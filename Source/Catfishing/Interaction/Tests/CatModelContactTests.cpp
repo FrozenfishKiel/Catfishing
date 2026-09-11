@@ -290,6 +290,9 @@ bool FCatModelWalkingPushSlopeTest::RunTest(const FString&)
         const FVector StopA=A->GetActorLocation(), StopB=B->GetActorLocation();
         A->GetPhysicalBodyComponent()->SetMoveIntent(FVector::ZeroVector);
         Scene.Step(Hz/2,Hz);
+        AddInfo(FString::Printf(TEXT("Event=walking_peer_stop_observed Blueprint=%s Pitch=%.1f Roll=%.1f Hz=%d Hitch=%d Wall=%d SpeedA=%.3f SpeedB=%.3f TravelA=%.3f TravelB=%.3f"),
+            Path,Pitch,Roll,Hz,bHitch,bWall,A->GetPhysicalBodyComponent()->GetVelocity().Size2D(),B->GetPhysicalBodyComponent()->GetVelocity().Size2D(),
+            FVector::Dist2D(StopA,A->GetActorLocation()),FVector::Dist2D(StopB,B->GetActorLocation())));
         TestTrue(TEXT("releasing the pushing input stops both ungripped bodies promptly"),
             A->GetPhysicalBodyComponent()->GetVelocity().Size2D()<3 && B->GetPhysicalBodyComponent()->GetVelocity().Size2D()<3
             && FVector::Dist2D(StopA,A->GetActorLocation())<15 && FVector::Dist2D(StopB,B->GetActorLocation())<15);

@@ -124,7 +124,7 @@ namespace CatLightPropNetwork
 			if (!Server || !Client) return false;
 			auto* Local = Client->GetFirstPlayerController();
 			auto* ClientCat = Local ? Cast<ACatCharacter>(Local->GetPawn()) : nullptr;
-			if (!ClientCat || !Local->PlayerState) return false;
+			if (!ClientCat || !Local->PlayerState || Local->AcknowledgedPawn != ClientCat) return false;
 			ACatCharacter *Cat = nullptr, *Helper = nullptr;
 			for (TActorIterator<ACatCharacter> It(Server); It; ++It)
 				if (It->GetPlayerState() && It->GetPlayerState()->GetPlayerId() == Local->PlayerState->GetPlayerId()) Cat = *It; else Helper = *It;

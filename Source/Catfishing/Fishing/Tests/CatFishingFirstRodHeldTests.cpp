@@ -160,6 +160,48 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("only one deployed rod exists"), Fishing->GetDeployedRodCountForDiagnostics(), 1);
 		TestTrue(TEXT("taking or leaving rod never teleports character"), Character->GetActorLocation().Equals(OriginalLocation));
 		TestEqual(TEXT("taking or leaving rod preserves movement mode"), Character->GetCharacterMovement()->MovementMode.GetValue(), OriginalMovement);
+		// 真实 R 分派：另一个玩家没有鱼竿库存，仍能接管长时间架放的同一实例。
+		auto* GuestController = World->SpawnActor<ACatfishingPlayerController>();
+		auto* GuestPlayer = World->SpawnActor<ACatfishingPlayerState>();
+		FActorSpawnParameters GuestSpawn;
+		GuestSpawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		auto* Guest = World->SpawnActor<ACatCharacter>(OriginalLocation - FVector(80, 0, 0), FRotator::ZeroRotator, GuestSpawn);
+		if (!GuestController || !GuestPlayer || !Guest) return false;
+		GuestController->PlayerState = GuestPlayer;
+		Guest->SetPlayerState(GuestPlayer);
+		GuestController->Possess(Guest);
+		const FUniqueNetIdRef GuestId = FUniqueNetIdString::Create(TEXT("SharedRodGuest"), FName(TEXT("CAT_TEST")));
+		GuestPlayer->SetUniqueId(FUniqueNetIdRepl(GuestId));
+		ACatfishingGameModeBase::FAdmissionRecord GuestAdmission;
+		GuestAdmission.Phase = ACatfishingGameModeBase::EAdmissionPhase::Active;
+		GuestAdmission.Controller = GuestController;
+		GameMode->AdmissionRecords.Add(ACatfishingGameModeBase::MakeStableNetIdKey(GuestPlayer->GetUniqueId()), GuestAdmission);
+		TStrongObjectPtr<ULocalPlayer> GuestLocal(NewObject<ULocalPlayer>(GEngine));
+		GuestController->SetPlayer(GuestLocal.Get());
+		auto* GuestCommands = GuestController->GetFishingCommandComponent();
+		Commands->SubmitRodInteract();
+		const FTransform SharedParkedPose = Rod->GetPhysicalRodBody()->GetComponentTransform();
+		for (int32 Frame = 0; Frame < 1300; ++Frame) WorldWrapper.TickTestWorld(0.05f);
+		TestTrue(TEXT("unattended rod stays fixed for 65 seconds"), Rod->GetPhysicalRodBody()->GetComponentTransform().Equals(SharedParkedPose, 1.e-5));
+		Guest->GetPhysicalBodyComponent()->TeleportBodyFromAuthority(FTransform(Guest->GetActorRotation(),
+			Rod->GetGripWorldTransform().GetLocation() - FVector(80, 0, 0)), TEXT("SharedRodPickup"));
+		FCatFishingCommandResult SharedPickup;
+		const auto SharedEdge = GuestCommands->SubmitRodInteract();
+		if (!TestTrue(TEXT("R takes another player's deployed rod after 65 seconds"),
+			GuestCommands->TryGetResult(SharedEdge.RequestId, SharedPickup) && SharedPickup.bCommitted)) return false;
+		TestEqual(TEXT("shared pickup preserves the exact item"), Rod->GetPresentationState().ItemInstanceId, ItemId);
+		TestEqual(TEXT("guest is the only operator"), Fishing->FindRodOperatedBy(GuestPlayer), Rod);
+		TestEqual(TEXT("shared pickup does not deploy or debit inventory"), Equipment->GetSnapshot().Revision, UsedEquipmentRevision);
+		FCatOperateRodCommand Occupied;
+		Occupied.Context.RequestId = FGuid::NewGuid();
+		Occupied.Context.RodActorId = Rod->GetPresentationState().RodActorId;
+		Occupied.Context.ExpectedRodActorRevision = Rod->GetPresentationState().RodActorRevision;
+		AddExpectedErrorPlain(TEXT("Reason=AlreadyControlled"), EAutomationExpectedErrorFlags::Contains, 1);
+		TestFalse(TEXT("original deployer cannot steal occupied control"), Fishing->OperateRod(Controller, Occupied).bCommitted);
+		GuestCommands->SubmitRodInteract();
+		Character->GetPhysicalBodyComponent()->TeleportBodyFromAuthority(FTransform(Character->GetActorRotation(), OriginalLocation), TEXT("SharedRodReturn"));
+		Commands->SubmitRodInteract();
+		if (!TestEqual(TEXT("original player can explicitly retake the released rod"), Fishing->FindRodOperatedBy(Player), Rod)) return false;
 		const int64 BeforeFocusLossRevision = Equipment->GetSnapshot().Revision;
 		Commands->SubmitPrimaryPressed();
 		Commands->ClearHeldInputForLifecycle(TEXT("TestFocusLostWhileAiming"));
@@ -292,8 +334,35 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("EndPlay removes only the destroyed rod's registration"), Fishing->GetDeployedRodCount(Player), 1);
 		TestEqual(TEXT("EndPlay preserves the first grounded rod"), Fishing->FindDeployedRod(Player), Rod);
 		TestNull(TEXT("EndPlay clears the destroyed rod's operator"), Fishing->FindRodOperatedBy(Player));
-		TestTrue(TEXT("final grounded rod can be destroyed"), Rod->Destroy());
-		TestEqual(TEXT("final destruction leaves no deployed registry entries"), Fishing->GetDeployedRodCountForDiagnostics(), 0);
+		Guest->GetPhysicalBodyComponent()->TeleportBodyFromAuthority(FTransform(Guest->GetActorRotation(),
+			Rod->GetGripWorldTransform().GetLocation() - FVector(80, 0, 0)), TEXT("SharedRodPack"));
+		const FCatInventoryEntry* SharedHeldEntry = Character->GetInventoryComponent()->FindHeldInventoryEntryFromAuthority(ItemId);
+		if (!SharedHeldEntry) return false;
+		const double SharedDurability = CatFishingTest::Durability(*SharedHeldEntry);
+		auto* GuestInventory = Guest->GetInventoryComponent();
+		auto* GuestEquipment = Guest->GetEquipmentComponent();
+		int32 EmptySlots = 0;
+		for (const auto& Entry : GuestInventory->GetInventoryEntries())
+			if (!Entry.Instance || Entry.StackCount == 0) ++EmptySlots;
+		for (int32 Index = 0; Index < EmptySlots; ++Index)
+			if (!GuestEquipment->GrantEquipmentFromAuthority(FGuid::NewGuid(), GuestEquipment->GetSnapshot().Revision, TEXT("FeatherFloat")).bCommitted) return false;
+		AddExpectedErrorPlain(TEXT("Reason=InventoryReturnRejected"), EAutomationExpectedErrorFlags::Contains, 1);
+		AddExpectedErrorPlain(TEXT("Event=fishing_command_result Type=ECatFishingCommandType::PackRod Committed=false"), EAutomationExpectedErrorFlags::Contains, 1);
+		const auto FullPackEdge = GuestCommands->SubmitCancel();
+		FCatFishingCommandResult FullPack;
+		TestTrue(TEXT("full backpack X has a correlated rejection"), GuestCommands->TryGetResult(FullPackEdge.RequestId, FullPack) && !FullPack.bCommitted);
+		TestTrue(TEXT("failed shared pack leaves the world rod deployed"), Rod->GetPresentationState().bDeployed);
+		TestNotNull(TEXT("failed shared pack restores the same source item"), Character->GetInventoryComponent()->FindHeldInventoryEntryFromAuthority(ItemId));
+		TestNull(TEXT("failed shared pack leaves no duplicate target held item"), GuestInventory->FindHeldInventoryEntryFromAuthority(ItemId));
+		GuestInventory->RemoveItemInstanceFromIndex(GuestInventory->FindFirstInventorySlotIndexByDefinitionId(TEXT("FeatherFloat")));
+		FCatFishingCommandResult SharedPack;
+		const auto SharedPackEdge = GuestCommands->SubmitCancel();
+		if (!TestTrue(TEXT("guest X packs the empty grounded shared rod"), GuestCommands->TryGetResult(SharedPackEdge.RequestId, SharedPack) && SharedPack.bCommitted)) return false;
+		TestTrue(TEXT("same item exists in guest backpack"), CatFishingTest::Entries(Guest->GetEquipmentComponent()).ContainsByPredicate(
+			[ItemId, SharedDurability](const FCatInventoryEntry& Entry) { return CatFishingTest::InstanceId(Entry) == ItemId
+				&& Entry.StackCount == 1 && CatFishingTest::Durability(Entry) == SharedDurability; }));
+		TestNull(TEXT("source no longer holds the transferred item"), Character->GetInventoryComponent()->FindHeldInventoryEntryFromAuthority(ItemId));
+		TestEqual(TEXT("shared packing leaves no deployed registry entries"), Fishing->GetDeployedRodCountForDiagnostics(), 0);
 	}
 	return !HasAnyErrors();
 }

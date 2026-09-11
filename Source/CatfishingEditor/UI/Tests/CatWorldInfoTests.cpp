@@ -88,8 +88,9 @@ bool FCatWorldInfoRegistrationTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("创建普通对象的观察者"), Viewer)) return false;
 	Source->StaticInfo.Title = FText::FromString(TEXT("普通场景告示牌"));
 	FCatWorldInfoViewData Data;
-	TestEqual(TEXT("非交互 Actor 附近可显示摘要"), Source->EvaluateDisplay(Viewer, false, 100.0), ECatWorldInfoDetail::Summary);
-	TestTrue(TEXT("非交互 Actor 可以提供信息"), Source->BuildInfo(Viewer, ECatWorldInfoDetail::Summary, Data));
+	TestEqual(TEXT("非交互 Actor 默认不因靠近而显示"), Source->EvaluateDisplay(Viewer, false, 100.0), ECatWorldInfoDetail::Hidden);
+	TestEqual(TEXT("非交互 Actor 准心命中时显示详情"), Source->EvaluateDisplay(Viewer, true, 100.0), ECatWorldInfoDetail::Full);
+	TestTrue(TEXT("非交互 Actor 可以提供信息"), Source->BuildInfo(Viewer, ECatWorldInfoDetail::Full, Data));
 	TestEqual(TEXT("信息读取不依赖交互提示"), Data.Title.ToString(), FString(TEXT("普通场景告示牌")));
 	Registry->RegisterSource(Source);
 	Registry->RegisterSource(nullptr);

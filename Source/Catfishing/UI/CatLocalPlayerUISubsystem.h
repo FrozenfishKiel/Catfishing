@@ -38,6 +38,8 @@ class CATFISHING_API UCatLocalPlayerUISubsystem : public ULocalPlayerSubsystem
 
 #if WITH_DEV_AUTOMATION_TESTS
 	friend class FCatLocalPlayerUISubsystemSplitPlayerModulesAttachTest;
+	friend class FCatLoadingReadinessLatentCommand;
+	friend class FCatPackagedTravelCommand;
 #endif
 
 public:
@@ -123,37 +125,37 @@ private:
 	/** 根据当前本地 Controller、World 和 Online 快照调和 Frontend Root；完成后要么存在唯一有效 Root，要么已拆除失效前端。 */
 	void RefreshFrontendForCurrentController();
 
-	/** 根据 Online 快照刷新全局加载遮罩；Start 和 Leave 等待期显示最高层遮罩，并把合成后的表现快照写给正式 Loading WBP。 */
+	/** 根据 Online、World 与本地 UI 事实刷新遮罩；新请求或就绪回退取消旧完成展示，真实就绪后只安排一次撤罩。 */
 	void RefreshGlobalLoadingScreen(const FCatOnlineSnapshot& Snapshot);
 
-	/** 从当前 Online 子系统重新读取快照并刷新遮罩；Pawn/UI 真实就绪事件会调用它来收起等待态，不由定时器判断完成。 */
+	/** 从当前 Online 子系统重读事实并刷新遮罩；事件和遮罩存活期的 Slate 观察共用此入口，完成与否仍由实际就绪条件决定。 */
 	void RefreshGlobalLoadingScreenFromCurrentSnapshot();
 
 	/** 从 Online、Lyra 式引擎 gate 与本地 UI 就绪事实生成遮罩表现；进入游戏会同步给出真实 gate 合成总进度。 */
 	bool ShouldShowGlobalLoadingScreen(const FCatOnlineSnapshot& Snapshot, FCatGlobalLoadingPresentation& OutPresentation) const;
 
-	/** 创建或复用全局加载遮罩并写入本轮表现快照；遮罩复用正式 Loading WBP 资产，并独立于 Frontend Root 子页。 */
+	/** 创建或复用正式 Loading WBP 并观察其存活期间的就绪变化；重复调用复用同一个 Slate 订阅，不依赖后续 Online 广播。 */
 	void ShowGlobalLoadingScreen(const FCatGlobalLoadingPresentation& Presentation);
 
-	/** 移除全局加载遮罩并清空最后阶段文本与本地过渡记忆；它不改变 Online 操作，只释放本地 UMG 表现。 */
+	/** 移除遮罩并成对停止 Slate 观察，清空阶段文本和过渡记忆；只释放本地表现，不改变 Online 操作。 */
 	void HideGlobalLoadingScreen();
 
 	/** 请求在完成态短暂停留后移除全局遮罩；Start/Leave 已完成但玩家还需要看清 100% 或完成状态时调用。 */
 	void RequestGlobalLoadingDismissalAfterPresentation(ECatOnlineOperation CompletedOperation);
 
-	/** 全局遮罩完成态停留的刷新回调；它只在 Slate 刷新周期里检查展示时长是否到达，不参与加载进度。 */
-	void HandleGlobalLoadingDismissalPostTick(float DeltaTime);
+	/** 遮罩存活期间重读 World、Online 和本地 UI 就绪条件；真实完成后才检查完成文案停留时长并撤罩。 */
+	void HandleGlobalLoadingPostTick(float DeltaTime);
 
-	/** 清理全局遮罩完成态停留回调；隐藏遮罩、错误收口或重新进入等待态时都要成对移除。 */
-	void ClearGlobalLoadingDismissalPostTick();
+	/** 清空完成文案的待撤罩状态；重新等待时仍保留 Slate 观察，只有隐藏遮罩才移除订阅。 */
+	void ResetGlobalLoadingDismissal();
 
-	/** 将当前表现快照写入全局 Loading WBP；进入游戏显示合成总进度，返回主菜单折叠进度条。 */
+	/** 将真实等待阶段写入正式 WBP，阶段变化时留下关联日志；进入游戏显示合成进度，回主菜单折叠进度条。 */
 	void RefreshGlobalLoadingScreenPresentation(const FCatGlobalLoadingPresentation& Presentation);
 
 	/** 合成进入玩法的总进度；Start、玩法软资源预热、地图包、Travel、World、BeginPlay、Connected 和本地 UI 都必须来自真实 gate，不在显示层改写。 */
 	float GetGameplayLoadingProgressPercent(const FCatOnlineSnapshot& Snapshot) const;
 
-	/** 根据最新 Online 快照更新 Start/Leave 过渡记忆；这份记忆只延续真实请求到 UI 就绪事件，不承担完成判断。 */
+	/** 记录最新 Start/Leave 请求直到实际撤罩，错误时失效；完成展示期间仍能识别就绪回退，记忆本身不代表已完成。 */
 	void TrackGlobalLoadingTransition(const FCatOnlineSnapshot& Snapshot);
 
 	/** 判断进入玩法的等待是否可以收口；必须同时看到 Lake/Connected、引擎 World 运行和本地 HUD/菜单/交互 UI 装配完成。 */
@@ -216,17 +218,11 @@ private:
 	/** 是否已经安排在完成态停留后移除遮罩；它代表 UI 收口等待，不代表 Online 还有加载任务。 */
 	bool bGlobalLoadingDismissalPending = false;
 
-	/** 正在等待完成态停留的操作类型；用于把 Start 和 Leave 的最后一段状态写成不同文案。 */
-	ECatOnlineOperation GlobalLoadingDismissalOperation = ECatOnlineOperation::None;
-
-	/** 正在等待完成态停留的请求关联键；用于日志定位这段完成展示对应哪一次 Start/Leave。 */
-	FGuid GlobalLoadingDismissalRequestId;
-
 	/** 全局加载完成态允许撤遮罩的最早单调时间，单位秒；只在真实完成后写入，值到达前不改变任何 Online 状态。 */
 	double GlobalLoadingDismissalReadyTimeSeconds = 0.0;
 
-	/** Slate PostTick 通知 UI 收口的句柄；只用于完成态停留期间成对解绑，不驱动加载进度。 */
-	FDelegateHandle GlobalLoadingDismissalPostTickHandle;
+	/** 遮罩存活期间的 Slate 观察订阅；显示时注册、隐藏时解绑，捕获没有 Online/Pawn 通知的迟到就绪，不保存第二份加载状态。 */
+	FDelegateHandle GlobalLoadingPostTickHandle;
 
 	/** 当前 LocalPlayer 的 Frontend 流程协调器；它只持有流程、确认槽位和命令等待事实，Root 按明确意图调用它。 */
 	UPROPERTY(Transient)

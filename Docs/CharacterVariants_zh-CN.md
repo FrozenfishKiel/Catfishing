@@ -1,5 +1,42 @@
 # 角色换装与公共动画模板
 
+## 2026-09-11 猫之间推拉的一次性受力表现（试用）
+
+`ACatCharacter` 创建 `UCatForceReactionComponent`（`Character/Animation/`），原猫与 CuteCat 的角色子蓝图启用它。服务器在 `TG_PostPhysics`、身体移动 Tick 之后采样本帧已提交的猫之间抓握/身体推动力；不会在 `ApplyTraction` 每帧先清再写的中间状态触发。抓杆、鱼线、重力、纯竖直抓跳不触发水平受力 Montage。玩法移动、抓握、体力账本、Condition 权威均不改变。
+
+一次受力的规则：水平载荷达到 **5 N** 时锁定本次方向并多播一次；持续受力、方向反转、Montage 播完都不重新触发。载荷降到 **2 N** 以下（含等于）并连续 **0.2 秒** 后才能再次触发。值在角色 `ForceReaction` 组件 Defaults 中配置；底层力仍为 kg·cm/s²，采样只除以 100 转成 N，不修改原力。载荷取「水平合力大小、最大单来源水平力」的较大值，因此两侧拉力抵消不会被视作卸载；方向优先取水平合力，几乎完全抵消时取最大来源方向。
+
+方向描述身体向哪里反应，不描述攻击者在哪边。以身体前向和实际受力做点乘/叉乘，选择 `Forward / Backward / Left / Right`；对方在正前方拉猫时选 Forward，推猫时选 Backward。抓握已经给双方相反的力，表现层不得再给“拉”额外取反。每个角色当前的一次连续载荷只允许一次事件，多手或多人新增来源不会绕过门控。
+
+原始 Animalia 受击素材是头/胸/骨盆 × 左右 × 轻重，并非现成的纯四向动画。此次试用片段使用 `Hit_ChestL_Heavy-IP` 的冲击/回弹时间曲线驱动定向骨盆偏移和倾斜，保留首帧站姿、子骨骼长度及根骨位置；随后通过现有 `RTG_AnimaliaToCuteCat` 重定向并修正 CuteCat 的根骨/骨盆单位。它们是**派生的四向试用动作**，不应描述为四段原本就有的成品动画。原猫全部旧动画与断线受击 Montage 保留，其既有消费者仍有效。
+
+正式资产为 `/Game/Animalia/Cat/Animations/ForceReaction/AS_Force{Forward,Backward,Left,Right}`、同目录 `AM_Force*`，以及 `/Game/Characters/CuteCat/Animation/Retargeted/` 下对应的八个资产。Montage 使用公共模板的单一 `DefaultSlot`，单段、播放一次、无 Root Motion，混入 0.08 秒、混出 0.15 秒。CuteCat 用现有 `PhysicalVisual.AnimationOverrides` 映射原动作身份，播放仍走 `ACatCharacter::PlayAnimMontage`，四足和抓握 IK 保持原消费者。
+
+服务器处于不可行动/倒地表现时消费并抑制本次起始事件；各接收端若仍在倒地/起身或已有 Montage，则跳过本次播放，不排队补播、不在持续受力时重试。这样不会打断抛竿、救援、断线或上一次尚未结束的反应。可靠多播携带事件序号，客户端只接收事件，不独立检测力。组件销毁只停止自己记录的 Montage；握点释放、目标销毁仍沿原力源清理路径卸载。
+
+生成入口：构建 Editor 后，在空闲 UE Python commandlet 中运行 `Scripts/Art/create_force_reaction_assets.py`。默认保留已有动作；确需重生成本功能的四段源片段和四段目标片段时设置 `CAT_FORCE_REACTION_REBUILD=1`，不要用该选项覆盖用户手工调整过的动作。脚本不会重建公共 ABP、旧重定向器或其他角色资产。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 入口与源 | `Interaction/Grab/CatPhysicsGrabComponent::ApplyTraction`、`Character/CatCharacterMovementComponent::UpdatePeerPushContacts` → `CatPhysicalBodyComponent::SetExternalForceFromAuthority` | 原先只传力，无一次性动画；保留全部原力公式/单位 | 新 `bCharacterInteraction` 标记，身体推动沿原 `bBodyContact` 纳入；新只读采样返回 N 和方向 | 原力先写完，再采样 | 实际抓猫双向传力、释放清理、无关力与竖直力过滤 | 已接入；`CharacterForceSourcesAndCleanup` 验证真实 `GripFromAuthority`→`ApplyTraction` |
+| 门控与方向 | 新 `Character/Animation/CatForceReactionComponent::{TickComponent,FCatForceReactionGate}` ← Body PostMovement Tick prerequisite | 连续检测只产生起始事件；无新玩法状态 | 5/2 N、0.2秒迟滞门控；身体坐标下点乘/叉乘 | 固定帧提交之后，恢复行动不绕过已消费载荷 | 30/60/120 Hz、短断帧、持续/反向受力、重新卸力 | 已接入；`OnceUntilStableUnload` 覆盖；实际方向另由资产姿势检查 |
+| 原素材与派生动作 | `/Game/Animalia/Cat/Animations/InPlace/Hit_ChestL_Heavy-IP` → `CatForceReactionAuthoring.cpp::CreateForceReactionSourceClips` | 素材没有纯四向；不能按 L/R 名称猜偏移 | 从源冲击曲线生成四向骨盆反应，再由现有 IK Retargeter 导出 CuteCat | 源片段→重定向→单位修正→Montage | 朝向、骨长、首末姿态、Root Motion | 已生成16个资产；四向实际姿势与画面验证见下方证据 |
+| 资源消费与 Cook 引用 | `/Game/Character/BP_CatCharacter`、`BP_CuteCatCharacter` 的 `ForceReaction.DirectionalMontages`；CuteCat `PhysicalVisual.AnimationOverrides` → 新 Montage → Sequence → Skeleton | 新表现配置使用既有公共 Slot 和换皮映射 | `FinalizeForceReactionAssets` 配置两个具体子类；抽象基类和公共 ABP 不改 | 先资源，后硬引用，最后启用两个子类 | 重载后 CDO、Skeleton、唯一非循环 Slot；Cook未运行 | 已绑定；`SkinMontagesAndActualPoseDirections` 实查重载消费者；无新 WBP/DataAsset/ini字段 |
+| 网络、冲突与清理 | `UCatForceReactionComponent::MulticastReact` → `ACatCharacter::PlayAnimMontage` → 可见 `PhysicalVisual`；Condition原表现状态 | 每端只播放一次；不争抢已有动作 | 服务器事件序号/可靠多播；忙碌或不可行动时消费后跳过；EndPlay仅清自身表现 | 确认开始→各端消费；原抓握负责力源释放 | 房主/拥有端/旁观端、实际 Montage 和最终骨骼；忙碌与恢复不补播 | `OnsetOnlyAcrossThreeEndpoints`、`FormalCuteCatFourDirectionsAndBusyMontage` 验证 |
+| 日志、旧路径及非涉及项 | `LogCatCharacter` 的 `force_reaction_*`；原 `DefaultGame.ini` 的 `LineBrokenMontage` 仍由 Fishing 使用 | 新事件与既有断线事件分离，无双重玩法入口 | 日志带 World/NetMode/Authority/LocalRole/Actor/BodyId/EventId/Direction/LoadN/Result | 静态diff→资产重载→Editor/Game→运行 | 新包无需-log落盘未验收；UI、库存、存档、费用不涉及 | 原动画/终局消费者保留；本轮错误的派生动作已同包替换，空Slot已修复；无另一套生产触发入口 |
+
+本轮工作区基线只有用户未跟踪文档 `裁决同步 · 程序（工程待办）.md`，未纳入改动。修改前 `Saved/Automation/ForceReaction-Baseline-20260911/Report/index.json` 的角色族4项通过（2项带警告）；原始素材采样见 `Saved/ForceReaction/hit_poses.json`。首次工具存在空Slot与姿势方向问题，已用行为/姿势失败证据定位后修正，早期 `Report` / `FinalReport` 不作为交付绿灯。
+
+`contract`：最终 Editor Development 构建 `Saved/ForceReaction/BuildDelivery.log` 和 Game Win64 Development 构建 `BuildGame.log` 均成功。`DeliveryAuditFinal.log` / `DeliveryAudit.json` 核查18个包：两种猫到四个 Montage、Sequence 的硬引用链成立，重复生成 Changed=0；只有本功能16个新资产及两个角色子蓝图修改，无临时重定向副本残留。
+
+`runtime_behavior`：`Saved/ForceReaction/VerifiedReport/index.json` 的18项全部通过（15 clean、3项带警告，0 failed/notRun），范围为 ForceReaction、CharacterVariants、Locomotion。包含真实抓握力来源/清理、30/60/120Hz门控、两骨架8段实际姿势方向、正式CuteCat四向播放/忙碌跳过、房主/拥有端/旁观端一次性事件与可见骨骼消费，以及既有跳跃、倒地恢复和四足/抓握步态回归。网络事件测试使用隔离的权威力源，真实抓握入口由另一个运行测试覆盖。三项警告分别是引擎 `r.MotionVectorSimulation` 渲染线程提示及测试传送后旧 ControlEpoch 输入被正常拒绝；没有 `force_reaction_playback_failed`。
+
+`presentation_delivery`：已查看 `Saved/ForceReaction/Screenshots/{Idle,Forward,Backward,Left,Right}.png` 的受控正式 CuteCat 渲染，身体比例及整体朝向保持，动作呈现对应方向的偏移/倾斜。源动作时间曲线派生的动作协调性仍需正式地图多人试玩；新 Cook、Win64 Development 新包房主/客户端无 `-log` 落盘验收未运行，不关闭所属模块。
+
+本轮服务器与两个客户端的实际日志合并在 `D:/develop/Catfishing/Saved/ForceReaction/VerifiedTests.log`，按 `LogCatCharacter`、`force_reaction_started`、`force_reaction_observed`、`force_reaction_rearmed` 和 `BodyId` / `EventId` / `NetMode` 关联；三端成功不是用单端日志推断。打包后仍使用项目标准 `<打包根目录>/Catfishing/Saved/Logs`，未硬编码路径。
+
+交付核对时出现 `Source/Catfishing/Online/CatOnlineSubsystem.{h,cpp}` 并行修改，保留且不纳入本功能检查点；上述已执行构建/回归不代表对随后并行修改的重新验证。
+
 ## 资产入口
 
 | 用途 | 资产包路径 |

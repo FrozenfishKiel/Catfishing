@@ -14,25 +14,27 @@ struct FCollisionQueryParams;
 class UCatPhysicalBodyComponent;
 
 /** Frozen motor input for side-effect-free candidate prediction; world cm and kg*cm/s^2. */
+USTRUCT()
 struct CATFISHING_API FCatBodyDriveSample
 {
-    FVector MoveIntent = FVector::ZeroVector;
-    FVector HoldLocation = FVector::ZeroVector;
-    double MaxSpeed = 0;
-    double MaxForce = 0;
-    bool bFishing = false;
-    bool bCooperative = false;
-    bool bLocomotion = false;
-    bool bConnected = false;
-    bool bUnderLoad = false;
+    GENERATED_BODY()
+    UPROPERTY() FVector MoveIntent = FVector::ZeroVector;
+    UPROPERTY() FVector HoldLocation = FVector::ZeroVector;
+    UPROPERTY() double MaxSpeed = 0;
+    UPROPERTY() double MaxForce = 0;
+    UPROPERTY() bool bFishing = false;
+    UPROPERTY() bool bCooperative = false;
+    UPROPERTY() bool bLocomotion = false;
+    UPROPERTY() bool bConnected = false;
+    UPROPERTY() bool bUnderLoad = false;
     /** Only ungripped body contact: passive displacement does not request a full-strength stance. */
-    bool bPassiveBodyContact = false;
+    UPROPERTY() bool bPassiveBodyContact = false;
     /** A peer is still moving or transmitting grab/fishing load; otherwise allow prompt braking. */
-    bool bBodyContactDriven = false;
-    bool bHoldActive = false;
+    UPROPERTY() bool bBodyContactDriven = false;
+    UPROPERTY() bool bHoldActive = false;
 };
 
-/** Advances formal CMC after submitted loads, then publishes the completed authority pose. */
+/** Post-physics ordering anchor for native CMC; publishes diagnostic Chaos pawn snapshots. */
 USTRUCT()
 struct FCatPhysicalBodyPostPhysicsTick : public FTickFunction
 {
@@ -62,6 +64,10 @@ struct FCatPhysicalBodySnapshot
 	UPROPERTY() uint32 ResetEpoch = 0;
 	UPROPERTY() bool bGrounded = false;
 	UPROPERTY() bool bSupportSampleReady = false;
+	/** Authority policy for CMC prediction. No client can submit force or stamina values. */
+	UPROPERTY() FCatBodyDriveSample Drive;
+	UPROPERTY() FVector ExternalForce = FVector::ZeroVector;
+	UPROPERTY() uint32 ControlEpoch = 0;
 };
 
 /** Authority input and pose channel: formal characters use CMC, diagnostic Pawns use Chaos. */
@@ -80,9 +86,17 @@ public:
 	UBoxComponent* GetBody() const { return Body; }
 	void UseCharacterMovement(UCatCharacterMovementComponent* Movement) { CharacterMovement = Movement; }
 	bool UsesCharacterMovement() const { return CharacterMovement != nullptr; }
+	/** Called after the single CMC movement step, on authority and predicting clients. */
+	void CompleteCharacterMovement();
+	void NotifyCharacterJump();
+	FVector GetLocalMoveIntent() const { return MoveInput; }
+	FCatBodyDriveSample GetReplicatedDrive() const { return Snapshot.Drive; }
+	FVector GetReplicatedExternalForce() const { return Snapshot.ExternalForce; }
 	double GetFacingYawDegrees() const { return FacingYawDegrees; }
-	FTickFunction& GetPostMovementTick() { return PostPhysicsTick; }
+	FTickFunction& GetPostMovementTick();
 	FVector GetExternalForceFromAuthority();
+	/** Read-only character-pair load in N. Net force chooses direction; cancelling loads stay latched. */
+	double GetCharacterInteractionLoadFromAuthority(FVector& OutDirectionForce) const;
 	/** Any applied source, including cancelling or vertical loads; excludes gravity/floor support. */
 	bool HasExternalLoadFromAuthority() const;
 	double GetVerticalGripForceFromAuthority() const;
@@ -124,7 +138,7 @@ public:
 	void SetLocomotionEnabledFromAuthority(bool bEnabled, FName Reason);
 	bool TeleportBodyFromAuthority(const FTransform& Transform, FName Reason);
 	/** Each source replaces its own force. Units are kg*cm/s^2; multiply Newtons by 100 once. */
-	void SetExternalForceFromAuthority(const UObject* Source, FVector ForceKgCmS2, bool bVerticalGripTraction = false, bool bBodyContact = false);
+	void SetExternalForceFromAuthority(const UObject* Source, FVector ForceKgCmS2, bool bVerticalGripTraction = false, bool bBodyContact = false, bool bCharacterInteraction = false);
 	void ClearExternalForce(const UObject* Source);
 	/** Replaces the ordinary motor budget; zero means no voluntary motor force, never unlimited. */
 	void SetFishingMotorBudget(const UObject* Source, double MaxForceKgCmS2, double MaxSpeedCmS = 100.0);
@@ -172,6 +186,7 @@ private:
 		FVector Force = FVector::ZeroVector;
 		bool bVerticalGripTraction = false;
 		bool bBodyContact = false;
+		bool bCharacterInteraction = false;
 	};
 	TMap<TWeakObjectPtr<const UObject>, FExternalForce> ExternalForces;
 	TWeakObjectPtr<const UObject> FishingMotorSource;

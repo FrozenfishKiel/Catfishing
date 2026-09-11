@@ -6,6 +6,7 @@
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "Character/CatCharacter.h"
+#include "Character/Animation/CatForceReactionComponent.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Character/Physics/CatPhysicsPrototypeVisualComponent.h"
 #include "Condition/CatConditionComponent.h"
@@ -78,7 +79,7 @@ namespace CatCuteNetwork
 			if (!Server || !Client) return false;
 			APlayerController* Local=Client->GetFirstPlayerController();
 			ACatCharacter* ClientCat=Local ? Cast<ACatCharacter>(Local->GetPawn()) : nullptr;
-			if (!ClientCat || !Local->PlayerState) return false;
+			if (!ClientCat || !Local->PlayerState || Local->AcknowledgedPawn != ClientCat) return false;
 			ACatCharacter* ServerCat=nullptr;
 			for (TActorIterator<ACatCharacter> It(Server); It; ++It)
 				if (It->GetPlayerState() && It->GetPlayerState()->GetPlayerId()==Local->PlayerState->GetPlayerId()) ServerCat=*It;
@@ -91,6 +92,12 @@ namespace CatCuteNetwork
 			if (Stage==0) {
 				Local->SetActorTickEnabled(false);
 				for (auto It=Server->GetPlayerControllerIterator(); It; ++It) if (It->Get()) It->Get()->SetActorTickEnabled(false);
+				// Free locomotion fixture: the simple GameMode may reuse an unobstructed PlayerStart
+				// because this character's legacy capsule has collision disabled. Separate real model bodies.
+				int32 Placement=0;
+				for (TActorIterator<ACatCharacter> It(Server);It;++It)
+					It->GetPhysicalBodyComponent()->TeleportBodyFromAuthority(FTransform(FRotator::ZeroRotator,
+						FVector(-300,Placement++*600-300,It->GetDefaultHalfHeight())),TEXT("VariantTestArrange"));
 				for (ACatCharacter* Cat : {ServerCat,ClientCat}) {
 					Test->TestEqual(TEXT("network spawns selected CuteCat class"),Cat->GetClass()->GetPathName(),FString(ClassPath));
 					Test->TestTrue(TEXT("network animation instance is the CuteCat template child"),Cat->GetMesh()->GetAnimInstance()->GetClass()->GetName()==TEXT("ABP_CuteCat_C"));
@@ -99,7 +106,7 @@ namespace CatCuteNetwork
 			}
 			CB->SetMoveIntent(Stage==2 ? FVector::ForwardVector : FVector::ZeroVector);
 			CB->SetViewIntent(FRotator::ZeroRotator);
-			if (Stage==1 && Now-StageAt>1 && SB->IsGrounded() && CB->IsGrounded()) {
+			if (Stage==1 && Now-StageAt>3 && SB->IsGrounded() && CB->IsGrounded()) {
 				Test->TestTrue(TEXT("both endpoints initialize four-foot IK"),SV->GetLocomotionObservation().GroundMask==15 && CV->GetLocomotionObservation().GroundMask==15);
 				StartLocation=ServerCat->GetActorLocation(); Stage=2; StageAt=Now;
 				StandingHead=CV->GetVisualMesh()->GetBoneLocationByName(TEXT("Head_001"),EBoneSpaces::WorldSpace).Z;
@@ -180,5 +187,146 @@ bool FCatCuteCatNetworkTest::RunTest(const FString& Parameters)
 	ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
 	FAutomationTestFramework::Get().EnqueueLatentCommand(Restore);
 	return true;
+}
+
+namespace CatCuteNetwork
+{
+    class FVerifyForceReaction final : public IAutomationLatentCommand
+    {
+    public:
+        explicit FVerifyForceReaction(FAutomationTestBase* InTest):Test(InTest),Started(FPlatformTime::Seconds()) {}
+        bool Update() override
+        {
+            if (FPlatformTime::Seconds()-Started>45) { Test->AddError(FString::Printf(TEXT("Reaction network timeout Stage=%d"),Stage)); return true; }
+            UWorld* Server=nullptr; TArray<UWorld*> Clients;
+            for (const auto& Context:GEngine->GetWorldContexts()) if (Context.WorldType==EWorldType::PIE && Context.World())
+            {
+                if (Context.World()->GetNetMode()==NM_ListenServer) Server=Context.World();
+                if (Context.World()->GetNetMode()==NM_Client) Clients.Add(Context.World());
+            }
+            if (!Server || Clients.Num()!=2) return false;
+            auto* PC=Clients[0]->GetFirstPlayerController();
+            auto* OwnerCat=PC ? Cast<ACatCharacter>(PC->GetPawn()) : nullptr;
+            if (!OwnerCat || !PC->PlayerState) return false;
+            const int32 PlayerId=PC->PlayerState->GetPlayerId();
+            TArray<ACatCharacter*> Cats;
+            for (auto* World:{Server,Clients[0],Clients[1]})
+            {
+                ACatCharacter* Found=nullptr;
+                for (TActorIterator<ACatCharacter> It(World);It;++It)
+                    if (It->GetPlayerState() && It->GetPlayerState()->GetPlayerId()==PlayerId) Found=*It;
+                if (!Found || !Found->GetMesh()->GetAnimInstance()) return false;
+                Cats.Add(Found);
+            }
+            const double Now=Server->GetTimeSeconds();
+            auto* Body=Cats[0]->GetPhysicalBodyComponent();
+            if (Stage==0)
+            {
+                for (auto* World : Clients)
+                {
+                    const auto* Local = World->GetFirstPlayerController();
+                    if (!Local || !Local->GetPawn() || Local->AcknowledgedPawn != Local->GetPawn()) return false;
+                }
+                for (auto* World:{Server,Clients[0],Clients[1]})
+                    for (auto It=World->GetPlayerControllerIterator();It;++It) if (It->Get()) It->Get()->SetActorTickEnabled(false);
+                int32 Placement=0;
+                for (TActorIterator<ACatCharacter> It(Server);It;++It)
+                    It->GetPhysicalBodyComponent()->TeleportBodyFromAuthority(FTransform(FRotator::ZeroRotator,
+                        FVector(-500,Placement++*600-600,It->GetDefaultHalfHeight())),TEXT("ReactionTestArrange"));
+                Stage=1; At=Now; return false;
+            }
+            if (Stage==1 && Now-At>3)
+            {
+                for (auto* Cat:Cats)
+                {
+                    Baseline.Add(Cat->FindComponentByClass<UCatForceReactionComponent>()->GetPlayedCount());
+                    auto* Visual=Cat->FindComponentByClass<UCatPhysicsPrototypeVisualComponent>();
+                    HeadBefore.Add(Cat->GetActorTransform().InverseTransformPosition(Visual->GetVisualMesh()->GetBoneLocationByName(TEXT("Head_001"),EBoneSpaces::WorldSpace)));
+                }
+                Force=Cats[0]->GetActorForwardVector()*1000;
+                Body->SetExternalForceFromAuthority(Cats[0],Force,false,false,true);
+                Stage=2; At=Now;
+            }
+            else if (Stage==2 && Now-At>.25)
+            {
+                int32 Index=0;
+                for (auto* Cat:Cats)
+                {
+                    auto* Reaction=Cat->FindComponentByClass<UCatForceReactionComponent>();
+                    Test->TestEqual(TEXT("server, owning client, observer each plays onset once"),Reaction->GetPlayedCount(),Baseline[Index]+1);
+                    Test->TestEqual(TEXT("all endpoints choose actual forward force"),Reaction->GetObservedDirection(),ECatForceReactionDirection::Forward);
+                    auto* Visual=Cat->FindComponentByClass<UCatPhysicsPrototypeVisualComponent>();
+                    auto* Montage=Cast<UAnimMontage>(Visual->ResolveAnimationAsset(Reaction->DirectionalMontages[0]));
+                    Test->TestTrue(TEXT("mapped montage is actually playing"),Cat->GetMesh()->GetAnimInstance()->Montage_IsPlaying(Montage));
+                    const FVector Head=Cat->GetActorTransform().InverseTransformPosition(Visual->GetVisualMesh()->GetBoneLocationByName(TEXT("Head_001"),EBoneSpaces::WorldSpace));
+                    Test->TestTrue(TEXT("visible post-IK mesh actually consumes reaction"),FVector::Dist(Head,HeadBefore[Index++])>.25);
+                }
+                Stage=3;
+            }
+            else if (Stage==3 && Now-At>3)
+            {
+                int32 Index=0;
+                for (auto* Cat:Cats)
+                {
+                    Test->TestEqual(TEXT("sustained force never replays after montage ends"),Cat->FindComponentByClass<UCatForceReactionComponent>()->GetPlayedCount(),Baseline[Index++]+1);
+                    Test->TestFalse(TEXT("one-shot naturally finishes"),Cat->GetMesh()->GetAnimInstance()->IsAnyMontagePlaying());
+                }
+                Body->SetExternalForceFromAuthority(Cats[0],-Force,false,false,true);
+                Stage=4; At=Now;
+            }
+            else if (Stage==4 && Now-At>.5)
+            {
+                int32 Index=0;
+                for (auto* Cat:Cats) Test->TestEqual(TEXT("force reversal without unloading cannot replay"),Cat->FindComponentByClass<UCatForceReactionComponent>()->GetPlayedCount(),Baseline[Index++]+1);
+                Body->ClearExternalForce(Cats[0]); Stage=5; At=Now;
+            }
+            else if (Stage==5 && Now-At>.35)
+            {
+                Body->SetExternalForceFromAuthority(Cats[0],-Force,false,false,true); Stage=6; At=Now;
+            }
+            else if (Stage==6 && Now-At>.25)
+            {
+                int32 Index=0;
+                for (auto* Cat:Cats)
+                {
+                    auto* Reaction=Cat->FindComponentByClass<UCatForceReactionComponent>();
+                    Test->TestEqual(TEXT("stable unload permits one new playback"),Reaction->GetPlayedCount(),Baseline[Index++]+2);
+                    Test->TestEqual(TEXT("push now plays opposite to earlier pull on every endpoint"),Reaction->GetObservedDirection(),ECatForceReactionDirection::Backward);
+                }
+                Body->ClearExternalForce(Cats[0]);
+                Test->AddInfo(TEXT("Event=force_reaction_network_verified Endpoints=ListenServer,OwningClient,Observer Scope=Once,Sustain,Reverse,Rearm,VisiblePose"));
+                return true;
+            }
+            return false;
+        }
+    private:
+        FAutomationTestBase* Test;
+        double Started,At=0; int32 Stage=0; FVector Force; TArray<FVector> HeadBefore; TArray<uint32> Baseline;
+    };
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatForceReactionNetworkTest,"Catfishing.ForceReaction.Network.OnsetOnlyAcrossThreeEndpoints",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ProductFilter)
+bool FCatForceReactionNetworkTest::RunTest(const FString& Parameters)
+{
+    if (!TestTrue(TEXT("idle validation editor"),GEditor && GEngine && !GEditor->PlayWorld)) return false;
+    const auto Restore=MakeShared<CatCuteNetwork::FRestore>();
+    UWorld* Map=FAutomationEditorCommonUtils::CreateNewMap(); Map->bIsNameStableForNetworking=true;
+    Map->GetWorldSettings()->DefaultGameMode=AGameModeBase::StaticClass();
+    auto* Floor=Map->SpawnActor<AStaticMeshActor>();
+    Floor->GetStaticMeshComponent()->SetStaticMesh(LoadObject<UStaticMesh>(nullptr,TEXT("/Engine/BasicShapes/Cube")));
+    Floor->GetStaticMeshComponent()->SetCollisionProfileName(TEXT("BlockAll"));
+    Floor->SetActorTransform(FTransform(FRotator::ZeroRotator,FVector(0,0,-10),FVector(60,60,.2)));
+    const double Height=LoadClass<ACatCharacter>(nullptr,CatCuteNetwork::ClassPath)->GetDefaultObject<ACatCharacter>()->GetDefaultHalfHeight();
+    for (int32 I=0;I<3;++I) Map->SpawnActor<APlayerStart>(FVector(-500,I*500-500,Height),FRotator::ZeroRotator);
+    auto* Settings=GetMutableDefault<ULevelEditorPlaySettings>();
+    Settings->SetPlayNetMode(PIE_ListenServer); Settings->SetPlayNumberOfClients(3); Settings->SetRunUnderOneProcess(true);
+    for (auto& Driver:GEngine->NetDriverDefinitions) if (Driver.DefName==TEXT("GameNetDriver"))
+        Driver.DriverClassName=Driver.DriverClassNameFallback=TEXT("/Script/OnlineSubsystemUtils.IpNetDriver");
+    ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
+    FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<CatCuteNetwork::FVerifyForceReaction>(this));
+    ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
+    FAutomationTestFramework::Get().EnqueueLatentCommand(Restore);
+    return true;
 }
 #endif

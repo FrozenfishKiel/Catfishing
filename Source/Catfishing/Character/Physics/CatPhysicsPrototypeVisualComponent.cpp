@@ -136,6 +136,8 @@ bool UCatPhysicsPrototypeVisualComponent::InitializeVisual(USceneComponent* InBo
 	Owner->AddInstanceComponent(VisualMesh);
 	VisualMesh->SetupAttachment(InBodyRoot);
 	VisualMesh->SetRelativeTransform(MeshRelativeTransform);
+	InitialVisualRelativeTransform = MeshRelativeTransform;
+	InitialAnimationRelativeTransform = AnimationSource->GetRelativeTransform();
 	VisualMesh->SetSkinnedAssetAndUpdate(CharacterMesh);
 	VisualMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	VisualMesh->SetGenerateOverlapEvents(false);
@@ -213,6 +215,18 @@ void UCatPhysicsPrototypeVisualComponent::RefreshVisualPose(const float DeltaTim
 		UpdateBaseAnimation(SafeDelta);
 		AnimationSource->TickAnimation(SafeDelta,false);
 		AnimationSource->RefreshBoneTransforms();
+	}
+	// CMC smooths the Character mesh. The rendered poseable mesh must consume that same
+	// transform, otherwise only the hidden animation source would receive network smoothing.
+	// Authority model contacts consume this pose. Cosmetic listen-server mesh smoothing
+	// must not displace the authoritative contact geometry away from its terrain capsule.
+	if (!GetOwner()->HasAuthority() && !bOwnsAnimationSource && AnimationSource->GetAttachParent())
+	{
+		const FTransform UnsmoothedSource = InitialAnimationRelativeTransform * AnimationSource->GetAttachParent()->GetComponentTransform();
+		FTransform VisualPose = InitialVisualRelativeTransform * BodyRoot->GetComponentTransform();
+		VisualPose.AddToTranslation(AnimationSource->GetComponentLocation() - UnsmoothedSource.GetLocation());
+		VisualPose.SetRotation(AnimationSource->GetComponentQuat() * UnsmoothedSource.GetRotation().Inverse() * VisualPose.GetRotation());
+		VisualMesh->SetWorldTransform(VisualPose);
 	}
 	VisualMesh->CopyPoseFromSkeletalComponent(AnimationSource);
 	if (bOwnsAnimationSource && (AnimationState == EAnimationState::Takeoff || AnimationState == EAnimationState::Airborne

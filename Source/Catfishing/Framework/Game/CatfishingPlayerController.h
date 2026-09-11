@@ -42,6 +42,8 @@ class CATFISHING_API ACatfishingPlayerController : public APlayerController
 	friend class FCatFishingSlackAimCommandRoutingTest;
 	friend class FCatPhysicalInputRouteTest;
 public:
+	/** Ordinary/sprint speed from this controller and the pawn class, in cm/s. Used by CMC flags. */
+	float GetConfiguredMovementSpeed(const APawn* TargetPawn, bool bSprinting) const;
 	/** 每帧先对齐公开翻天快照与锁，再交给引擎处理输入；同时覆盖 GameState 晚到与复制延迟。 */
 	virtual void Tick(float DeltaSeconds) override;
 	/** 查询当前公开翻天锁，供本地 UI 和 Ability 输入拒绝操作；客户端超时不能改变服务器的 active 事实。 */

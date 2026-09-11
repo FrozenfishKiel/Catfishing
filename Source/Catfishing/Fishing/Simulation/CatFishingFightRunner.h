@@ -95,7 +95,7 @@ public:
 	/** 鱼当前是否接触真实干地；水岸转换由连续表面查询裁决，不永久锁在某一种表面。 */
 	bool IsFishBeachedForAuthority() const { return bFishBeached; }
 	/** 原物品主人明确取回操控时，重新绑定本人 ASC 与输入序号域。 */
-	bool ResumeOwnerFromAuthority(APlayerState* NewPlayerState, UCatAbilitySystemComponent* NewAbilitySystem,
+	bool ResumePrimaryFromAuthority(APlayerState* NewPlayerState, UCatAbilitySystemComponent* NewAbilitySystem,
 		double NewCatStrength, double NewCatStaminaMaximum, double NewCatStamina,
 		int64 InitialInputSequence, bool bInitialPullHeld, bool bInitialSlackHeld);
 	ECatFightCatAction GetCatAction() const { return State.CatAction; }

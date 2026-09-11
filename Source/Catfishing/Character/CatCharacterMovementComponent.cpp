@@ -8,6 +8,8 @@
 #include "Interaction/CatModelContactComponent.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "GameFramework/PlayerController.h"
+#include "Framework/Game/CatfishingPlayerController.h"
 #include "EngineUtils.h"
 
 namespace
@@ -38,14 +40,78 @@ UCatCharacterMovementComponent::UCatCharacterMovementComponent()
 	bUseControllerDesiredRotation = false;
 	Mass = 4.0f;
 	MaxAcceleration = BrakingDecelerationWalking = 6000.0f;
+	SetNetworkMoveDataContainer(NetworkMoves);
+	NetworkSmoothingMode = ENetworkSmoothingMode::Exponential;
+	PrimaryComponentTick.TickGroup = TG_PostPhysics;
 }
 
-void UCatCharacterMovementComponent::AdvanceFromAuthority(float DeltaSeconds)
+void UCatCharacterMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* TickFunction)
 {
 	auto* Cat = Cast<ACatCharacter>(CharacterOwner);
 	auto* Body = Cat ? Cat->GetPhysicalBodyComponent() : nullptr;
-	if (!Body || !Cat->HasAuthority() || DeltaSeconds <= 0) return;
-	const auto EffortDrive = Body->CaptureDriveSample();
+	if (!Body || !Body->GetBody()) return;
+	if (ObservedControlEpoch != Body->GetControlEpoch())
+	{
+		ObservedControlEpoch = Body->GetControlEpoch();
+		ResetControlPrediction();
+		UE_LOG(LogCatPhysicsGrab, Log, TEXT("Event=cmc_prediction_started World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s BodyId=%s ControlEpoch=%u Result=SavedMovesAndReconciliation"),
+			*GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), Cat->HasAuthority(), int32(Cat->GetLocalRole()),
+			*GetNameSafe(Cat), *Body->GetBodyId().ToString(), ObservedControlEpoch);
+	}
+	if (Cat->IsLocallyControlled() || (Cat->HasAuthority() && !Cat->GetController()))
+		AddInputVector(Body->GetLocalMoveIntent(), true);
+	Super::TickComponent(DeltaTime, TickType, TickFunction);
+	// Authority-only controllers (e.g. domain test worlds or an unconnected gameplay host)
+	// have neither local player input nor incoming ServerMoves. Preserve their force/floor
+	// simulation. A real remote player's UNetConnection is a Player and never enters here.
+	const auto* PC = Cast<APlayerController>(Cat->GetController());
+	if (Cat->HasAuthority() && PC && !PC->Player && !Cat->IsLocallyControlled())
+		ControlledCharacterMove(Body->GetLocalMoveIntent(), DeltaTime);
+	Body->CompleteCharacterMovement();
+	if (Cat->IsLocallyControlled() && !Cat->HasAuthority() && (!Velocity.IsNearlyZero(3) || !Body->GetLocalMoveIntent().IsNearlyZero())
+		&& GetWorld()->GetTimeSeconds() >= NextPredictionLogSeconds)
+	{
+		NextPredictionLogSeconds = GetWorld()->GetTimeSeconds() + 1;
+		const auto* Data = static_cast<FNetworkPredictionData_Client_Character*>(GetPredictionData_Client());
+		UE_LOG(LogCatPhysicsGrab, Log, TEXT("Event=cmc_prediction_sample World=%s NetMode=%d Authority=0 LocalRole=%d Actor=%s BodyId=%s ControlEpoch=%u PendingMoves=%d MoveTime=%.3f Location=%s Velocity=%s Result=LocallyPredicted"),
+			*GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), int32(Cat->GetLocalRole()), *GetNameSafe(Cat), *Body->GetBodyId().ToString(),
+			ObservedControlEpoch, Data->SavedMoves.Num(), Data->CurrentTimeStamp, *Cat->GetActorLocation().ToCompactString(), *Velocity.ToCompactString());
+	}
+}
+
+bool UCatCharacterMovementComponent::DoJump(bool bReplayingMoves, float DeltaTime)
+{
+	auto* Cat = Cast<ACatCharacter>(CharacterOwner);
+	auto* Body = Cat ? Cat->GetPhysicalBodyComponent() : nullptr;
+	if (!Body || !Body->IsLocomotionEnabled()) return false;
+	JumpZVelocity = Body->JumpSpeedCmS;
+	const bool bJumped = Super::DoJump(bReplayingMoves, DeltaTime);
+	if (bJumped && Cat->HasAuthority()) Body->NotifyCharacterJump();
+	return bJumped;
+}
+
+void UCatCharacterMovementComponent::PerformMovement(float DeltaSeconds)
+{
+	auto* Cat = Cast<ACatCharacter>(CharacterOwner);
+	auto* Body = Cat ? Cat->GetPhysicalBodyComponent() : nullptr;
+	if (!Body || !Body->GetBody() || DeltaSeconds <= 0) return;
+	const bool bAuthority = Cat->HasAuthority();
+	if (bAuthority && Cat->GetController() && !Cat->IsLocallyControlled())
+		Body->SetViewIntent(Cat->GetController()->GetControlRotation());
+	// Acceleration is restored from each saved/network move, including replay and analogue input.
+	const FVector MoveIntent = (Acceleration / FMath::Max(1.0f, GetMaxAcceleration())).GetClampedToMaxSize(1.0);
+	if (bAuthority) Body->SetMoveIntent(MoveIntent);
+	if (!bReplayPolicy)
+	{
+		ActiveDrive = bAuthority ? Body->CaptureDriveSample() : Body->GetReplicatedDrive();
+		ActiveExternalForce = bAuthority ? Body->GetExternalForceFromAuthority() : Body->GetReplicatedExternalForce();
+	}
+	ActiveDrive.MoveIntent = Body->IsLocomotionEnabled() ? MoveIntent : FVector::ZeroVector;
+	ActiveDrive.bLocomotion = Body->IsLocomotionEnabled();
+	if (const auto* Controller = Cast<ACatfishingPlayerController>(Cat->GetController()); Controller && Controller->IsDayTransitionInputBlocked())
+		ActiveDrive.MoveIntent = FVector::ZeroVector;
+	if (!ActiveDrive.bFishing) ActiveDrive.MaxSpeed = Body->MaxMovementSpeedCmS;
+	const auto EffortDrive = ActiveDrive;
 	const FVector StartPosition = Cat->GetActorLocation();
 	const FVector StartCorrection = TotalMotionCorrection;
 	const uint32 StartResetEpoch = Body->GetResetEpoch();
@@ -64,17 +130,20 @@ void UCatCharacterMovementComponent::AdvanceFromAuthority(float DeltaSeconds)
 	MaxWalkSpeed = Body->MaxMovementSpeedCmS;
 	JumpZVelocity = Body->JumpSpeedCmS;
 	GravityScale = Body->GravityScale;
-	Acceleration = Body->GetMoveIntent() * GetMaxAcceleration();
+	Acceleration = ActiveDrive.MoveIntent * GetMaxAcceleration();
 	// 4c5e8cd: continuous traction uses the same small steps even on slow frames.
-    MovementExternalForce = QueuedExternalImpulse / DeltaSeconds;
-    QueuedExternalImpulse = FVector::ZeroVector;
-    MovementExternalForce.Z += Body->GetVerticalGripForceFromAuthority();
+    MovementExternalForce = bAuthority ? QueuedExternalImpulse / DeltaSeconds : FVector::ZeroVector;
+    if (bAuthority) QueuedExternalImpulse = FVector::ZeroVector;
+    if (bAuthority) MovementExternalForce.Z += Body->GetVerticalGripForceFromAuthority();
+    else { MovementExternalForce.Z = ActiveExternalForce.Z; ActiveExternalForce.Z = 0; }
+    LastExternalForce = ActiveExternalForce + MovementExternalForce;
+    LastExternalForce.Z = MovementExternalForce.Z; // CalcVelocity discards source Z; vertical grip is integrated once.
     if (IsMovingOnGround() && MovementExternalForce.Z > -GetGravityZ()*FMath::Max(1.0f,Mass))
     {
         SetMovementMode(MOVE_Falling);
-        Body->NotifyGripLiftFromAuthority();
+        if (bAuthority) Body->NotifyGripLiftFromAuthority();
     }
-    const bool bTraction = Body->HasFishingMotor() || Body->CaptureDriveSample().bConnected || !MovementExternalForce.IsNearlyZero();
+    const bool bTraction = ActiveDrive.bFishing || ActiveDrive.bConnected || !MovementExternalForce.IsNearlyZero();
     const float Step = bTraction ? FMath::Min(MaxSimulationTimeStep, 1.0f / 120.0f) : MaxSimulationTimeStep;
     TGuardValue<float> StepGuard(MaxSimulationTimeStep, Step);
     TGuardValue<int32> IterationGuard(MaxSimulationIterations, bTraction
@@ -85,7 +154,8 @@ void UCatCharacterMovementComponent::AdvanceFromAuthority(float DeltaSeconds)
     const FVector PeerCorrection = TotalMotionCorrection - BeforePeerCorrection;
     MovementExternalForce = FVector::ZeroVector;
 	bQueuedExternalLoad = false;
-	if (auto* Effort = Cat->FindComponentByClass<UCatPhysicalEffortComponent>())
+	bReplayPolicy = false;
+	if (auto* Effort = bAuthority ? Cat->FindComponentByClass<UCatPhysicalEffortComponent>() : nullptr)
 		if (StartResetEpoch == Body->GetResetEpoch())
 		{
 			FVector ActualDisplacement = Cat->GetActorLocation() - StartPosition - (TotalMotionCorrection - StartCorrection);
@@ -96,6 +166,7 @@ void UCatCharacterMovementComponent::AdvanceFromAuthority(float DeltaSeconds)
 			ActualDisplacement.Z = 0;
 			Effort->SettleMovementFromAuthority(EffortDrive, IntendedDisplacement, ActualDisplacement, DeltaSeconds, bStartedGrounded);
 		}
+	Body->CompleteCharacterMovement();
 }
 
 void UCatCharacterMovementComponent::CalcVelocity(float DeltaTime, float Friction, bool bFluid, float BrakingDeceleration)
@@ -105,12 +176,13 @@ void UCatCharacterMovementComponent::CalcVelocity(float DeltaTime, float Frictio
 	if (!Body || DeltaTime <= 0) return;
 	// Grounded voluntary braking and external traction share one finite force budget.
 	// Vertical force is integrated only by NewFallVelocity; PhysFalling restores CalcVelocity's Z.
-	FVector Force = Body->GetExternalForceFromAuthority();
+	FVector Force = Cat->HasAuthority() ? Body->GetExternalForceFromAuthority() : ActiveExternalForce;
 	Force += MovementExternalForce;
 	Force.Z = 0;
     if (IsMovingOnGround())
     {
-        auto Drive = Body->CaptureDriveSample();
+        auto Drive = Cat->HasAuthority() ? Body->CaptureDriveSample() : ActiveDrive;
+        Drive.MoveIntent = ActiveDrive.MoveIntent;
         const double Resistance = FMath::IsFinite(GroundResistanceNewtons) ? FMath::Max(0.0f,GroundResistanceNewtons) : .8;
         Velocity = IntegrateGroundVelocity(Drive,CharacterOwner->GetActorLocation(),Velocity,Force,FMath::Max(1.0f,Mass),Resistance,DeltaTime);
     }
@@ -127,8 +199,10 @@ void UCatCharacterMovementComponent::PhysicsRotation(float DeltaTime)
 	const auto* Cat = Cast<ACatCharacter>(CharacterOwner);
 	const auto* Body = Cat ? Cat->GetPhysicalBodyComponent() : nullptr;
 	if (!Body || !UpdatedComponent) return;
-	const double Yaw = FMath::FixedTurn(UpdatedComponent->GetComponentRotation().Yaw,
-		Body->GetFacingYawDegrees(), 720.0 * FMath::Max(0.0f, DeltaTime));
+	const bool bAim = ActiveDrive.bFishing || Body->GetGrab()->IsReaching(true) || Body->GetGrab()->IsReaching(false);
+	const double TargetYaw = bAim ? Body->GetViewIntent().Yaw : (!ActiveDrive.MoveIntent.IsNearlyZero()
+		? ActiveDrive.MoveIntent.Rotation().Yaw : UpdatedComponent->GetComponentRotation().Yaw);
+	const double Yaw = FMath::FixedTurn(UpdatedComponent->GetComponentRotation().Yaw, TargetYaw, 720.0 * FMath::Max(0.0f, DeltaTime));
 	MoveUpdatedComponent(FVector::ZeroVector, FRotator(0,Yaw,0), true);
 }
 
@@ -275,36 +349,12 @@ void UCatCharacterMovementComponent::ResolveModelPeerPenetration()
 	}
 }
 
-void UCatCharacterMovementComponent::ObserveSnapshot(const FVector& ObservedVelocity, const FVector& ObservedIntent)
-{
-	if (!CharacterOwner || CharacterOwner->HasAuthority()) return;
-	Velocity = ObservedVelocity;
-	Acceleration = ObservedIntent * GetMaxAcceleration();
-}
-
 bool UCatCharacterMovementComponent::ResolvePenetrationImpl(const FVector& Adjustment, const FHitResult& Hit, const FQuat& Rotation)
 {
 	const FVector Before = UpdatedComponent ? UpdatedComponent->GetComponentLocation() : FVector::ZeroVector;
 	const bool bResolved = Super::ResolvePenetrationImpl(Adjustment, Hit, Rotation);
 	if (UpdatedComponent) TotalMotionCorrection += UpdatedComponent->GetComponentLocation() - Before;
 	return bResolved;
-}
-
-bool UCatCharacterMovementComponent::IsFalling() const
-{
-	const auto* Cat = Cast<ACatCharacter>(CharacterOwner);
-	if (Cat && !Cat->HasAuthority())
-	{
-		const auto* Body = Cat->GetPhysicalBodyComponent();
-		return Body->HasMovementSample() && !Body->IsGrounded();
-	}
-	return Super::IsFalling();
-}
-
-bool UCatCharacterMovementComponent::IsMovingOnGround() const
-{
-	const auto* Cat = Cast<ACatCharacter>(CharacterOwner);
-	return Cat && !Cat->HasAuthority() ? Cat->GetPhysicalBodyComponent()->IsGrounded() : Super::IsMovingOnGround();
 }
 
 FCatCMCMotionPrediction UCatCharacterMovementComponent::CaptureMotionPrediction()

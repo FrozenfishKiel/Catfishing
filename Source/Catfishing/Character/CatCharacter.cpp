@@ -19,6 +19,7 @@
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "Animation/AnimMontage.h"
+#include "Character/Animation/CatForceReactionComponent.h"
 #include "Condition/CatConditionComponent.h"
 #include "Condition/CatConditionPresentationComponent.h"
 #include "Equipment/CatEquipmentComponent.h"
@@ -61,7 +62,7 @@ ACatCharacter::ACatCharacter(const FObjectInitializer& ObjectInitializer)
 	GetCharacterMovement()->MaxWalkSpeed=100.0f;
 	PrimaryActorTick.bCanEverTick=true;
 	PrimaryActorTick.TickGroup=TG_PostPhysics;
-	SetReplicateMovement(false);
+	SetReplicateMovement(true);
 	SetNetUpdateFrequency(30);
 	bUseControllerRotationYaw=false;
 	PhysicalBody=CreateDefaultSubobject<UBoxComponent>(TEXT("PhysicsBody"));
@@ -83,6 +84,7 @@ ACatCharacter::ACatCharacter(const FObjectInitializer& ObjectInitializer)
 	CreateDefaultSubobject<UCatPhysicalEffortComponent>(TEXT("PhysicalEffort"));
 	PhysicalVisual=CreateDefaultSubobject<UCatPhysicsPrototypeVisualComponent>(TEXT("PhysicalVisual"));
 	ModelContacts=CreateDefaultSubobject<UCatModelContactComponent>(TEXT("ModelContacts"));
+	CreateDefaultSubobject<UCatForceReactionComponent>(TEXT("ForceReaction"));
 
 }
 
@@ -319,12 +321,14 @@ void ACatCharacter::BeginPlay()
 	PhysicalBody->AttachToComponent(GetCapsuleComponent(), FAttachmentTransformRules::KeepWorldTransform);
 	for (int32 Index=0; Index<AuthoredChildren.Num(); ++Index) AuthoredChildren[Index]->SetWorldTransform(ChildTransforms[Index]);
 	GetCapsuleComponent()->SetCapsuleSize(13.0 * MeshGeometryScale, 20.0 * MeshGeometryScale);
+	CacheInitialMeshOffset(GetMesh()->GetRelativeLocation(), GetMesh()->GetRelativeRotation());
 	ConfigureCharacterMovementAuthority();
 	PhysicalBodyComponent->UseCharacterMovement(CastChecked<UCatCharacterMovementComponent>(GetCharacterMovement()));
 	PhysicalBodyComponent->ConfigureMovementDefaults(GetCharacterMovement()->JumpZVelocity,
 		GetCharacterMovement()->GravityScale, GetCharacterMovement()->MaxWalkSpeed);
 	PhysicalBodyComponent->Initialize(PhysicalBody,LeftPhysicsHand,RightPhysicsHand,LeftPhysicsArm,RightPhysicsArm,PhysicsGrab,MeshGeometryScale);
-	PrimaryActorTick.AddPrerequisite(PhysicalBodyComponent, PhysicalBodyComponent->GetPostMovementTick());
+	GetCharacterMovement()->AddTickPrerequisiteComponent(PhysicalBodyComponent);
+	PrimaryActorTick.AddPrerequisite(GetCharacterMovement(), GetCharacterMovement()->PrimaryComponentTick);
 	if (GetMesh()->GetSkeletalMeshAsset())
 	{
 		GetMesh()->PrimaryComponentTick.TickGroup=TG_PostPhysics;
@@ -440,7 +444,7 @@ void ACatCharacter::InitializeAbilityActorInfo()
 
 void ACatCharacter::ConfigureCharacterMovementAuthority()
 {
-	SetReplicateMovement(false);
+	SetReplicateMovement(true);
 	bUseControllerRotationYaw=false;
 	GetCapsuleComponent()->SetCollisionProfileName(TEXT("Pawn"));
 	GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
@@ -451,7 +455,8 @@ void ACatCharacter::ConfigureCharacterMovementAuthority()
 	GetCharacterMovement()->bEnablePhysicsInteraction=false;
 	GetCharacterMovement()->Mass=4.0f;
 	GetCharacterMovement()->SetMovementMode(MOVE_Falling);
-	GetCharacterMovement()->SetComponentTickEnabled(false);
+	GetCharacterMovement()->PrimaryComponentTick.TickGroup=TG_PostPhysics;
+	GetCharacterMovement()->SetComponentTickEnabled(true);
 	GetMesh()->bOnlyAllowAutonomousTickPose=false;
 	GetMesh()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	GetMesh()->SetGenerateOverlapEvents(false);

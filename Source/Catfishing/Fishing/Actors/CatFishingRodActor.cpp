@@ -112,7 +112,8 @@ void ACatFishingRodActor::RefreshPrimaryControlFromAuthority()
 bool ACatFishingRodActor::SetPrimaryOperatorFromAuthority(APlayerState* PlayerOrNull, const int64 ExpectedRevision)
 {
 	if (!HasAuthority() || !bIdentityInitialized || ExpectedRevision != PresentationState.RodActorRevision
-		|| (PlayerOrNull && (PlayerOrNull != PresentationState.OwnerPlayerState || !PresentationState.bDeployed || PresentationState.bBroken))) return false;
+		|| (PlayerOrNull && (!PresentationState.bDeployed || PresentationState.bBroken
+			|| (PresentationState.OperatorPlayerState && PresentationState.OperatorPlayerState != PlayerOrNull)))) return false;
 	FCatFishingRodPresentationState Next = PresentationState;
 	Next.OperatorPlayerStates.Reset();
 	if (PlayerOrNull) Next.OperatorPlayerStates.Add(PlayerOrNull);

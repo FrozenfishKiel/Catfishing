@@ -463,35 +463,37 @@ void UCatLocalPlayerUISubsystem::RefreshFrontendForCurrentController()
 }
 
 // 全局遮罩刷新流程：
-// 1. 先记录本次刷新前仍在跟随的 Start/Leave 请求，方便完成态同帧到达时还能写出完成状态。
+// 1. 对齐本次 Start/Leave 请求；请求切换时取消旧完成展示，防止新一轮等待沿用旧截止时间。
 // 2. 再按 Online、引擎和本地 UI 就绪事实决定显示；仍在真实等待时取消完成态停留并刷新正式 WBP。
-// 3. 已经真实完成时只进入视觉层的短暂完成展示，再移除遮罩；错误或非 Start/Leave 状态则立刻释放。
+// 3. 真实完成时只安排一次短暂完成展示，保留请求直到实际撤罩；就绪回退仍能回到等待，错误或无过渡则立即释放。
 void UCatLocalPlayerUISubsystem::RefreshGlobalLoadingScreen(const FCatOnlineSnapshot& Snapshot)
 {
 	const ECatOnlineOperation PreviousLoadingOperation = GlobalLoadingOperation;
 	const FGuid PreviousLoadingRequestId = GlobalLoadingRequestId;
 	const bool bHadVisibleLoadingScreen = GlobalLoadingScreenWidget && GlobalLoadingScreenWidget->IsInViewport();
 	TrackGlobalLoadingTransition(Snapshot);
+	if (GlobalLoadingOperation != PreviousLoadingOperation || GlobalLoadingRequestId != PreviousLoadingRequestId)
+	{
+		ResetGlobalLoadingDismissal();
+	}
 	FCatGlobalLoadingPresentation Presentation;
 	if (ShouldShowGlobalLoadingScreen(Snapshot, Presentation))
 	{
-		ClearGlobalLoadingDismissalPostTick();
+		ResetGlobalLoadingDismissal();
 		ShowGlobalLoadingScreen(Presentation);
 		return;
 	}
-	const bool bCanPresentGameplayCompletion = PreviousLoadingOperation == ECatOnlineOperation::Start
+	const bool bCanPresentGameplayCompletion = GlobalLoadingOperation == ECatOnlineOperation::Start
 		&& IsGameplayLoadingReadyToDismiss(Snapshot);
-	const bool bCanPresentFrontendCompletion = PreviousLoadingOperation == ECatOnlineOperation::Leave
+	const bool bCanPresentFrontendCompletion = GlobalLoadingOperation == ECatOnlineOperation::Leave
 		&& IsFrontendLoadingReadyToDismiss(Snapshot);
 	if (Snapshot.LastError == ECatOnlineError::None && bHadVisibleLoadingScreen
 		&& (bCanPresentGameplayCompletion || bCanPresentFrontendCompletion))
 	{
-		GlobalLoadingRequestId = PreviousLoadingRequestId;
-		RequestGlobalLoadingDismissalAfterPresentation(PreviousLoadingOperation);
-		return;
-	}
-	if (bGlobalLoadingDismissalPending && Snapshot.LastError == ECatOnlineError::None)
-	{
+		if (!bGlobalLoadingDismissalPending)
+		{
+			RequestGlobalLoadingDismissalAfterPresentation(GlobalLoadingOperation);
+		}
 		return;
 	}
 	HideGlobalLoadingScreen();
@@ -507,7 +509,7 @@ void UCatLocalPlayerUISubsystem::RefreshGlobalLoadingScreenFromCurrentSnapshot()
 	{
 		GlobalLoadingOperation = ECatOnlineOperation::None;
 		GlobalLoadingRequestId.Invalidate();
-		ClearGlobalLoadingDismissalPostTick();
+		ResetGlobalLoadingDismissal();
 		HideGlobalLoadingScreen();
 		return;
 	}
@@ -666,7 +668,8 @@ bool UCatLocalPlayerUISubsystem::ShouldShowGlobalLoadingScreen(
 	return false;
 }
 
-// 全局遮罩显示流程：优先复用当前实例；首次显示时用 GameInstance 创建正式 Loading WBP 并加到最高层，随后写入已经合成好的表现快照。
+// 全局遮罩显示流程：用 GameInstance 创建或复用正式 WBP 并挂到最高层；类或上下文缺失时记录失败并返回。
+// 成功显示后只注册一份 Slate 观察，覆盖 GameState、BeginPlay 和视口晚于最后一次 Online/Pawn 通知到达的空窗；最后写入真实表现。
 void UCatLocalPlayerUISubsystem::ShowGlobalLoadingScreen(const FCatGlobalLoadingPresentation& Presentation)
 {
 	if (!GlobalLoadingScreenWidget)
@@ -695,13 +698,24 @@ void UCatLocalPlayerUISubsystem::ShowGlobalLoadingScreen(const FCatGlobalLoading
 	{
 		GlobalLoadingScreenWidget->AddToViewport(CatLocalPlayerUILoadingScreen::ViewportZOrder);
 	}
+	if (!GlobalLoadingPostTickHandle.IsValid() && FSlateApplication::IsInitialized())
+	{
+		GlobalLoadingPostTickHandle = FSlateApplication::Get().OnPostTick().AddUObject(
+			this, &ThisClass::HandleGlobalLoadingPostTick);
+	}
 	RefreshGlobalLoadingScreenPresentation(Presentation);
 }
 
-// 全局遮罩隐藏流程：先成对解绑完成态停留回调并清掉本地 Start/Leave 过渡记忆，再移除最高层 WBP 和文本缓存；Online 终态和错误展示仍由对应 Controller/Model 自己处理。
+// 全局遮罩隐藏流程：先停止 Slate 观察并清掉完成停留、Start/Leave 记忆；即使 Widget 已失效也必须完成解绑。
+// 有实例时记录最后阶段并移出视口，随后释放缓存；Online 终态和错误仍归对应 Controller/Model。
 void UCatLocalPlayerUISubsystem::HideGlobalLoadingScreen()
 {
-	ClearGlobalLoadingDismissalPostTick();
+	if (GlobalLoadingPostTickHandle.IsValid() && FSlateApplication::IsInitialized())
+	{
+		FSlateApplication::Get().OnPostTick().Remove(GlobalLoadingPostTickHandle);
+	}
+	GlobalLoadingPostTickHandle.Reset();
+	ResetGlobalLoadingDismissal();
 	GlobalLoadingOperation = ECatOnlineOperation::None;
 	GlobalLoadingRequestId.Invalidate();
 	if (!GlobalLoadingScreenWidget)
@@ -719,7 +733,7 @@ void UCatLocalPlayerUISubsystem::HideGlobalLoadingScreen()
 // 完成态遮罩移除请求流程：
 // 1. 根据刚完成的 Start/Leave 写入真实完成文案，Start 明确显示总进度 100%，Leave 仍不显示进度条。
 // 2. 从 UI 设置读取最短展示秒数并换成单调时间；这段等待发生在加载全部完成之后，只服务玩家看清完成态。
-// 3. 若 Slate 可用则注册 PostTick 回调按界面刷新周期检查到点时间；PostTick 只是完成文案的展示检查点，不参与加载判断。
+// 3. 复用显示时已注册的 Slate 观察；若 Slate 不可用则直接清理，避免完成状态留下无法消费的停留请求。
 void UCatLocalPlayerUISubsystem::RequestGlobalLoadingDismissalAfterPresentation(
 	const ECatOnlineOperation CompletedOperation)
 {
@@ -729,8 +743,6 @@ void UCatLocalPlayerUISubsystem::RequestGlobalLoadingDismissalAfterPresentation(
 		return;
 	}
 	bGlobalLoadingDismissalPending = true;
-	GlobalLoadingDismissalOperation = CompletedOperation;
-	GlobalLoadingDismissalRequestId = GlobalLoadingRequestId;
 	FCatGlobalLoadingPresentation Presentation;
 	if (CompletedOperation == ECatOnlineOperation::Start)
 	{
@@ -760,48 +772,31 @@ void UCatLocalPlayerUISubsystem::RequestGlobalLoadingDismissalAfterPresentation(
 		HideGlobalLoadingScreen();
 		return;
 	}
-	if (!GlobalLoadingDismissalPostTickHandle.IsValid())
-	{
-		GlobalLoadingDismissalPostTickHandle = FSlateApplication::Get().OnPostTick().AddUObject(
-			this, &ThisClass::HandleGlobalLoadingDismissalPostTick);
-	}
 }
 
-// 完成态停留后收口流程：只响应已经安排过的完成态请求；每次 Slate PostTick 都只检查真实时间是否越过最短展示点，未到点时继续保留遮罩且不改写 Online 状态。
-void UCatLocalPlayerUISubsystem::HandleGlobalLoadingDismissalPostTick(const float DeltaTime)
+// 遮罩观察流程：先重读当前 World/Online/UI 事实，让没有专门通知的迟到条件也能推进或取消完成展示。
+// 仍在等待或展示时间未到时保留遮罩；全部条件成立且完成文案已展示足够时间后记录关联请求并统一隐藏。
+// 此回调只观察真实状态，既不随时间增加加载进度，也不以超时跳过准入条件。
+void UCatLocalPlayerUISubsystem::HandleGlobalLoadingPostTick(const float DeltaTime)
 {
 	(void)DeltaTime;
-	if (!bGlobalLoadingDismissalPending)
-	{
-		ClearGlobalLoadingDismissalPostTick();
-		return;
-	}
-	if (FPlatformTime::Seconds() < GlobalLoadingDismissalReadyTimeSeconds)
+	RefreshGlobalLoadingScreenFromCurrentSnapshot();
+	if (!bGlobalLoadingDismissalPending || FPlatformTime::Seconds() < GlobalLoadingDismissalReadyTimeSeconds)
 	{
 		return;
 	}
-	const ECatOnlineOperation CompletedOperation = GlobalLoadingDismissalOperation;
-	const FGuid CompletedRequestId = GlobalLoadingDismissalRequestId;
-	ClearGlobalLoadingDismissalPostTick();
 	UE_LOG(LogCatUI, Log,
 		TEXT("Event=ui_global_loading_dismissal_presented Operation=%d RequestId=%s LastStatus=\"%s\""),
-		static_cast<int32>(CompletedOperation),
-		*CompletedRequestId.ToString(EGuidFormats::DigitsWithHyphens),
+		static_cast<int32>(GlobalLoadingOperation),
+		*GlobalLoadingRequestId.ToString(EGuidFormats::DigitsWithHyphens),
 		*LastGlobalLoadingStatusText.ToString());
 	HideGlobalLoadingScreen();
 }
 
-// 完成态停留回调清理流程：如果曾经注册 Slate PostTick 就成对移除；随后清空完成态请求字段，避免新一次 Start/Leave 继承失效完成展示。
-void UCatLocalPlayerUISubsystem::ClearGlobalLoadingDismissalPostTick()
+// 完成展示重置流程：清空待撤罩标记和展示截止时间，避免下一次等待继承旧完成态；当前过渡意图与 Slate 观察由遮罩统一保留到隐藏。
+void UCatLocalPlayerUISubsystem::ResetGlobalLoadingDismissal()
 {
-	if (GlobalLoadingDismissalPostTickHandle.IsValid() && FSlateApplication::IsInitialized())
-	{
-		FSlateApplication::Get().OnPostTick().Remove(GlobalLoadingDismissalPostTickHandle);
-	}
-	GlobalLoadingDismissalPostTickHandle.Reset();
 	bGlobalLoadingDismissalPending = false;
-	GlobalLoadingDismissalOperation = ECatOnlineOperation::None;
-	GlobalLoadingDismissalRequestId.Invalidate();
 	GlobalLoadingDismissalReadyTimeSeconds = 0.0;
 }
 
@@ -809,11 +804,22 @@ void UCatLocalPlayerUISubsystem::ClearGlobalLoadingDismissalPostTick()
 // 1. 先写高层目标和当前真实步骤，让玩家能看到正在等保存、销毁房间、切图还是 UI 装配。
 // 2. 进入游戏时把模型合成出的总进度和百分号直接写到 WBP；总进度来自状态事实，不来自倒计时或动画时长。
 // 3. 返回主菜单会折叠进度条，只更新文字状态；代码只展示真实等待阶段，不由定时器判断完成。
+// 4. 仅在阶段文本变化时记录 World、玩家和请求关联信息；每帧观察不刷日志，也不改写玩法或 Online 状态。
 void UCatLocalPlayerUISubsystem::RefreshGlobalLoadingScreenPresentation(const FCatGlobalLoadingPresentation& Presentation)
 {
 	if (!GlobalLoadingScreenWidget)
 	{
 		return;
+	}
+	if (!LastGlobalLoadingStatusText.EqualTo(Presentation.StatusText))
+	{
+		const UWorld* World = GetWorld();
+		const APlayerController* Controller = BoundPlayerController.Get();
+		UE_LOG(LogCatUI, Log,
+			TEXT("Event=ui_global_loading_stage RequestId=%s World=%s NetMode=%d Controller=%s Authority=%d LocalRole=%d Status=\"%s\" Detail=\"%s\" Reason=\"%s\""),
+			*GlobalLoadingRequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(World), World ? static_cast<int32>(World->GetNetMode()) : -1,
+			*GetNameSafe(Controller), Controller && Controller->HasAuthority(), Controller ? static_cast<int32>(Controller->GetLocalRole()) : -1,
+			*Presentation.StatusText.ToString(), *Presentation.DetailText.ToString(), *Presentation.ReasonText.ToString());
 	}
 	LastGlobalLoadingStatusText = Presentation.StatusText;
 	const float DisplayedProgressPercent = Presentation.ProgressPercent;
@@ -951,7 +957,7 @@ float UCatLocalPlayerUISubsystem::GetGameplayLoadingProgressPercent(const FCatOn
 	return ProgressPercent;
 }
 
-// 过渡记忆流程：Start/Leave 的真实快照出现时记录当前请求；错误或真实就绪时清空，避免 Online 结案早于 UI 就绪导致遮罩提前消失。
+// 过渡记忆流程：Start/Leave 的真实快照出现时记录当前请求，错误时失效；成功意图保留到实际隐藏，使完成展示期间的就绪回退仍能继续等待。
 void UCatLocalPlayerUISubsystem::TrackGlobalLoadingTransition(const FCatOnlineSnapshot& Snapshot)
 {
 	if (Snapshot.LastError != ECatOnlineError::None)
@@ -969,16 +975,6 @@ void UCatLocalPlayerUISubsystem::TrackGlobalLoadingTransition(const FCatOnlineSn
 	{
 		GlobalLoadingOperation = ECatOnlineOperation::Leave;
 		GlobalLoadingRequestId = Snapshot.RequestId;
-	}
-	if (GlobalLoadingOperation == ECatOnlineOperation::Start && IsGameplayLoadingReadyToDismiss(Snapshot))
-	{
-		GlobalLoadingOperation = ECatOnlineOperation::None;
-		GlobalLoadingRequestId.Invalidate();
-	}
-	else if (GlobalLoadingOperation == ECatOnlineOperation::Leave && IsFrontendLoadingReadyToDismiss(Snapshot))
-	{
-		GlobalLoadingOperation = ECatOnlineOperation::None;
-		GlobalLoadingRequestId.Invalidate();
 	}
 }
 
