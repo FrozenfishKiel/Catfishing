@@ -67,7 +67,11 @@ public:
 	 */
 	bool HasCatalogCartTerminal(const FCatShopCartCommand& Command) const;
 
-	/** 本局经济账本是公款、库存和订单状态的审计事实；外层展示只能读副本，金额不可回写，交付状态只由确认回执推进。 */
+	/**
+	 * 本局经济账本是公款、库存和订单状态的审计事实；外层展示只能读副本，金额不可回写。
+	 * 每条记录都带提交 UTC 时刻和当时的商店天序号，Playtest 回看据此按天切片，不必再从广播顺序倒推。
+	 * 它只活在本局：World 退出时随 Deinitialize 一起清空，和公款「跟局走」是同一条口径。
+	 */
 	TArray<FCatShopTransactionRecord> GetTransactionLedgerSnapshot() const;
 
 	/**
@@ -79,7 +83,7 @@ public:
 		const UCatShopInventoryComponent* ShopInventory, FCatShopResolvedCart& OutResolved,
 		ECatDomainCommandError& OutError) const;
 
-	/** 玩家支付购物车时提交一整车指定摊位目录项；返回整单公款终态、库存快照和每个 EntryId 对应的待交付账本。 */
+	/** 玩家支付购物车时提交一整车指定摊位目录项；返回整单公款终态、库存快照和每个 EntryId 对应的成交账本。 */
 	FCatShopCartTransactionResult PurchaseCatalogCart(const FCatShopCartCommand& Command,
 		UCatShopInventoryComponent* ShopInventory);
 
@@ -92,15 +96,15 @@ public:
 
 	/** 在售鱼协调器保护实物期间，通过一次 GAS GE 逐鱼算钱并入账；服务不删除鱼，失败由协调器释放世界鱼或恢复鱼护原格。 */
 	FCatShopTransactionResult ApplyFishSale(const FCatShopFishSaleCommand& Command);
-	/** 用下游领域的成功回执确认订单已交付；它不重新扣公款、库存或生成第二条账本。 */
-	FCatShopTransactionResult ConfirmTransactionDelivery(const FCatShopDeliveryConfirmationCommand& Command);
 
 	/**
-	 * 局级商店天序号是每日进货的共享边界；调用方跨到新一天时调用本函数，让所有已注册摊位库存各自处理补货。
-	 * 实现：先要求经济 runtime 和写口可用，且新天序号确实比当前天序号大——同一天重复调用不补第二次货；
-	 *       随后把新天序号传给每个摊位库存组件，由组件只重置标了 bDailyRestock 的有限库存。
-	 * 边界：它不换货架、不改价格。真正随机换货架走 RefreshShopInventoryFromCatalog，并且仍由摊位组件读自己的出售表。
-	 * 返回值契约：只有首次跨到更新的天序号并完成每日进货时才返回 true；同一天重放或写口关闭时返回 false，
+	 * 局级商店天序号是清晨那一拍的共享边界；调用方跨到新一天时调用本函数，让所有已注册摊位库存换一轮货架并补货。
+	 * 实现：先要求经济 runtime 和写口可用，且新天序号确实比当前天序号大——同一天重复调用不换第二次货架；
+	 *       随后对每个摊位库存组件先按出售表重抽当前货架（商店册 §3.1.2「装备每日刷新」），再让组件只重置
+	 *       标了 bDailyRestock 的有限库存（「特殊饵与特殊道具每日限量进货」）。
+	 * 边界：开局第一天不换货架——那一轮货架是摊位 BeginPlay 时抽的，换掉等于玩家还没看见就被重抽；
+	 *       从第二天起每天清晨换一次。价格仍只来自出售表，本函数不改价。
+	 * 返回值契约：只有首次跨到更新的天序号且货架或库存确实变过时才返回 true；同一天重放或写口关闭时返回 false，
 	 * 调用方据此保持客户端现有货架展示，不广播一次没有事实变化的刷新。
 	 */
 	bool AdvanceShopDay(int32 NewDayIndex);
@@ -109,6 +113,7 @@ public:
 	 * 声明：按指定摊位自己的出售表显式刷新当前货架库存；调用方决定何时触发，本服务只守经济 gate 和注册关系。
 	 * 实现：要求服务器 runtime、命令门、来源摊位库存、注册关系和 RequestId 成立；再转给该摊位库存组件按自身配置重新抽货架。
 	 * 结果：成功后只改变当前货架库存、目录可用标记和刷新缓存，不清空公款或交易账本；组件变化订阅会推动公开快照刷新。
+	 * 正式节拍走 AdvanceShopDay 的清晨换货架；本入口留给调试、验收脚本和将来需要在一天之内额外换一轮的场合。
 	 */
 	bool RefreshShopInventoryFromCatalog(UCatShopInventoryComponent* ShopInventory, const FGuid& RequestId,
 		const FCatShopRefreshRequest& Request);
@@ -131,11 +136,11 @@ public:
 	FCatShopInventoryRefreshed OnShopInventoryRefreshed;
 
 	/**
-	 * 商人猫收摊：购物车支付、售鱼入账和交付确认这些写口停止受理新命令，每日进货也一并停下；
+	 * 商人猫收摊：购物车支付和售鱼入账这些写口停止受理新命令，清晨换货架与每日进货也一并停下；
 	 * 公款、库存和账本查询照常可读，既有 RequestId 重放仍返回首次终态。
-	 * 新命令拿到的错误码不一定是 CommandsClosed：四个写口都把配置/策略未裁的 PolicyUndecided 排在命令门之前，
+	 * 新命令拿到的错误码不一定是 CommandsClosed：购买与售鱼两条链都把配置/策略未裁的 PolicyUndecided 排在命令门之前，
 	 * 所以配置缺失时收摊后返回的是 PolicyUndecided。两者都是拒绝，判断"商店关没关"不要只认 CommandsClosed。
-	 * 它同时是最后一个夜晚"买卖冻结、只剩吃鱼与篝火回看"的表达和 World teardown 的收口；调用点是 Run 进入两种
+	 * 它同时是最后一个夜晚"买卖冻结、只剩吃鱼与篝火"的表达和 World teardown 的收口；调用点是 Run 进入两种
 	 * 结算夜时的 GameMode 相位切换和 World teardown 的 Deinitialize，两者重复调用不产生第二次副作用。
 	 */
 	void CloseCommands();
@@ -169,8 +174,14 @@ private:
 	/** 解析当前默认收购表；软引用尚未加载或资产不存在时返回空，让售鱼按策略缺失拒绝。 */
 	UDataTable* GetFishSalePriceTable() const;
 
-	/** 回放购物车终态时重读当前账本和库存，让客户端拿到最新交付状态而不是首次缓存里的失效 Pending。 */
+	/** 回放购物车终态时重读当前账本和库存，让客户端拿到与公开货架同版本的事实，而不是首次缓存里的旧库存数字。 */
 	void RefreshCartReplayResultFromLedger(FCatShopCartTransactionResult& Result) const;
+
+	/**
+	 * 为「某摊位在第 N 天清晨换货架」拼一个确定性刷新 RequestId；同一摊位同一天算出来的是同一个号，
+	 * 组件侧的刷新幂等集合据此保证一天只抽一轮货架，不靠调用方自己记有没有换过。
+	 */
+	static FGuid MakeShopDayRefreshRequestId(const FGuid& ShopInventoryId, int32 DayIndex);
 
 	/** 把一条账本记录转成对外公开交易记录；操作者身份留空，服务不持有可复制的公开身份。 */
 	static FCatShopPublicTransaction MakePublicTransaction(const FCatShopTransactionRecord& Record);
@@ -190,9 +201,6 @@ private:
 	/** 售鱼入账的业务载荷签名；库存提交证据与每条鱼的身份、种类和重量必须保持稳定。 */
 	static FString MakeFishSalePayloadSignature(const FCatShopFishSaleCommand& Command);
 
-	/** 交付确认的业务载荷签名；同 RequestId 不能替换 Transaction 或 Receipt。 */
-	static FString MakeDeliveryPayloadSignature(const FCatShopDeliveryConfirmationCommand& Command);
-
 	/** 检查终态缓存的业务载荷是否仍是同一意图；缺失签名按漂移处理，避免半升级缓存被误放行。 */
 	bool DoesTerminalPayloadMatch(const FString& CacheKey, const FString& PayloadSignature) const;
 
@@ -207,7 +215,7 @@ private:
 	/** 团队余额变更后的只读事务版本；余额由 GameState ASC 持有，版本只用于购买兼容和账本排序。 */
 	int64 WalletRevision = 0;
 
-	/** 本局交易账本；价格/公款/库存事实不可重算，交付状态只允许 Pending 到 Delivered。 */
+	/** 本局交易账本；价格/公款/库存事实写下即不可重算，购买行在写入那一刻物品已经进公库，没有第二个交付阶段。 */
 	TArray<FCatShopTransactionRecord> TransactionLedger;
 
 	/** RequestId 幂等终态缓存；重放返回首次账本记录但不重复扣款或入账。 */

@@ -11,14 +11,15 @@
 #include "ShopEconomy/CatShopKioskActor.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatShopInventoryDeliveryReplayTest,
-	"Catfishing.Unit.ShopEconomy.InventoryDeliveryConfirmsAndReplaysWithoutDuplicatePaymentOrItems",
+	"Catfishing.Unit.ShopEconomy.CartPurchaseDeliversOnPaymentAndReplaysWithoutDuplicatePaymentOrItems",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 // 购物车交付边界回归：
 // 1. 在独立 authority World 加载正式摊位蓝图和公共仓库，使用实际目录与公款配置。
-// 2. 从当前货架选一项可付款商品，先预检整批接收，再通过公开经济、库存和确认接口提交。
-// 3. 确认账本从待交付变为已交付，并检查金额和实物数量；不依赖库存版本号作为提交证据。
-// 4. 分别重放购买、发货和确认，验证同一请求不会再次扣钱、发货或生成账本。
+// 2. 从当前货架选一项可付款商品，先预检整批接收，再通过公开经济和库存接口提交。
+// 3. 账本一写下就是成交态（2026-09-09 裁「购买即入库」，没有待交付中间态），并检查金额和实物数量；
+//    不依赖库存版本号作为提交证据。
+// 4. 分别重放购买和发货，验证同一请求不会再次扣钱、发货或生成账本。
 // 此用例覆盖服务边界；Controller 距离校验、UI 操作和网络传输由各自运行验证覆盖。
 bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 {
@@ -73,21 +74,14 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 	if (!TestEqual(TEXT("扣款前整批库存预检通过"),
 		Inventory->ValidateInventoryDefinitionBatchGrantFromAuthority(Command.Context.RequestId,
 			Command.Context.StableNetId, Batch), ECatDomainCommandError::None)) return false;
+	const FDateTime BeforePurchaseUtc = FDateTime::UtcNow();
 	const FCatShopCartTransactionResult Purchase = Shop->PurchaseCatalogCart(Command, Shelf);
-	if (!TestTrue(TEXT("真实购买产生一笔待交付账本"), Purchase.Command.bCommitted
-		&& Purchase.Transactions.Num() == 1 && Purchase.Transactions[0].bDeliveryPending)) return false;
+	if (!TestTrue(TEXT("真实购买产生一笔成交账本"), Purchase.Command.bCommitted
+		&& Purchase.Transactions.Num() == 1 && Purchase.Transactions[0].bPurchase)) return false;
+	TestTrue(TEXT("账本留下可回看的提交时刻"), Purchase.Transactions[0].CommittedAtUtc >= BeforePurchaseUtc);
 	const FCatDomainCommandResult Grant = Inventory->GrantInventoryDefinitionBatchFromAuthority(
 		Command.Context.RequestId, Command.Context.StableNetId, Batch);
 	if (!TestTrue(TEXT("实际物品已进入公共库存"), Grant.bCommitted)) return false;
-	FCatShopDeliveryConfirmationCommand Confirmation;
-	Confirmation.Context.RequestId = Purchase.Transactions[0].TransactionId;
-	Confirmation.Context.StableNetId = Command.Context.StableNetId;
-	Confirmation.Context.ExpectedRevision = Purchase.Transactions[0].WalletRevision;
-	Confirmation.TransactionId = Purchase.Transactions[0].TransactionId;
-	Confirmation.DeliveryReceiptId = Grant.RequestId;
-	const FCatShopTransactionResult Confirmed = Shop->ConfirmTransactionDelivery(Confirmation);
-	TestTrue(TEXT("库存提交回执足以确认交付"), Confirmed.Command.bCommitted
-		&& Confirmed.Transaction.bDeliveryConfirmed && !Confirmed.Transaction.bDeliveryPending);
 	TestEqual(TEXT("购买只扣一次商品价格"), Shop->GetWalletSnapshot().Balance,
 		WalletBefore.Balance - Selected.UnitPrice);
 	TestEqual(TEXT("公共库存收到目录规定数量"),
@@ -98,8 +92,6 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("发货重放保留成功提交事实"), CatIsAcceptedDomainCommandResult(
 		Inventory->GrantInventoryDefinitionBatchFromAuthority(Command.Context.RequestId,
 			Command.Context.StableNetId, Batch)));
-	TestEqual(TEXT("交付确认可以重放"), Shop->ConfirmTransactionDelivery(Confirmation).Command.Error,
-		ECatDomainCommandError::AlreadyResolved);
 	TestEqual(TEXT("重放不再次扣款"), Shop->GetWalletSnapshot().Balance,
 		WalletBefore.Balance - Selected.UnitPrice);
 	TestEqual(TEXT("重放不再次发货"), Inventory->CountVisibleInventoryQuantityByDefinitionId(Selected.DefinitionId),

@@ -170,7 +170,7 @@ bool UCatShopEconomyService::HasCatalogCartTerminal(const FCatShopCartCommand& C
 	return CartTerminalCache.Contains(CacheKey);
 }
 
-// 账本读取流程：复制本局交易记录；广播层可展示金额和交付状态，但不能绕过确认入口直接改服务内数组。
+// 账本读取流程：复制本局交易记录；广播层可展示金额、提交时刻和天序号，但不能改服务内数组。
 TArray<FCatShopTransactionRecord> UCatShopEconomyService::GetTransactionLedgerSnapshot() const
 {
 	return TransactionLedger;
@@ -291,10 +291,12 @@ bool UCatShopEconomyService::ResolveCatalogCartForAuthority(const FCatShopCartCo
 }
 
 // 整车购买流程：
-// 1. 先用身份、CartPurchase 和 RequestId 查询幂等终态；成功订单重放时重读账本/库存，把交付状态带回最新值。
+// 1. 先用身份、CartPurchase 和 RequestId 查询幂等终态；成功订单重放时重读账本/库存，把货架数字带回最新值。
 //    若首次终态是拒绝，重放必须返回首次错误，不能把一次失败请求伪装成已经结算。
 // 2. 首次命令复用整车报价判据，然后让摊位库存整批扣减；扣库存失败时公款和账本保持不变。
-// 3. 库存扣完后一次扣总价，并为每个 EntryId 写一条待交付账本，免费商品也以 0 元购买行进入同一交付链。
+// 3. 库存扣完后一次扣总价，并为每个 EntryId 写一条成交账本，免费商品也以 0 元购买行进入同一入库链。
+//    账本同时留下提交 UTC 时刻与当时的商店天序号，供 Playtest 按天回看；它没有待交付中间态，
+//    发货由订单链在同一次调用里紧接着做（商店册 §2 核心循环第 4 条「购买物进入团队装备库」）。
 // 提交守卫覆盖库存、GAS、账本及广播，期间嵌套购买或售鱼直接拒绝且不缓存，避免回调抢先复用尚未完成的请求。
 FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const FCatShopCartCommand& Command,
 	UCatShopInventoryComponent* ShopInventory)
@@ -366,6 +368,8 @@ FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const 
 	{
 		++WalletRevision;
 	}
+	// 一车里的每一行共用同一个提交时刻：它们是同一次成交，回看时也应该落在同一格。
+	const FDateTime CommittedAtUtc = FDateTime::UtcNow();
 	Result.Transactions.Reserve(ResolvedCart.Lines.Num());
 	for (const FCatShopResolvedCartLine& Line : ResolvedCart.Lines)
 	{
@@ -374,7 +378,8 @@ FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const 
 		Record.RequestId = Command.Context.RequestId;
 		Record.StableNetId = Command.Context.StableNetId;
 		Record.bPurchase = true;
-		Record.bDeliveryPending = true;
+		Record.CommittedAtUtc = CommittedAtUtc;
+		Record.ShopDayIndex = CurrentShopDayIndex;
 		Record.EntryId = Line.Entry.EntryId;
 		Record.ShopInventoryId = Command.ShopInventoryId;
 		Record.DefinitionId = Line.Entry.DefinitionId;
@@ -559,6 +564,8 @@ FCatShopTransactionResult UCatShopEconomyService::ApplyFishSale(const FCatShopFi
 	Record.RequestId = Command.Context.RequestId;
 	Record.StableNetId = Command.Context.StableNetId;
 	Record.bFishSale = true;
+	Record.CommittedAtUtc = FDateTime::UtcNow();
+	Record.ShopDayIndex = CurrentShopDayIndex;
 	Record.FishInstanceId = Command.Fish[0].FishInstanceId;
 	Record.WalletDelta = AppraisedValue;
 	Record.WalletRevision = WalletRevision;
@@ -572,111 +579,39 @@ FCatShopTransactionResult UCatShopEconomyService::ApplyFishSale(const FCatShopFi
 	return Result;
 }
 
-// 交付确认流程：先按确认 RequestId 重放，再用 TransactionId 找到原订单；成功终态可幂等返回，失败终态必须返回首次错误。
-// 只允许原买家用真实下游回执把 Pending 推进到 Delivered。
-FCatShopTransactionResult UCatShopEconomyService::ConfirmTransactionDelivery(
-	const FCatShopDeliveryConfirmationCommand& Command)
-{
-	FCatShopTransactionResult Result;
-	Result.Command.RequestId = Command.Context.RequestId;
-	Result.Wallet = GetWalletSnapshot();
-	if (!Command.Context.RequestId.IsValid() || Command.Context.StableNetId.IsEmpty()
-		|| !Command.TransactionId.IsValid() || !Command.DeliveryReceiptId.IsValid())
-	{
-		Result.Command.Error = ECatDomainCommandError::InvalidPayload;
-		Result.Command.Revision = WalletRevision;
-		return Result;
-	}
-	const FString CacheKey = MakeTerminalKey(Command.Context.StableNetId, TEXT("Delivery"), Command.Context.RequestId);
-	const FString PayloadSignature = MakeDeliveryPayloadSignature(Command);
-	if (const FCatShopTransactionResult* Cached = TerminalCache.Find(CacheKey))
-	{
-		if (!DoesTerminalPayloadMatch(CacheKey, PayloadSignature))
-		{
-			Result.Command.Error = ECatDomainCommandError::InvalidPayload;
-			Result.Command.Revision = WalletRevision;
-			return Result;
-		}
-		Result = *Cached;
-		if (Cached->Command.bCommitted && Cached->Command.Error == ECatDomainCommandError::None)
-		{
-			Result.Command.bCommitted = false;
-			Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
-		}
-		return Result;
-	}
-	FCatShopTransactionRecord* Record = TransactionLedger.FindByPredicate([&Command](const FCatShopTransactionRecord& Candidate)
-	{
-		return Candidate.TransactionId == Command.TransactionId;
-	});
-	if (!bCommandsOpen)
-	{
-		Result.Command.Error = ECatDomainCommandError::CommandsClosed;
-	}
-	else if (!Record)
-	{
-		Result.Command.Error = ECatDomainCommandError::NotFound;
-	}
-	else
-	{
-		Result.Transaction = *Record;
-		if (const UCatShopInventoryComponent* CurrentInventory =
-			FindRegisteredShopInventoryById(Record->ShopInventoryId))
-		{
-			CurrentInventory->TryGetStockSnapshot(Record->EntryId, Result.Stock);
-		}
-		if (Record->StableNetId != Command.Context.StableNetId)
-		{
-			Result.Command.Error = ECatDomainCommandError::PermissionDenied;
-		}
-		else if (Command.Context.ExpectedRevision != Record->WalletRevision)
-		{
-			Result.Command.Error = ECatDomainCommandError::RevisionConflict;
-		}
-		else if (Record->bDeliveryConfirmed)
-		{
-			Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
-		}
-		else if (!Record->bPurchase || !Record->bDeliveryPending
-			|| Record->DefinitionId.IsNone() || Record->PurchaseQuantity <= 0)
-		{
-			Result.Command.Error = ECatDomainCommandError::InvalidPhase;
-		}
-		else
-		{
-			Record->bDeliveryPending = false;
-			Record->bDeliveryConfirmed = true;
-			Record->DeliveryReceiptId = Command.DeliveryReceiptId;
-			Result.Command.bCommitted = true;
-			Result.Command.Error = ECatDomainCommandError::None;
-			Result.Transaction = *Record;
-		}
-	}
-	Result.Command.Revision = WalletRevision;
-	Result.Wallet = GetWalletSnapshot();
-	CacheTerminalResult(CacheKey, PayloadSignature, Result);
-	if (Result.Command.bCommitted)
-	{
-		// 交付确认不动公款，但它把订单从"已付款待取"推到"已到货"，这是全队都要看到的状态变化，
-		// 所以和购买、售鱼走同一条广播；订阅方据此更新同一条交易记录，而不是新增一条。
-		OnPublicTransactionCommitted.Broadcast(MakePublicTransaction(Result.Transaction));
-	}
-	return Result;
-}
-
-// 每日进货流程：先确认经济和写口还开着，再把新天序号广播给所有已注册摊位库存；每个摊位自己决定哪些条目需要补货。
+// 清晨节拍流程：先确认经济和写口还开着，再对每个已注册摊位先换货架、后补货。
+// 1. 换货架＝商店册 §3.1.2「装备每日刷新」：按摊位自己的出售表重抽一轮，固定上架行留下，随机候选重新按权重抽。
+//    RequestId 由摊位身份与天序号确定性拼出，摊位侧的刷新幂等集合据此保证同一天只换一次。
+// 2. 补货＝同节「特殊饵与特殊道具每日限量进货」：只把标了 bDailyRestock 的有限库存重置回当日进货量。
+// 3. 开局第一天不换货架——那轮货架是摊位 BeginPlay 抽的，玩家还没照面就重抽等于白抽；换货架从第二天清晨开始。
+// 顺序不能反：先换货架决定今天卖什么，再补货决定这批货今天有几份；反过来补的会是上一轮已被换掉的行。
 bool UCatShopEconomyService::AdvanceShopDay(const int32 NewDayIndex)
 {
 	if (!bRuntimeReady || !bCommandsOpen || NewDayIndex <= CurrentShopDayIndex)
 	{
 		return false;
 	}
+	const bool bFirstShopDay = CurrentShopDayIndex <= 0;
 	CurrentShopDayIndex = NewDayIndex;
 	bool bAnyChanged = false;
 	for (const TWeakObjectPtr<UCatShopInventoryComponent>& InventoryPtr : RegisteredShopInventories)
 	{
 		UCatShopInventoryComponent* Inventory = InventoryPtr.Get();
-		if (Inventory && Inventory->AdvanceShopDay(NewDayIndex))
+		if (!Inventory)
+		{
+			continue;
+		}
+		if (!bFirstShopDay)
+		{
+			const FGuid RefreshRequestId =
+				MakeShopDayRefreshRequestId(Inventory->GetShopInventoryId(), NewDayIndex);
+			// 正常运行不指定随机种子；要复现某一天的货架时由调试入口自己带种子调 RefreshShopInventoryFromCatalog。
+			if (RefreshShopInventoryFromCatalog(Inventory, RefreshRequestId, FCatShopRefreshRequest()))
+			{
+				bAnyChanged = true;
+			}
+		}
+		if (Inventory->AdvanceShopDay(NewDayIndex))
 		{
 			bAnyChanged = true;
 		}
@@ -886,7 +821,7 @@ UDataTable* UCatShopEconomyService::GetFishSalePriceTable() const
 }
 
 // 购物车重放刷新流程：
-// 1. 按缓存里的 TransactionId 到当前账本重读每一行，避免已确认交付的订单仍返回首次缓存时的 Pending。
+// 1. 按缓存里的 TransactionId 到当前账本重读每一行；账本行本身不再变状态，重读是为了让副本始终指向账本这一份事实。
 // 2. 再按每行来源摊位重读当前库存快照，让客户端收到的重放结果和公开货架保持同一版本事实。
 // 3. 只改传入结果副本，不修改账本、库存或终态缓存。
 void UCatShopEconomyService::RefreshCartReplayResultFromLedger(FCatShopCartTransactionResult& Result) const
@@ -919,6 +854,15 @@ void UCatShopEconomyService::RefreshCartReplayResultFromLedger(FCatShopCartTrans
 	Result.Command.Revision = WalletRevision;
 }
 
+// 清晨刷新请求号流程：把摊位身份和天序号拼成一段固定文本，再取确定性 GUID。
+// 同一摊位同一天永远算出同一个号，所以哪怕清晨那一拍被重复触发，摊位侧的刷新幂等集合也只会让货架换一轮；
+// 换成随机 GUID 就得靠调用方自己记「今天换过没有」，那份状态迟早和摊位实际货架对不上。
+FGuid UCatShopEconomyService::MakeShopDayRefreshRequestId(const FGuid& ShopInventoryId, const int32 DayIndex)
+{
+	return FGuid::NewDeterministicGuid(FString::Printf(TEXT("CatShopDayRefresh|%s|%d"),
+		*ShopInventoryId.ToString(EGuidFormats::DigitsWithHyphens), DayIndex));
+}
+
 // 公开交易记录构造流程：复制账本里可以公开的字段。
 // ActorPlayerState 刻意留空：服务只有服务器私有 StableNetId，按项目约定它不能进复制 DTO，
 // 由持有身份映射的复制挂载点在发出去之前补上公开身份。
@@ -928,8 +872,6 @@ FCatShopPublicTransaction UCatShopEconomyService::MakePublicTransaction(const FC
 	Public.TransactionId = Record.TransactionId;
 	Public.bPurchase = Record.bPurchase;
 	Public.bFishSale = Record.bFishSale;
-	Public.bDeliveryPending = Record.bDeliveryPending;
-	Public.bDeliveryConfirmed = Record.bDeliveryConfirmed;
 	Public.EntryId = Record.EntryId;
 	Public.ShopInventoryId = Record.ShopInventoryId;
 	Public.DefinitionId = Record.DefinitionId;
@@ -1016,14 +958,6 @@ FString UCatShopEconomyService::MakeFishSalePayloadSignature(const FCatShopFishS
 	}
 	return FString::Printf(TEXT("InventoryCommit=%s|Fish=%s"),
 		*Command.InventoryCommitId.ToString(EGuidFormats::DigitsWithHyphens), *FString::Join(Lines, TEXT(",")));
-}
-
-// 交付载荷签名流程：冻结原交易、下游回执和公款前提；回执漂移必须拒绝而不是重放。
-FString UCatShopEconomyService::MakeDeliveryPayloadSignature(const FCatShopDeliveryConfirmationCommand& Command)
-{
-	return FString::Printf(TEXT("Expected=%lld|Transaction=%s|Receipt=%s"),
-		Command.Context.ExpectedRevision, *Command.TransactionId.ToString(EGuidFormats::DigitsWithHyphens),
-		*Command.DeliveryReceiptId.ToString(EGuidFormats::DigitsWithHyphens));
 }
 
 // 载荷比对流程：终态缓存必须伴随签名一起存在且完全一致；缺失签名按不安全缓存处理并拒绝漂移。
