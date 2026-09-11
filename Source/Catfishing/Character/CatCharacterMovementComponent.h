@@ -52,8 +52,10 @@ public:
 	virtual bool ResolvePenetrationImpl(const FVector& Adjustment, const FHitResult& Hit, const FQuat& Rotation) override;
 	FVector GetTotalMotionCorrection() const { return TotalMotionCorrection; }
 private:
+	void ResolveModelPeerPenetration();
 	FVector TotalMotionCorrection = FVector::ZeroVector;
 	double NextModelContactLogSeconds = 0;
+	double NextPeerSeparationLogSeconds = 0;
 	FVector QueuedExternalImpulse = FVector::ZeroVector;
 	bool bQueuedExternalLoad = false;
 	FVector MovementExternalForce = FVector::ZeroVector;

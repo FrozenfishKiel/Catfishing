@@ -194,6 +194,49 @@ public:
 		if (Stage==15)
 		{
 			if (Now-StageStarted<.3) return false;
+			ServerBody->TeleportBodyFromAuthority(FTransform(FVector(0,0,40)),TEXT("BodyPushNetworkFixture"));
+			HostCat->GetPhysicalBodyComponent()->TeleportBodyFromAuthority(FTransform(FVector(140,0,40)),TEXT("BodyPushNetworkPeerFixture"));
+			Local->SetControlRotation(FRotator::ZeroRotator);
+			Stage=16; StageStarted=Now;
+		}
+		if (Stage==16)
+		{
+			if (Now-StageStarted<1) return false;
+			PeerPushStart=HostCat->GetActorLocation();
+			Local->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Pressed,1.0f));
+			Stage=17; StageStarted=Now;
+		}
+		if (Stage==17)
+		{
+			if (Now-StageStarted<3) return false;
+			Local->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Released,0.0f));
+			Test->TestTrue(TEXT("client WASD alone pushes an idle formal friend on the server"),HostCat->GetActorLocation().X>PeerPushStart.X+30);
+			Test->TestTrue(TEXT("body pushing does not require either mouse reach"),!ServerGrab->IsReaching(true) && !ServerGrab->IsReaching(false)
+				&& !ClientGrab->IsReaching(true) && !ClientGrab->IsReaching(false));
+			if (FApp::CanEverRender())
+			{
+				const FVector Mid=(ClientCat->GetActorLocation()+HostCat->GetActorLocation())*.5;
+				EvidenceCamera=Client->SpawnActor<ACameraActor>();
+				EvidenceCamera->SetActorLocationAndRotation(Mid+FVector(0,-240,140),(Mid-(Mid+FVector(0,-240,140))).Rotation());
+				Local->SetViewTarget(EvidenceCamera.Get());
+			}
+			Stage=18; StageStarted=Now;
+		}
+		if (Stage==18)
+		{
+			if (Now-StageStarted<.3) return false;
+			ACatCharacter* ClientPeer=nullptr;
+			for (TActorIterator<ACatCharacter> It(Client);It;++It)
+				if (It->GetPlayerState() && It->GetPlayerState()->GetPlayerId()==HostCat->GetPlayerState()->GetPlayerId()) ClientPeer=*It;
+			if (!ClientPeer) return Wait(TEXT("replicated body-push peer"));
+			Test->TestTrue(TEXT("client observes the actual ungripped peer displacement"),ClientPeer->GetActorLocation().X>PeerPushStart.X+30
+				&& FVector::Dist(ClientPeer->GetActorLocation(),HostCat->GetActorLocation())<3);
+			Test->AddInfo(FString::Printf(TEXT("Event=physical_body_push_network_verified ServerTravelCm=%.3f ClientTravelCm=%.3f PositionErrorCm=%.3f ServerPlayerId=%d PeerPlayerId=%d Reaching=0 Result=ReplicatedWASDPush"),
+				HostCat->GetActorLocation().X-PeerPushStart.X,ClientPeer->GetActorLocation().X-PeerPushStart.X,
+				FVector::Dist(ClientPeer->GetActorLocation(),HostCat->GetActorLocation()),Remote->PlayerState->GetPlayerId(),HostCat->GetPlayerState()->GetPlayerId()));
+			if (FApp::CanEverRender()) CaptureMovement(Client,TEXT("body-push-no-reach"));
+			Local->SetViewTarget(ClientCat);
+			if (EvidenceCamera.IsValid()) { EvidenceCamera->Destroy(); EvidenceCamera.Reset(); }
 			ServerCat->TeleportTo(FVector(0,0,ServerCat->GetBodyStandRootHeightCm()),FRotator::ZeroRotator,false,false);
 			// Expose the friend's side to the approaching hand, rather than the retired body box.
 			HostCat->TeleportTo(FVector(0,52,HostCat->GetBodyStandRootHeightCm()),FRotator::ZeroRotator,false,false);
@@ -351,6 +394,7 @@ private:
 	int32 Stage=0;
 	uint32 GripRevision=0;
 	FVector TargetStart=FVector::ZeroVector;
+	FVector PeerPushStart=FVector::ZeroVector;
 	FVector WalkStart=FVector::ZeroVector, StopServer=FVector::ZeroVector, StopClient=FVector::ZeroVector;
 	FString LastWait;
 	TWeakObjectPtr<UCatHUDWidget> Widget;

@@ -180,9 +180,10 @@ bool FCatPhysicalPeerStalemateTest::RunTest(const FString&)
 	Scene.Step(60);
 	const FVector Before=B->GetActorLocation();
 	A->GetPhysicalBodyComponent()->SetMoveIntent(FVector::ForwardVector);
+	B->GetPhysicalBodyComponent()->SetMoveIntent(-FVector::ForwardVector);
 	Scene.Step(120);
-	TestTrue(TEXT("equal finite strength can hold a real peer contact without a position lock"),FVector::Dist2D(Before,B->GetActorLocation())<5);
-	TestTrue(TEXT("both the blocked mover and the standing supporter spend personal stamina"),Stamina(A)<59 && Stamina(B)<59);
+	TestTrue(TEXT("equal actively opposing strength can hold a real peer contact without a position lock"),FVector::Dist2D(Before,B->GetActorLocation())<5);
+	TestTrue(TEXT("both actively opposing movers spend personal stamina"),Stamina(A)<59 && Stamina(B)<59);
 	A->GetPhysicalBodyComponent()->TeleportBodyFromAuthority(FTransform(FVector(0,0,20)),TEXT("ZeroPushFixture"));
 	B->GetPhysicalBodyComponent()->TeleportBodyFromAuthority(FTransform(FVector(28,0,20)),TEXT("ZeroPeerFixture"));
 	Seed(A,20,0); Seed(B,20);

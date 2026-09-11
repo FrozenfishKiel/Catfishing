@@ -1,6 +1,37 @@
 # 物理抓握原型使用说明
 
-2026-09-11 当前正式猫的辅助地面驱动已接入本人 ASC 力量和意图缺失体力结算，松方向键仍有限站稳，耗尽时主动出力为零，任何外部负载下禁止恢复。接触主动反力受各猫力量预算限制，30 N 只保留在被动碰撞部分；模型/骨骼数量不叠力。详见 [当前猫鱼/猫猫框架与验证](FishFightImplementationGuide_zh-CN.md)。下方带日期的原型和迁移说明为历史版本。
+
+## 2026-09-11：普通身体互推与斜坡分离
+
+本轮基线 `2878dd6`。源码、资产均无已有未提交改动；根目录一份未跟踪的裁决同步文档保留。本轮未修改二进制资产或输入配置。用户反馈不伸手无法推动朋友、坡面推挤卡住；现有日志 `Saved/Logs/Catfishing.log` 的 `model_contact_push` 已观察到 20–34cm 重叠。最近个人体力接入把身体触碰也当成满力量主动站稳；原模型接触只提供重叠后推力，没有实体分离纠正。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 身体接触与防穿透 | `Source/Catfishing/Character/CatCharacterMovementComponent.cpp::UpdatePeerPushContacts`→`Source/Catfishing/Interaction/CatModelContactComponent.cpp::FindPeerContact`；模型角色互相忽略胶囊 | 仅重叠后加力，缺少实体分离；角色会穿入 | 保留真实模型表面，接触力查询使用3cm沿双方地面高差方向的近接触余量来跨过小幅动画/分离间隙，实际穿入纠正仍使用零余量；移动完成后沿 CMC 地形扫掠纠正穿入；一对角色按逆质量分配原有电机反力，避免把推者驱动力全部抵消 | 原模型查询→CMC接收→快照 | 两正式猫不伸手互推、反向运动、贴墙；远距不产生空气墙 | `Report-20260911-142656-025` 定向24/24通过，含24组模型/地形场景；联机结果见下文 |
+| 普通接触与抓握支撑 | `Source/Catfishing/Character/Physics/CatPhysicalBodyComponent.cpp::CaptureDriveSample/SetExternalForceFromAuthority`→地面积分与个人努力结算 | 空闲身体触碰也请求全力量站稳 | 外力源增加只供内部使用的身体接触标记，移动/预测样本内显式 `bPassiveBodyContact`。仅纯身体触碰且无手抓/鱼竿/其他载荷时，空闲者被动让开；实际移动仍采用本人力量及费用，其他外力支撑保持 | 外力标记→移动样本→积分及努力位移 | 被动移动不收费；主动对抗及抓握/持竿支撑照旧，耗尽不恢复隐藏电机 | 24/24定向通过，被推者保持60体力、双方松键0.5秒内速度<3cm/s且位移<15cm；不涉及存档或网络字段迁移 |
+| 斜坡/退出/复制 | 模型 MTD→`ResolveModelPeerPenetration`→`MoveAlongFloor/SafeMoveUpdatedComponent`→原 `PublishPostPhysicsSnapshot`；原外力弱引用清理 | 倾斜法线简单水平投影，几何穿入没有按坡面清理 | 形状重叠决定是否接触，直立角色间使用根位置水平轴稳定推挤方向，避免逐骨骼法线跳变导向侧滑；沿该轴估算分离量，纠正经原胶囊扫掠/坡面/台阶，仍禁止把猫当落脚点；纠正记入 `TotalMotionCorrection`，不当作玩家主动进度收费 | 地形扫掠→位置样本/费用→原复制 | 上下坡、横坡、60/120Hz/卡顿；贴墙不穿墙；目标退出仍原清理 | `Report-20260911-142656-025` 定向24/24通过，含24组模型/地形场景；联机结果见下文 |
+| 已抓连双方与松键 | `Source/Catfishing/Interaction/Grab/CatPhysicsGrabComponent.h` 原 `TractionReceiver`→实际接收身体；模型查询/CMC接触及 `CatLightPropNetworkTests` 的只读接收方检查 | 新实体分离会和已有抓握约束争抢位置；纯身体接触松键后也须及时刹停 | 将只读 `GetTractionReceiverForDiagnostics` 统一命名为生产 `GetTractionReceiver`（仅一项旧C++测试消费者，同步迁移，无蓝图入口）；已抓连双方沿用原接触法线/反力且不追加位置分离；普通接触样本区分是否仍有主动推者，全部松键时有限刹停且不产生被动支撑费用 | 只读接收方→模型识别连线→CMC选择唯一解算规则；原抓点/复制/清理不改 | 同环境旧基线三客户端通过，新版本曾失败，必须恢复；普通互推松键、相等力量对抗、力竭守恒 | `Report-20260911-142724-843` 三客户端与身体互推均通过；保留与基线相同的落地抓点复制失败，详见下文 |
+| 资产/配置/表现/打包 | `/Game/Character/BP_CatCharacter`、`BP_CuteCatCharacter`→各自现有PhysicsAsset及最终姿态；动画/抓点消费者不改 | 需保持修复后的真实尺寸和原抓点 | 不改PhysicsAsset、骨架、脚部IK、WBP、输入、默认力量/重力/跳跃；无资产生成/Cook入口迁移、库存持久化写入 | 原资产直接运行 | 运行加载两种正式蓝图、手抓与跳跃；二进制隐藏图未逐个审计，不删除兼容入口 | `Report-20260911-142656-025` 定向24/24通过，含24组模型/地形场景；联机结果见下文 |
+| 测试/日志/文档 | `Interaction/Tests/CatModelContactTests`、`Character/Tests/CatUprightMovementTests`、`AbilitySystem/Tests/CatPhysicalEffortTests`及 `Editor/Character/Physics/Tests/CatPhysicalCharacterNetworkTests.cpp::FVerify`（客户端W→权威身体互推→双端位置→原抓握） | 旧体力测试要求空闲同力量者完全顶住，不符合最新互推要求 | 改为双方主动反向用力时僵持；新增同力量空闲者地形推挤，不放宽费用或远距离接触要求；`model_contact_resolved`默认Log限频落盘 | 基线失败→修复复验→Editor/Game→独立提交 | contract/runtime_behavior/presentation_delivery分别留证；新包/正式地图真人体验不能以自动化代替 | 定向24/24及客户端互推通过；费用/搏鱼最终复验与主工程构建在下文记实，不删除既有失败 |
+
+
+本轮证据（持续更新）：
+
+- 基线 `Report-20260911-140405-825/index.json`：两正式蓝图、0/±25°、60/120Hz 共12场景，被推者位移全部为0，空闲者却发生体力扣除。该行为来自 `dcfd1dc` 接入的主动支撑语义，不是输入映射删除。
+- `contract/runtime_behavior`：`Saved/Automation/PeerPush-20260911/Report-20260911-141745-318/index.json` 79/79通过（72 clean、7带警告）；包括24组正式模型坡面/20°横坡/100ms卡顿帧/墙体场景。未贴墙场景被推者位移129–287cm；贴墙终点由原CMC胶囊阻挡；被推者体力均保持60。直接测量Chaos形状MTD，最大几何穿入5.939cm；它与倾斜表面所需的水平纠正距离是不同量，测试分别记录，不放宽8cm的几何重叠上限。抓握耗尽拒绝、旧状态树/非模拟刚体警告及负向输入诊断仍在报告中，不称为零警告。
+- 客户端真实W按键互推、抓人、焦点释放、独立相机转向和起停：`Report-20260911-141820-042/index.json` 中 `FormalClientViewGripForceAndFocusRelease` 通过。双端被推位移108.402cm，采样位置差0cm。此组合曾发现已抓连双方重复纠正的位置争用，现已修复，最新结果见下一条。
+- `presentation_delivery`：已检查隔离客户端图片 `Saved/Validation/PeerPush-20260911/Saved/Automation/MovementResponse-20260910/Images/20260911-061916-formal-body-push-no-reach.png`，两只正式原猫直立且未伸手；这是受控场景，不能替代当前Showcase2地图真人手感、新Cook、DedicatedServer或Development包双端无-log落盘验收。角色模块保持未关闭。
+
+- 最终互推/CMC/个人体力/物理身体定向：`Report-20260911-142656-025/index.json` 24/24通过（23 clean、1条力竭拒绝诊断），新增双方松键及时停止验证。
+- 联机对照：隔离副本恢复本轮修改前的已合并提交 `2878dd6` 的6份生产源码，`Report-20260911-142133-394/index.json` 中三客户端通过，抓竿组合因 `direct friend grip remains replicated after landing` 失败。修复重复分离后的 `Report-20260911-142724-843/index.json`：三客户端、客户端W互推/抓人/焦点释放均通过，抓竿组合仅保留同一条既有落地复制失败；抓竿反拉手点间距1.406cm（旧基线2.413cm），局部锚点漂移0，握点反拉已通过。最终身体互推双端位移110.083cm，位置差0cm。该既有复制缺口不在本次普通互推中扩大修复，也不将抓握组合标为整体通过。
+- 开发日志：`LogCatPhysicsGrab` 的 `model_contact_push` 与 `model_contact_resolved` 默认Log、每角色至多每秒采样，携带World/NetMode/Authority/LocalRole及BodyId。几何字段明确为 `HorizontalSeparationEstimateCm`，避免将沿坡面水平分离估值误称为原始MTD深度；实际校验日志记录 `MaxShapePenetrationCm`。服务端与客户端观察见上述联机报告和对应 `Automation-*.log`。
+
+- 最终原搏鱼回归：`Report-20260911-142946-870/index.json` 63/63通过（57 clean、6条既有诊断警告），没有改动主钓身份、个人费用、R取放、原搏鱼计算或抓点传力的业务入口。
+- 构建：隔离 Editor Development 完整编译/链接成功（`BuildEditor-20260911-142648-752.log`）；正式工程 Game Development 成功（`BuildGame-Main-Final.log`）；正式 Editor 源码预编译成功（`BuildEditor-Main-NoLink.log`）。当前用户编辑器进程35672占用旧DLL，主工程Editor最后链接与重启载入尚未执行，不能把当前试玩视为已加载修复。主工程和已测试隔离实现的差异仅为末尾说明性注释/排版，玩法源码一致。
+- 清理：原 `GetTractionReceiverForDiagnostics` 没有剩余C++引用，唯一旧测试消费者已经迁移；实际原生无模型测试仍使用胶囊回退，已抓连角色仍使用原软接触/握点约束，均为确认在用的消费者，保留对应分支。不修改或删除PhysicsAsset、输入、脚步IK、WBP、资产生成/Cook入口、持久化写口；保留用户根目录未跟踪文档。
+
+
+2026-09-11 当前正式猫的辅助地面驱动已接入本人 ASC 力量和意图缺失体力结算。抓握/钓鱼负载下松方向键仍有限站稳；仅身体触碰时，空闲者被动让开且不产生主动支撑费用。耗尽时主动出力为零，外部负载下禁止恢复。接触主动反力受各猫力量预算限制，30 N 只保留在被动碰撞部分；模型/骨骼数量不叠力。详见 [当前猫鱼/猫猫框架与验证](FishFightImplementationGuide_zh-CN.md)。下方带日期的原型和迁移说明为历史版本。
 
 ## 2026-09-10：按最终模型姿态抓握、互推及 CuteCat 空气墙修复
 

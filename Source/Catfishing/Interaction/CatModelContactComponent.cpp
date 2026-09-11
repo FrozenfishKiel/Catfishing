@@ -127,14 +127,36 @@ bool UCatModelContactComponent::IsLegacyContactProxy(const UPrimitiveComponent* 
         || Component == Body->GetHand(true) || Component == Body->GetHand(false);
 }
 
-bool UCatModelContactComponent::FindPeerContact(const UCatModelContactComponent* Other, FVector& Normal, double& Depth) const
+bool UCatModelContactComponent::HasTractionConnectionWith(const UCatModelContactComponent* Other) const
 {
-    Normal = FVector::ZeroVector; Depth = 0;
+    if (!Other) return false;
+    for (const auto* Side : {this, Other})
+    {
+        const AActor* Peer = Side == this ? Other->GetOwner() : GetOwner();
+        const auto* Grab = Side->GetOwner()->FindComponentByClass<UCatPhysicsGrabComponent>();
+        const auto* PeerBody = Peer->FindComponentByClass<UCatPhysicalBodyComponent>();
+        if (Grab) for (bool bLeft : {true, false})
+            if (Grab->IsGripping(bLeft) && (Grab->GetGripTarget(bLeft) == Peer
+                || (PeerBody && Grab->GetTractionReceiver(bLeft) == PeerBody))) return true;
+    }
+    return false;
+}
+
+bool UCatModelContactComponent::FindPeerContact(const UCatModelContactComponent* Other, FVector& Normal, double& SeparationTravelCm, double MarginCm) const
+{
+    Normal = FVector::ZeroVector; SeparationTravelCm = 0;
     if (!Other || !HasModelContacts() || !Other->HasModelContacts()) return false;
-    // Choose one deepest horizontal contact, so adding bones never multiplies the pair's force budget.
+    const FVector Difference = Other->GetOwner()->GetActorLocation()-GetOwner()->GetActorLocation();
+    const FVector Approach = Difference.GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER,
+        GetOwner()->GetUniqueID() < Other->GetOwner()->GetUniqueID() ? FVector::ForwardVector : -FVector::ForwardVector);
+    const FVector SurfaceDirection = FVector(Approach.X, Approach.Y, FMath::Clamp(Difference.Z / FMath::Max(1.0,Difference.Size2D()), -1.0, 1.0));
+    const bool bConstrained = HasTractionConnectionWith(Other);
+    const double Margin = !bConstrained && FMath::IsFinite(MarginCm) ? FMath::Clamp(MarginCm,0.0,3.0) : 0.0;
+    // Authored surfaces gate contact; upright roots supply one stable pair axis.
+    // Bone normals otherwise change with each walking pose and turn a straight push sideways.
     for (UCatModelContactBody* A : Bodies) for (UCatModelContactBody* B : Other->Bodies)
     {
-        if (!A->Bounds.GetBox().Intersect(B->Bounds.GetBox())) continue;
+        if (!A->Bounds.GetBox().ExpandBy(Margin*1.5).Intersect(B->Bounds.GetBox())) continue;
         const auto* BI = A->GetBodyInstance();
         const auto* OtherBI = B->GetBodyInstance();
         if (!BI || !OtherBI || !BI->IsValidBodyInstance() || !OtherBI->IsValidBodyInstance()) continue;
@@ -150,17 +172,29 @@ bool UCatModelContactComponent::FindPeerContact(const UCatModelContactComponent*
                 if (FPhysicsInterface::Overlap_Geom(BI, FPhysicsInterface::GetGeometryCollection(Shape),
                     FTransform(B->GetComponentQuat(), B->GetComponentLocation()), &MTD))
                 {
-                    const double HorizontalDepth = MTD.Distance * MTD.Direction.Size2D();
-                    if (HorizontalDepth > Depth)
+                    const double HorizontalNormal = FMath::Abs(FVector::DotProduct(MTD.Direction, SurfaceDirection));
+                    // Estimate horizontal travel along the supported ground direction, including
+                    // the height change between two roots standing on a slope.
+                    if (MTD.Distance <= 0) continue;
+                    const double HorizontalDepth = bConstrained ? MTD.Distance * MTD.Direction.Size2D()
+                        : MTD.Distance / FMath::Max(.2, HorizontalNormal);
+                    if (HorizontalDepth > SeparationTravelCm)
                     {
-                        Depth = HorizontalDepth;
-                        Normal = MTD.Direction.GetSafeNormal2D();
+                        SeparationTravelCm = HorizontalDepth;
+                        Normal = bConstrained ? MTD.Direction.GetSafeNormal2D() : Approach;
                     }
+                }
+                else if (Margin > 0 && Normal.IsNearlyZero()
+                    && FPhysicsInterface::Overlap_Geom(BI, FPhysicsInterface::GetGeometryCollection(Shape),
+                        FTransform(B->GetComponentQuat(), B->GetComponentLocation()-SurfaceDirection*Margin), &MTD))
+                {
+                    // This is contact persistence only, never penetration or a positional correction.
+                    Normal = Approach;
                 }
             }
         });
     }
-    return Depth > UE_SMALL_NUMBER && !Normal.IsNearlyZero();
+    return !Normal.IsNearlyZero();
 }
 
 void UCatModelContactComponent::EndPlay(const EEndPlayReason::Type Reason)

@@ -25,6 +25,10 @@ struct CATFISHING_API FCatBodyDriveSample
     bool bLocomotion = false;
     bool bConnected = false;
     bool bUnderLoad = false;
+    /** Only ungripped body contact: passive displacement does not request a full-strength stance. */
+    bool bPassiveBodyContact = false;
+    /** A peer is still moving or transmitting grab/fishing load; otherwise allow prompt braking. */
+    bool bBodyContactDriven = false;
     bool bHoldActive = false;
 };
 
@@ -118,7 +122,7 @@ public:
 	void SetLocomotionEnabledFromAuthority(bool bEnabled, FName Reason);
 	bool TeleportBodyFromAuthority(const FTransform& Transform, FName Reason);
 	/** Each source replaces its own force. Units are kg*cm/s^2; multiply Newtons by 100 once. */
-	void SetExternalForceFromAuthority(const UObject* Source, FVector ForceKgCmS2, bool bVerticalGripTraction = false);
+	void SetExternalForceFromAuthority(const UObject* Source, FVector ForceKgCmS2, bool bVerticalGripTraction = false, bool bBodyContact = false);
 	void ClearExternalForce(const UObject* Source);
 	/** Replaces the ordinary motor budget; zero means no voluntary motor force, never unlimited. */
 	void SetFishingMotorBudget(const UObject* Source, double MaxForceKgCmS2, double MaxSpeedCmS = 100.0);
@@ -164,6 +168,7 @@ private:
 	{
 		FVector Force = FVector::ZeroVector;
 		bool bVerticalGripTraction = false;
+		bool bBodyContact = false;
 	};
 	TMap<TWeakObjectPtr<const UObject>, FExternalForce> ExternalForces;
 	TWeakObjectPtr<const UObject> FishingMotorSource;

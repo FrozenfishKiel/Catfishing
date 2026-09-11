@@ -349,7 +349,24 @@ FCatBodyDriveSample UCatPhysicalBodyComponent::CaptureDriveSample()
     Sample.bFishing = FishingMotorSource.IsValid();
     Sample.bLocomotion = bLocomotionEnabled;
     Sample.bUnderLoad = HasExternalLoadFromAuthority();
-    Sample.bConnected = HasPhysicalGrabConnection() || Sample.bUnderLoad;
+    const bool bGripped = HasPhysicalGrabConnection();
+    Sample.bConnected = bGripped || Sample.bUnderLoad;
+    bool bHasBodyContact = false, bHasOtherLoad = false;
+    for (const auto& Entry : ExternalForces)
+        if (Entry.Key.IsValid())
+        {
+            bHasBodyContact |= Entry.Value.bBodyContact;
+            bHasOtherLoad |= !Entry.Value.bBodyContact;
+            if (Entry.Value.bBodyContact)
+                if (const auto* SourceMovement = Cast<UCatCharacterMovementComponent>(Entry.Key.Get()))
+                    if (const auto* PeerBody = SourceMovement->GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>())
+                    {
+                        Sample.bBodyContactDriven |= !PeerBody->GetMoveIntent().IsNearlyZero()
+                            || PeerBody->HasFishingMotor() || PeerBody->HasPhysicalGrabConnection();
+                    }
+        }
+    Sample.bPassiveBodyContact = bHasBodyContact && !bHasOtherLoad && !bGripped && !Sample.bFishing
+        && (!CharacterMovement || !CharacterMovement->HasExternalLoad());
     // Contact remains real at zero load and when opposite forces cancel. Neither condition
     // may restore the unlimited free-walking motor between two contact frames.
     if (!Sample.bConnected)
@@ -371,6 +388,11 @@ FVector UCatPhysicalBodyComponent::ComputeDriveForce(FCatBodyDriveSample& Sample
 {
     if (!Sample.bLocomotion) { Sample.bHoldActive = false; return FVector::ZeroVector; }
     const FVector HorizontalVelocity(Velocity.X, Velocity.Y, 0);
+    if (Sample.bPassiveBodyContact && Sample.MoveIntent.IsNearlyZero())
+    {
+        Sample.bHoldActive = false;
+        return FVector::ZeroVector;
+    }
     if ((Sample.bFishing || Sample.bCooperative) && Sample.MoveIntent.IsNearlyZero())
     {
         if (!Sample.bHoldActive) { Sample.HoldLocation = Position; Sample.bHoldActive = true; }
@@ -656,12 +678,13 @@ void UCatPhysicalBodyComponent::SetLocomotionEnabledFromAuthority(bool bEnabled,
 	GetOwner()->ForceNetUpdate();
 	LogState(TEXT("physics_body_locomotion_changed"), Reason);
 }
-void UCatPhysicalBodyComponent::SetExternalForceFromAuthority(const UObject* Source, FVector ForceKgCmS2, bool bVerticalGripTraction)
+void UCatPhysicalBodyComponent::SetExternalForceFromAuthority(const UObject* Source, FVector ForceKgCmS2, bool bVerticalGripTraction, bool bBodyContact)
 {
 	if (!HasAuthority() || !IsValid(Source) || ForceKgCmS2.ContainsNaN()) return;
 	auto& Entry = ExternalForces.FindOrAdd(TWeakObjectPtr<const UObject>(Source));
 	Entry.Force = ForceKgCmS2;
 	Entry.bVerticalGripTraction = bVerticalGripTraction;
+	Entry.bBodyContact = bBodyContact;
 }
 void UCatPhysicalBodyComponent::ClearExternalForce(const UObject* Source)
 {

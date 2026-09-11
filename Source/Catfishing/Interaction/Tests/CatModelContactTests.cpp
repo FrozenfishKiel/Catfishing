@@ -10,6 +10,11 @@
 #include "Components/SphereComponent.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "Engine/SkeletalMesh.h"
+#include "Physics/Experimental/PhysInterface_Chaos.h"
+#include "Physics/PhysicsInterfaceTypes.h"
+#include "Chaos/ChaosEngineInterface.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 
 namespace CatModelContactTest
 {
@@ -20,6 +25,33 @@ ACatCharacter* Spawn(CatPhysicalTest::FScene& Scene, const TCHAR* Path, FVector 
     FActorSpawnParameters Params; Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
     return Scene.World.GetTestWorld()->SpawnActor<ACatCharacter>(Type, Position, FRotator::ZeroRotator, Params);
 }
+// Measure actual shape penetration independently of the upright solver's estimated
+// horizontal correction travel (which is longer than the MTD on tilted surfaces).
+double ShapePenetration(UCatModelContactComponent* First, UCatModelContactComponent* Second)
+{
+    double Maximum = 0;
+    for (UCatModelContactBody* A : First->GetBodies()) for (UCatModelContactBody* B : Second->GetBodies())
+    {
+        if (!A->Bounds.GetBox().Intersect(B->Bounds.GetBox())) continue;
+        auto* BI = A->GetBodyInstance(); auto* OtherBI = B->GetBodyInstance();
+        FPhysicsCommand::ExecuteRead(BI->GetPhysicsActor(), OtherBI->GetPhysicsActor(),
+            [&](const FPhysicsActorHandle&, const FPhysicsActorHandle& ActorB)
+        {
+            PhysicsInterfaceTypes::FInlineShapeArray Shapes;
+            FPhysicsInterface::GetAllShapes_AssumedLocked(ActorB, Shapes);
+            for (const auto& Shape : Shapes)
+            {
+                if (!Shape.GetGeometry().IsConvex()) continue;
+                FMTDResult MTD;
+                if (FPhysicsInterface::Overlap_Geom(BI, FPhysicsInterface::GetGeometryCollection(Shape),
+                    FTransform(B->GetComponentQuat(), B->GetComponentLocation()), &MTD))
+                    Maximum = FMath::Max(Maximum, double(MTD.Distance));
+            }
+        });
+    }
+    return Maximum;
+}
+
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatModelContactAssetsTest,
@@ -184,4 +216,76 @@ bool FCatModelContactPushTest::RunTest(const FString& Parameters)
     }
     return !HasAnyErrors();
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatModelWalkingPushSlopeTest,
+    "Catfishing.ModelContacts.Runtime.WalkingPushOnSlopesWithoutReaching",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FCatModelWalkingPushSlopeTest::RunTest(const FString&)
+{
+    for (const TCHAR* Path : {TEXT("/Game/Character/BP_CatCharacter.BP_CatCharacter_C"),
+        TEXT("/Game/Character/BP_CuteCatCharacter.BP_CuteCatCharacter_C")})
+    for (const double Pitch : {0.0, 25.0, -25.0}) for (const int32 Variant : {0, 1, 2, 3})
+    {
+        CatPhysicalTest::FScene Scene;
+        if (!Scene.Initialize(this)) return false;
+        const int32 Hz = Variant==1 ? 120 : 60;
+        const bool bHitch = Variant==2, bWall = Variant==3;
+        const double Roll = bHitch ? 20.0 : 0.0;
+        const FRotator Slope(Pitch,0,Roll);
+        Scene.Floor->GetStaticMeshComponent()->SetMobility(EComponentMobility::Movable);
+        Scene.Floor->SetActorLocationAndRotation(-Slope.RotateVector(FVector::UpVector)*10, Slope);
+        Scene.Floor->GetStaticMeshComponent()->SetMobility(EComponentMobility::Static);
+        if (bWall) Scene.AddBox(FVector(300,0,150),FVector(10,400,400));
+        auto* A=CatModelContactTest::Spawn(Scene,Path,FVector(0,0,140));
+        auto* B=CatModelContactTest::Spawn(Scene,Path,FVector(160,0,140+160*FMath::Tan(FMath::DegreesToRadians(Pitch))));
+        if (!A || !B) return false;
+        for (auto* Cat : {A,B})
+        {
+            auto* ASC=Cat->GetCatAbilitySystemComponent();
+            ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(),50);
+            ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute(),60);
+            ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(),60);
+        }
+        Scene.Step(Hz*2,Hz);
+        if (!TestTrue(TEXT("both formal cats settle onto the actual slope"),A->GetPhysicalBodyComponent()->IsGrounded() && B->GetPhysicalBodyComponent()->IsGrounded())) return false;
+        const FVector StartA=A->GetActorLocation(), StartB=B->GetActorLocation();
+        A->GetPhysicalBodyComponent()->SetMoveIntent(FVector::ForwardVector);
+        double MaximumDepth=0, MaximumSeparation=0;
+        auto* ModelA=A->FindComponentByClass<UCatModelContactComponent>();
+        auto* ModelB=B->FindComponentByClass<UCatModelContactComponent>();
+        for (int32 Frame=0;Frame<Hz*4;++Frame)
+        {
+            Scene.Step(1,bHitch && Frame%30==0 ? 10 : Hz);
+            FVector Normal; double Depth;
+            if (ModelA->FindPeerContact(ModelB,Normal,Depth))
+            {
+                MaximumSeparation=FMath::Max(MaximumSeparation,Depth);
+                MaximumDepth=FMath::Max(MaximumDepth,CatModelContactTest::ShapePenetration(ModelA,ModelB));
+            }
+        }
+        const double Travel=B->GetActorLocation().X-StartB.X;
+        AddInfo(FString::Printf(TEXT("Event=walking_peer_push_slope_verified Blueprint=%s Pitch=%.1f Roll=%.1f Hz=%d Hitch=%d Wall=%d TravelCm=%.3f PusherTravelCm=%.3f MaxShapePenetrationCm=%.3f MaxHorizontalCorrectionEstimateCm=%.3f FinalSeparationCm=%.3f PeerStamina=%.3f Grounded=%d A=%s B=%s"),
+            Path,Pitch,Roll,Hz,bHitch,bWall,Travel,A->GetActorLocation().X-StartA.X,MaximumDepth,MaximumSeparation,B->GetActorLocation().X-A->GetActorLocation().X,
+            B->GetCatAbilitySystemComponent()->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()),B->GetPhysicalBodyComponent()->IsGrounded(), *A->GetActorLocation().ToCompactString(), *B->GetActorLocation().ToCompactString()));
+        TestTrue(TEXT("walking alone pushes an equally strong idle friend along the slope"),Travel>40);
+        TestTrue(TEXT("bodies remain ordered instead of walking through each other"),B->GetActorLocation().X>A->GetActorLocation().X+10);
+        TestTrue(TEXT("contact does not leave deeply interpenetrating bodies"),MaximumDepth<8);
+        TestEqual(TEXT("an idle friend does not pay active support stamina for body contact"),
+            B->GetCatAbilitySystemComponent()->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()),60.0f);
+        if (bWall) TestTrue(TEXT("contact correction never moves either terrain capsule through the wall"),
+            A->GetActorLocation().X+A->GetCapsuleComponent()->GetScaledCapsuleRadius()<290.5
+            && B->GetActorLocation().X+B->GetCapsuleComponent()->GetScaledCapsuleRadius()<290.5);
+        TestTrue(TEXT("both cats keep real terrain support and stay upright"),A->GetPhysicalBodyComponent()->IsGrounded() && B->GetPhysicalBodyComponent()->IsGrounded()
+            && A->GetActorUpVector().Z>.999 && B->GetActorUpVector().Z>.999);
+        const FVector StopA=A->GetActorLocation(), StopB=B->GetActorLocation();
+        A->GetPhysicalBodyComponent()->SetMoveIntent(FVector::ZeroVector);
+        Scene.Step(Hz/2,Hz);
+        TestTrue(TEXT("releasing the pushing input stops both ungripped bodies promptly"),
+            A->GetPhysicalBodyComponent()->GetVelocity().Size2D()<3 && B->GetPhysicalBodyComponent()->GetVelocity().Size2D()<3
+            && FVector::Dist2D(StopA,A->GetActorLocation())<15 && FVector::Dist2D(StopB,B->GetActorLocation())<15);
+        TestTrue(TEXT("ordinary body pushing needs no extended hand or retained grip"),!A->GetPhysicalBodyComponent()->GetGrab()->IsReaching(true)
+            && !A->GetPhysicalBodyComponent()->GetGrab()->IsReaching(false) && !B->GetPhysicalBodyComponent()->GetGrab()->IsGripping(true) && !B->GetPhysicalBodyComponent()->GetGrab()->IsGripping(false));
+    }
+    return !HasAnyErrors();
+}
+
 #endif
