@@ -1,4 +1,4 @@
-# 鱼表格「第一版」列级发布映射（人维护；不在 Knowledge/Feishu/ 镜像里，导出脚本不碰它）
+# 鱼表格「第一版」列级发布映射（人维护；不在飞书镜像里，导出脚本不碰它）
 #
 # 读者：程序（接鱼表时按 publish 取列）、数值属主（改列先改这里的声明）、game-toolkit 的内容层检查。
 # 口径来自插件 split-doc-layers/examples/content-model/README.md「来源与发布声明」：
@@ -14,11 +14,15 @@ table:
   wiki_node_token: DKhnweGaEiPTJZkO8OScQOJenqg
   spreadsheet_token: CQlMsQon6hlo8ctpZRWcAPzOnRi
   sheet_id: R7rRBp
-  mirror: Knowledge/Feishu/GDD 系统分册/鱼/鱼表格/第一版.csv
+  mirror: C:/Users/lzcm7/OneDrive/GameProject/CatFishing/Feishu/GDD 系统分册/鱼/鱼表格/第一版.csv   # 镜像 2026-09-10 移出仓库，本机绝对路径
+  manifest: C:/Users/lzcm7/OneDrive/GameProject/CatFishing/Feishu/_manifest.json
   identity_column: fish_id            # 2026-09-09 加，值＝工程 FishDefinitionId
-  declared_at_revision: 822           # 写本文件时的表 revision；表改列序不影响本文件（按列名对）
+  declared_at_revision: 872           # 写本文件时的表 revision；表改列序不影响本文件（按列名对；09-09 晚 fish_id 已移到首列、「金钱系数」列在力量系数 K 旁；09-10 加「最近冲岸距离」列与两张子表）
   header_row: 1
   data_rows: 2-17                     # 16 条鱼；空行不算
+  related_sheets:                     # 同一 spreadsheet 里的子表，2026-09-10 建，占位、张佳定；未进发布映射
+    - {title: 饵权重, sheet_id: CekBpa, note: 每鱼×每饵权重，目标饵 3、其余 1；抽鱼第二步（鱼册 §3.1.4）}
+    - {title: 基础池, sheet_id: rdnjT9, note: 无窝料基础池成员与概率（鱼册 §3.1.2）}
 
 publish_target:
   class: UCatFishDefinition
@@ -108,6 +112,20 @@ columns:
     unit: cm
     publish: ScoopTargetRadiusCentimeters
     note: 2026-09-09 李前臻裁「可抄几何按代码、逐鱼配圆」后加列；16 行占位按体重档 小 60／中 90／大 120，湖心巨影 0＝不可抄，正式值待调；资产现值未与本列对过（需开引擎）
+  - name: 最近冲岸距离
+    classification: declarative
+    type: number
+    unit: 米
+    publish: excluded
+    gap: 代码无对应字段；意图模型结构由钱成澔定后再对（参数页「贴岸阀」行）
+    note: 2026-09-10 Claude 建列，按参数页贴岸阀行快照填：食肉中鱼与湖心巨影 1.5、其余 0；衔接待钱成澔确认，正式值随「鱼的行为」方案定
+  - name: 金钱系数
+    classification: declarative
+    type: number
+    unit: 金币/公斤
+    publish: excluded
+    gap: 代码没有逐鱼单价字段，收鱼估价现为体重档表 FCatShopFishWeightPrice；09-09 晚裁改为 售价＝本列×实际重量，待加字段
+    note: 2026-09-09 晚李前臻加列（初名「售价」，同晚改名并挪到力量系数 K 旁），逐鱼每公斤单价，16 行已填齐；商店册体重档收购价表随之作废
   - name: 图鉴描述
     classification: declarative
     type: text
@@ -148,8 +166,9 @@ columns:
     classification: declarative
     type: enum
     values: {普通: 待核, 少见: 待核, 稀有: 待核, 珍稀: 待核, 事件: 待核}
+    enum_order: [普通, 少见, 稀有, 珍稀, 事件]   # 低→高；完美削减「最高一档」＝珍稀（钓鱼规则 §4.3）
     publish: RarityTierId
-    note: 代码 RarityTierId 的取值集合在资产里，Config 未列，待核后填映射
+    note: 代码 RarityTierId 的取值集合在资产里，Config 未列，待核后填映射。2026-09-10：「事件」只有湖心巨影，完美削减暂按最高档处理，李前臻未拍
   - name: 食性
     classification: declarative
     type: enum
@@ -172,7 +191,8 @@ columns:
     classification: declarative
     type: number
     publish: excluded
-    gap: 同上；且设计口径「按体重档」与表里按鱼种写死未合一（一致性检查矛盾 10）
+    gap: 代码无对应字段（四套性格模板 09-09 退为测试用，逐鱼字段待加）
+    note: 2026-09-10 李前臻定按鱼种、本列为准，表头同改；参数页与鱼的行为页的「按体重档 0.8/1.0/1.2/1.5」作废，原一致性矛盾 10 关闭
   - name: 鱼刚咬饵时，鱼漂的变化
     classification: interpretive
     owner: Interface
