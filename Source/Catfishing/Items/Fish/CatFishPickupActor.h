@@ -105,7 +105,7 @@ public:
 protected:
 	/** 完成生成后设置独立交互范围并恢复当前鱼姿态；客户端按复制的身份配置同一尺寸的物理根。 */
 	virtual void BeginPlay() override;
-	/** 附着复制到达后按表现与物理事实收敛，防止迟到的嘴部附件覆盖丢弃。 */
+	/** 附着复制沿用原鱼世界尺寸并按表现与物理事实收敛，防止尺寸漂移或迟到附件覆盖丢弃。 */
 	virtual void OnRep_AttachmentReplication() override;
 	/** 运动复制到达后再次收敛嘴部状态，使先到的物理丢弃不会被旧携带表现回挂。 */
 	virtual void OnRep_ReplicatedMovement() override;
@@ -120,7 +120,7 @@ private:
 	bool IsAuthorityRequestSpatiallyValid(const AController* RequestingController) const;
 	/** 权威占用空嘴并附着本鱼；鱼和鱼护共用互斥约束，附着失败恢复地面状态，成功才发布复制。 */
 	bool BeginMouthCarryFromAuthority(ACatCharacter* Character, APlayerState* PlayerState);
-	/** 把根组件精确附着到角色 Mesh + Mouth Socket；不能只比较父 Actor。 */
+	/** 根组件附着到角色 Mesh 与嘴部Socket并保持原世界尺寸；只纠正位置和朝向，避免复制重试重置缩放。 */
 	bool AttachCarriedRootToMouth(ACatCharacter* Character, const TCHAR* Source, bool bLogCorrection);
 	/** 以复制的 Carried/Available 为最终事实，收敛 AttachmentReplication 与 PresentationState 的到达顺序。 */
 	void ReconcileAttachmentFromPresentation(const TCHAR* Source);

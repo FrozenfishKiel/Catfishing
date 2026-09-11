@@ -516,9 +516,12 @@ bool FCatInventoryFishGuardRoundTripTest::RunTest(const FString& Parameters)
 	const TArray<FCatInventoryEntry> FillerEntries = Inventory->GetInventoryEntries();
 	for (const FCatInventoryEntry& Entry : FillerEntries) if (Entry.Instance) Inventory->RemoveItemInstance(Entry.Instance);
 	FGuid GuardId;
+	const FVector GuardWorldScale(0.4, 0.6, 0.8);
+	Guard->SetActorScale3D(GuardWorldScale);
 	for (const ECatInventoryWorldAction Action : {ECatInventoryWorldAction::Place, ECatInventoryWorldAction::Drop})
 	{
 		if (!TestTrue(TEXT("公开入口拾取原鱼护"), Guard->PickUpFromAuthority(Controller, FGuid::NewGuid()))) return false;
+		TestTrue(TEXT("叼起鱼护保留场景世界尺寸"), Guard->GetActorScale3D().Equals(GuardWorldScale, 0.001));
 		TestTrue(TEXT("嘴上携带的是原Actor"), ACatFishGuardActor::FindCarriedGuard(Character) == Guard);
 		TestFalse(TEXT("携带后不可再作为地面鱼护"), Guard->IsGrounded());
 		TestTrue(TEXT("拾起瞬间仍持有原FishInventory"), Guard->GetFishInventoryComponent() == FishInventory);
@@ -613,7 +616,11 @@ bool FCatWorldFishMouthDropTest::RunTest(const FString& Parameters)
 	UCatInventoryComponent* Inventory = Character->GetInventoryComponent();
 	if (!TestTrue(TEXT("鱼物理根、正式网格及玩家库存就绪"), Body && FishMesh && FishMesh->GetSkeletalMeshAsset() && Inventory)) return false;
 	const int32 InitialInventoryFish = Inventory->CountVisibleInventoryQuantityByDefinitionId(Definition->GetInventoryDefinitionId());
+	const FVector FishWorldScale(0.7, 0.8, 0.9);
+	Fish->SetActorScale3D(FishWorldScale);
+	const FVector FishVisualScale = FishMesh->GetComponentScale();
 	if (!TestTrue(TEXT("通过真实Interact叼起原鱼"), ICatInteractable::Execute_Interact(Fish, Controller, FGuid::NewGuid()))) return false;
+	TestTrue(TEXT("叼起原鱼保留场景世界尺寸"), Fish->GetActorScale3D().Equals(FishWorldScale, 0.001));
 	const FTransform CarriedMeshTransform = FishMesh->GetRelativeTransform();
 	const FVector CarriedBoxExtent = Body->GetUnscaledBoxExtent();
 
@@ -630,6 +637,8 @@ bool FCatWorldFishMouthDropTest::RunTest(const FString& Parameters)
 		}
 		TestEqual(Prefix + TEXT("只有一条活鱼"), LiveFishCount, 1);
 		TestTrue(Prefix + TEXT("原鱼未被销毁"), IsValid(Fish) && !Fish->IsActorBeingDestroyed());
+		TestTrue(Prefix + TEXT("原鱼世界尺寸不变"), Fish->GetActorScale3D().Equals(FishWorldScale, 0.001));
+		TestTrue(Prefix + TEXT("原鱼网格显示尺寸不变"), FishMesh->GetComponentScale().Equals(FishVisualScale, 0.001));
 		TestEqual(Prefix + TEXT("世界鱼GUID不变"), Fish->GetPresentationState().FishInstanceId, FishId);
 		TestEqual(Prefix + TEXT("世界鱼重量不变"), Fish->GetPresentationState().WeightKilograms, WeightKilograms);
 		TestEqual(Prefix + TEXT("来源会话不变"), Fish->GetPresentationState().FishingSessionId, SessionId);

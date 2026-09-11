@@ -61,6 +61,9 @@ public:
 	virtual bool Interact_Implementation(AController* RequestingController, FGuid RequestId) override;
 
 protected:
+	/** 接收服务器附着时保留本物原有世界尺寸；位置、朝向及解除附着仍沿用引擎处理。 */
+	virtual void OnRep_AttachmentReplication() override;
+
 	/** authority 进入 World 时按配置补齐正式鱼库存槽位；客户端只等待 InventoryComponent 复制。 */
 	virtual void BeginPlay() override;
 
@@ -85,7 +88,7 @@ private:
 	UPROPERTY(EditDefaultsOnly, Category = "Catfishing|Inventory")
 	TSoftObjectPtr<UCatInventoryItemDefinition> GuardDefinition;
 
-	/** 鱼护挂到嘴部后的局部偏移；美术按鱼护模型设置，不套用鱼体专属的缩放和落地姿态。 */
+	/** 鱼护挂到嘴部后的局部位置与朝向；服务器读取这两项，缩放分量不参与附着，以保留场景中原鱼护尺寸。 */
 	UPROPERTY(EditDefaultsOnly, Category = "Catfishing|Inventory")
 	FTransform MouthCarryTransform = FTransform::Identity;
 	/** authority 复核请求角色与本鱼护的距离/视线；客户端准星命中不能代替服务器空间校验。 */

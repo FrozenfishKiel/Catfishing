@@ -149,8 +149,26 @@ void ACatFishGuardActor::SetInventoryOwnerFromAuthority(AActor* NewInventoryOwne
 		*GetName(), *GetNameSafe(InventoryOwner), IsGrounded(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole());
 }
 
+// 附着接收流程：有父组件时，用原物当前世界尺寸计算附着所需的局部缩放，只修正待应用的附着参数。
+// 然后由引擎处理位置、朝向、附着或解绑；不让网络量化后的缩放改写原物，也不保存尺寸快照。
+void ACatFishGuardActor::OnRep_AttachmentReplication()
+{
+	if (RootComponent && AttachmentReplication.AttachParent)
+	{
+		USceneComponent* Parent = AttachmentReplication.AttachComponent ? AttachmentReplication.AttachComponent.Get()
+			: AttachmentReplication.AttachParent->GetRootComponent();
+		if (Parent)
+		{
+			AttachmentReplication.RelativeScale3D = RootComponent->IsUsingAbsoluteScale() ? GetActorScale3D()
+				: GetActorTransform().GetRelativeTransform(Parent->GetSocketTransform(AttachmentReplication.AttachSocket)).GetScale3D();
+		}
+	}
+	Super::OnRep_AttachmentReplication();
+}
+
 // 归属收敛流程：两端都按库存归属设置碰撞并停止携带刚体；嘴部资格、附着与隐藏只由服务器决定。
 // 客户端让引擎消费服务器的 AttachmentReplication/bHidden，避免旧鱼销毁晚到时重新裁决并覆盖正确附着。
+// 附着保留原世界尺寸，嘴部配置只调整位置和朝向，不能再覆盖引擎为抵消角色/Socket缩放算出的局部缩放。
 void ACatFishGuardActor::OnRep_InventoryOwner()
 {
 	SetActorEnableCollision(InventoryOwner == nullptr);
@@ -166,7 +184,7 @@ void ACatFishGuardActor::OnRep_InventoryOwner()
 			&& !ACatFishPickupActor::FindCarriedFish(Character) && (!OtherGuard || OtherGuard == this))
 		{
 			AttachToComponent(Character->GetMesh(), FAttachmentTransformRules::SnapToTargetNotIncludingScale, Settings->MouthCarrySocketName);
-			SetActorRelativeTransform(MouthCarryTransform);
+			GetRootComponent()->SetRelativeLocationAndRotation(MouthCarryTransform.GetLocation(), MouthCarryTransform.GetRotation());
 			SetActorHiddenInGame(false);
 		}
 		else

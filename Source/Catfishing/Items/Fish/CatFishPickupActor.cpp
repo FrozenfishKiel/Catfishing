@@ -87,11 +87,22 @@ void ACatFishPickupActor::BeginPlay()
 	}
 }
 
-// 非物理态先让引擎应用附件，再收敛表现；物理态跳过旧附件的相对变换写入，避免瞬移回嘴后才解绑。
+// 非物理态先按原鱼当前世界尺寸修正待应用的附着缩放，再让引擎处理附件并收敛表现。
+// 不用量化后的缩放覆盖原鱼；物理态仍跳过旧附件，避免丢弃后被迟到消息拉回嘴部。
 void ACatFishPickupActor::OnRep_AttachmentReplication()
 {
 	if (!GetReplicatedMovement().bRepPhysics)
 	{
+		if (RootComponent && AttachmentReplication.AttachParent)
+		{
+			USceneComponent* Parent = AttachmentReplication.AttachComponent ? AttachmentReplication.AttachComponent.Get()
+				: AttachmentReplication.AttachParent->GetRootComponent();
+			if (Parent)
+			{
+				AttachmentReplication.RelativeScale3D = RootComponent->IsUsingAbsoluteScale() ? GetActorScale3D()
+					: GetActorTransform().GetRelativeTransform(Parent->GetSocketTransform(AttachmentReplication.AttachSocket)).GetScale3D();
+			}
+		}
 		Super::OnRep_AttachmentReplication();
 	}
 	ReconcileAttachmentFromPresentation(TEXT("AttachmentReplication"));
@@ -355,6 +366,8 @@ bool ACatFishPickupActor::BeginMouthCarryFromAuthority(ACatCharacter* Character,
 	return GetAttachParentActor() == Character;
 }
 
+// 嘴部附着流程：先检查角色、根和客户端骨架，再按保留世界尺寸的规则连接目标Socket；只应用配置位置与旋转。
+// 复制纠正也只比较这两项，不把为抵消父级缩放而产生的局部缩放误判为错误；最后刷新嘴叼姿态并按需记录纠正结果。
 bool ACatFishPickupActor::AttachCarriedRootToMouth(ACatCharacter* Character, const TCHAR* Source,
 	const bool bLogCorrection)
 {
@@ -376,16 +389,16 @@ bool ACatFishPickupActor::AttachCarriedRootToMouth(ACatCharacter* Character, con
 	const FName PreviousSocket = Root->GetAttachSocketName();
 	const FTransform PreviousRelative = Root->GetRelativeTransform();
 	const bool bNeedsCorrection = PreviousParent != CharacterMesh || PreviousSocket != SocketName
-		|| !PreviousRelative.Equals(RelativeTransform, UE_KINDA_SMALL_NUMBER);
+		|| !PreviousRelative.EqualsNoScale(RelativeTransform, UE_KINDA_SMALL_NUMBER);
 	if ((PreviousParent != CharacterMesh || PreviousSocket != SocketName)
 		&& !AttachToComponent(CharacterMesh, FAttachmentTransformRules::SnapToTargetNotIncludingScale, SocketName))
 	{
 		return false;
 	}
-	SetActorRelativeTransform(RelativeTransform);
+	Root->SetRelativeLocationAndRotation(RelativeTransform.GetLocation(), RelativeTransform.GetRotation());
 	ApplyCarriedVisualTransform();
 	const bool bExact = Root->GetAttachParent() == CharacterMesh && Root->GetAttachSocketName() == SocketName
-		&& Root->GetRelativeTransform().Equals(RelativeTransform, UE_KINDA_SMALL_NUMBER);
+		&& Root->GetRelativeTransform().EqualsNoScale(RelativeTransform, UE_KINDA_SMALL_NUMBER);
 	if (bLogCorrection && bNeedsCorrection)
 	{
 		if (bExact)

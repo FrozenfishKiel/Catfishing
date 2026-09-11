@@ -280,6 +280,8 @@ namespace CatFishGuardCarryNetwork
 				&& Ground.ImpactNormal.Z >= FMath::Cos(FMath::DegreesToRadians(Settings->PlacementSlopeDegrees)))) return true;
 			ServerGuard = ServerWorld->SpawnActor<ACatFishGuardActor>(GuardClass, Ground.ImpactPoint + FVector(0, 0, 40), FRotator::ZeroRotator);
 			if (!Test->TestNotNull(TEXT("stage=0 authority spawns original BP_CatGuard"), ServerGuard.Get())) return true;
+			OriginalGuardWorldScale = ServerGuard->GetActorScale3D() * 0.65;
+			ServerGuard->SetActorScale3D(OriginalGuardWorldScale);
 			UPrimitiveComponent* Body = Cast<UPrimitiveComponent>(ServerGuard->GetRootComponent());
 			ServerFishInventory = ServerGuard->GetFishInventoryComponent();
 			if (!Test->TestTrue(TEXT("stage=0 formal guard has physical root and existing FishInventory"), Body && ServerFishInventory.IsValid())) return true;
@@ -306,7 +308,7 @@ namespace CatFishGuardCarryNetwork
 
 		/** 同时观察原两端对象：先核对原库存、精确 GUID/重量/数量，再读归属、刚体、嘴部附件与背包。
 		 * InventoryOwner 仅通过反射只读核对，不为测试新增生产 getter；服务器内鱼还须保持原 UObject。
-		 * 携带核对正式 socket 与可见性，落地核对空嘴和背包扣格；最后比较位置、旋转和缩放。
+		 * 携带核对正式 socket 与可见性，落地核对空嘴和背包扣格；两端都须保留拾取前尺寸，最后比较位置、旋转和缩放。
 		 * 任一复制事实未到位返回 false 并写明端与等待项，让上层继续等待或带阶段超时报错。 */
 		bool BothSidesMatch(const bool bCarried, const bool bDrop)
 		{
@@ -318,6 +320,10 @@ namespace CatFishGuardCarryNetwork
 				UCatFishOnlyInventoryComponent* Inventory = Peer == 0 ? ServerFishInventory.Get() : ClientFishInventory.Get();
 				WaitingFor = FString::Printf(TEXT("peer=%d original FishInventory with exactly two original GUIDs, quantities and weights"), Peer);
 				if (!Guard || Guard->IsActorBeingDestroyed() || !Character || !Inventory || Guard->GetFishInventoryComponent() != Inventory) return false;
+				WaitingFor = FString::Printf(TEXT("peer=%d original world scale expected=%s actual=%s"), Peer,
+					*OriginalGuardWorldScale.ToCompactString(), *Guard->GetActorScale3D().ToCompactString());
+				// 两端都核对拾取前尺寸，只容许浮点变换误差；不能以低精度附着复制为由接受永久缩放漂移。
+				if (!Guard->GetActorScale3D().Equals(OriginalGuardWorldScale, UE_KINDA_SMALL_NUMBER)) return false;
 				TSet<FGuid> Seen;
 				for (const FCatInventoryEntry& Entry : Inventory->GetInventoryEntries())
 				{
@@ -354,6 +360,8 @@ namespace CatFishGuardCarryNetwork
 			// 落稳丢弃允许15厘米网络物理修正差；固定放置限2厘米、2度；携带只比较局部变换，排除角色插值差。
 			const FTransform ServerTransform = bCarried ? ServerGuard->GetRootComponent()->GetRelativeTransform() : ServerGuard->GetActorTransform();
 			const FTransform ClientTransform = bCarried ? ClientGuard->GetRootComponent()->GetRelativeTransform() : ClientGuard->GetActorTransform();
+			WaitingFor = FString::Printf(TEXT("both original guards converge carried=%d server=%s client=%s"), bCarried,
+				*ServerTransform.ToHumanReadableString(), *ClientTransform.ToHumanReadableString());
 			return FVector::Dist(ServerTransform.GetLocation(), ClientTransform.GetLocation()) <= (bDrop ? 15.0 : 2.0)
 				// 四元数夹角以弧度返回；Drop落稳允许10度刚体修正，静态放置与嘴部偏移限2度。
 				&& ServerTransform.GetRotation().AngularDistance(ClientTransform.GetRotation()) <= FMath::DegreesToRadians(bDrop ? 10.0 : 2.0)
@@ -362,6 +370,8 @@ namespace CatFishGuardCarryNetwork
 
 		/** 框架拥有的断言接收者；命令只在队列存活期向其报告结果。 */
 		FAutomationTestBase* Test = nullptr;
+		/** 场景中原鱼护的世界缩放；准备阶段记录非默认尺寸，双方携带和落地阶段读取，防止两端一起变大仍被当作复制正确。 */
+		FVector OriginalGuardWorldScale = FVector::OneVector;
 		/** 当前异步步骤，0准备/1初始复制/2拾取/3放置/4再拾取/5丢弃；仅在条件齐备后推进，避免重复 RPC。 */
 		int32 Stage = 0;
 		/** 当前步骤起始单调时间，单位秒；每次推进刷新，超时用它限制等待。 */
