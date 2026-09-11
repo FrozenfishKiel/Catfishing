@@ -1,0 +1,988 @@
+{
+ "ssot_root": "Knowledge/Design",
+ "generated_at": "2026-09-11",
+ "space_id": "7670823117626870757",
+ "note": "设计 SSOT 的清单。字段原样保留自飞书导出，因为下游各读各的：check_fish_table_vs_definition.py 按 sheet_name 找表、读 sheets[].revision（飞书 revision，整数）判资产是否落后；collect_gap.py 读 revision_id/revision 当重跑信号，并用 node_token 作稳定要求键的 doc 身份——node_token 不得更改，改了整份基线对不上。新增 content_sha1 是仓库文件内容哈希；docs 的 revision_id 已改成哈希（正文在仓库里写，飞书 revision 不再是变更信号），原值留在 feishu_revision_id。表仍在飞书填，所以 sheets/embedded_sheets 的 revision 保持飞书原值。",
+ "docs": [
+  {
+   "title": "北极星愿景",
+   "node_token": "EOdZwzK8wiDtZNkLTcXcEEWxnid",
+   "obj_token": "ET5MdaUHRorYnhxZqS9c60TMnrc",
+   "obj_type": "docx",
+   "depth": 0,
+   "path": [
+    "北极星愿景"
+   ],
+   "has_child": false,
+   "file": "北极星愿景.md",
+   "revision_id": "b09c3a785655",
+   "lines": 60,
+   "content_sha1": "b09c3a785655",
+   "feishu_revision_id": 59
+  },
+  {
+   "title": "世界观与美术基调",
+   "node_token": "FsLmwaQypioUnPkA3ZUcsjNKnAd",
+   "obj_token": "RGmOd7dpioCQ8Px5v1McJrjinlh",
+   "obj_type": "docx",
+   "depth": 0,
+   "path": [
+    "世界观与美术基调"
+   ],
+   "has_child": false,
+   "file": "世界观与美术基调.md",
+   "revision_id": "f4e9f8b13cd9",
+   "lines": 60,
+   "content_sha1": "f4e9f8b13cd9",
+   "feishu_revision_id": 29
+  },
+  {
+   "title": "里程碑",
+   "node_token": "IiJOwUQeQiZwUokQqKocQaUknRc",
+   "obj_token": "BFc3dw8SZo6oSrxoRAicfo2mnvb",
+   "obj_type": "docx",
+   "depth": 0,
+   "path": [
+    "里程碑"
+   ],
+   "has_child": false,
+   "file": "里程碑.md",
+   "revision_id": "3b380dbb2fe1",
+   "lines": 49,
+   "content_sha1": "3b380dbb2fe1",
+   "feishu_revision_id": 118
+  },
+  {
+   "title": "动作表现集",
+   "node_token": "HuFUwyepFiFA4lkb24ecPYEMnbf",
+   "obj_token": "Mdr7dvUX1ouzGUxuMx0cqNifnYe",
+   "obj_type": "docx",
+   "depth": 0,
+   "path": [
+    "动作表现集"
+   ],
+   "has_child": true,
+   "file": "动作表现集/动作表现集.md",
+   "revision_id": "e646bc2256ed",
+   "lines": 101,
+   "content_sha1": "e646bc2256ed",
+   "feishu_revision_id": 3510
+  },
+  {
+   "title": "多人合作动作补充",
+   "node_token": "CYhhwTgoDiIRWwkMr1rcV8kNnUb",
+   "obj_token": "RGacdmz0so07FwxJe8scTjo6nbg",
+   "obj_type": "docx",
+   "depth": 1,
+   "path": [
+    "动作表现集",
+    "多人合作动作补充"
+   ],
+   "has_child": false,
+   "file": "动作表现集/多人合作动作补充.md",
+   "revision_id": "61ee01e4747d",
+   "lines": 81,
+   "content_sha1": "61ee01e4747d",
+   "feishu_revision_id": 45
+  },
+  {
+   "title": "GDD 系统分册",
+   "node_token": "C7C8wed3ti43DFkzpQicUoWNn3c",
+   "obj_token": "LXZed2M3Zo3ZMmxv2sicPckNnUd",
+   "obj_type": "docx",
+   "depth": 0,
+   "path": [
+    "GDD 系统分册"
+   ],
+   "has_child": true,
+   "file": "GDD 系统分册/GDD 系统分册.md",
+   "revision_id": "2cf16dea3e9c",
+   "lines": 164,
+   "content_sha1": "2cf16dea3e9c",
+   "feishu_revision_id": 176
+  },
+  {
+   "title": "钓鱼系统",
+   "node_token": "ConXwh5TAi6OMVk91pJcumbBnfe",
+   "obj_token": "EFQJdvK7Qo0oNxxkGkvcorWdnQg",
+   "obj_type": "docx",
+   "depth": 1,
+   "path": [
+    "GDD 系统分册",
+    "钓鱼系统"
+   ],
+   "has_child": true,
+   "file": "GDD 系统分册/钓鱼系统/钓鱼系统.md",
+   "revision_id": "1181ae525354",
+   "lines": 198,
+   "content_sha1": "1181ae525354",
+   "feishu_revision_id": 388
+  },
+  {
+   "title": "钓鱼规则",
+   "node_token": "BzUbwq0qRil89ykyFPNcNou5nYo",
+   "obj_token": "KJKwdWSiEo1A5HxV88UcuwMRnkf",
+   "obj_type": "docx",
+   "depth": 2,
+   "path": [
+    "GDD 系统分册",
+    "钓鱼系统",
+    "钓鱼规则"
+   ],
+   "has_child": false,
+   "file": "GDD 系统分册/钓鱼系统/钓鱼规则.md",
+   "revision_id": "62dc5ce01321",
+   "lines": 395,
+   "content_sha1": "62dc5ce01321",
+   "feishu_revision_id": 333
+  },
+  {
+   "title": "多人钓鱼附篇",
+   "node_token": "ABIKwtQeliv3aLkuGjrcFAi3nzk",
+   "obj_token": "Skcadd2aLoDiVBxDRcOcs7OGnje",
+   "obj_type": "docx",
+   "depth": 2,
+   "path": [
+    "GDD 系统分册",
+    "钓鱼系统",
+    "多人钓鱼附篇"
+   ],
+   "has_child": false,
+   "file": "GDD 系统分册/钓鱼系统/多人钓鱼附篇.md",
+   "revision_id": "e92f52ac9550",
+   "lines": 139,
+   "content_sha1": "e92f52ac9550",
+   "feishu_revision_id": 82
+  },
+  {
+   "title": "道具",
+   "node_token": "VVHrw3FAui78wZkjuKZcLHBdnEc",
+   "obj_token": "Ohy5dF5PJofBg8xeZnrcx1vEnxg",
+   "obj_type": "docx",
+   "depth": 1,
+   "path": [
+    "GDD 系统分册",
+    "道具"
+   ],
+   "has_child": true,
+   "file": "GDD 系统分册/道具/道具.md",
+   "revision_id": "6f60de8aa407",
+   "lines": 307,
+   "content_sha1": "6f60de8aa407",
+   "feishu_revision_id": 833
+  },
+  {
+   "title": "鱼",
+   "node_token": "SlFcwt3BdidWCRkz2S4cIplJnnV",
+   "obj_token": "EAnSdzGeFocCTlxmOHGcJTbonAe",
+   "obj_type": "docx",
+   "depth": 1,
+   "path": [
+    "GDD 系统分册",
+    "鱼"
+   ],
+   "has_child": true,
+   "file": "GDD 系统分册/鱼/鱼.md",
+   "revision_id": "31bee0b6a0f5",
+   "lines": 169,
+   "content_sha1": "31bee0b6a0f5",
+   "feishu_revision_id": 539
+  },
+  {
+   "title": "鱼的行为",
+   "node_token": "XrwVwVQOuir3qFktxHNcdH7engd",
+   "obj_token": "JcPYd2xn3oSSj7xWgkccmEFdnzg",
+   "obj_type": "docx",
+   "depth": 2,
+   "path": [
+    "GDD 系统分册",
+    "鱼",
+    "鱼的行为"
+   ],
+   "has_child": false,
+   "file": "GDD 系统分册/鱼/鱼的行为.md",
+   "revision_id": "cc05fb222275",
+   "lines": 106,
+   "content_sha1": "cc05fb222275",
+   "feishu_revision_id": 189
+  },
+  {
+   "title": "营地",
+   "node_token": "EE9vwzWE2iHVXGkduzGcEx4bnjh",
+   "obj_token": "OKy0df2rToXTh1x7tUuc5b3gn8A",
+   "obj_type": "docx",
+   "depth": 1,
+   "path": [
+    "GDD 系统分册",
+    "营地"
+   ],
+   "has_child": false,
+   "file": "GDD 系统分册/营地.md",
+   "revision_id": "2f43b7cbf0e1",
+   "lines": 181,
+   "content_sha1": "2f43b7cbf0e1",
+   "feishu_revision_id": 313
+  },
+  {
+   "title": "商店",
+   "node_token": "U0JtwqFJ8ijKxakb1egcRXhvnKg",
+   "obj_token": "HTjQdtW56otoylxBa8NclJKsnCb",
+   "obj_type": "docx",
+   "depth": 1,
+   "path": [
+    "GDD 系统分册",
+    "商店"
+   ],
+   "has_child": false,
+   "file": "GDD 系统分册/商店.md",
+   "revision_id": "c0b696502f96",
+   "lines": 165,
+   "content_sha1": "c0b696502f96",
+   "feishu_revision_id": 351
+  },
+  {
+   "title": "猫咪与状态",
+   "node_token": "BIeHwP14vigUEBkI3UxciEionxf",
+   "obj_token": "VL9kdbYnBowwKfxrCkzc2espned",
+   "obj_type": "docx",
+   "depth": 1,
+   "path": [
+    "GDD 系统分册",
+    "猫咪与状态"
+   ],
+   "has_child": true,
+   "file": "GDD 系统分册/猫咪与状态/猫咪与状态.md",
+   "revision_id": "0737e51230c8",
+   "lines": 262,
+   "content_sha1": "0737e51230c8",
+   "feishu_revision_id": 208
+  },
+  {
+   "title": "数值成长",
+   "node_token": "Na20wnqTXiwM7TkKf4kcnaQ0npf",
+   "obj_token": "OrZDdHzMloJaXWx3GuWcEQ9InZe",
+   "obj_type": "docx",
+   "depth": 2,
+   "path": [
+    "GDD 系统分册",
+    "猫咪与状态",
+    "数值成长"
+   ],
+   "has_child": false,
+   "file": "GDD 系统分册/猫咪与状态/数值成长.md",
+   "revision_id": "db870c572c2b",
+   "lines": 94,
+   "content_sha1": "db870c572c2b",
+   "feishu_revision_id": 67
+  },
+  {
+   "title": "吃鱼效果",
+   "node_token": "O753wiu7yiuBtMkburWcicZnnre",
+   "obj_token": "KH9bdBX6QoOMxRxo23KcyMQFnxb",
+   "obj_type": "docx",
+   "depth": 2,
+   "path": [
+    "GDD 系统分册",
+    "猫咪与状态",
+    "吃鱼效果"
+   ],
+   "has_child": false,
+   "file": "GDD 系统分册/猫咪与状态/吃鱼效果.md",
+   "revision_id": "e1ed5e55f6fe",
+   "lines": 77,
+   "content_sha1": "e1ed5e55f6fe",
+   "feishu_revision_id": 64
+  },
+  {
+   "title": "升级效果",
+   "node_token": "Sisrw4FzWiL2AekXetFc7Vxunqg",
+   "obj_token": "Pd5EdR7EyoMzYsx3C2Nc1CDSncg",
+   "obj_type": "docx",
+   "depth": 2,
+   "path": [
+    "GDD 系统分册",
+    "猫咪与状态",
+    "升级效果"
+   ],
+   "has_child": false,
+   "file": "GDD 系统分册/猫咪与状态/升级效果.md",
+   "revision_id": "5082b08febda",
+   "lines": 49,
+   "content_sha1": "5082b08febda",
+   "feishu_revision_id": 66
+  },
+  {
+   "title": "主界面",
+   "node_token": "OEqkw02J2iHso9keQ1Yc7Wsdnpe",
+   "obj_token": "D5h8dp1Ipoukd4xFHMPcHcHznvf",
+   "obj_type": "docx",
+   "depth": 2,
+   "path": [
+    "GDD 系统分册",
+    "ui",
+    "主界面"
+   ],
+   "has_child": false,
+   "file": "GDD 系统分册/ui/主界面.md",
+   "revision_id": "bf54a842244d",
+   "lines": 159,
+   "content_sha1": "bf54a842244d",
+   "feishu_revision_id": 353
+  },
+  {
+   "title": "交互",
+   "node_token": "PjD4w3XrJi4UT4k3fthcTCOrnhf",
+   "obj_token": "QyR0d1iQ3otRkBxNfVlcxWo7nFc",
+   "obj_type": "docx",
+   "depth": 1,
+   "path": [
+    "GDD 系统分册",
+    "交互"
+   ],
+   "has_child": false,
+   "file": "GDD 系统分册/交互.md",
+   "revision_id": "2b58515bbfff",
+   "lines": 112,
+   "content_sha1": "2b58515bbfff",
+   "feishu_revision_id": 81
+  },
+  {
+   "title": "图鉴",
+   "node_token": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ",
+   "obj_token": "YlJVdVbWgoKpxBxiefycEcENn1b",
+   "obj_type": "docx",
+   "depth": 1,
+   "path": [
+    "GDD 系统分册",
+    "图鉴"
+   ],
+   "has_child": false,
+   "file": "GDD 系统分册/图鉴.md",
+   "revision_id": "3ba8350964fc",
+   "lines": 242,
+   "content_sha1": "3ba8350964fc",
+   "feishu_revision_id": 132
+  },
+  {
+   "title": "局与进程",
+   "node_token": "Ca49ww71ai2IAlklmsZcqF7Tnzb",
+   "obj_token": "Fr3PdRNJPosKGGx6LPPcygmrnZI",
+   "obj_type": "docx",
+   "depth": 1,
+   "path": [
+    "GDD 系统分册",
+    "局与进程"
+   ],
+   "has_child": false,
+   "file": "GDD 系统分册/局与进程.md",
+   "revision_id": "214ab2f9eb34",
+   "lines": 200,
+   "content_sha1": "214ab2f9eb34",
+   "feishu_revision_id": 170
+  },
+  {
+   "title": "环境与氛围",
+   "node_token": "Bg2jwBdkViHRgRkOtx2crCgAnHh",
+   "obj_token": "TOundRsSRo0EEHxsp1dc3FTPnVb",
+   "obj_type": "docx",
+   "depth": 1,
+   "path": [
+    "GDD 系统分册",
+    "环境与氛围"
+   ],
+   "has_child": false,
+   "file": "GDD 系统分册/环境与氛围.md",
+   "revision_id": "ee128bcc5850",
+   "lines": 241,
+   "content_sha1": "ee128bcc5850",
+   "feishu_revision_id": 114
+  },
+  {
+   "title": "联机社交",
+   "node_token": "EH0LwpHihiFR8Ukh6s6cXTqUnXc",
+   "obj_token": "ZUaMdmlPMoGMyAxOrqpcvPhgnlc",
+   "obj_type": "docx",
+   "depth": 1,
+   "path": [
+    "GDD 系统分册",
+    "联机社交"
+   ],
+   "has_child": false,
+   "file": "GDD 系统分册/联机社交.md",
+   "revision_id": "5644960878d4",
+   "lines": 309,
+   "content_sha1": "5644960878d4",
+   "feishu_revision_id": 254
+  },
+  {
+   "title": "印记",
+   "node_token": "EPi4wjG5IigRTwkH8stcGWoUnUh",
+   "obj_token": "MK7Ad0bF6oBoTXxv2VRcfLhRn6f",
+   "obj_type": "docx",
+   "depth": 1,
+   "path": [
+    "GDD 系统分册",
+    "印记"
+   ],
+   "has_child": false,
+   "file": "GDD 系统分册/印记.md",
+   "revision_id": "1ec6bfe746c0",
+   "lines": 259,
+   "content_sha1": "1ec6bfe746c0",
+   "feishu_revision_id": 90
+  },
+  {
+   "title": "设计修改记录",
+   "node_token": "ZNEpwV95CiU8eVkXoN4c0M1Sn8c",
+   "obj_token": "QKjfd7uYKo9vNuxmtJqcBkiInEc",
+   "obj_type": "docx",
+   "depth": 1,
+   "path": [
+    "裁决同步",
+    "设计修改记录"
+   ],
+   "has_child": false,
+   "file": "设计修改记录.md",
+   "revision_id": "fe3d6ddfdde8",
+   "lines": 305,
+   "content_sha1": "fe3d6ddfdde8",
+   "feishu_revision_id": 98
+  },
+  {
+   "title": "数值模拟与参数记录",
+   "node_token": "Xg1EwylUuiUeVckeLwtcMXMjnAg",
+   "obj_token": "IR2edjDXHoiiTPxko3zciwswnyg",
+   "obj_type": "docx",
+   "depth": 0,
+   "path": [
+    "数值模拟与参数记录"
+   ],
+   "has_child": false,
+   "file": "数值模拟与参数记录.md",
+   "revision_id": "34d7bc787f94",
+   "lines": 102,
+   "content_sha1": "34d7bc787f94",
+   "feishu_revision_id": 167
+  }
+ ],
+ "sheets": [
+  {
+   "node": "道具总表",
+   "path": [
+    "GDD 系统分册",
+    "道具",
+    "道具总表"
+   ],
+   "node_token": "RBHPwKudEiwItbko3HvcFPCenom",
+   "obj_token": "YVAYsf8RFhJ7kKtmAHacBaUQnHc",
+   "sheet_id": "5e822d",
+   "sheet_name": "道具",
+   "region": "A1:H14",
+   "revision": 231,
+   "file": "GDD 系统分册/道具/道具总表/道具.csv",
+   "rows": 14,
+   "cols": 8,
+   "content_sha1": "f47f0d37844d",
+   "revision_id": "f47f0d37844d"
+  },
+  {
+   "node": "鱼竿",
+   "path": [
+    "GDD 系统分册",
+    "道具",
+    "鱼竿"
+   ],
+   "node_token": "BmkPwEbVLiUuIlkbAxQczFwsnCf",
+   "obj_token": "BQdZsCRX2hVa5WtDK2QcNd04nMc",
+   "sheet_id": "35cade",
+   "sheet_name": "Sheet1",
+   "region": "A1:F7",
+   "revision": 4,
+   "file": "GDD 系统分册/道具/鱼竿/Sheet1.csv",
+   "rows": 7,
+   "cols": 6,
+   "content_sha1": "159423d37d55",
+   "revision_id": "159423d37d55"
+  },
+  {
+   "node": "鱼漂",
+   "path": [
+    "GDD 系统分册",
+    "道具",
+    "鱼漂"
+   ],
+   "node_token": "LCUMwlQ92i7xHBk1odQcIJKmnDe",
+   "obj_token": "EIzbsneOxhsfpVt70Zhc5E2unGg",
+   "sheet_id": "ac5ee4",
+   "sheet_name": "Sheet1",
+   "region": "A1:F7",
+   "revision": 10,
+   "file": "GDD 系统分册/道具/鱼漂/Sheet1.csv",
+   "rows": 7,
+   "cols": 6,
+   "content_sha1": "c084dbb3a5db",
+   "revision_id": "c084dbb3a5db"
+  },
+  {
+   "node": "窝料",
+   "path": [
+    "GDD 系统分册",
+    "道具",
+    "窝料"
+   ],
+   "node_token": "WYFUwTy7FiRx6DkEKlFcn5JPnSd",
+   "obj_token": "YgoysJ38XhWNJ3tlgtEcifFUnLf",
+   "sheet_id": "be988c",
+   "sheet_name": "Sheet1",
+   "region": "A1:I5",
+   "revision": 51,
+   "file": "GDD 系统分册/道具/窝料/Sheet1.csv",
+   "rows": 5,
+   "cols": 9,
+   "content_sha1": "65a55859348b",
+   "revision_id": "65a55859348b"
+  },
+  {
+   "node": "鱼饵",
+   "path": [
+    "GDD 系统分册",
+    "道具",
+    "鱼饵"
+   ],
+   "node_token": "VrsAwmWw7iACprkNaCCcpIXRnpg",
+   "obj_token": "EsuNsYCrUhEkBltIasYcoq0AnOg",
+   "sheet_id": "6756b4",
+   "sheet_name": "Sheet1",
+   "region": "A1:F6",
+   "revision": 33,
+   "file": "GDD 系统分册/道具/鱼饵/Sheet1.csv",
+   "rows": 6,
+   "cols": 6,
+   "content_sha1": "89024b19c616",
+   "revision_id": "89024b19c616"
+  },
+  {
+   "node": "鱼饵",
+   "path": [
+    "GDD 系统分册",
+    "道具",
+    "鱼饵"
+   ],
+   "node_token": "VrsAwmWw7iACprkNaCCcpIXRnpg",
+   "obj_token": "EsuNsYCrUhEkBltIasYcoq0AnOg",
+   "sheet_id": "zMDtVC",
+   "sheet_name": "假饵（点子库·Demo 不做）",
+   "region": "A1:E6",
+   "revision": 33,
+   "file": "GDD 系统分册/道具/鱼饵/假饵（点子库·Demo 不做）.csv",
+   "rows": 6,
+   "cols": 5,
+   "content_sha1": "26745d9193af",
+   "revision_id": "26745d9193af"
+  },
+  {
+   "node": "鱼表格",
+   "path": [
+    "GDD 系统分册",
+    "鱼",
+    "鱼表格"
+   ],
+   "node_token": "DKhnweGaEiPTJZkO8OScQOJenqg",
+   "obj_token": "CQlMsQon6hlo8ctpZRWcAPzOnRi",
+   "sheet_id": "R7rRBp",
+   "sheet_name": "第一版",
+   "region": "A1:Z23",
+   "revision": 872,
+   "file": "GDD 系统分册/鱼/鱼表格/第一版.csv",
+   "rows": 17,
+   "cols": 26,
+   "content_sha1": "b3e7367fd3ec",
+   "revision_id": "b3e7367fd3ec"
+  },
+  {
+   "node": "鱼表格",
+   "path": [
+    "GDD 系统分册",
+    "鱼",
+    "鱼表格"
+   ],
+   "node_token": "DKhnweGaEiPTJZkO8OScQOJenqg",
+   "obj_token": "CQlMsQon6hlo8ctpZRWcAPzOnRi",
+   "sheet_id": "bc9794",
+   "sheet_name": "旧版-已废弃-勿引（饥饿口径）",
+   "region": "A1:L48",
+   "revision": 872,
+   "file": "GDD 系统分册/鱼/鱼表格/旧版-已废弃-勿引（饥饿口径）.csv",
+   "rows": 48,
+   "cols": 12,
+   "content_sha1": "b782587b7e82",
+   "revision_id": "b782587b7e82"
+  },
+  {
+   "node": "鱼表格",
+   "path": [
+    "GDD 系统分册",
+    "鱼",
+    "鱼表格"
+   ],
+   "node_token": "DKhnweGaEiPTJZkO8OScQOJenqg",
+   "obj_token": "CQlMsQon6hlo8ctpZRWcAPzOnRi",
+   "sheet_id": "CekBpa",
+   "sheet_name": "饵权重",
+   "region": "A1:I18",
+   "revision": 872,
+   "file": "GDD 系统分册/鱼/鱼表格/饵权重.csv",
+   "rows": 18,
+   "cols": 9,
+   "content_sha1": "fb2040d1e3ee",
+   "revision_id": "fb2040d1e3ee"
+  },
+  {
+   "node": "鱼表格",
+   "path": [
+    "GDD 系统分册",
+    "鱼",
+    "鱼表格"
+   ],
+   "node_token": "DKhnweGaEiPTJZkO8OScQOJenqg",
+   "obj_token": "CQlMsQon6hlo8ctpZRWcAPzOnRi",
+   "sheet_id": "rdnjT9",
+   "sheet_name": "基础池",
+   "region": "A1:D6",
+   "revision": 872,
+   "file": "GDD 系统分册/鱼/鱼表格/基础池.csv",
+   "rows": 6,
+   "cols": 4,
+   "content_sha1": "e5229d4f23e7",
+   "revision_id": "e5229d4f23e7"
+  },
+  {
+   "node": "ui",
+   "path": [
+    "GDD 系统分册",
+    "ui"
+   ],
+   "node_token": "UZ3ywmA0WiN8MKkSyOrcvuvknDb",
+   "obj_token": "BhJksVu89h0Mqgt0gjycd4QUnUh",
+   "sheet_id": "xnub6V",
+   "sheet_name": "页头",
+   "region": "A1:B3",
+   "revision": 379,
+   "file": "GDD 系统分册/ui/页头.csv",
+   "rows": 3,
+   "cols": 2,
+   "content_sha1": "448b34b267f6",
+   "revision_id": "448b34b267f6"
+  },
+  {
+   "node": "ui",
+   "path": [
+    "GDD 系统分册",
+    "ui"
+   ],
+   "node_token": "UZ3ywmA0WiN8MKkSyOrcvuvknDb",
+   "obj_token": "BhJksVu89h0Mqgt0gjycd4QUnUh",
+   "sheet_id": "gMiOr6",
+   "sheet_name": "Sheet2",
+   "region": "A1:C40",
+   "revision": 379,
+   "file": "GDD 系统分册/ui/Sheet2.csv",
+   "rows": 40,
+   "cols": 3,
+   "content_sha1": "f5e9a7445668",
+   "revision_id": "f5e9a7445668"
+  },
+  {
+   "node": "ui",
+   "path": [
+    "GDD 系统分册",
+    "ui"
+   ],
+   "node_token": "UZ3ywmA0WiN8MKkSyOrcvuvknDb",
+   "obj_token": "BhJksVu89h0Mqgt0gjycd4QUnUh",
+   "sheet_id": "a88907",
+   "sheet_name": "Sheet1",
+   "region": "A1:K23",
+   "revision": 379,
+   "file": "GDD 系统分册/ui/Sheet1.csv",
+   "rows": 23,
+   "cols": 11,
+   "content_sha1": "608b737a7832",
+   "revision_id": "608b737a7832"
+  },
+  {
+   "node": "ui",
+   "path": [
+    "GDD 系统分册",
+    "ui"
+   ],
+   "node_token": "UZ3ywmA0WiN8MKkSyOrcvuvknDb",
+   "obj_token": "BhJksVu89h0Mqgt0gjycd4QUnUh",
+   "sheet_id": "OO4CNy",
+   "sheet_name": "提示文案",
+   "region": "A1:C15",
+   "revision": 379,
+   "file": "GDD 系统分册/ui/提示文案.csv",
+   "rows": 15,
+   "cols": 3,
+   "content_sha1": "236b0b1227a0",
+   "revision_id": "236b0b1227a0"
+  }
+ ],
+ "embedded_sheets": [
+  {
+   "in_doc": "动作表现集/多人合作动作补充.md",
+   "doc_node_token": "CYhhwTgoDiIRWwkMr1rcV8kNnUb",
+   "token": "FXGWs7JsIhnCUftfoiwco7LRnBe",
+   "sheet_id": "bD6WeK",
+   "sheet_name": "bD6WeK",
+   "workbook_title": null,
+   "header": [
+    "项目",
+    "说明"
+   ],
+   "region": "A1:B4",
+   "revision": 75,
+   "file": "动作表现集/多人合作动作补充.embedded/bD6WeK.csv",
+   "rows": 4,
+   "cols": 2,
+   "content_sha1": "022be83a48f2",
+   "revision_id": "022be83a48f2"
+  },
+  {
+   "in_doc": "动作表现集/多人合作动作补充.md",
+   "doc_node_token": "CYhhwTgoDiIRWwkMr1rcV8kNnUb",
+   "token": "FXGWs7JsIhnCUftfoiwco7LRnBe",
+   "sheet_id": "FutdkG",
+   "sheet_name": "FutdkG",
+   "workbook_title": null,
+   "header": [
+    "情况",
+    "结果",
+    "动画表现"
+   ],
+   "region": "A1:C4",
+   "revision": 75,
+   "file": "动作表现集/多人合作动作补充.embedded/FutdkG.csv",
+   "rows": 4,
+   "cols": 3,
+   "content_sha1": "583a37fb63e0",
+   "revision_id": "583a37fb63e0"
+  },
+  {
+   "in_doc": "动作表现集/多人合作动作补充.md",
+   "doc_node_token": "CYhhwTgoDiIRWwkMr1rcV8kNnUb",
+   "token": "FXGWs7JsIhnCUftfoiwco7LRnBe",
+   "sheet_id": "FphmYX",
+   "sheet_name": "FphmYX",
+   "workbook_title": null,
+   "header": [
+    "情况",
+    "结果",
+    "动画表现"
+   ],
+   "region": "A1:C5",
+   "revision": 75,
+   "file": "动作表现集/多人合作动作补充.embedded/FphmYX.csv",
+   "rows": 5,
+   "cols": 3,
+   "content_sha1": "5faf53a66162",
+   "revision_id": "5faf53a66162"
+  },
+  {
+   "in_doc": "动作表现集/多人合作动作补充.md",
+   "doc_node_token": "CYhhwTgoDiIRWwkMr1rcV8kNnUb",
+   "token": "FXGWs7JsIhnCUftfoiwco7LRnBe",
+   "sheet_id": "PomG0l",
+   "sheet_name": "PomG0l",
+   "workbook_title": null,
+   "header": [
+    "情况",
+    "结果",
+    "动画表现"
+   ],
+   "region": "A1:C5",
+   "revision": 75,
+   "file": "动作表现集/多人合作动作补充.embedded/PomG0l.csv",
+   "rows": 5,
+   "cols": 3,
+   "content_sha1": "7a6457941d24",
+   "revision_id": "7a6457941d24"
+  },
+  {
+   "in_doc": "动作表现集/多人合作动作补充.md",
+   "doc_node_token": "CYhhwTgoDiIRWwkMr1rcV8kNnUb",
+   "token": "FXGWs7JsIhnCUftfoiwco7LRnBe",
+   "sheet_id": "faBWbs",
+   "sheet_name": "faBWbs",
+   "workbook_title": null,
+   "header": [
+    "动作",
+    "触发条件",
+    "效果"
+   ],
+   "region": "A1:C7",
+   "revision": 75,
+   "file": "动作表现集/多人合作动作补充.embedded/faBWbs.csv",
+   "rows": 7,
+   "cols": 3,
+   "content_sha1": "598aee14ce1a",
+   "revision_id": "598aee14ce1a"
+  },
+  {
+   "in_doc": "动作表现集/多人合作动作补充.md",
+   "doc_node_token": "CYhhwTgoDiIRWwkMr1rcV8kNnUb",
+   "token": "FXGWs7JsIhnCUftfoiwco7LRnBe",
+   "sheet_id": "qO7Iqs",
+   "sheet_name": "qO7Iqs",
+   "workbook_title": null,
+   "header": [
+    "移动状态",
+    "体力消耗",
+    "说明"
+   ],
+   "region": "A1:C5",
+   "revision": 75,
+   "file": "动作表现集/多人合作动作补充.embedded/qO7Iqs.csv",
+   "rows": 5,
+   "cols": 3,
+   "content_sha1": "9107f891f40c",
+   "revision_id": "9107f891f40c"
+  },
+  {
+   "in_doc": "动作表现集/多人合作动作补充.md",
+   "doc_node_token": "CYhhwTgoDiIRWwkMr1rcV8kNnUb",
+   "token": "FXGWs7JsIhnCUftfoiwco7LRnBe",
+   "sheet_id": "vN3cOC",
+   "sheet_name": "vN3cOC",
+   "workbook_title": null,
+   "header": [
+    "结果",
+    "说明"
+   ],
+   "region": "A1:B2",
+   "revision": 75,
+   "file": "动作表现集/多人合作动作补充.embedded/vN3cOC.csv",
+   "rows": 2,
+   "cols": 2,
+   "content_sha1": "5d70e1e18178",
+   "revision_id": "5d70e1e18178"
+  },
+  {
+   "in_doc": "动作表现集/多人合作动作补充.md",
+   "doc_node_token": "CYhhwTgoDiIRWwkMr1rcV8kNnUb",
+   "token": "FXGWs7JsIhnCUftfoiwco7LRnBe",
+   "sheet_id": "gHA3Ed",
+   "sheet_name": "gHA3Ed",
+   "workbook_title": null,
+   "header": [
+    "操作",
+    "效果"
+   ],
+   "region": "A1:B4",
+   "revision": 75,
+   "file": "动作表现集/多人合作动作补充.embedded/gHA3Ed.csv",
+   "rows": 4,
+   "cols": 2,
+   "content_sha1": "1d159d8544c3",
+   "revision_id": "1d159d8544c3"
+  },
+  {
+   "in_doc": "动作表现集/多人合作动作补充.md",
+   "doc_node_token": "CYhhwTgoDiIRWwkMr1rcV8kNnUb",
+   "token": "FXGWs7JsIhnCUftfoiwco7LRnBe",
+   "sheet_id": "Y8Wt2F",
+   "sheet_name": "Y8Wt2F",
+   "workbook_title": null,
+   "header": [
+    "UI元素",
+    "说明"
+   ],
+   "region": "A1:B5",
+   "revision": 75,
+   "file": "动作表现集/多人合作动作补充.embedded/Y8Wt2F.csv",
+   "rows": 5,
+   "cols": 2,
+   "content_sha1": "f68e809ec2a3",
+   "revision_id": "f68e809ec2a3"
+  },
+  {
+   "in_doc": "动作表现集/多人合作动作补充.md",
+   "doc_node_token": "CYhhwTgoDiIRWwkMr1rcV8kNnUb",
+   "token": "FXGWs7JsIhnCUftfoiwco7LRnBe",
+   "sheet_id": "TqTiXJ",
+   "sheet_name": "TqTiXJ",
+   "workbook_title": null,
+   "header": [
+    "彩蛋",
+    "触发条件",
+    "效果"
+   ],
+   "region": "A1:C3",
+   "revision": 75,
+   "file": "动作表现集/多人合作动作补充.embedded/TqTiXJ.csv",
+   "rows": 3,
+   "cols": 3,
+   "content_sha1": "826c8b76a4ba",
+   "revision_id": "826c8b76a4ba"
+  },
+  {
+   "in_doc": "动作表现集/多人合作动作补充.md",
+   "doc_node_token": "CYhhwTgoDiIRWwkMr1rcV8kNnUb",
+   "token": "FXGWs7JsIhnCUftfoiwco7LRnBe",
+   "sheet_id": "EmtUWj",
+   "sheet_name": "EmtUWj",
+   "workbook_title": null,
+   "header": [
+    "项目",
+    "规则"
+   ],
+   "region": "A1:B11",
+   "revision": 75,
+   "file": "动作表现集/多人合作动作补充.embedded/EmtUWj.csv",
+   "rows": 11,
+   "cols": 2,
+   "content_sha1": "f26da83684ca",
+   "revision_id": "f26da83684ca"
+  },
+  {
+   "in_doc": "GDD 系统分册/商店.md",
+   "doc_node_token": "U0JtwqFJ8ijKxakb1egcRXhvnKg",
+   "token": "W99csYTJihlSwYtD9aQcK2HYnLg",
+   "sheet_id": "DeiSFL",
+   "sheet_name": "DeiSFL",
+   "workbook_title": null,
+   "header": [
+    "验证项",
+    "记录指标",
+    "首轮通过条件"
+   ],
+   "region": "A1:C7",
+   "revision": 39,
+   "file": "GDD 系统分册/商店.embedded/DeiSFL.csv",
+   "rows": 7,
+   "cols": 3,
+   "content_sha1": "15d8af1a2e7c",
+   "revision_id": "15d8af1a2e7c"
+  },
+  {
+   "in_doc": "GDD 系统分册/商店.md",
+   "doc_node_token": "U0JtwqFJ8ijKxakb1egcRXhvnKg",
+   "token": "W99csYTJihlSwYtD9aQcK2HYnLg",
+   "sheet_id": "GaHeFr",
+   "sheet_name": "GaHeFr",
+   "workbook_title": null,
+   "header": [
+    "相关分册",
+    "待对齐内容"
+   ],
+   "region": "A1:B9",
+   "revision": 39,
+   "file": "GDD 系统分册/商店.embedded/GaHeFr.csv",
+   "rows": 9,
+   "cols": 2,
+   "content_sha1": "0b2f578a4ae2",
+   "revision_id": "0b2f578a4ae2"
+  }
+ ]
+}

@@ -1,0 +1,6 @@
+﻿fish_id,名字,基础池概率（占位）,说明
+Fish_RiverPattern,河纹鱼,0.4,
+Fish_LittleSilver,小银鱼,0.3,
+Fish_Loach,泥鳅,0.2,
+Fish_Stinky,臭臭鱼,0.1,整蛊鱼进不进基础池由张佳定
+,（说明）,,基础池＝没窝料时的兜底鱼池，Total=0 也钓得到鱼（鱼册 §3.1.2）；成员与概率均为占位，2026-09-10 Claude 建表，张佳定
