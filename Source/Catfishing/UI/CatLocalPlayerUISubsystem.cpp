@@ -1,6 +1,7 @@
 #include "UI/CatLocalPlayerUISubsystem.h"
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "UI/Run/CatDayTransitionWidget.h"
+#include "UI/WorldInfo/CatWorldInfoController.h"
 
 #include "Character/CatCharacter.h"
 #include "Blueprint/UserWidget.h"
@@ -222,9 +223,11 @@ bool UCatLocalPlayerUISubsystem::IsInventoryOpen() const
 
 // 翻天表现流程：
 // 1. 只接收本 LocalPlayer 的当前 Controller；锁定期关闭库存和菜单，切断格子直接 use 与模态按键入口。
-// 2. 用服务器时间计算淡出、停留、淡入；迟到或超时快照的黑色透明度为零，操作阻断仍服从服务器 active。
-// 3. 提交后才展示服务器 Message 或目标天数；失败只按 RequestId 开启一次两秒提示，且不占用操作锁。
-// 4. 仅在有锁或提示时创建原生 UI；普通结束移除视图但保留失败去重键，旅行则由 ClearDayTransition 完整清理。
+// 2. 失败按 RequestId 只开启一次基于本机实时时钟的两秒提示；无锁且无提示时先归还焦点，再移除视图，保留去重记录。
+// 3. 按服务器时间计算淡出、停留、淡入；已经越过完整过场时透明度为零，阻断仍取 active 且非 failed，不由本地时钟解除。
+// 4. 提交且处于结果展示时间段时显示 Message 或目标天数；成功凭据只有请求标识匹配才追加结算摘要，失败只显示错误文本。
+// 5. 需要展示时加载正式 WBP，加载或创建失败按请求记录并停止重试；实例存在但视口晚到时保留实例，后续帧继续挂接。
+// 6. 挂接全视口 9000 层后提交透明度、文本和阻断状态；旅行由 ClearDayTransition 清除视图、加载失败记忆及反馈计时。
 void UCatLocalPlayerUISubsystem::RefreshDayTransition(APlayerController* Controller,
 	const FCatRunDayTransition& Transition, const double ServerTimeSeconds)
 {
@@ -265,6 +268,7 @@ void UCatLocalPlayerUISubsystem::RefreshDayTransition(APlayerController* Control
 	}
 	float BlackOpacity = 0.0f;
 	FText Title;
+	FText SettlementDetails;
 	if (bShowFailure)
 	{
 		Title = Transition.Message;
@@ -292,12 +296,31 @@ void UCatLocalPlayerUISubsystem::RefreshDayTransition(APlayerController* Control
 			Title = Transition.Message.IsEmpty()
 				? FText::Format(NSLOCTEXT("CatDayTransition", "DayTitle", "第 {0} 天"), FText::AsNumber(Transition.TargetDayIndex))
 				: Transition.Message;
+			const FCatOfferingResultSnapshot& Result = Transition.LastCommittedOffering;
+			if (Result.RequestId == Transition.RequestId)
+			{
+				SettlementDetails = FText::Format(NSLOCTEXT("CatDayTransition", "SettlementDetails", "献祭 {0}/{1} 点 · {2}\n世界进度 {3}% → {4}%"),
+					FText::AsNumber(Result.OfferedPoints), FText::AsNumber(Result.TargetPoints),
+					Result.bMetTarget ? NSLOCTEXT("CatWorldInfo", "TargetMet", "达标") : NSLOCTEXT("CatWorldInfo", "TargetMissed", "未达标"),
+					FText::AsNumber(Result.WorldProgressBefore), FText::AsNumber(Result.WorldProgressAfter));
+			}
 		}
 	}
 	const bool bCreatedThisFrame = !DayTransitionWidget;
 	if (bCreatedThisFrame)
 	{
-		DayTransitionWidget = CreateWidget<UCatDayTransitionWidget>(Controller, UCatDayTransitionWidget::StaticClass());
+		if (UnavailableDayTransitionViewId == Transition.RequestId) return;
+		const UCatUISettings* Settings = GetDefault<UCatUISettings>();
+		const TSubclassOf<UCatDayTransitionWidget> ViewClass = Settings->LoadDayTransitionWidgetClass();
+		if (ViewClass) DayTransitionWidget = CreateWidget<UCatDayTransitionWidget>(Controller, ViewClass);
+		if (!DayTransitionWidget)
+		{
+			UnavailableDayTransitionViewId = Transition.RequestId;
+			UE_LOG(LogCatUI, Error, TEXT("Event=DayTransitionWBPUnavailable World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s RequestId=%s Class=%s"),
+				*GetNameSafe(Controller->GetWorld()), static_cast<int32>(Controller->GetNetMode()), Controller->HasAuthority(),
+				static_cast<int32>(Controller->GetLocalRole()), *Controller->GetName(), *Transition.RequestId.ToString(), *Settings->DayTransitionWidgetClass.ToString());
+			return;
+		}
 	}
 	if (!DayTransitionWidget) return;
 	// 与现有 HUD 使用同一全视口层：9000 遮住 HUD，仍低于 Online 的 10000；玩家子层无法覆盖全视口 HUD。
@@ -314,10 +337,11 @@ void UCatLocalPlayerUISubsystem::RefreshDayTransition(APlayerController* Control
 		}
 		return;
 	}
-	DayTransitionWidget->RenderTransition(BlackOpacity, Title, bBlocked);
+	DayTransitionWidget->RenderTransition(BlackOpacity, Title, bBlocked, SettlementDetails);
 }
 
-// 清理流程：移出本功能视图并清空失败去重与停留时间；不修改输入模式、Online loading 或任何 Run 快照。
+// 清理流程：有视图时先以非阻断空内容渲染，使它归还自己仍持有的焦点，再移出视口并清引用；最后清空两种失败去重键和提示截止时间。
+// 不修改玩家输入模式、Online loading 或 Run 快照，已由别的页面接管的焦点不会被强行抢回。
 void UCatLocalPlayerUISubsystem::ClearDayTransition()
 {
 	if (DayTransitionWidget)
@@ -327,6 +351,7 @@ void UCatLocalPlayerUISubsystem::ClearDayTransition()
 		DayTransitionWidget = nullptr;
 	}
 	LastDayTransitionFailureId.Invalidate();
+	UnavailableDayTransitionViewId.Invalidate();
 	DayTransitionFailureUntilSeconds = 0.0;
 }
 
@@ -1224,11 +1249,12 @@ void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 
 // 本地玩家 UI 装配流程：
 // 1. 验证本地设置、当前 Controller/Pawn 和 World；核心页面 WBP 缺失时停止装配，物品提示缺失则只关闭该提示并记录原因，均不创建原生替身。
-// 2. 创建 HUD Model/View 并入视口；默认常驻天数、背包入口、设置入口和中心准星，背包内容由库存页打开后再显示。
-// 3. 创建库存窗口控制器和默认背包 WBP；面板绑定角色库存自己的 Model，不预先入视口，仍通过既有 Action 打开。
-// 4. 创建局内主菜单 View/Controller；菜单不常驻视口，只在主菜单 Action 或 HUD 按钮触发时打开。
-// 5. 创建物品悬停 View；成功加入全视口层后才绑定控制器，失败释放引用；库存格只提交来源，提示层独立于库存页面。
-// 6. 创建 Interaction 提示 View 和控制器；控制器订阅 PlayerController 的唯一准星交互目标，商店、鱼护和未来箱子仍由世界交互对象提供页面上下文。
+// 2. 创建 HUD Model/View、库存、菜单和交互提示实例；任一必需实例缺失则统一解绑已创建部分，再结束本次装配。
+// 3. 绑定 HUD 动作与角色 Model，订阅 Model 更新后把 HUD 放入视口；Model 绑定失败同样统一清理。
+// 4. 创建物品悬停 View；成功加入全视口层后才绑定控制器，失败释放引用并记录，库存格只提交来源。
+// 5. 刷新 HUD，绑定库存和菜单控制器；页面暂不入视口，仍由既有输入打开，任一绑定失败则整体解绑。
+// 6. 将交互提示初始化为隐藏并放入视口，再订阅唯一准星目标；绑定失败清理所有局内 UI。
+// 7. 最后绑定本玩家的 WorldInfo 控制器并记录装配日志；它读取注册锚点，后续单个信息牌资产失败不拆除整个 HUD。
 void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 {
 	const UCatUISettings* Settings = GetDefault<UCatUISettings>();
@@ -1322,6 +1348,8 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 		DetachPlayerLakeUI();
 		return;
 	}
+	WorldInfoController = NewObject<UCatWorldInfoController>(this);
+	WorldInfoController->Bind(Controller);
 	const UWorld* World = GetWorld();
 	const ULocalPlayer* LocalPlayer = GetLocalPlayer();
 	UE_LOG(LogCatUI, Log,
@@ -1338,9 +1366,18 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 		*GetNameSafe(InteractionPromptWidget ? InteractionPromptWidget->GetClass() : nullptr));
 }
 
-// 本地玩家 UI 解绑流程：PageController 先恢复输入并移出当前模态页，Model 再解除玩法订阅，最后移除各自 WBP 并清引用。
+// 本地玩家 UI 解绑流程：
+// 1. 先让 WorldInfo 释放观察距离和信息牌，再解绑悬停来源并移除提示视图。
+// 2. 按菜单、库存的顺序解绑控制器以恢复各自输入状态，再移除对应页面；尚未创建的对象直接跳过。
+// 3. 解除 HUD Model 事件与玩法订阅，清掉 HUD 动作委托并移除 HUD，随后解绑交互提示控制器和视图。
+// 4. 清空当前挂接角色并记录卸载日志；各步释放自身引用，允许装配失败后复用同一清理入口。
 void UCatLocalPlayerUISubsystem::DetachPlayerLakeUI()
 {
+	if (WorldInfoController)
+	{
+		WorldInfoController->Unbind();
+		WorldInfoController = nullptr;
+	}
 	// 先清理全局悬停来源，再移除 View；后续格子的 Destruct 不会再触发过期提示。
 	if (ItemTooltipController)
 	{

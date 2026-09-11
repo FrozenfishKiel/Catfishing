@@ -6,8 +6,10 @@
 #include "GameFramework/PlayerController.h"
 #include "Interaction/CatInteractionSettings.h"
 #include "Inventory/CatFishOnlyInventoryComponent.h"
+#include "Inventory/CatInventoryItemInstance.h"
+#include "UI/WorldInfo/CatFishTankWorldInfoComponent.h"
 
-// 构造流程：创建固定摆放根、正式鱼库存和交互入口；开启 Actor 复制并关闭 Tick，鱼数组只由 InventoryComponent 复制。
+// 构造流程：创建固定摆放根、正式鱼库存和交互入口，再挂接只读信息锚点；开启复制并关闭 Tick，鱼数组仍只归库存持有。
 ACatFishTankActor::ACatFishTankActor()
 {
 	bReplicates = true;
@@ -23,10 +25,12 @@ ACatFishTankActor::ACatFishTankActor()
 	InteractionCollision->SetGenerateOverlapEvents(false);
 	FishInventory = CreateDefaultSubobject<UCatFishOnlyInventoryComponent>(TEXT("FishInventory"));
 	TankInteraction = CreateDefaultSubobject<UCatFishTankInteractionComponent>(TEXT("TankInteraction"));
+	WorldInfo = CreateDefaultSubobject<UCatFishTankWorldInfoComponent>(TEXT("WorldInfo"));
+	WorldInfo->SetupAttachment(TankRoot);
 	InteractionPrompt = NSLOCTEXT("Catfishing", "FishTankInteractionPrompt", "打开鱼缸");
 }
 
-// BeginPlay 流程：服务器把编辑器容量写入正式鱼库存；客户端只通过库存复制得到格子和版本。
+// BeginPlay 流程：父类先启动组件与订阅，再配置交互碰撞；服务器写入正式库存容量后显式刷新摘要，客户端等待复制。
 void ACatFishTankActor::BeginPlay()
 {
 	Super::BeginPlay();
@@ -38,6 +42,31 @@ void ACatFishTankActor::BeginPlay()
 	{
 		FishInventory->SetInventorySlotCountFromAuthority(FishInventorySlotCapacity);
 	}
+	// 库存只在扩容时广播；即使容量没有变化，也必须在组件 BeginPlay 之后发布第一份完整摘要。
+	if (HasAuthority() && WorldInfo)
+	{
+		WorldInfo->RefreshSummary();
+	}
+}
+
+// 鱼缸销毁流程：服务器只回收当前库存条目所保留的一对一隐藏世界鱼，先断开实例引用再销毁 Actor，防止容器拆除后留下不可见可复制的鱼载体。
+void ACatFishTankActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (HasAuthority() && FishInventory)
+	{
+		for (const FCatInventoryEntry& Entry : FishInventory->GetInventoryEntries())
+		{
+			if (Entry.StackCount == 1 && Entry.Instance)
+			{
+				if (AActor* RetainedActor = Entry.Instance->GetWorldActor())
+				{
+					Entry.Instance->SetWorldActor(nullptr);
+					RetainedActor->Destroy();
+				}
+			}
+		}
+	}
+	Super::EndPlay(EndPlayReason);
 }
 
 // 可交互判断流程：读取交互开关、请求 Controller 和正式鱼库存组件；任一条件缺失都拒绝，让提示和执行入口保持同一套可用性边界。

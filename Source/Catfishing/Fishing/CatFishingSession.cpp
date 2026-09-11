@@ -391,8 +391,7 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 	const double FishRadius = FishDefinition ? FishDefinition->ScoopTargetRadiusCentimeters : 0.0;
 	const FVector FishLocation = Encounter ? Encounter->GetActorLocation() : FVector::ZeroVector;
 	// 抄鱼与拾取共用单嘴约束；鱼护虽在背包中，其可见嘴部载体仍占用这一位置。
-	const bool bMouthFree = ScoopingCharacter && !ACatFishPickupActor::FindCarriedFish(ScoopingCharacter)
-		&& !ACatFishGuardActor::FindCarriedGuard(ScoopingCharacter);
+	const bool bMouthFree = ScoopingCharacter && ScoopingCharacter->GetMouthCarriedActor() == nullptr;
 	const bool bRayReachesFish = bScoopReachReady && ScoopingCharacter && Settings && Encounter && FishRadius > 0.0
 		&& UCatFishingAimLibrary::DoesScoopRayReachFish(ScooperLocation, ScooperFacing,
 			static_cast<float>(ScoopReachCentimeters), FishLocation, static_cast<float>(FishRadius),
@@ -1695,7 +1694,7 @@ bool ACatFishingSession::SpawnScoopedFishPickupFromAuthority(ACatCharacter* Scoo
 	ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
 	if (!HasAuthority() || !World || !ScoopingCharacter || !ScoopingPlayerState || ScooperStableNetId.IsEmpty()
 		|| !Encounter || !FishDefinition || !AttemptSnapshot.WaterRegion.IsValid()
-		|| ACatFishPickupActor::FindCarriedFish(ScoopingCharacter) || ACatFishGuardActor::FindCarriedGuard(ScoopingCharacter))
+		|| ScoopingCharacter->GetMouthCarriedActor() != nullptr)
 	{
 		return false;
 	}

@@ -5,6 +5,7 @@
 #include "CatUISettings.generated.h"
 
 class UCatHUDWidget;
+class UCatDayTransitionWidget;
 class UCatItemTooltipWidget;
 class UCatFrontendRootWidget;
 class UCatInteractionPromptWidget;
@@ -29,6 +30,9 @@ public:
 
 	/** 返回正式主 HUD WBP 类；缺失时调用方 fail-closed，不创建原生白盒替身。 */
 	TSubclassOf<UCatHUDWidget> LoadHUDWidgetClass() const;
+
+	/** 读取正式翻天 WBP；缺失、原生类或错误父类都返回空，调用方必须隐藏并记录而非创建替身。 */
+	TSubclassOf<UCatDayTransitionWidget> LoadDayTransitionWidgetClass() const;
 
 	/** 返回正式 Frontend Root WBP 类；缺失时 LocalPlayer fail-closed，不创建原生替身。 */
 	TSubclassOf<UCatFrontendRootWidget> LoadFrontendRootWidgetClass() const;
@@ -79,6 +83,10 @@ public:
 	/** 正式主 HUD WBP 类；默认只常驻天数、背包和设置入口，背包内容由库存页面打开后显示。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|HUD")
 	TSoftClassPtr<UCatHUDWidget> HUDWidgetClass;
+
+	/** 翻天遮罩的正式 WBP 软类引用；构造器提供默认路径，项目配置可覆盖，LocalPlayer 经加载入口按请求创建实例，布局由资产维护。 */
+	UPROPERTY(Config, EditAnywhere, Category="Lake|Run")
+	TSoftClassPtr<UCatDayTransitionWidget> DayTransitionWidgetClass;
 
 	/** 正式 Frontend 根 WBP 类；只在 Frontend World 为本地玩家创建，Root 内只装配主菜单、存档、房间和设置页面。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Frontend")

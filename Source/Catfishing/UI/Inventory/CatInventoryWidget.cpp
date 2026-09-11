@@ -7,9 +7,13 @@
 #include "Components/Widget.h"
 #include "Components/WrapBox.h"
 #include "Engine/LocalPlayer.h"
+#include "FishContainers/CatFishGuardActor.h"
+#include "FishContainers/CatFishTankActor.h"
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "Input/Events.h"
 #include "InputCoreTypes.h"
+#include "Inventory/CatFishInventoryItemInstance.h"
+#include "Inventory/CatFishOnlyInventoryComponent.h"
 #include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatInventoryItemInstance.h"
 #include "Inventory/CatInventoryStatics.h"
@@ -75,6 +79,7 @@ void UCatInventoryWidget::NativeConstruct()
 	}
 	if (DropButton) { DropButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleDropClicked); }
 	if (PlaceButton) { PlaceButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandlePlaceClicked); }
+	if (CarryButton) { CarryButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestCarrySelectedFish); }
 	if (ReleaseQuantityConfirmButton) { ReleaseQuantityConfirmButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleReleaseQuantityConfirmed); }
 	if (ReleaseQuantityCancelButton) { ReleaseQuantityCancelButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleReleaseQuantityCancelled); }
 	ResetPendingRelease();
@@ -114,6 +119,7 @@ void UCatInventoryWidget::NativeDestruct()
 	}
 	if (DropButton) { DropButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleDropClicked); }
 	if (PlaceButton) { PlaceButton->OnClicked.RemoveDynamic(this, &ThisClass::HandlePlaceClicked); }
+	if (CarryButton) { CarryButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestCarrySelectedFish); }
 	if (ReleaseQuantityConfirmButton) { ReleaseQuantityConfirmButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleReleaseQuantityConfirmed); }
 	if (ReleaseQuantityCancelButton) { ReleaseQuantityCancelButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleReleaseQuantityCancelled); }
 	ResetPendingRelease();
@@ -133,6 +139,7 @@ void UCatInventoryWidget::RefreshInventorySlots()
 	}
 	if (DropButton) { DropButton->SetIsEnabled(false); }
 	if (PlaceButton) { PlaceButton->SetIsEnabled(false); }
+	RefreshCarryAction();
 	if (!InventorySlotWrapBox)
 	{
 		return;
@@ -205,6 +212,7 @@ void UCatInventoryWidget::RequestSelectSlot(const int32 SlotIndex)
 	}
 	if (DropButton) { DropButton->SetIsEnabled(bCanAct); }
 	if (PlaceButton) { PlaceButton->SetIsEnabled(bCanAct); }
+	RefreshCarryAction();
 }
 
 // 先取消尚未确认的数量选择；本页没有离库或售鱼请求等待回执且格子有效时，使用按钮转入与右键相同的格子方法。
@@ -227,6 +235,26 @@ void UCatInventoryWidget::RequestDropSelectedItem()
 void UCatInventoryWidget::RequestPlaceSelectedItem()
 {
 	BeginReleaseSelectedItem(ECatInventoryWorldAction::Place);
+}
+
+// 叼起请求流程：先废弃未提交的 Drop/Place 数量快照，再拒绝等待回执期间的重复点击；随后按当前 Model 确认外部鱼容器、单条鱼和空嘴状态，通过后固定数量一复用正式世界动作提交。
+void UCatInventoryWidget::RequestCarrySelectedFish()
+{
+	// 叼起不使用数量面板；先废弃任何尚未提交的 Drop/Place 快照，避免同一页面遗留另一种世界动作的确认入口。
+	ResetPendingRelease();
+	if (PendingCommandRequestId.IsValid())
+	{
+		RefreshCarryAction();
+		return;
+	}
+	FCatInventoryEntry Entry;
+	int32 SlotIndex = INDEX_NONE;
+	if (!CanCarrySelectedFish(Entry, SlotIndex))
+	{
+		RefreshCarryAction();
+		return;
+	}
+	SubmitReleaseItem(DisplayInventory.Get(), SlotIndex, Entry.Instance->GetItemInstanceId(), 1, ECatInventoryWorldAction::Carry);
 }
 
 // 先取消尚未提交的数量选择，再向 PageController 提交关闭意图；窗口和输入恢复仍由页面控制器负责。
@@ -285,6 +313,13 @@ FReply UCatInventoryWidget::NativeOnKeyDown(const FGeometry& InGeometry, const F
 		return FReply::Handled();
 	}
 	return Super::NativeOnKeyDown(InGeometry, InKeyEvent);
+}
+
+// 可见页面 Tick 流程：父类先维持 UMG 生命周期，再只读取角色已复制的嘴部 Actor 并更新按钮禁用态；不触发库存重建、选择变化或额外网络请求。
+void UCatInventoryWidget::NativeTick(const FGeometry& MyGeometry, const float InDeltaTime)
+{
+	Super::NativeTick(MyGeometry, InDeltaTime);
+	RefreshCarryAction();
 }
 
 // 选中格读取流程：先清空输出，再按本页选择下标重读当前 Model；不依赖旧格子副本，空格或失效实例不能成为提交目标。
@@ -392,6 +427,39 @@ void UCatInventoryWidget::BeginReleaseSelectedItem(const ECatInventoryWorldActio
 	ReleaseQuantitySpinBox->SetMaxFractionalDigits(0);
 	ReleaseQuantitySpinBox->SetValue(1.0f);
 	ReleaseQuantityPanel->SetVisibility(ESlateVisibility::Visible);
+}
+
+// 叼起资格判定流程：先读取当前选中条目与显示库存，再确认宿主正是鱼缸或鱼护且该库存就是宿主的正式鱼库存；最后要求实例为单条鱼、ID 有效且本地角色复制的嘴部引用为空。
+bool UCatInventoryWidget::CanCarrySelectedFish(FCatInventoryEntry& OutEntry, int32& OutSlotIndex) const
+{
+	OutEntry = FCatInventoryEntry();
+	OutSlotIndex = INDEX_NONE;
+	UCatInventoryComponent* Inventory = DisplayInventory.Get();
+	if (!Inventory || PendingCommandRequestId.IsValid() || !GetSelectedInventoryEntry(OutEntry, OutSlotIndex)
+		|| OutEntry.StackCount != 1 || !Cast<UCatFishInventoryItemInstance>(OutEntry.Instance)
+		|| !OutEntry.Instance->GetItemInstanceId().IsValid())
+	{
+		return false;
+	}
+	AActor* InventoryHost = Inventory->GetOwner();
+	ACatFishTankActor* FishTank = Cast<ACatFishTankActor>(InventoryHost);
+	ACatFishGuardActor* FishGuard = Cast<ACatFishGuardActor>(InventoryHost);
+	const bool bIsFishTankInventory = FishTank && FishTank->GetFishInventoryComponent() == Inventory;
+	const bool bIsFishGuardInventory = FishGuard && FishGuard->GetFishInventoryComponent() == Inventory;
+	const ACatCharacter* Character = Cast<ACatCharacter>(GetOwningPlayerPawn());
+	return (bIsFishTankInventory || bIsFishGuardInventory) && Character && !Character->GetMouthCarriedActor();
+}
+
+// 叼起按钮投影流程：每次只依据当前选择、等待状态和已复制的嘴部引用设置可用性；按钮未在旧 WBP 中接线时直接跳过，保持现有页面兼容。
+void UCatInventoryWidget::RefreshCarryAction()
+{
+	if (!CarryButton)
+	{
+		return;
+	}
+	FCatInventoryEntry Entry;
+	int32 SlotIndex = INDEX_NONE;
+	CarryButton->SetIsEnabled(CanCarrySelectedFish(Entry, SlotIndex));
 }
 
 // 离库提交流程：本地只生成请求 ID 并交出来源事实；服务器负责重读库存、计算位置、生成世界 Actor 和扣量的原子性。

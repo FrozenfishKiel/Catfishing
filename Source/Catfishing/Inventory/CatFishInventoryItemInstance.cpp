@@ -4,6 +4,7 @@
 #include "Condition/CatConditionComponent.h"
 #include "Data/CatFishDefinition.h"
 #include "Inventory/CatInventoryComponent.h"
+#include "Items/Fish/CatFishPickupActor.h"
 #include "Net/UnrealNetwork.h"
 
 // 鱼实例构造流程：基础实例已分配 ItemInstanceId；鱼专属字段等捕获提交时再由服务器写入。
@@ -163,7 +164,16 @@ FCatDomainCommandResult UCatFishInventoryItemInstance::UseFromInventorySlotFromA
 				(void)MutableResult;
 				const FCatDomainCommandResult BodyResult =
 					Condition->ConsumeCommittedFish(UseContext.RequestId, Definition);
-				return CatIsAcceptedDomainCommandResult(BodyResult);
+				if (!CatIsAcceptedDomainCommandResult(BodyResult))
+				{
+					return false;
+				}
+				// 身体效果已经接受，库存不会再回滚这条鱼；此时才释放容器保管的隐藏 Actor，避免失败回滚留下失配的库存条目。
+				if (ACatFishPickupActor* RetainedFishActor = Cast<ACatFishPickupActor>(GetWorldActor()))
+				{
+					RetainedFishActor->Destroy();
+				}
+				return true;
 			});
 
 	Result.RequestId = InventoryResult.RequestId;

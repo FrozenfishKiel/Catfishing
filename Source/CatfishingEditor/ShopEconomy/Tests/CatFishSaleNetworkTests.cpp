@@ -34,6 +34,7 @@
 #include "Inventory/CatFishInventoryItemInstance.h"
 #include "Inventory/CatFishOnlyInventoryComponent.h"
 #include "Inventory/CatInventoryAccessRules.h"
+#include "Items/Fish/CatFishPickupActor.h"
 #include "ShopEconomy/CatFishBuyerActor.h"
 #include "UI/CatLocalPlayerUISubsystem.h"
 #include "UI/Inventory/CatFishGuardInventoryWidget.h"
@@ -188,6 +189,7 @@ namespace CatFishSaleNetwork
 				if (!Test->TestTrue(TEXT("first sale commits successfully through owning-client receipt"),
 					Result.bCommitted && !Result.bTerminalReplay && Result.Error == ECatDomainCommandError::None)) return true;
 				if (!BothSidesMatch({}, InitialBalance + 96.0f)) return false;
+				if (!VerifyRetainedActorsConsumed(TEXT("first real Slate sale"))) return true;
 				if (!Test->TestTrue(TEXT("button-selected buyer still exists for identical replay payload"), SaleBuyer.IsValid())) return true;
 				ClientController->ServerSellFishBatch(SaleRequestId, SaleBuyer.Get(), ClientGuard.Get(), SubmittedIds);
 				Stage = 3;
@@ -203,6 +205,7 @@ namespace CatFishSaleNetwork
 					&& Result.Error == ECatDomainCommandError::AlreadyResolved
 					&& Result.ReplayedTerminalError == ECatDomainCommandError::None)) return true;
 				if (!BothSidesMatch({}, InitialBalance + 96.0f)) return false;
+				if (!VerifyRetainedActorsConsumed(TEXT("same-payload replay"))) return true;
 				if (!SeedPair()) return true;
 				Stage = 4;
 				return false;
@@ -217,6 +220,7 @@ namespace CatFishSaleNetwork
 				const FCatInventoryEntry* Remaining = ServerGuard->GetFishInventoryComponent()->GetInventoryEntryAtSlot(SurvivorSlot);
 				if (!Test->TestTrue(TEXT("rejected batch preserves the other fish's original slot, instance and quantity"),
 					Survivor.IsValid() && Remaining && Remaining->Instance == Survivor.Get() && Remaining->StackCount == 1)) return true;
+				if (!VerifyRetainedActorsPreservedAfterRejectedBatch()) return true;
 				Test->AddInfo(TEXT("Event=formal_fish_sale_network Result=Batch96Replicated_ReplayUnchanged_StaleBatchRejected UI=TwoFormalViews_Quotes48And96_SlateSellAllClick RangeRoundTrip=NotCovered"));
 				return true;
 			}
@@ -428,8 +432,8 @@ namespace CatFishSaleNetwork
 				&& CatInventoryAccessRules::IsHostReachable(ServerGuard.Get(), Character, GetDefault<UCatCampSettings>());
 		}
 
-		/** 加载正式 RiverPattern 定义，用已登录玩家身份初始化两条各 2.5 kg 的独立鱼，再经正式入库入口写入同一鱼护；
-		 * 保存本轮 GUID 供后续与客户端复制匹配，失败立即返回，不创建替代价格或余额写口。 */
+		/** 加载正式 RiverPattern 定义，给每条鱼绑定一个隐藏的原世界 Actor 后再经正式入库入口写入同一鱼护；
+		 * 保存本轮 GUID 与保留 Actor 供后续售卖清理和客户端复制匹配，失败立即返回，不创建替代价格或余额写口。 */
 		bool SeedPair()
 		{
 			UCatFishDefinition* Definition = LoadObject<UCatFishDefinition>(nullptr,
@@ -438,6 +442,7 @@ namespace CatFishSaleNetwork
 			if (!Test->TestNotNull(TEXT("formal Fish_RiverPattern definition loads"), Definition)
 				|| !Test->TestNotNull(TEXT("formal guard owns its fish inventory"), Inventory)) return false;
 			PairIds.Reset();
+			RetainedFishActors.Reset();
 			const FString OwnerId = ServerController->GetPlayerState<APlayerState>()->GetUniqueId()->ToString();
 			for (int32 Index = 0; Index < 2; ++Index)
 			{
@@ -445,12 +450,50 @@ namespace CatFishSaleNetwork
 				UCatFishInventoryItemInstance* Fish = NewObject<UCatFishInventoryItemInstance>(ServerGuard.Get());
 				Fish->SetItemDefinition(Definition);
 				if (!Test->TestTrue(TEXT("authority freezes formal fish identity and 2.5 kg weight"),
-					Fish->InitializeFishFromAuthority(FGuid::NewGuid(), Id, OwnerId, 2.5))
-					|| !Test->TestTrue(TEXT("original guard accepts the real fish instance"), Inventory->AddItemInstance(Fish, 1))) return false;
+					Fish->InitializeFishFromAuthority(FGuid::NewGuid(), Id, OwnerId, 2.5))) return false;
+				ACatFishPickupActor* RetainedActor = ServerWorld->SpawnActor<ACatFishPickupActor>(
+					ServerGuard->GetActorLocation() + FVector(0.0, 0.0, 100.0 + Index * 50.0), FRotator::ZeroRotator);
+				if (!Test->TestTrue(TEXT("authority creates the original fish actor retained by this inventory instance"), RetainedActor != nullptr)
+					|| !Test->TestTrue(TEXT("retained original fish actor accepts the frozen inventory instance"),
+						RetainedActor && RetainedActor->InitializeFromInventoryFromAuthority(Fish, 1))) return false;
+				RetainedActor->SetActorHiddenInGame(true);
+				RetainedActor->SetActorEnableCollision(false);
+				if (!Test->TestTrue(TEXT("original guard accepts the real fish instance"), Inventory->AddItemInstance(Fish, 1))) return false;
+				if (!Test->TestTrue(TEXT("stored fish retains the original actor while runtime ownership returns to the guard"),
+					Fish->GetWorldActor() == RetainedActor && Fish->GetRuntimeOwnerActor() == ServerGuard.Get())) return false;
+				RetainedFishActors.Add(RetainedActor);
 				PairIds.Add(Id);
 			}
 			ServerGuard->ForceNetUpdate();
 			return true;
+		}
+
+		/** 在成功售卖或同载荷重放后检查两条已售鱼的原世界 Actor 已进入销毁；重放再次读取同一弱引用，防止终态缓存意外把已消费的保留 Actor 复活。 */
+		bool VerifyRetainedActorsConsumed(const TCHAR* AssertionContext)
+		{
+			if (!Test->TestEqual(FString::Printf(TEXT("%s retains both original actor references"), AssertionContext), RetainedFishActors.Num(), 2)) return false;
+			for (const TWeakObjectPtr<ACatFishPickupActor>& RetainedActor : RetainedFishActors)
+			{
+				if (!Test->TestTrue(FString::Printf(TEXT("%s keeps sold original actor destroyed"), AssertionContext),
+					!RetainedActor.IsValid() || RetainedActor->IsActorBeingDestroyed())) return false;
+			}
+			return true;
+		}
+
+		/** 错误批次回执后检查第二轮原 Actor 没有被售卖流程替换或公开：第一条仍与幸存实例配对，第二条虽被测试预先移格也保持原隐藏保管态。 */
+		bool VerifyRetainedActorsPreservedAfterRejectedBatch()
+		{
+			if (!Test->TestEqual(TEXT("rejected batch retains both second-round original actor references"), RetainedFishActors.Num(), 2)
+				|| !Survivor.IsValid()) return false;
+			for (const TWeakObjectPtr<ACatFishPickupActor>& RetainedActor : RetainedFishActors)
+			{
+				if (!Test->TestTrue(TEXT("rejected batch neither consumes nor reveals its retained original actor"),
+					RetainedActor.IsValid() && !RetainedActor->IsActorBeingDestroyed()
+					&& RetainedActor->IsHidden() && !RetainedActor->GetActorEnableCollision())) return false;
+			}
+			return Test->TestTrue(TEXT("rejected batch keeps the surviving original fish paired with its original actor and guard"),
+				Survivor->GetWorldActor() == RetainedFishActors[0].Get()
+				&& Survivor->GetRuntimeOwnerActor() == ServerGuard.Get());
 		}
 
 		/** 从指定鱼护的实际组件读取所有格子，核对唯一 GUID、正式库存定义 RiverPatternFish、数量和冻结重量；
@@ -526,6 +569,8 @@ namespace CatFishSaleNetwork
 		FGuid StaleRequestId = FGuid::NewGuid();
 		/** 当前一对服务器鱼的身份；每次播种替换，用于精确匹配客户端复制。 */
 		TArray<FGuid> PairIds;
+		/** 当前播种鱼实例各自保留的原世界 Actor；播种写入，成功、重放和拒绝阶段只读它们验证销毁、未复活与未误消费。 */
+		TArray<TWeakObjectPtr<ACatFishPickupActor>> RetainedFishActors;
 		/** 从客户端实际鱼实例冻结的提交列表；重放保持原样，第二笔移鱼也不更新这份旧载荷。 */
 		TArray<FGuid> SubmittedIds;
 		/** 第二笔应保留的鱼原实例；弱引用让断言能发现被错误移除或替换，不替库存保活。 */

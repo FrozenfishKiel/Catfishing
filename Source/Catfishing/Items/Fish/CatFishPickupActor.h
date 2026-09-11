@@ -61,6 +61,9 @@ public:
 	/** 接收库存落地的一条鱼，恢复冻结重量和表现；这条鱼已入过正式库存，不再次生成捕获奖励。 */
 	virtual bool InitializeFromInventoryFromAuthority(UCatInventoryItemInstance* Item, int32 Quantity) override;
 
+	/** Carry 为新生成载体初始化冻结鱼身份但不改来源实例引用；调用方在静默移除原格成功后才把 WorldActor 和运行宿主交给载体。 */
+	bool InitializeFromInventoryForCarryFromAuthority(UCatFishInventoryItemInstance* Item, int32 Quantity);
+
 	/** 读取服务器持有的鱼定义供售价等权威计算使用；客户端表现仍沿原鱼种 ID 解析。 */
 	UCatFishDefinition* GetFishDefinition() const;
 
@@ -81,12 +84,25 @@ public:
 	/** 查找该角色当前嘴上叼着的唯一世界鱼；没有或附件状态不一致时返回空。 */
 	static ACatFishPickupActor* FindCarriedFish(const ACatCharacter* Character);
 
+	/** 权威占用空嘴并附着本鱼；抄网和地面拾取立即发布，库存 Carry 可延后发布到静默移格完成后，失败会撤销本次 expected-actor 认领。 */
+	bool BeginMouthCarryFromAuthority(ACatCharacter* Character, APlayerState* PlayerState, bool bPublish = true);
+
+	/** 携带者倒地、失去占有或销毁时释放本鱼到地面；只影响仍由本鱼占用的嘴部引用。 */
+	void ReleaseMouthCarryFromAuthority(const FVector& DropLocation);
+
+	/** 只读核对保管 Actor 与库存鱼实例是否仍是一对一；Carry 的预检用它拒绝槽位复用，不在预检阶段改实例归属、可见性或附着。 */
+	bool CanCarryInventoryItemFromAuthority(const UCatFishInventoryItemInstance* ExpectedItem) const;
+
+	/** Carry 在静默扣格失败时把本次附着的原 Actor 恢复为隐藏保管态；不写库存格和实例归属，保留回调中其它合法转移的结果。 */
+	void RestoreInventoryRetentionFromAuthority(UCatFishInventoryItemInstance* ExpectedItem,
+		const FTransform& ExpectedWorldTransform);
+
 	/** 玩家主动丢弃当前真实嘴叼鱼；先预检空间，成功才解除携带并轻抛原 Actor，失败保持嘴部与鱼身份不变。 */
 	bool DropFromAuthority(AController* RequestingController);
 
 	/**
 	 * authority 把这条嘴叼鱼提交到射线命中的地面鱼护。
-	 * 只有目标鱼护正式库存已接收同一个鱼 ItemInstance 才销毁世界鱼；箱满或权限失败时继续叼着。
+	 * 只有目标鱼护正式库存静默接收同一个鱼 ItemInstance 后，才归档捕获、结束嘴部携带并把原 Actor 隐藏为库存保管载体；箱满或权限失败时继续叼着。
 	 */
 	FCatCaptureCommitResult StoreInFishGuardFromAuthority(AController* RequestingController, FGuid RequestId,
 		AActor* TargetInventoryHost);
@@ -107,6 +123,8 @@ public:
 protected:
 	/** 完成生成后设置独立交互范围并恢复当前鱼姿态；客户端按复制的身份配置同一尺寸的物理根。 */
 	virtual void BeginPlay() override;
+	/** Actor 被售出、消费或容器清理销毁时按 expected actor 清除嘴部引用；不再依赖角色附件树是否已经先解绑。 */
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	/** 附着复制沿用原鱼世界尺寸并按表现与物理事实收敛，防止尺寸漂移或迟到附件覆盖丢弃。 */
 	virtual void OnRep_AttachmentReplication() override;
 	/** 运动复制到达后再次收敛嘴部状态，使先到的物理丢弃不会被旧携带表现回挂。 */
@@ -120,16 +138,12 @@ private:
 	UFUNCTION() void OnRep_PresentationState(const FCatFishPickupPresentationState& Previous);
 	UFUNCTION() void HandleAuthorityCarrierDestroyed(AActor* DestroyedActor);
 	bool IsAuthorityRequestSpatiallyValid(const AController* RequestingController) const;
-	/** 权威占用空嘴并附着本鱼；鱼和鱼护共用互斥约束，附着失败恢复地面状态，成功才发布复制。 */
-	bool BeginMouthCarryFromAuthority(ACatCharacter* Character, APlayerState* PlayerState);
 	/** 根组件附着到角色 Mesh 与嘴部Socket并保持原世界尺寸；只纠正位置和朝向，避免复制重试重置缩放。 */
 	bool AttachCarriedRootToMouth(ACatCharacter* Character, const TCHAR* Source, bool bLogCorrection);
 	/** 以复制的 Carried/Available 为最终事实，收敛 AttachmentReplication 与 PresentationState 的到达顺序。 */
 	void ReconcileAttachmentFromPresentation(const TCHAR* Source);
 	void ScheduleAttachmentReconcileRetry();
 	void RetryAttachmentReconcile();
-	/** 携带者退出后解除嘴部占用，在既有地面查询结果上固定鱼体；不触发新的捕获记录或物理抛掷。 */
-	void ReleaseMouthCarryFromAuthority(const FVector& DropLocation);
 	/** 结束服务器嘴部携带生命周期，解除宿主回调、附着和归属；落点与物理由主动丢弃或宿主销毁入口决定。 */
 	void EndMouthCarryFromAuthority();
 	void ApplyLocalFocus(bool bFocused);
@@ -157,11 +171,11 @@ private:
 	/** 只在 authority 保存定义以构造捕获/图鉴事实，不下发 DataAsset。 */
 	UPROPERTY(Transient) TObjectPtr<UCatFishDefinition> FishDefinition;
 	UPROPERTY(Transient) TObjectPtr<UCatFishPresentationDefinition> FishPresentationDefinition;
-	/** 从库存落地时保留的实物鱼实例；再次入护时复制到接收宿主，保留原捕获者、重量和实例身份。 */
+	/** 本世界鱼承载的唯一实物鱼实例；入容器、取回和落地均沿用同一对象，运行宿主随归属切换，捕获者、重量和身份不变。 */
 	UPROPERTY(Transient) TObjectPtr<UCatFishInventoryItemInstance> InventoryItem;
 	/** 这条实物鱼是否已经提交过捕获记录；库存落地和首次归档后写入，消费或再次入护时据此避免重复授予。 */
 	bool bCaptureRecorded = false;
-	/** 本鱼是否已被消费流程占用；提交前置true阻止重入，入护或入账失败释放，成功后保持到销毁。 */
+	/** 本鱼是否正被不可逆消费提交占用；入护成功会解除该占用以便同一保管 Actor 后续 Carry，真正售出或吃掉才保持到销毁。 */
 	bool bConsumptionCommitted = false;
 	FTransform LandedMeshBaseTransform = FTransform::Identity;
 	FTransform CarriedMeshBaseTransform = FTransform::Identity;

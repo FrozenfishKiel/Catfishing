@@ -1073,7 +1073,7 @@ void ACatfishingPlayerController::ServerReleaseInventoryItemToWorld_Implementati
 	Result.RequestId = RequestId;
 	if (!CanForwardGameplayCommand()) Result.Error = ECatDomainCommandError::CommandsClosed;
 	else if (!RequestId.IsValid() || !ItemInstanceId.IsValid() || Quantity <= 0
-		|| (Action != ECatInventoryWorldAction::Drop && Action != ECatInventoryWorldAction::Place))
+		|| (Action != ECatInventoryWorldAction::Drop && Action != ECatInventoryWorldAction::Place && Action != ECatInventoryWorldAction::Carry))
 		Result.Error = ECatDomainCommandError::InvalidPayload;
 	else if (ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn()))
 		Result = UCatInventoryStatics::ReleaseItemToWorldFromAuthority(ControlledCharacter, RequestId,
@@ -1095,8 +1095,8 @@ void ACatfishingPlayerController::ServerDropCarriedItem_Implementation()
 	ACatCharacter* CatCharacter = Cast<ACatCharacter>(GetPawn());
 	if (!CanForwardGameplayCommand() || !CatCharacter || !CatCharacter->GetConditionComponent()
 		|| CatCharacter->GetConditionComponent()->GetSnapshot().bDowned) return;
-	ACatFishPickupActor* Fish = ACatFishPickupActor::FindCarriedFish(CatCharacter);
-	ACatFishGuardActor* Guard = ACatFishGuardActor::FindCarriedGuard(CatCharacter);
+	ACatFishPickupActor* Fish = Cast<ACatFishPickupActor>(CatCharacter->GetMouthCarriedActor());
+	ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(CatCharacter->GetMouthCarriedActor());
 	if (!IsValid(Fish) && !IsValid(Guard)) return;
 	bool bDropped = false;
 	if (IsValid(Fish))
@@ -1277,8 +1277,7 @@ void ACatfishingPlayerController::NativeInputTagPressed(const FGameplayTag Input
 		if (!IsLocalController() || IsMoveInputIgnored()) return;
 		ACatCharacter* CatCharacter = Cast<ACatCharacter>(GetPawn());
 		if (!CatCharacter) return;
-		AActor* Item = ACatFishPickupActor::FindCarriedFish(CatCharacter);
-		if (!Item) Item = ACatFishGuardActor::FindCarriedGuard(CatCharacter);
+		AActor* Item = CatCharacter->GetMouthCarriedActor();
 		if (!Item) return;
 		if (InteractionTargetingComponent) InteractionTargetingComponent->EndInteractionInput(true);
 		UE_LOG(LogCatfishing, Log,

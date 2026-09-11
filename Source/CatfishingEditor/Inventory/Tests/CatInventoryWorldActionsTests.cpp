@@ -17,6 +17,7 @@
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "FishContainers/CatFishGuardActor.h"
+#include "FishContainers/CatFishTankActor.h"
 #include "FishContainers/CatFishPickupSettings.h"
 #include "Framework/Game/CatfishingGameState.h"
 #include "Framework/Game/CatfishingPlayerController.h"
@@ -523,6 +524,7 @@ bool FCatInventoryFishGuardRoundTripTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("公开入口拾取原鱼护"), Guard->PickUpFromAuthority(Controller, FGuid::NewGuid()))) return false;
 		TestTrue(TEXT("叼起鱼护保留场景世界尺寸"), Guard->GetActorScale3D().Equals(GuardWorldScale, 0.001));
 		TestTrue(TEXT("嘴上携带的是原Actor"), ACatFishGuardActor::FindCarriedGuard(Character) == Guard);
+		TestTrue(TEXT("角色公开嘴部引用携带同一原鱼护"), Character->GetMouthCarriedActor() == Guard);
 		TestFalse(TEXT("携带后不可再作为地面鱼护"), Guard->IsGrounded());
 		TestTrue(TEXT("拾起瞬间仍持有原FishInventory"), Guard->GetFishInventoryComponent() == FishInventory);
 		for (int32 Index = 0; Index < FishIds.Num(); ++Index)
@@ -543,6 +545,7 @@ bool FCatInventoryFishGuardRoundTripTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("通用Release放下原鱼护"), UCatInventoryStatics::ReleaseItemToWorldFromAuthority(
 			Character, FGuid::NewGuid(), Character, Slot, GuardId, 1, Action).bCommitted)) return false;
 		TestTrue(TEXT("原鱼护回到地面且仍有效"), IsValid(Guard) && Guard->IsGrounded());
+		TestNull(TEXT("鱼护落地后角色公开嘴部引用解除"), Character->GetMouthCarriedActor());
 		TestFalse(TEXT("鱼护已离开背包格"), Inventory->HasItemAtSlot(Slot));
 		UPrimitiveComponent* Body = Cast<UPrimitiveComponent>(Guard->GetRootComponent());
 		TestTrue(TEXT("鱼护物理模式对应Drop或Place"), Body && Body->IsSimulatingPhysics() == (Action == ECatInventoryWorldAction::Drop));
@@ -555,6 +558,23 @@ bool FCatInventoryFishGuardRoundTripTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("内鱼重量未重置"), FishInstances[Index]->GetFishWeightKilograms(), Index == 0 ? 2.5 : 3.75);
 		}
 	}
+	// 无主生命周期流程：旧鱼护在 UnPossess 时必须先从原背包注销并落地；随后另一只鱼护取得嘴部后，销毁旧 Actor 只能按 expected actor 清理，不能误清新认领。
+	if (!TestTrue(TEXT("退出前再次拾取原鱼护"), Guard->PickUpFromAuthority(Controller, FGuid::NewGuid()))) return false;
+	const int32 HeldGuardSlot = Inventory->FindFirstInventorySlotIndexByDefinitionId(GuardDefinition->GetInventoryDefinitionId());
+	const FCatInventoryEntry* HeldGuardEntry = Inventory->GetInventoryEntryAtSlot(HeldGuardSlot);
+	UCatFishGuardInventoryItemInstance* HeldGuardItem = HeldGuardEntry ? Cast<UCatFishGuardInventoryItemInstance>(HeldGuardEntry->Instance) : nullptr;
+	if (!TestTrue(TEXT("退出前背包持有原鱼护实例"), HeldGuardItem && HeldGuardItem->GetWorldActor() == Guard)) return false;
+	Controller->UnPossess();
+	TestNull(TEXT("UnPossess 后旧角色嘴部引用为空"), Character->GetMouthCarriedActor());
+	TestTrue(TEXT("UnPossess 后原鱼护回到地面"), IsValid(Guard) && Guard->IsGrounded());
+	TestEqual(TEXT("UnPossess 后旧角色背包不再保留鱼护实例"),
+		Inventory->FindInventorySlotIndexFromInstanceId(HeldGuardItem->GetItemInstanceId()), INDEX_NONE);
+	Controller->Possess(Character);
+	ACatFishGuardActor* NewGuard = World->SpawnActor<ACatFishGuardActor>(FVector(180, 0, 100), FRotator::ZeroRotator);
+	if (!TestTrue(TEXT("创建新认领的鱼护"), NewGuard && NewGuard->PickUpFromAuthority(Controller, FGuid::NewGuid()))) return false;
+	TestTrue(TEXT("新鱼护成为当前唯一嘴部认领"), Character->GetMouthCarriedActor() == NewGuard);
+	Guard->Destroy();
+	TestTrue(TEXT("销毁已释放旧鱼护不清除新嘴部认领"), Character->GetMouthCarriedActor() == NewGuard);
 	return !HasAnyErrors();
 }
 
@@ -600,6 +620,11 @@ bool FCatWorldFishMouthDropTest::RunTest(const FString& Parameters)
 	const FName MouthSocket = GetDefault<UCatFishPickupSettings>()->MouthCarrySocketName;
 	if (!TestTrue(TEXT("正式猫具有嘴部Socket"), Character->GetMesh()->DoesSocketExist(MouthSocket))) return false;
 	if (!TestNotNull(TEXT("创建真实地面"), AddFloor(*Character))) return false;
+	// 容器置于拾鱼视线侧方，避免其准星查询球遮住原鱼；两者仍在正式交互距离内。
+	ACatFishGuardActor* Guard = World->SpawnActor<ACatFishGuardActor>(FVector(100, 140, 100), FRotator::ZeroRotator);
+	if (!TestNotNull(TEXT("创建接收原鱼的真实鱼护"), Guard)) return false;
+	UCatFishOnlyInventoryComponent* GuardInventory = Guard->GetFishInventoryComponent();
+	if (!TestNotNull(TEXT("真实鱼护库存就绪"), GuardInventory)) return false;
 	ACatFishPickupActor* Fish = World->SpawnActor<ACatFishPickupActor>(FVector(100, 0, 100), FRotator::ZeroRotator);
 	if (!TestNotNull(TEXT("创建唯一世界鱼"), Fish)) return false;
 	UCatFishInventoryItemInstance* Item = NewObject<UCatFishInventoryItemInstance>(Fish);
@@ -655,6 +680,7 @@ bool FCatWorldFishMouthDropTest::RunTest(const FString& Parameters)
 		const FString Prefix = FString(Phase) + TEXT(": ");
 		CheckIdentity(Phase);
 		TestTrue(Prefix + TEXT("原鱼仍占用原玩家嘴部"), ACatFishPickupActor::FindCarriedFish(Character) == Fish);
+		TestTrue(Prefix + TEXT("角色公开嘴部引用仍指向原鱼"), Character->GetMouthCarriedActor() == Fish);
 		TestEqual(Prefix + TEXT("保持Carried"), Fish->GetPresentationState().State, ECatFishPickupState::Carried);
 		TestTrue(Prefix + TEXT("携带玩家身份不变"), Fish->GetPresentationState().CarriedByPlayerState == Controller->PlayerState);
 		TestTrue(Prefix + TEXT("附着仍是角色Mesh"), Body->GetAttachParent() == Character->GetMesh());
@@ -668,6 +694,26 @@ bool FCatWorldFishMouthDropTest::RunTest(const FString& Parameters)
 	};
 	const FTransform BeforeReject = Fish->GetActorTransform();
 	CheckMouth(TEXT("初次叼起"), BeforeReject);
+	// 保留态安全流程：真实 Store 成功后原 Actor 继续充当同一库存实例的隐藏载体，不能被旧交互或旧出售路径重新认领；
+	// 随后只允许正式库存 Carry 取回，并核对仍是同一 Actor 与同一实例，不把保留实现退化成重新生成。
+	const FCatCaptureCommitResult StoreResult = Fish->StoreInFishGuardFromAuthority(Controller, FGuid::NewGuid(), Guard);
+	if (!TestTrue(TEXT("真实入护提交成功"), StoreResult.Command.bCommitted && StoreResult.Command.Error == ECatDomainCommandError::None)) return false;
+	const int32 GuardFishSlot = GuardInventory->FindInventorySlotIndexFromInstanceId(FishId);
+	const FCatInventoryEntry* GuardFishEntry = GuardInventory->GetInventoryEntryAtSlot(GuardFishSlot);
+	if (!TestTrue(TEXT("入护后原实例和原Actor保持一对一关联"), GuardFishEntry && GuardFishEntry->Instance == Item
+		&& GuardFishEntry->StackCount == 1 && Item->GetWorldActor() == Fish)) return false;
+	TestTrue(TEXT("入护后原Actor仍有效且隐藏"), IsValid(Fish) && !Fish->IsActorBeingDestroyed()
+		&& Fish->IsHidden() && !Fish->GetActorEnableCollision());
+	if (!TestFalse(TEXT("保管Actor的直接交互预检拒绝"), ICatInteractable::Execute_CanInteract(Fish, Controller))) return false;
+	if (!TestFalse(TEXT("保管Actor的直接交互提交拒绝"), ICatInteractable::Execute_Interact(Fish, Controller, FGuid::NewGuid()))) return false;
+	if (!TestFalse(TEXT("保管Actor不允许绕过库存直接消费"), Fish->CanConsumeFromAuthority(Controller))) return false;
+	if (!TestTrue(TEXT("正式库存Carry取回原鱼"), UCatInventoryStatics::ReleaseItemToWorldFromAuthority(
+		Character, FGuid::NewGuid(), Guard, GuardFishSlot, FishId, 1, ECatInventoryWorldAction::Carry).bCommitted)) return false;
+	TestTrue(TEXT("库存Carry仍使用同一原Actor"), Character->GetMouthCarriedActor() == Fish
+		&& ACatFishPickupActor::FindCarriedFish(Character) == Fish && Item->GetWorldActor() == Fish
+		&& Item->GetRuntimeOwnerActor() == Fish);
+	TestFalse(TEXT("库存Carry后原鱼实例离开鱼护格"), GuardInventory->HasItemAtSlot(GuardFishSlot));
+	CheckMouth(TEXT("库存Carry取回"), Fish->GetActorTransform());
 	AddExpectedMessagePlain(TEXT("Event=fish_drop_rejected"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 2);
 	TestFalse(TEXT("错误携带者没有丢弃"), Fish->DropFromAuthority(OtherController));
 	CheckMouth(TEXT("错误携带者拒绝"), BeforeReject);
@@ -692,6 +738,7 @@ bool FCatWorldFishMouthDropTest::RunTest(const FString& Parameters)
 	CheckIdentity(TEXT("成功丢弃"));
 	TestEqual(TEXT("原鱼切到Available"), Fish->GetPresentationState().State, ECatFishPickupState::Available);
 	TestNull(TEXT("嘴部占用解除"), ACatFishPickupActor::FindCarriedFish(Character));
+	TestNull(TEXT("角色公开嘴部引用解除"), Character->GetMouthCarriedActor());
 	TestNull(TEXT("附件解除"), Body->GetAttachParent());
 	TestTrue(TEXT("携带归属全部清空"), !Fish->GetOwner() && !Fish->GetInstigator() && !Fish->GetPresentationState().CarriedByPlayerState);
 	TestTrue(TEXT("原物理根正在模拟"), Body->IsSimulatingPhysics());
@@ -706,6 +753,143 @@ bool FCatWorldFishMouthDropTest::RunTest(const FString& Parameters)
 		FVector::DotProduct(Velocity, Character->GetActorForwardVector().GetSafeNormal2D()), Settings->DropForwardSpeed, 0.01));
 	TestTrue(TEXT("向上初速度来自现有配置"), FMath::IsNearlyEqual(Velocity.Z, Settings->DropUpwardSpeed, 0.01));
 	TestTrue(TEXT("没有额外侧向速度"), FMath::IsNearlyZero(Velocity.Y, 0.01));
+	// 容器往返流程：先把落地原鱼重新叼起，随后在鱼护和鱼缸间交替保存、取回；每次都从当前源格提交真实命令。
+	// 拒绝请求必须保留同一源实例、保管载体和空嘴；成功重放只能返回已缓存结果，不能再次扣格或生成第二条鱼。
+	ACatFishTankActor* Tank = World->SpawnActor<ACatFishTankActor>(FVector(100, -140, 100), FRotator::ZeroRotator);
+	if (!TestTrue(TEXT("创建真实鱼缸库存"), Tank && Tank->GetFishInventoryComponent())) return false;
+	if (!TestTrue(TEXT("落地原鱼再次叼起"), ICatInteractable::Execute_Interact(Fish, Controller, FGuid::NewGuid()))) return false;
+	for (int32 Round = 0; Round < 4; ++Round)
+	{
+		AActor* Container = Round % 2 == 0 ? static_cast<AActor*>(Guard) : static_cast<AActor*>(Tank);
+		UCatFishOnlyInventoryComponent* Source = Round % 2 == 0 ? GuardInventory : Tank->GetFishInventoryComponent();
+		if (!TestTrue(TEXT("原鱼存入当前容器"), Fish->StoreInFishGuardFromAuthority(
+			Controller, FGuid::NewGuid(), Container).Command.bCommitted)) return false;
+		const int32 Slot = Source->FindInventorySlotIndexFromInstanceId(FishId);
+		const FTransform RetainedTransform = Fish->GetActorTransform();
+		const FCatInventoryEntry* Stored = Source->GetInventoryEntryAtSlot(Slot);
+		if (!TestTrue(TEXT("存入仍是原实例和原载体"), Stored && Stored->Instance == Item && Item->GetWorldActor() == Fish)) return false;
+		TestNull(TEXT("存入后空嘴"), Character->GetMouthCarriedActor());
+		TestFalse(TEXT("数量二不能绕过单鱼约束"), UCatInventoryStatics::ReleaseItemToWorldFromAuthority(
+			Character, FGuid::NewGuid(), Container, Slot, FishId, 2, ECatInventoryWorldAction::Carry).bCommitted);
+		TestFalse(TEXT("旧实例身份不能取走当前鱼"), UCatInventoryStatics::ReleaseItemToWorldFromAuthority(
+			Character, FGuid::NewGuid(), Container, Slot, FGuid::NewGuid(), 1, ECatInventoryWorldAction::Carry).bCommitted);
+		TestFalse(TEXT("远处玩家不能取走容器鱼"), UCatInventoryStatics::ReleaseItemToWorldFromAuthority(
+			OtherCharacter, FGuid::NewGuid(), Container, Slot, FishId, 1, ECatInventoryWorldAction::Carry).bCommitted);
+		if (Round == 0)
+		{
+			// 临时移除本夹具的骨架来制造真实挂点缺失；请求后恢复正式资源，继续同一原鱼的成功路径。
+			Character->GetMesh()->SetSkeletalMeshAsset(nullptr);
+			TestFalse(TEXT("缺少嘴部挂点不生成或认领鱼"), UCatInventoryStatics::ReleaseItemToWorldFromAuthority(
+				Character, FGuid::NewGuid(), Container, Slot, FishId, 1, ECatInventoryWorldAction::Carry).bCommitted);
+			Character->GetMesh()->SetSkeletalMeshAsset(FormalMesh->GetSkeletalMeshAsset());
+			// 静态根不能附着到可移动猫骨架，真实引擎附着失败必须完整恢复保管态；随后恢复夹具的可移动性再执行成功请求。
+			Body->SetMobility(EComponentMobility::Static);
+			TestFalse(TEXT("引擎附着失败不会取走源鱼"), UCatInventoryStatics::ReleaseItemToWorldFromAuthority(
+				Character, FGuid::NewGuid(), Container, Slot, FishId, 1, ECatInventoryWorldAction::Carry).bCommitted);
+			Body->SetMobility(EComponentMobility::Movable);
+		}
+		Stored = Source->GetInventoryEntryAtSlot(Slot);
+		TestTrue(TEXT("拒绝后源格、归属、隐藏和变换均不变"), Stored && Stored->Instance == Item && Stored->StackCount == 1
+			&& Item->GetRuntimeOwnerActor() == Container && Fish->IsHidden() && !Fish->GetActorEnableCollision()
+			&& Fish->GetActorTransform().Equals(RetainedTransform, 0.001) && !Character->GetMouthCarriedActor());
+		const FGuid CarryRequest = FGuid::NewGuid();
+		if (!TestTrue(TEXT("鱼护或鱼缸公开Carry成功"), UCatInventoryStatics::ReleaseItemToWorldFromAuthority(
+			Character, CarryRequest, Container, Slot, FishId, 1, ECatInventoryWorldAction::Carry).bCommitted)) return false;
+		if (Round == 0)
+		{
+			// UE 在同一权威线程顺序处理两人的请求；第二个合法近处玩家不能再次转移刚被第一人取走的同一源鱼。
+			OtherCharacter->GetMesh()->SetSkeletalMeshAsset(FormalMesh->GetSkeletalMeshAsset());
+			OtherCharacter->SetActorLocation(FVector(0, 140, 100));
+			const FCatDomainCommandResult Contender = UCatInventoryStatics::ReleaseItemToWorldFromAuthority(
+				OtherCharacter, FGuid::NewGuid(), Container, Slot, FishId, 1, ECatInventoryWorldAction::Carry);
+			TestEqual(TEXT("第二位可达玩家在源格核验处败出"), Contender.Error, ECatDomainCommandError::InvalidPayload);
+			TestTrue(TEXT("两名玩家同帧争抢只有一人获得原鱼"), !Contender.bCommitted
+				&& Character->GetMouthCarriedActor() == Fish && !OtherCharacter->GetMouthCarriedActor());
+			OtherCharacter->SetActorLocation(FVector(0, 1000, 100));
+		}
+		TestTrue(TEXT("同请求重放返回首次成功"), UCatInventoryStatics::ReleaseItemToWorldFromAuthority(
+			Character, CarryRequest, Container, Slot, FishId, 1, ECatInventoryWorldAction::Carry).bCommitted);
+		TestFalse(TEXT("取回后源格已移除"), Source->HasItemAtSlot(Slot));
+		TestTrue(TEXT("往返后原鱼占据唯一嘴部"), Character->GetMouthCarriedActor() == Fish);
+		CheckIdentity(TEXT("容器往返"));
+	}
+	// 附着回调重入流程：源鱼仍在库存时，真实 TransformUpdated 回调通过正式移动入口把它交给另一容器。
+	// 外层 Carry 必须拒绝并只撤销自己的嘴部认领；不得扣后来换入的格子，也不得把已转移实例的宿主写回旧容器。
+	if (!TestTrue(TEXT("回调重入前原鱼存入鱼护"), Fish->StoreInFishGuardFromAuthority(Controller, FGuid::NewGuid(), Guard).Command.bCommitted)) return false;
+	Fish->SetActorLocation(Guard->GetActorLocation());
+	const int32 ReentrantSlot = GuardInventory->FindInventorySlotIndexFromInstanceId(FishId);
+	bool bTransferCallbackRan = false;
+	FCatDomainCommandResult ReentrantTransfer;
+	const FDelegateHandle TransferDuringAttach = Body->TransformUpdated.AddLambda(
+		[&](USceneComponent* UpdatedComponent, EUpdateTransformFlags, ETeleportType)
+		{
+			if (bTransferCallbackRan || UpdatedComponent->GetAttachParent() != Character->GetMesh()) return;
+			bTransferCallbackRan = true;
+			ReentrantTransfer = UCatInventoryStatics::MoveItemBetweenInventoryHostsFromAuthority(
+				Character, FGuid::NewGuid(), Guard, ReentrantSlot, Tank, 0);
+		});
+	const FCatDomainCommandResult ReentrantCarry = UCatInventoryStatics::ReleaseItemToWorldFromAuthority(
+		Character, FGuid::NewGuid(), Guard, ReentrantSlot, FishId, 1, ECatInventoryWorldAction::Carry);
+	Body->TransformUpdated.Remove(TransferDuringAttach);
+	TestTrue(TEXT("真实附着回调已完成另一容器转移"), bTransferCallbackRan && ReentrantTransfer.bCommitted);
+	TestFalse(TEXT("来源在附着期间转移后外层Carry拒绝"), ReentrantCarry.bCommitted);
+	const FCatInventoryEntry* ReentrantTarget = Tank->GetFishInventoryComponent()->GetInventoryEntryAtSlot(0);
+	TestTrue(TEXT("回滚保留已完成转移的原实例与新宿主"), ReentrantTarget && ReentrantTarget->Instance == Item
+		&& Item->GetRuntimeOwnerActor() == Tank && Item->GetWorldActor() == Fish && Fish->IsHidden()
+		&& !GuardInventory->HasItemAtSlot(ReentrantSlot) && !Character->GetMouthCarriedActor());
+	if (HasAnyErrors()) return false;
+	if (!TestTrue(TEXT("回调转移后的原鱼仍可从新容器取回"), UCatInventoryStatics::ReleaseItemToWorldFromAuthority(
+		Character, FGuid::NewGuid(), Tank, 0, FishId, 1, ECatInventoryWorldAction::Carry).bCommitted)) return false;
+	// 历史库存流程：没有世界载体的鱼首次 Carry 创建载体但不复制库存实例；占嘴期间另一条鱼保持在源容器。
+	if (!TestTrue(TEXT("原鱼暂存鱼护"), Fish->StoreInFishGuardFromAuthority(Controller, FGuid::NewGuid(), Guard).Command.bCommitted)) return false;
+	UCatFishInventoryItemInstance* HistoricItem = NewObject<UCatFishInventoryItemInstance>(Tank);
+	HistoricItem->SetItemDefinition(Definition);
+	const FGuid HistoricId = FGuid::NewGuid();
+	if (!TestTrue(TEXT("创建无载体历史鱼实例"), HistoricItem->InitializeFishFromAuthority(
+		FGuid::NewGuid(), HistoricId, TEXT("MouthFishOwner"), 3.75)
+		&& Tank->GetFishInventoryComponent()->AddItemInstance(HistoricItem, 1))) return false;
+	const int32 HistoricSlot = Tank->GetFishInventoryComponent()->FindInventorySlotIndexFromInstanceId(HistoricId);
+	TestNull(TEXT("历史鱼初始没有Actor"), HistoricItem->GetWorldActor());
+	if (!TestTrue(TEXT("历史鱼首次Carry成功"), UCatInventoryStatics::ReleaseItemToWorldFromAuthority(
+		Character, FGuid::NewGuid(), Tank, HistoricSlot, HistoricId, 1, ECatInventoryWorldAction::Carry).bCommitted)) return false;
+	ACatFishPickupActor* HistoricActor = Cast<ACatFishPickupActor>(Character->GetMouthCarriedActor());
+	if (!TestTrue(TEXT("首次创建载体持有原历史实例"), HistoricActor && HistoricItem->GetWorldActor() == HistoricActor
+		&& HistoricItem->GetRuntimeOwnerActor() == HistoricActor)) return false;
+	TestEqual(TEXT("历史重量不变"), HistoricActor->GetPresentationState().WeightKilograms, 3.75);
+	const int32 OriginalSlot = GuardInventory->FindInventorySlotIndexFromInstanceId(FishId);
+	TestFalse(TEXT("嘴已有鱼时不能叼起第二条"), UCatInventoryStatics::ReleaseItemToWorldFromAuthority(
+		Character, FGuid::NewGuid(), Guard, OriginalSlot, FishId, 1, ECatInventoryWorldAction::Carry).bCommitted);
+	TestTrue(TEXT("占嘴拒绝保持原嘴和原源格"), Character->GetMouthCarriedActor() == HistoricActor
+		&& GuardInventory->GetInventoryEntryAtSlot(OriginalSlot)->Instance == Item && Fish->IsHidden());
+	HistoricActor->Destroy();
+	TestNull(TEXT("当前载体销毁解除唯一嘴部引用"), Character->GetMouthCarriedActor());
+	// 槽位复用流程：通过正式移动把原鱼转入鱼缸，再把另一实例放回旧格；旧 GUID 不能消费后来换入的鱼。
+	if (!TestTrue(TEXT("原鱼经正式库存移动到鱼缸"), UCatInventoryStatics::MoveItemBetweenInventoryHostsFromAuthority(
+		Character, FGuid::NewGuid(), Guard, OriginalSlot, Tank, HistoricSlot).bCommitted)) return false;
+	UCatFishInventoryItemInstance* Replacement = NewObject<UCatFishInventoryItemInstance>(Guard);
+	Replacement->SetItemDefinition(Definition);
+	if (!TestTrue(TEXT("旧格放入不同鱼实例"), Replacement->InitializeFishFromAuthority(
+		FGuid::NewGuid(), FGuid::NewGuid(), TEXT("MouthFishOwner"), 1.5) && GuardInventory->AddItemInstance(Replacement, 1))) return false;
+	TestEqual(TEXT("确认真实复用了旧格"), GuardInventory->FindInventorySlotIndexFromInstanceId(Replacement->GetItemInstanceId()), OriginalSlot);
+	TestFalse(TEXT("旧格旧GUID不能消费新鱼"), UCatInventoryStatics::ReleaseItemToWorldFromAuthority(
+		Character, FGuid::NewGuid(), Guard, OriginalSlot, FishId, 1, ECatInventoryWorldAction::Carry).bCommitted);
+	TestTrue(TEXT("转移后载体仍属鱼缸原实例"), Item->GetRuntimeOwnerActor() == Tank && Item->GetWorldActor() == Fish
+		&& GuardInventory->GetInventoryEntryAtSlot(OriginalSlot)->Instance == Replacement);
+	const int32 TankSlot = Tank->GetFishInventoryComponent()->FindInventorySlotIndexFromInstanceId(FishId);
+	if (!TestTrue(TEXT("转移后从新容器Carry原鱼"), UCatInventoryStatics::ReleaseItemToWorldFromAuthority(
+		Character, FGuid::NewGuid(), Tank, TankSlot, FishId, 1, ECatInventoryWorldAction::Carry).bCommitted)) return false;
+	Tank->Destroy();
+	TestTrue(TEXT("销毁空源容器不销毁已取出的鱼"), IsValid(Fish) && !Fish->IsActorBeingDestroyed()
+		&& Character->GetMouthCarriedActor() == Fish);
+	Controller->UnPossess();
+	TestNull(TEXT("失去控制释放嘴部鱼"), Character->GetMouthCarriedActor());
+	TestTrue(TEXT("生命周期落地保持根和显示尺寸"), Fish->GetActorScale3D().Equals(FishWorldScale, 0.001)
+		&& FishMesh->GetComponentScale().Equals(FishVisualScale, 0.001));
+	Controller->Possess(Character);
+	if (!TestTrue(TEXT("生命周期落地鱼重新叼起"), ICatInteractable::Execute_Interact(Fish, Controller, FGuid::NewGuid()))) return false;
+	if (!TestTrue(TEXT("销毁容器前保存原鱼"), Fish->StoreInFishGuardFromAuthority(Controller, FGuid::NewGuid(), Guard).Command.bCommitted)) return false;
+	Guard->Destroy();
+	TestTrue(TEXT("容器销毁只清理仍保管的原载体"), !IsValid(Fish) || Fish->IsActorBeingDestroyed());
 	return !HasAnyErrors();
 }
 

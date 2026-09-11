@@ -7,6 +7,7 @@
 
 class UCatFishOnlyInventoryComponent;
 class UCatFishTankInteractionComponent;
+class UCatFishTankWorldInfoComponent;
 class USceneComponent;
 class USphereComponent;
 
@@ -17,7 +18,7 @@ class CATFISHING_API ACatFishTankActor : public AActor, public ICatInteractable
 	GENERATED_BODY()
 
 public:
-	/** 建立共享鱼缸库存宿主并关闭无关 Tick；鱼内容由 FishInventory 复制，Actor 不生成第二份容器真相。 */
+	/** 建立共享鱼缸库存宿主和只读信息锚点并关闭 Tick；鱼内容由 FishInventory 持有，摘要只投影库存事实。 */
 	ACatFishTankActor();
 
 	/** 判断请求 Controller 是否能把本鱼缸作为交互目标；只承认玩家 Controller、交互开关和正式库存组件。 */
@@ -41,8 +42,11 @@ public:
 	UCatFishTankInteractionComponent* GetTankInteraction() const;
 
 protected:
-	/** authority 进入 World 时按编辑器容量补齐正式鱼库存槽位；客户端只等待 InventoryComponent 复制。 */
+	/** authority 入场时按编辑器容量补齐正式库存，再显式发布只读摘要；客户端等待库存与摘要各自复制。 */
 	virtual void BeginPlay() override;
+
+	/** 鱼缸销毁时清理仍由本库存保管的隐藏鱼 Actor；已 Carry 离开库存的鱼不属于本容器。 */
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
 	/** 共享鱼缸的固定场景根；关卡用它摆放位置，运行时不把该坐标当成库存真相。 */
@@ -60,6 +64,10 @@ private:
 	/** 鱼缸的本地交互入口；它只把共享鱼缸库存作为背包外部上下文打开，真实移动仍由库存事务决定。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|FishContainers", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatFishTankInteractionComponent> TankInteraction;
+
+	/** 共享鱼缸的只读世界信息锚点；构造时创建并挂接，Actor 入场时请求首次汇总，服务器发布库存摘要供客户端 UI 和祭坛读取，不提供库存写口。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|World Info", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UCatFishTankWorldInfoComponent> WorldInfo;
 
 	/** 鱼缸是否允许成为交互目标；蓝图或编辑器可关闭它，交互扫描和提示读取后会一起隐藏入口。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Catfishing|Interaction", meta = (AllowPrivateAccess = "true"))

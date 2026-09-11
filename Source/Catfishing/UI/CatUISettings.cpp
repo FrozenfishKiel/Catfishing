@@ -4,6 +4,7 @@
 #include "InputAction.h"
 #include "InputMappingContext.h"
 #include "UI/HUD/CatHUDWidget.h"
+#include "UI/Run/CatDayTransitionWidget.h"
 #include "UI/Frontend/CatFrontendRootWidget.h"
 #include "UI/Interaction/CatInteractionPromptWidget.h"
 #include "UI/Inventory/CatInventoryWidget.h"
@@ -11,9 +12,12 @@
 #include "UI/ItemTooltip/CatItemTooltipWidget.h"
 #include "UI/Save/CatLakeMainMenuWidget.h"
 
-// 构造流程：为正式拆分的 HUD、背包、交互提示、局内菜单 WBP 和输入资产写入稳定软路径；输入 Action 放在项目既有 InputContext 下维护，运行时代码只加载资产和绑定 Action。
+// 构造流程：为翻天、物品提示、HUD、背包及格子、交互提示、前端和局内菜单写入正式 WBP 默认软路径，再设置既有 InputAction 与 InputContext 的输入资产路径。
+// 此处只保存可被项目配置覆盖的引用，不加载或创建控件；各加载入口在实际装配时解析资产。
 UCatUISettings::UCatUISettings()
 {
+	DayTransitionWidgetClass = TSoftClassPtr<UCatDayTransitionWidget>(
+		FSoftClassPath(TEXT("/Game/UI/Run/WBP_CatDayTransition.WBP_CatDayTransition_C")));
 	ItemTooltipWidgetClass = TSoftClassPtr<UCatItemTooltipWidget>(
 		FSoftClassPath(TEXT("/Game/UI/Inventory/WBP_CatItemTooltip.WBP_CatItemTooltip_C")));
 	HUDWidgetClass = TSoftClassPtr<UCatHUDWidget>(
@@ -97,6 +101,14 @@ TSubclassOf<UCatInteractionPromptWidget> UCatUISettings::LoadInteractionPromptWi
 		return nullptr;
 	}
 	return LoadedClass;
+}
+
+// 正式翻天视图加载：解析软类后核对 UMG 父类和蓝图生成标志；失败不实例化原生类，不改变过场时钟。
+TSubclassOf<UCatDayTransitionWidget> UCatUISettings::LoadDayTransitionWidgetClass() const
+{
+	UClass* LoadedClass = DayTransitionWidgetClass.LoadSynchronous();
+	return LoadedClass && LoadedClass->IsChildOf(UCatDayTransitionWidget::StaticClass())
+		&& LoadedClass->HasAnyClassFlags(CLASS_CompiledFromBlueprint) ? LoadedClass : nullptr;
 }
 
 // 解析正式软类并验证父类；失败返回空，由 LocalPlayer 记录缺失，避免迁移未完成时显示白盒替身。

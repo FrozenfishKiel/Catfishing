@@ -14,6 +14,12 @@
 #include "FishContainers/CatFishTankActor.h"
 #include "Logging/CatLog.h"
 
+// 只读关系解析：保留关卡显式关联，失效引用返回空，不扫描世界或生成替代鱼缸。
+ACatFishTankActor* ACatCampHubActor::ResolveSharedFishTank() const
+{
+	return IsValid(SharedFishTank) ? SharedFishTank.Get() : nullptr;
+}
+
 namespace
 {
 	/** 营地玩家出生环的默认半径，单位厘米；它让初始 Pawn 离开营地中心和 PlayerStart 胶囊，同时仍处在常规营地交互半径内。 */

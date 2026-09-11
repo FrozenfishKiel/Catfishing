@@ -36,6 +36,10 @@ public:
 	/** 判断传入鱼缸是否就是本营地显式关联的共享鱼缸；交互组件只用它解析 Camp 上下文，不取得写权限。 */
 	bool IsSharedFishTank(const ACatFishTankActor* Candidate) const;
 
+	/** 信息提供者查询关卡显式关联的共享鱼缸；有效引用直接返回，失效时返回空以显示关联未就绪，不扫描世界补配对象。 */
+	UFUNCTION(BlueprintPure, Category="Camp")
+	ACatFishTankActor* ResolveSharedFishTank() const;
+
 	/** 商店发货询问本营地能否提供公共仓库；PlayerController 全图扫描命中后调用它，空值表示本营地当前不能接收购买物。 */
 	ACatCampInventoryActor* ResolvePublicInventoryForShopOrder() const;
 

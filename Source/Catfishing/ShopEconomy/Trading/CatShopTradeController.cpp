@@ -211,6 +211,7 @@ FCatShopOrderResult UCatShopTradeController::SubmitFishSaleFromPlayer(AControlle
 	UCatInventoryComponent* Inventory = Guard ? Guard->GetFishInventoryComponent() : nullptr;
 	TArray<FCatInventoryEntry> OriginalEntries;
 	TArray<FCatInventoryEntry> RemainingEntries;
+	TArray<TWeakObjectPtr<ACatFishPickupActor>> SoldRetainedFishActors;
 	ACatFishPickupActor* MouthFish = nullptr;
 	if (Guard)
 	{
@@ -231,6 +232,10 @@ FCatShopOrderResult UCatShopTradeController::SubmitFishSaleFromPlayer(AControlle
 			Line.FishInstanceId = Id;
 			Line.FishDefinitionId = Fish->GetItemDefinitionId();
 			Line.WeightKilograms = Fish->GetFishWeightKilograms();
+			if (ACatFishPickupActor* RetainedFishActor = Cast<ACatFishPickupActor>(Fish->GetWorldActor()))
+			{
+				SoldRetainedFishActors.AddUnique(RetainedFishActor);
+			}
 			RemainingEntries[Slot] = FCatInventoryEntry(Inventory);
 		}
 	}
@@ -279,6 +284,14 @@ FCatShopOrderResult UCatShopTradeController::SubmitFishSaleFromPlayer(AControlle
 	{
 		Inventory->ReplaceInventoryEntriesFromAuthority(OriginalEntries, OriginalEntries.Num(), false);
 		return Finish(Result.Transaction.Command.Error);
+	}
+	// 经济提交已不可回滚，才销毁本次售出实例保留的容器 Actor；通用整表替换也服务于转移和回滚，不能在其中做这项清理。
+	for (const TWeakObjectPtr<ACatFishPickupActor>& RetainedFishActor : SoldRetainedFishActors)
+	{
+		if (ACatFishPickupActor* Actor = RetainedFishActor.Get())
+		{
+			Actor->Destroy();
+		}
 	}
 	Finish(ECatDomainCommandError::None);
 	Inventory->BroadcastInventoryChange();
