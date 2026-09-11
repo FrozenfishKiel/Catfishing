@@ -26,6 +26,7 @@ class UCatLakeMainMenuController;
 class UCatLakeMainMenuWidget;
 class UUserWidget;
 class UCatDayTransitionWidget;
+class UCatWorldInfoController;
 struct FCatRunDayTransition;
 enum class ECatHUDAction : uint8;
 
@@ -74,9 +75,16 @@ public:
 	void ClearDayTransition();
 
 private:
-	/** 本玩家的原生翻天遮罩；RefreshDayTransition 创建和渲染，ClearDayTransition 或正常结束移除。 */
+	/** 本地玩家独有的对象信息显示控制器；局内 UI 装配时绑定，换 Pawn、Controller 或旅行时成对解绑。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatWorldInfoController> WorldInfoController;
+
+	/** 本玩家的正式翻天 WBP；RefreshDayTransition 创建和渲染，ClearDayTransition 或正常结束移除。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatDayTransitionWidget> DayTransitionWidget;
+
+	/** 最近因正式 WBP 加载或创建失败而停止尝试的请求标识；RefreshDayTransition 写入并比较，ClearDayTransition 清空，同一请求不重复加载和刷日志。 */
+	FGuid UnavailableDayTransitionViewId;
 
 	/** 已展示过失败反馈的请求键；刷新时写入，避免同一失败快照每帧重开两秒提示，旅行清空。 */
 	FGuid LastDayTransitionFailureId;
@@ -173,10 +181,10 @@ private:
 	/** 当前 Controller Pawn 变化入口；同 Pawn 刷新库存读模型和输入绑定，换 Pawn 或空 Pawn 才拆装本地玩家 UI 模块。 */
 	void HandleControllerPawnChanged(APawn* NewPawn);
 
-	/** 当配置 WBP、当前 Controller 与 Character 有效时创建 HUD、Inventory、物品提示、Interaction 和局内菜单模块。 */
+	/** 当配置 WBP、当前 Controller 与 Character 有效时装配 HUD、Inventory、物品提示、Interaction、局内菜单及本玩家的 WorldInfo 控制器。 */
 	void AttachPlayerLakeUI(ACatCharacter* Character);
 
-	/** 先解绑各模块 PageController、Model 和悬停来源，再移除 View，最后清理所有本地玩家 UI 引用。 */
+	/** 退出或换绑时先清理 WorldInfo，再成对解绑各模块控制器、Model 与视图，清除委托和当前角色引用。 */
 	void DetachPlayerLakeUI();
 
 	/** HUD Model 投影变化入口；只把最新状态交给 HUD WBP，不访问背包或商店。 */

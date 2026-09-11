@@ -1183,7 +1183,10 @@ bool ACatfishingGameModeBase::DoesLastRunFlowResultMatch(const ECatRunTransition
 		&& LastRunFlowResult.Reason == ExpectedReason;
 }
 
-// 过渡开始：先由祭坛冻结地面鱼并与现有 GAS 预演联合检查，再发布唯一时间轴与操作门；拒绝只清确认，不扣鱼。
+// 过渡开始：
+// 1. 核对同世界祭坛、请求者资格及开放夜晚；再检查过场时长、StateTree、冻结供品、服务器身份和 GAS 预演，失败清理祭坛确认并记录原因，不扣鱼。
+// 2. 保存本轮祭坛、请求者和命令，重建时间轴但保留上次成功凭据；冻结过场时长和预期天数，置为活动态并提升 Run 修订。
+// 3. 发布公开状态与操作门，分别安排遮黑提交和过场结束计时器，记录开始事件；之后由提交或取消入口收口本轮事务。
 bool ACatfishingGameModeBase::BeginAltarDayTransition(ACatAltarActor* Altar, AController* Controller, FGuid RequestId)
 {
 	if (!IsValid(Altar) || Altar->GetWorld() != GetWorld() || !RequestId.IsValid()
@@ -1212,7 +1215,9 @@ bool ACatfishingGameModeBase::BeginAltarDayTransition(ACatAltarActor* Altar, ACo
 	TransitionController = Controller;
 	TransitionOffering = Command;
 	FCatRunDayTransition& Transition = RunPublicState.DayTransition;
+	const FCatOfferingResultSnapshot PreviousResult = Transition.LastCommittedOffering;
 	Transition = FCatRunDayTransition();
+	Transition.LastCommittedOffering = PreviousResult;
 	Transition.RequestId = RequestId;
 	Transition.bActive = true;
 	Transition.StartServerTimeSeconds = GetWorld()->GetTimeSeconds();
@@ -1231,7 +1236,11 @@ bool ACatfishingGameModeBase::BeginAltarDayTransition(ACatAltarActor* Altar, ACo
 	return true;
 }
 
-// 黑屏提交：玩家仍有效且整批鱼通过预检才调用原有 GAS 结算；同步消费成功后公开结果。失败停止本轮计时并解锁，不重试扣鱼。
+// 黑屏提交：
+// 1. 非活动或已提交时直接结束；重新核对祭坛、玩家资格和冻结鱼，失败交给取消入口清计时、解锁。
+// 2. 刷新命令预期修订并记录旧天、目标与进度，再调用唯一 GAS 结算；拒绝时取消，通过后同步消费冻结实物。
+// 3. 消费异常时保留已提交的 GAS 事实并报告失败，不重复扣鱼；全部消费成功才替换公开成功凭据和已提交标记。
+// 4. 根据命令结果选择失败终局、毕业或下一天文案，重置祭坛确认，提升修订并发布结果与日志；正常结束仍由原计时器负责。
 void ACatfishingGameModeBase::CommitAltarDayTransition()
 {
 	if (!RunPublicState.DayTransition.bActive || RunPublicState.DayTransition.bCommitted) return;
@@ -1246,6 +1255,12 @@ void ACatfishingGameModeBase::CommitAltarDayTransition()
 		return;
 	}
 	TransitionOffering.Context.ExpectedRevision = RunPublicState.Revision;
+	// 提交事件可能推动次日并清零当日属性，因此旧天目标必须在调用唯一写口前冻结。
+	FCatOfferingResultSnapshot OfferingResult;
+	OfferingResult.RequestId = RunPublicState.DayTransition.RequestId;
+	OfferingResult.SettlementDay = RunPublicState.Phase.DayIndex;
+	OfferingResult.TargetPoints = RunPublicState.DailyOfferingTarget;
+	OfferingResult.WorldProgressBefore = RunPublicState.WorldProgress;
 	const FCatRunCommandResult Result = SubmitOfferingSettlementInternal(TransitionOffering);
 	if (!Result.bCommitted)
 	{
@@ -1260,8 +1275,12 @@ void ACatfishingGameModeBase::CommitAltarDayTransition()
 	}
 	FCatRunDayTransition& Transition = RunPublicState.DayTransition;
 	Transition.bCommitted = true;
+	OfferingResult.OfferedPoints = Result.OfferedPoints;
+	OfferingResult.bMetTarget = Result.OfferedPoints >= OfferingResult.TargetPoints;
+	OfferingResult.WorldProgressAfter = Result.NewWorldProgress;
+	Transition.LastCommittedOffering = OfferingResult;
 	Transition.TargetDayIndex = Result.NewWorldProgress > 0 && Result.NewWorldProgress < 100
-		? RunPublicState.Phase.DayIndex + 1 : RunPublicState.Phase.DayIndex;
+		? OfferingResult.SettlementDay + 1 : OfferingResult.SettlementDay;
 	Transition.Message = Result.NewWorldProgress <= 0
 		? NSLOCTEXT("Catfishing", "AltarRunFailed", "本次旅程结束")
 		: Result.NewWorldProgress >= 100 ? NSLOCTEXT("Catfishing", "AltarGraduation", "毕业之夜")

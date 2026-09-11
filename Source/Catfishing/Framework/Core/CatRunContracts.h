@@ -128,6 +128,34 @@ enum class ECatEnvironmentTimeOfDay : uint8
 	Dusk
 };
 
+/** 最近一次供品与 GAS 均成功提交的展示凭据；只保存历史结果，不参与后续玩法计算。 */
+USTRUCT(BlueprintType)
+struct FCatOfferingResultSnapshot
+{
+	GENERATED_BODY()
+	/** 成功结算的关联标识；GameMode 提交成功后公开，UI 用它区分历史与本轮结果，无效时不得显示默认数值。 */
+	UPROPERTY(BlueprintReadOnly)
+	FGuid RequestId;
+	/** 实际结算的旧天序号；GameMode 在提交前记录，祭坛据此标注历史结果，次日切换不会改写此凭据。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 SettlementDay = 0;
+	/** 服务器接受的供品点数；GameMode 从命令结果写入，全部实物消费成功后公开，UI 用它展示本次达标情况。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 OfferedPoints = 0;
+	/** 结算当日要求的点数；GameMode 提交前记录，不随次日目标变更，两端 UI 读取以解释达标情况。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 TargetPoints = 0;
+	/** 权威结果是否达到当日目标；GameMode 比较已接受点数与冻结目标后写入，UI 只用作结果文字，不反向推进阶段。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bMetTarget = false;
+	/** 提交前的世界进度，单位为百分数的数值部分；GameMode 提交前记录，UI 与提交后值一起显示本次变化。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 WorldProgressBefore = 0;
+	/** 本次提交后的世界进度，单位为百分数的数值部分；GameMode 从服务器命令结果写入，UI 读取展示，不作客户端预测。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 WorldProgressAfter = 0;
+};
+
 /** 翻天遮罩的服务器时间轴；GameMode 发布开始、结算与结束，客户端只渲染并配对控制操作锁。 */
 USTRUCT(BlueprintType)
 struct FCatRunDayTransition
@@ -173,6 +201,10 @@ struct FCatRunDayTransition
 	/** 服务器提交结果的可读说明；用于普通天数标题、毕业、失败或依赖错误，不由客户端推导结算。 */
 	UPROPERTY(BlueprintReadOnly)
 	FText Message;
+
+	/** 最近一次成功结算凭据；GameMode 成功提交并消费实物后替换，新过渡保留旧值；祭坛显示历史，翻天 UI 仅在请求标识匹配时显示本轮结果。 */
+	UPROPERTY(BlueprintReadOnly)
+	FCatOfferingResultSnapshot LastCommittedOffering;
 };
 
 /** Run 唯一写入的阶段与时钟快照；Environment、Fishing 和 UI 只能消费，不得反向修改。 */

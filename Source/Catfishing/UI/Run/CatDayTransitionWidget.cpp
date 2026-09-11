@@ -1,72 +1,56 @@
 #include "UI/Run/CatDayTransitionWidget.h"
 
-#include "Styling/CoreStyle.h"
 #include "Engine/LocalPlayer.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Application/SlateUser.h"
-#include "Widgets/Layout/SBorder.h"
-#include "Widgets/SOverlay.h"
-#include "Widgets/Text/STextBlock.h"
+#include "Components/Border.h"
+#include "Components/TextBlock.h"
 
-// 构建流程：先铺纯黑背景，再居中放置可换行文字；初始透明且无文字，迟到快照不会先闪一帧黑。
-TSharedRef<SWidget> UCatDayTransitionWidget::RebuildWidget()
+// 渲染流程：
+// 1. 接收 LocalPlayer 已算好的时间轴投影，把透明度限制在零到一，分别更新存在的遮罩与两段文本；缺少绑定时跳过该控件。
+// 2. 阻断期将 WBP 设为可命中；本用户和 Slate 就绪且视图尚未持焦点时，保存原焦点、启用可聚焦并接管键盘路由。
+// 3. 非阻断期改为穿透且文字全不透明；仅在自己仍持焦点时尝试归还，原目标失效或恢复失败则返回该用户游戏视口。
+// 4. 非阻断时清空焦点弱引用并关闭可聚焦；用户或 Slate 未就绪则跳过焦点操作，不修改玩法操作锁或创建布局。
+void UCatDayTransitionWidget::RenderTransition(const float BlackOpacity, const FText& Message, const bool bBlockPointer, const FText& SettlementDetails)
 {
-	return SNew(SOverlay)
-		+ SOverlay::Slot()
-		[
-			SAssignNew(BlackOverlay, SBorder)
-			.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-			.BorderBackgroundColor(FLinearColor::Transparent)
-			// 消费黑底点击，避免视口在按下时抢走本过渡的键盘焦点。
-			.OnMouseButtonDown_Lambda([](const FGeometry&, const FPointerEvent&) { return FReply::Handled(); })
-		]
-		// 文字获得视口内的完整可用宽度，再按文本对齐居中；按期望宽度居中会让自动换行把短标题挤成两行。
-		+ SOverlay::Slot().HAlign(HAlign_Fill).VAlign(VAlign_Center).Padding(48.0f)
-		[
-			SAssignNew(ResultText, STextBlock)
-			.Font(FCoreStyle::GetDefaultFontStyle("Bold", 36))
-			.ColorAndOpacity(FLinearColor::White)
-			.ShadowOffset(FVector2D(1.0f, 1.0f))
-			.ShadowColorAndOpacity(FLinearColor::Black)
-			.Justification(ETextJustify::Center)
-			.AutoWrapText(true)
-		];
-}
-
-// 渲染流程：限制黑底透明度并写文案；锁定时阻断点击、保存并接管键盘焦点，解除时只归还自己持有的焦点，失败反馈允许穿透。
-void UCatDayTransitionWidget::RenderTransition(const float BlackOpacity, const FText& Message, const bool bBlockPointer)
-{
+	const float ClampedOpacity = FMath::Clamp(BlackOpacity, 0.0f, 1.0f);
 	if (BlackOverlay)
 	{
-		BlackOverlay->SetBorderBackgroundColor(FLinearColor(0.0f, 0.0f, 0.0f, FMath::Clamp(BlackOpacity, 0.0f, 1.0f)));
+		BlackOverlay->SetRenderOpacity(ClampedOpacity);
 	}
 	if (ResultText)
 	{
 		ResultText->SetText(Message);
-		ResultText->SetRenderOpacity(bBlockPointer ? FMath::Clamp(BlackOpacity, 0.0f, 1.0f) : 1.0f);
+		ResultText->SetRenderOpacity(bBlockPointer ? ClampedOpacity : 1.0f);
+	}
+	if (SettlementText)
+	{
+		SettlementText->SetText(SettlementDetails);
+		SettlementText->SetRenderOpacity(bBlockPointer ? ClampedOpacity : 1.0f);
 	}
 	SetVisibility(bBlockPointer ? ESlateVisibility::Visible : ESlateVisibility::HitTestInvisible);
 	ULocalPlayer* LocalPlayer = GetOwningLocalPlayer();
 	const TSharedPtr<FSlateUser> User = LocalPlayer ? LocalPlayer->GetSlateUser() : nullptr;
 	if (User && FSlateApplication::IsInitialized())
 	{
-		FSlateApplication& Slate = FSlateApplication::Get();
+		FSlateApplication& Application = FSlateApplication::Get();
 		if (bBlockPointer && !HasUserFocus(GetOwningPlayer()))
 		{
-			PreviousUserFocus = Slate.GetUserFocusedWidget(User->GetUserIndex());
+			PreviousUserFocus = Application.GetUserFocusedWidget(User->GetUserIndex());
 			SetIsFocusable(true);
 			SetUserFocus(GetOwningPlayer());
 		}
 		else if (!bBlockPointer && HasUserFocus(GetOwningPlayer()))
 		{
 			const TSharedPtr<SWidget> Previous = PreviousUserFocus.Pin();
-			// 原页面可能已被关闭但 Slate 引用尚未失效；无法归还时回到所属玩家视口，不能让失败提示留住键盘。
-			if (!Previous || !Slate.SetUserFocus(User->GetUserIndex(), Previous))
-			{
-				Slate.SetUserFocusToGameViewport(User->GetUserIndex());
-			}
-			PreviousUserFocus.Reset();
+			if (!Previous || !Application.SetUserFocus(User->GetUserIndex(), Previous))
+				Application.SetUserFocusToGameViewport(User->GetUserIndex());
 		}
+	}
+	if (!bBlockPointer)
+	{
+		PreviousUserFocus.Reset();
+		SetIsFocusable(false);
 	}
 }
 
@@ -76,10 +60,20 @@ FReply UCatDayTransitionWidget::NativeOnPreviewKeyDown(const FGeometry& InGeomet
 	return GetVisibility() == ESlateVisibility::Visible ? FReply::Handled() : Super::NativeOnPreviewKeyDown(InGeometry, InKeyEvent);
 }
 
-// 释放流程：先让 UMG 结束自身及子树资源，再丢弃本类的 Slate 引用；下次重建重新创建整棵树。
-void UCatDayTransitionWidget::ReleaseSlateResources(const bool bReleaseChildren)
+// 指针按下：仅正式锁定可命中态消费事件；失败提示沿父类路由，不写入游戏输入模式。
+FReply UCatDayTransitionWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
 {
-	Super::ReleaseSlateResources(bReleaseChildren);
-	BlackOverlay.Reset();
-	ResultText.Reset();
+	return GetVisibility() == ESlateVisibility::Visible ? FReply::Handled() : Super::NativeOnMouseButtonDown(InGeometry, InMouseEvent);
+}
+
+// 指针松开：当前可命中阻断态返回 Handled，避免释放事件下传；非阻断态委托父类路由，不修改输入模式。
+FReply UCatDayTransitionWidget::NativeOnMouseButtonUp(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
+{
+	return GetVisibility() == ESlateVisibility::Visible ? FReply::Handled() : Super::NativeOnMouseButtonUp(InGeometry, InMouseEvent);
+}
+
+// 滚轮路由：黑幕持锁时终止事件传播；无锁时保留父类行为，不自行移动下层焦点。
+FReply UCatDayTransitionWidget::NativeOnMouseWheel(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
+{
+	return GetVisibility() == ESlateVisibility::Visible ? FReply::Handled() : Super::NativeOnMouseWheel(InGeometry, InMouseEvent);
 }
