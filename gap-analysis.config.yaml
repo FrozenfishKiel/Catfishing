@@ -2,9 +2,8 @@
 # docs 相对 docs_root，code 相对工程根；refs 只作参考不评分；scope 是给分析者的评审范围一句话。
 # 增量模式靠它：文档 revision（_manifest.json）或 code 路径的 git diff 变了才重跑该系统。
 $schema_version: 1
-# 镜像 2026-09-10 移出本仓库，改放设计项目；下面两行是本机绝对路径，换机器改这里
-docs_root: C:/Users/lzcm7/OneDrive/GameProject/CatFishing/Feishu
-manifest: C:/Users/lzcm7/OneDrive/GameProject/CatFishing/Feishu/_manifest.json
+# 镜像 2026-09-10 移出本仓库，改放设计项目。docs_root/manifest 只接受相对工程根的路径，
+# 跨盘表达不了，所以这里不写：位置见 CLAUDE.md「设计文档」节，运行时用 --docs-root 传给脚本。
 systems:
   - name: 钓鱼系统-核心
     docs: ["GDD 系统分册/钓鱼系统/钓鱼系统.md", "GDD 系统分册/钓鱼系统/钓鱼规则.md"]
@@ -27,7 +26,7 @@ systems:
     scope: "全篇。"
     code: ["Source/Catfishing/ShopEconomy/", "Source/Catfishing/UI/Shop/", "Source/Catfishing/Camp/", "Scripts/verify_equipment_shop.ps1", "Scripts/verify_equipment_shop_runtime.py"]
   - name: 鱼
-    docs: ["GDD 系统分册/鱼/鱼.md", "GDD 系统分册/鱼/鱼表格/第一版.csv", "GDD 系统分册/鱼/鱼表格/入侵物种.md", "GDD 系统分册/鱼/鱼表格/入侵物种.embedded/*.csv"]
+    docs: ["GDD 系统分册/鱼/鱼.md", "GDD 系统分册/鱼/鱼表格/第一版.csv", "GDD 系统分册/鱼/鱼表格/饵权重.csv", "GDD 系统分册/鱼/鱼表格/基础池.csv", "GDD 系统分册/鱼/鱼表格/入侵物种.md", "GDD 系统分册/鱼/鱼表格/入侵物种.embedded/*.csv"]
     refs: ["裁决同步/裁决同步 · 鱼／营地／UI 与交互（张佳）.md", "GDD 系统分册/鱼/鱼的行为.md"]
     scope: "全篇；旧版-已废弃-勿引（饥饿口径）.csv 排除；鱼的行为.md 页头声明「实现不读本页」只作参考。入侵物种页无三行头、未挂号，按候选稿对待：列一行说明不评。"
     code: ["Source/Catfishing/Data/", "Source/Catfishing/Fishing/Behavior/", "Source/Catfishing/Fishing/Simulation/", "Source/Catfishing/Fishing/StateTree/", "Content/Catfishing/Data/Fish/", "Scripts/verify_showcase_formal_fish_region.py", "Scripts/create_fish_behavior_state_tree.py"]
@@ -57,7 +56,7 @@ systems:
     scope: "全篇。09-08 裁：图鉴收集层归上钩者一人，合力与抄网只进演出贡献名单。"
     code: ["Source/Catfishing/Collection/", "Source/Catfishing/Profile/", "Source/Catfishing/UI/Collection/", "Config/DefaultGame.ini", "Scripts/verify_data_world_profile_album.ps1"]
   - name: ui与交互
-    docs: ["GDD 系统分册/ui/主界面.md", "GDD 系统分册/ui/Sheet1.csv", "GDD 系统分册/ui/Sheet2.csv", "GDD 系统分册/交互.md"]
+    docs: ["GDD 系统分册/ui/主界面.md", "GDD 系统分册/ui/Sheet1.csv", "GDD 系统分册/ui/Sheet2.csv", "GDD 系统分册/ui/页头.csv", "GDD 系统分册/ui/提示文案.csv", "GDD 系统分册/交互.md"]
     refs: []
     scope: "全篇。Interface 层：WBP 蓝图控件查不了，但 C++ Widget/Subsystem/View DTO 与 Config/DefaultInput.ini 可查。两页均自标草稿，键位以钓鱼规则为准（抄鱼 F、抛竿左键）。工程 Docs/Development/UI_WBP拼装接口清单.md 只作参考。"
     code: ["Source/Catfishing/UI/**", "Source/Catfishing/Interaction/", "Source/Catfishing/Input/", "Config/DefaultInput.ini", "Content/UI/", "Content/Blueprint/"]

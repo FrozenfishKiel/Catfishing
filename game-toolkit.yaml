@@ -33,8 +33,9 @@ verify_entry: 项目 Scripts/ 下有一批 verify_*.py / verify_*.ps1（如 veri
 
 # 文档回填目标（game-toolkit 3.5.0 起的可选块）：设计文档类 skill 把结果路由到这些账本；缺了就只写报告
 doc_feedback:
-  rulings_ledger: C:/Users/lzcm7/OneDrive/GameProject/CatFishing/Feishu/裁决同步/设计修改记录.md   # 设计裁决账本，按日期记录、最新为准（本机绝对路径，镜像已移出仓库）
+  # rulings_ledger 与 owners 在设计项目的飞书镜像里，本块只接受相对工程根的路径，跨盘表达不了。
+  # 位置见 CLAUDE.md「设计文档」节：裁决账本＝镜像的 裁决同步/设计修改记录.md，负责人列＝镜像的 GDD 系统分册/GDD 系统分册.md。
+  # 用到它们的流程请显式传路径，别在这里写绝对路径——会让 project_env.py check 判 invalid。
   decision_ledger: Docs/Development/需求对齐差距清单.md        # 方向性问题去 §4
   engineering_log: Docs/Development/工程自补决策记录.md        # 工程自补决策台账
-  owners: C:/Users/lzcm7/OneDrive/GameProject/CatFishing/Feishu/GDD 系统分册/GDD 系统分册.md        # 分册一览的负责人列
   exclude_markers: [已废弃, 勿引, 旧版, Demo 不做, 候选, 不是 SSOT]
