@@ -19,6 +19,7 @@
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "Animation/AnimMontage.h"
+#include "Character/Animation/CatForceReactionComponent.h"
 #include "Condition/CatConditionComponent.h"
 #include "Condition/CatConditionPresentationComponent.h"
 #include "Equipment/CatEquipmentComponent.h"
@@ -83,6 +84,7 @@ ACatCharacter::ACatCharacter(const FObjectInitializer& ObjectInitializer)
 	CreateDefaultSubobject<UCatPhysicalEffortComponent>(TEXT("PhysicalEffort"));
 	PhysicalVisual=CreateDefaultSubobject<UCatPhysicsPrototypeVisualComponent>(TEXT("PhysicalVisual"));
 	ModelContacts=CreateDefaultSubobject<UCatModelContactComponent>(TEXT("ModelContacts"));
+	CreateDefaultSubobject<UCatForceReactionComponent>(TEXT("ForceReaction"));
 
 }
 

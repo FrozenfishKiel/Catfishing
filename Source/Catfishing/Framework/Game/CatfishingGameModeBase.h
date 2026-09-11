@@ -176,6 +176,8 @@ private:
 	friend class FCatGameModeCommandIntentGateTest;
 	/** 自动化夹具只在测试体内种入并检查私有准入/重连记录，用来证明 Logout、PreLogin 与白名单策略的 fail-closed 边界。 */
 	friend class FCatGameModeReconnectAdmissionWhitelistTest;
+	/** 验证真实 Logout 与退出 ACK 的竞争、精确连接身份和永久 Grant 等待边界。 */
+	friend class FCatHostExitDisconnectTest;
 	/** 自动化夹具只给 RunEnvironmentSocial 玩家入口闭环开放最小私有状态访问；测试用同一名 Active 玩家和普通夜晚 Phase 证明 Social 宽 gate 与 Chum 窄 gate 没有分叉，不把求助、保护牌和打窝拆成可独立关闭的小任务。 */
 	friend class FCatGameModeRunEnvironmentSocialPlayerEntrypointContractTest;
 #endif
@@ -263,8 +265,8 @@ private:
 #endif
 	/** 启动 gate 失败时保持 NotStarted、关闭写口并发布 StartupFailed，不回退为 C++ 状态机。 */
 	void FailRunStartup(const TCHAR* Reason);
-	/** Host exit 的远端 Destroy ACK 与 Profile Grant ACK 全部真实到达后广播 Ready；重复完成不会触发第二次 Online Destroy。 */
-	void CompleteHostExitAckWait();
+	/** 远端销毁 ACK 或精确 Logout 全齐且 Profile Grant ACK 全部到达后广播 Ready；重复完成不会触发第二次 Online Destroy。 */
+	void CompleteHostExitWait();
 	/** 把商店当前余额、货架库存和公开交易记录整体发布给 GameState。 */
 	void PublishShopEconomySnapshot();
 	/** 将服务器私有 StableNetId 解析成可复制的 PlayerState。 */
@@ -308,14 +310,14 @@ private:
 	FCatRunTeardownCompleted RunTeardownCompleted;
 	/** 已成功发布自然空间窝点的 Run+Day+Event+Anchor 键；只活在本 GameMode，防止环境刷新重复创建。 */
 	TSet<FString> SubmittedNaturalChumFieldKeys;
-	/** 当前 Host exit 仍待确认的远端 StableNetId；服务器只保存私有键，不复制原始身份。 */
-	TSet<FString> PendingHostExitAckStableNetIds;
-	/** 当前 Host exit 的关联 RequestId；远端 Destroy ACK 与最终 Grant ACK 进度必须匹配它。 */
+	/** 当前 Host exit 仍待离局的远端 StableNetId；销毁 ACK 或精确 Logout 消费，不代表永久 Grant 已落盘。 */
+	TSet<FString> PendingHostExitRemoteStableNetIds;
+	/** 当前 Host exit 的关联 RequestId；远端销毁 ACK 必须匹配，Logout 则必须匹配仍 Active 的 Controller。 */
 	FGuid ActiveHostExitRequestId;
 	/** 当前 Host exit 的 Online epoch；完成广播原样返回，迟到 ACK 不进入下一代。 */
 	int64 ActiveHostExitOperationEpoch = 0;
-	/** 当前 Host exit 是否已完成远端 Destroy ACK 与最终 Grant ACK 的真实等待；只有全部到达才会推进回主菜单链路。 */
-	bool bHostExitAckWaitComplete = false;
+	/** 当前 Host exit 是否已完成远端离局和最终 Grant ACK 等待；真实 Logout 不冒充远端销毁或档案落盘成功。 */
+	bool bHostExitWaitComplete = false;
 	/** 商店公开经济变化的服务器本机订阅；EndPlay 成对解除，避免失效 World 回调。 */
 	FDelegateHandle ShopPublicTransactionHandle;
 

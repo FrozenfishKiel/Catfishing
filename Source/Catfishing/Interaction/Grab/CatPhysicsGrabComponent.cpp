@@ -628,10 +628,10 @@ void UCatPhysicsGrabComponent::ApplyTraction(bool bLeft)
 			*GetNameSafe(Target->GetOwner()), *(Force / 100.0).ToCompactString(), *(Desired-Point).ToCompactString(), JumpWeight);
 	}
 	LastTractionForce[Index] = Force;
-	Physical->SetExternalForceFromAuthority(Contacts[Index], -Force, bVerticalTraction);
+	Physical->SetExternalForceFromAuthority(Contacts[Index], -Force, bVerticalTraction, false, bCharacterPair);
 	if (Receiver)
 	{
-		Receiver->SetExternalForceFromAuthority(Contacts[Index], Force, bVerticalTraction);
+		Receiver->SetExternalForceFromAuthority(Contacts[Index], Force, bVerticalTraction, false, bCharacterPair);
 		TractionReceiver[Index] = Receiver;
 	}
 	else if (Target->IsSimulatingPhysics(State.TargetBone)) Target->AddForceAtLocation(Force, Point, State.TargetBone);

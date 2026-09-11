@@ -10,6 +10,12 @@ class CATFISHINGEDITOR_API UCatCharacterVariantAuthoringLibrary : public UBluepr
 {
 	GENERATED_BODY()
 public:
+	/** Derive four body-space reactions from the audited lateral hit, preserving the standing heading and bone lengths. */
+	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Character")
+	static FString CreateForceReactionSourceClips(bool bRebuildGeneratedClips = false);
+	/** After retarget/normalization, create non-root-motion montages and wire the two existing character skins. */
+	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Character")
+	static FString FinalizeForceReactionAssets();
 	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Character")
 	static FString InspectBlueprint(const FString& AssetPath);
 	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Character")

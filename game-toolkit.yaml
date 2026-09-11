@@ -22,11 +22,19 @@ project_root: .
 # 技术栈：语言与框架
 tech_stack: C++ / Blueprint（模块：Catfishing、CatfishingEditor）
 
-# 源码范围：目录与排除项；写目录和排除规则，别写会会失效的文件计数
-source_scope: Source/ 下 .cpp/.h 为源码；Config/ 与 Scripts/ 可文本检查；Content/ 为资产不计入文本扫描；设计文档镜像在 Knowledge/Feishu/（飞书导出，只读）
+# 源码范围：目录与排除项；写目录和排除规则，别写会过期的文件计数
+source_scope: Source/ 下 .cpp/.h 为源码；Config/ 与 Scripts/ 可文本检查；Content/ 为资产不计入文本扫描；设计文档镜像不在本仓库，在 C:/Users/lzcm7/OneDrive/GameProject/CatFishing/Feishu/（飞书导出，只读，2026-09-10 移出）
 
 # 可检查程度：按「检查动作」分档，不要只按扩展名一刀切
 inspectability: 按检查动作分档：① 文件存在、路径与命名 —— 可直接检查；② C++、Config、Scripts/ 下的项目脚本 —— 可做静态文本检查；③ 资产的属性、类与引用 —— 需走引擎入口（见 verify_entry），按任务决定要不要做；④ Blueprint 图逻辑与运行时行为 —— 文本搜索证明不了，不得据此判定「未实现」，需专项证据。注意 .uasset/.umap 属于 ③④，能 Glob 到不等于读得懂
 
 # 验证入口：构建/测试/导出检查怎么跑。同一引擎不同项目可以完全不同
 verify_entry: 项目 Scripts/ 下有一批 verify_*.py / verify_*.ps1（如 verify_ui_reach_runtime.py 读引擎属性、verify_delivery_harness_assets.ps1 做文件级检查），按任务挑对应的那个。**尚未确认它们的调用方式与通过判据**，用前先读脚本和项目构建说明。注意仓库里的 Catfishing.sln / Automation_Catfishing.sln 是 UE 自动生成的，不能用 dotnet build
+
+# 文档回填目标（game-toolkit 3.5.0 起的可选块）：设计文档类 skill 把结果路由到这些账本；缺了就只写报告
+doc_feedback:
+  rulings_ledger: C:/Users/lzcm7/OneDrive/GameProject/CatFishing/Feishu/裁决同步/设计修改记录.md   # 设计裁决账本，按日期记录、最新为准（本机绝对路径，镜像已移出仓库）
+  decision_ledger: Docs/Development/需求对齐差距清单.md        # 方向性问题去 §4
+  engineering_log: Docs/Development/工程自补决策记录.md        # 工程自补决策台账
+  owners: C:/Users/lzcm7/OneDrive/GameProject/CatFishing/Feishu/GDD 系统分册/GDD 系统分册.md        # 分册一览的负责人列
+  exclude_markers: [已废弃, 勿引, 旧版, Demo 不做, 候选, 不是 SSOT]

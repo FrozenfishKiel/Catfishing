@@ -292,7 +292,7 @@ void ACatfishingGameModeBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	ClearDayDeadline();
 	GetWorldTimerManager().ClearTimer(PersistenceCheckpointTimerHandle);
 	PersistenceCheckpointTimerHandle.Invalidate();
-	PendingHostExitAckStableNetIds.Reset();
+	PendingHostExitRemoteStableNetIds.Reset();
 	if (UWorld* World = GetWorld())
 	{
 		if (UCatShopEconomyService* Shop = World->GetSubsystem<UCatShopEconomyService>())
@@ -656,6 +656,7 @@ void ACatfishingGameModeBase::HandleCharacterUnavailable(ACatCharacter* Characte
 // Logout 流程：先对精确 Active 连接完成或复核末次持久化捕获，再移除准入记录与 Pawn 通知；失效连接不能覆盖新连接的存档，之后继续原有重连 TTL。
 void ACatfishingGameModeBase::Logout(AController* Exiting)
 {
+	bool bHostExitRemoteDeparted = false;
 	const APlayerState* PlayerState = Exiting ? Exiting->PlayerState : nullptr;
 	if (PlayerState && PlayerState->GetUniqueId().IsValid())
 	{
@@ -674,6 +675,18 @@ void ACatfishingGameModeBase::Logout(AController* Exiting)
 			}
 			Exiting->GetOnNewPawnNotifier().RemoveAll(this);
 			AdmissionRecords.Remove(StableNetIdKey);
+			// DestroySession/ClientTravel 可先断开 Steam 连接，末次 Reliable ACK 不保证能送达。
+			// 只消费准入记录精确匹配的真实 Logout；这是离线事实，不是客户端 Session 或永久档案写入成功。
+			if (HasAuthority() && ActiveHostExitRequestId.IsValid() && !bHostExitWaitComplete
+				&& PendingHostExitRemoteStableNetIds.Remove(StableNetIdKey) > 0)
+			{
+				bHostExitRemoteDeparted = true;
+				UE_LOG(LogCatRun, Log,
+					TEXT("Event=run_teardown_remote_departed RequestId=%s Epoch=%lld World=%s NetMode=%d Authority=1 LocalRole=%d Controller=%s PlayerId=%d Result=LogoutObserved PendingRemoteExits=%d"),
+					*ActiveHostExitRequestId.ToString(EGuidFormats::DigitsWithHyphens), ActiveHostExitOperationEpoch,
+					*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()),
+					*GetNameSafe(Exiting), PlayerState->GetPlayerId(), PendingHostExitRemoteStableNetIds.Num());
+			}
 			const UCatOnlineSettings* OnlineSettings = GetDefault<UCatOnlineSettings>();
 			const bool bVoluntary = VoluntaryLeaveStableNetIds.Remove(StableNetIdKey) > 0;
 			const bool bKeepVoluntary = bVoluntary
@@ -698,6 +711,11 @@ void ACatfishingGameModeBase::Logout(AController* Exiting)
 		}
 	}
 	Super::Logout(Exiting);
+	if (bHostExitRemoteDeparted)
+	{
+		// 完成引擎 Logout 和身份清理后才允许 Online 的完成委托开始销毁 Session/旅行。
+		NotifyHostExitGrantAckProgress();
+	}
 }
 
 // 主动离局标记流程：只接受当前 Active Controller，读取继承 UniqueId 后写入短生命周期集合；Logout 精确消费，失效连接不能标记新占用。
@@ -1800,7 +1818,7 @@ void ACatfishingGameModeBase::FailRunStartup(const TCHAR* Reason)
 		*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision, Reason);
 }
 
-// Host teardown 流程：先重放已 Ready 的新 Online 关联键，Pending 期则只接受原 RequestId/epoch；首次请求必须拿到 Imprint、Social 与 Fishing 等当前服务。各服务按依赖顺序关闭不可逆命令，Imprint 先最终重投 Grant，然后才关 Run/Timer/StateTree、发 HostExit 并等远端 Destroy ACK；只有远端 ACK 与 durable Grant ACK 全齐才 Ready，不用计时器把等待伪装成完成。
+// Host teardown 流程：先重放已 Ready 的新 Online 关联键，Pending 期则只接受原 RequestId/epoch；首次请求必须拿到 Imprint、Social 与 Fishing 等当前服务。各服务按依赖顺序关闭不可逆命令，Imprint 先最终重投 Grant，然后才关 Run/Timer/StateTree、发 HostExit 并等远端销毁回执或真实 Logout；所有远端已收口且 durable Grant ACK 全齐才 Ready，不用计时器把等待伪装成完成。
 FCatRunTeardownResult ACatfishingGameModeBase::RequestRunTeardown(const FCatRunTeardownRequest& Request)
 {
 	FCatRunTeardownResult Result;
@@ -1815,7 +1833,7 @@ FCatRunTeardownResult ACatfishingGameModeBase::RequestRunTeardown(const FCatRunT
 	if (ActiveHostExitRequestId.IsValid())
 	{
 		// 本地领域与统一 ACK 已完成后允许 Online 用新 RequestId/epoch 重试 Destroy/Frontend；返回新关联键但绝不重做清理或再次通知远端。
-		if (bHostExitAckWaitComplete && RunPublicState.bTeardownComplete)
+		if (bHostExitWaitComplete && RunPublicState.bTeardownComplete)
 		{
 			Result.Status = ECatRunTeardownStatus::Ready;
 			return Result;
@@ -1872,30 +1890,41 @@ FCatRunTeardownResult ACatfishingGameModeBase::RequestRunTeardown(const FCatRunT
 	RunPublicState.EndReason = ECatRunEndReason::HostExit;
 	ActiveHostExitRequestId = Request.RequestId;
 	ActiveHostExitOperationEpoch = Request.OperationEpoch;
-	bHostExitAckWaitComplete = RemoteControllers.IsEmpty() && bGrantAcksComplete;
-	RunPublicState.bTeardownComplete = bHostExitAckWaitComplete;
-	PendingHostExitAckStableNetIds.Reset();
+	bHostExitWaitComplete = RemoteControllers.IsEmpty() && bGrantAcksComplete;
+	RunPublicState.bTeardownComplete = bHostExitWaitComplete;
+	PendingHostExitRemoteStableNetIds.Reset();
 	for (int32 Index = 0; Index < RemoteControllers.Num(); ++Index)
 	{
-		PendingHostExitAckStableNetIds.Add(RemoteStableNetIds[Index]);
+		PendingHostExitRemoteStableNetIds.Add(RemoteStableNetIds[Index]);
 		RemoteControllers[Index]->ClientPrepareForHostExit(Request.RequestId);
+		UE_LOG(LogCatRun, Log,
+			TEXT("Event=run_teardown_remote_exit_requested RequestId=%s Epoch=%lld World=%s NetMode=%d Authority=1 LocalRole=%d Controller=%s PlayerId=%d Result=RpcSubmitted"),
+			*Request.RequestId.ToString(EGuidFormats::DigitsWithHyphens), Request.OperationEpoch,
+			*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()),
+			*GetNameSafe(RemoteControllers[Index]), RemoteControllers[Index]->PlayerState
+				? RemoteControllers[Index]->PlayerState->GetPlayerId() : INDEX_NONE);
 	}
 	++RunPublicState.Revision;
 	RefreshEnvironmentAndPublish();
-	Result.Status = bHostExitAckWaitComplete ? ECatRunTeardownStatus::Ready : ECatRunTeardownStatus::Pending;
+	Result.Status = bHostExitWaitComplete ? ECatRunTeardownStatus::Ready : ECatRunTeardownStatus::Pending;
 	const int32 PendingGrantAcks = ImprintService->GetPendingGrantAckCount();
-	UE_LOG(LogCatRun, Log, TEXT("Event=run_teardown_%s RequestId=%s Epoch=%lld Revision=%lld PendingRemoteAcks=%d PendingGrantAcks=%d"),
-		bHostExitAckWaitComplete ? TEXT("ready") : TEXT("pending"),
+	UE_LOG(LogCatRun, Log, TEXT("Event=run_teardown_%s RequestId=%s Epoch=%lld Revision=%lld PendingRemoteExits=%d PendingGrantAcks=%d"),
+		bHostExitWaitComplete ? TEXT("ready") : TEXT("pending"),
 		*Request.RequestId.ToString(EGuidFormats::DigitsWithHyphens), Request.OperationEpoch, RunPublicState.Revision,
-		PendingHostExitAckStableNetIds.Num(), PendingGrantAcks);
+		PendingHostExitRemoteStableNetIds.Num(), PendingGrantAcks);
 	return Result;
 }
 
-// Host exit ACK 流程：验证当前等待、RequestId 与 Active Controller 身份后移除精确 StableNetId；最后一个远端 ACK 到达后还要复核 durable Grant ACK，二者都齐才提前完成。
+// Host exit ACK 流程：验证当前等待、RequestId 与 Active Controller 身份后移除精确 StableNetId；远端等待清空后还要复核 durable Grant ACK；Logout 也能独立确认远端已离线。
 void ACatfishingGameModeBase::AcknowledgeHostExitClient(AController* Controller, const FGuid RequestId)
 {
-	if (bHostExitAckWaitComplete || RequestId != ActiveHostExitRequestId || !IsControllerActive(Controller))
+	if (!HasAuthority() || !RequestId.IsValid() || bHostExitWaitComplete
+		|| RequestId != ActiveHostExitRequestId || !IsControllerActive(Controller))
 	{
+		UE_LOG(LogCatRun, Log,
+			TEXT("Event=run_teardown_remote_ack_ignored RequestId=%s Epoch=%lld World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s Result=InactiveOrMismatched"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), ActiveHostExitOperationEpoch,
+			*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority(), static_cast<int32>(GetLocalRole()), *GetNameSafe(Controller));
 		return;
 	}
 	const APlayerState* CurrentPlayerState = Controller ? Controller->PlayerState : nullptr;
@@ -1904,38 +1933,50 @@ void ACatfishingGameModeBase::AcknowledgeHostExitClient(AController* Controller,
 		return;
 	}
 	const FString StableNetId = MakeStableNetIdKey(CurrentPlayerState->GetUniqueId());
-	if (PendingHostExitAckStableNetIds.Remove(StableNetId) > 0)
+	if (PendingHostExitRemoteStableNetIds.Remove(StableNetId) > 0)
 	{
+		UE_LOG(LogCatRun, Log,
+			TEXT("Event=run_teardown_remote_ack_received RequestId=%s Epoch=%lld World=%s NetMode=%d Authority=1 LocalRole=%d Controller=%s PlayerId=%d Result=ClientDestroyAcknowledged PendingRemoteExits=%d"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), ActiveHostExitOperationEpoch,
+			*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()),
+			*GetNameSafe(Controller), CurrentPlayerState->GetPlayerId(), PendingHostExitRemoteStableNetIds.Num());
 		NotifyHostExitGrantAckProgress();
 	}
 }
 
-// Grant ACK 进度流程：只有当前确有 Host exit 等待、远端 Destroy ACK 为空且 Imprint 的真实 ACK 全齐才提前完成；不主动重投或篡改投递记录。
+// Grant ACK 进度流程：只有当前确有 Host exit 等待、远端离局等待为空且 Imprint 的真实 ACK 全齐才完成；不主动重投或篡改投递记录。
 void ACatfishingGameModeBase::NotifyHostExitGrantAckProgress()
 {
-	if (bHostExitAckWaitComplete || !ActiveHostExitRequestId.IsValid() || !PendingHostExitAckStableNetIds.IsEmpty())
+	if (bHostExitWaitComplete || !ActiveHostExitRequestId.IsValid() || !PendingHostExitRemoteStableNetIds.IsEmpty())
 	{
 		return;
 	}
 	const UCatRunImprintService* ImprintService = GetWorld() ? GetWorld()->GetSubsystem<UCatRunImprintService>() : nullptr;
 	if (ImprintService && ImprintService->AreAllGrantAcksComplete())
 	{
-		CompleteHostExitAckWait();
+		CompleteHostExitWait();
+	}
+	else
+	{
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=run_teardown_grants_pending RequestId=%s Epoch=%lld World=%s NetMode=%d Authority=%d LocalRole=%d PendingGrantAcks=%d Result=%s"),
+			*ActiveHostExitRequestId.ToString(EGuidFormats::DigitsWithHyphens), ActiveHostExitOperationEpoch,
+			*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority(), static_cast<int32>(GetLocalRole()),
+			ImprintService ? ImprintService->GetPendingGrantAckCount() : INDEX_NONE,
+			ImprintService ? TEXT("DurableAckRequired") : TEXT("ImprintServiceMissing"));
 	}
 }
 
-// Host exit ACK 完成流程：只在远端 Destroy ACK 与最终 Grant ACK 全部真实到达后发布 teardown complete；重复调用保持幂等。
-void ACatfishingGameModeBase::CompleteHostExitAckWait()
+// Host exit 完成流程：只在远端已回销毁 ACK 或真实 Logout、最终 Grant ACK 全齐后发布 teardown complete；重复调用保持幂等。
+void ACatfishingGameModeBase::CompleteHostExitWait()
 {
-	if (bHostExitAckWaitComplete || !ActiveHostExitRequestId.IsValid() || ActiveHostExitOperationEpoch <= 0)
+	const UCatRunImprintService* ImprintService = GetWorld() ? GetWorld()->GetSubsystem<UCatRunImprintService>() : nullptr;
+	if (!HasAuthority() || bHostExitWaitComplete || !ActiveHostExitRequestId.IsValid() || ActiveHostExitOperationEpoch <= 0
+		|| !PendingHostExitRemoteStableNetIds.IsEmpty() || !ImprintService || !ImprintService->AreAllGrantAcksComplete())
 	{
 		return;
 	}
-	bHostExitAckWaitComplete = true;
-	const int32 MissingAckCount = PendingHostExitAckStableNetIds.Num();
-	const UCatRunImprintService* ImprintService = GetWorld() ? GetWorld()->GetSubsystem<UCatRunImprintService>() : nullptr;
-	const int32 MissingGrantAckCount = ImprintService ? ImprintService->GetPendingGrantAckCount() : 0;
-	PendingHostExitAckStableNetIds.Reset();
+	bHostExitWaitComplete = true;
 	RunPublicState.bTeardownComplete = true;
 	++RunPublicState.Revision;
 	RefreshEnvironmentAndPublish();
@@ -1943,10 +1984,10 @@ void ACatfishingGameModeBase::CompleteHostExitAckWait()
 	Result.RequestId = ActiveHostExitRequestId;
 	Result.OperationEpoch = ActiveHostExitOperationEpoch;
 	Result.Status = ECatRunTeardownStatus::Ready;
-	RunTeardownCompleted.Broadcast(Result);
-	UE_LOG(LogCatRun, Log, TEXT("Event=run_teardown_acks_complete RequestId=%s Epoch=%lld MissingRemoteAcks=%d MissingGrantAcks=%d"),
+	UE_LOG(LogCatRun, Log, TEXT("Event=run_teardown_complete RequestId=%s Epoch=%lld World=%s NetMode=%d Authority=1 LocalRole=%d PendingRemoteExits=0 PendingGrantAcks=0 Result=Ready"),
 		*Result.RequestId.ToString(EGuidFormats::DigitsWithHyphens), Result.OperationEpoch,
-		MissingAckCount, MissingGrantAckCount);
+		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()));
+	RunTeardownCompleted.Broadcast(Result);
 }
 
 // Teardown 委托读取流程：返回 GameMode 生命周期内的唯一完成广播；订阅者必须自行比对 RequestId/epoch。
@@ -2336,14 +2377,14 @@ bool ACatfishingGameModeBase::ApplyDebugForceNextDay()
 	}
 	const ECatRunPhase PreviousPhase = RunPublicState.Phase.Phase;
 	if (RunPublicState.EndReason == ECatRunEndReason::HostExit || ActiveHostExitRequestId.IsValid()
-		|| !PendingHostExitAckStableNetIds.IsEmpty() || RunPublicState.bTeardownComplete)
+		|| !PendingHostExitRemoteStableNetIds.IsEmpty() || RunPublicState.bTeardownComplete)
 	{
 		UE_LOG(LogCatRun, Warning,
-			TEXT("Event=run_environment_social_debug_force_next_day_rejected Reason=HostExitTeardownActive RunId=%s Revision=%lld Day=%d Phase=%s EndReason=%s PendingRemoteAcks=%d TeardownComplete=%s"),
+			TEXT("Event=run_environment_social_debug_force_next_day_rejected Reason=HostExitTeardownActive RunId=%s Revision=%lld Day=%d Phase=%s EndReason=%s PendingRemoteExits=%d TeardownComplete=%s"),
 			*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens),
 			RunPublicState.Revision, RunPublicState.Phase.DayIndex,
 			*UEnum::GetValueAsString(PreviousPhase), *UEnum::GetValueAsString(RunPublicState.EndReason),
-			PendingHostExitAckStableNetIds.Num(),
+			PendingHostExitRemoteStableNetIds.Num(),
 			RunPublicState.bTeardownComplete ? TEXT("true") : TEXT("false"));
 		return false;
 	}
