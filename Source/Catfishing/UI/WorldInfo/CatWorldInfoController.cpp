@@ -10,11 +10,19 @@
 #include "Interaction/CatInteractionTargetingComponent.h"
 #include "Logging/CatLog.h"
 
-// 绑定流程：先拆旧视图，再接纳本地玩家；远端 Controller 不在本进程创建别人的信息牌。
+// 绑定流程：先解绑旧玩家并清空视图与观察缓存；空值或远端 Controller 到此结束，保持未绑定状态。
+// 本地 Controller 写入弱引用后记录所属世界、网络角色、玩家对象名与固定屏幕布局模式；视图留待首次 Tick 创建。
+// WorldInfoScreenLayoutBound 每次成功绑定都会记录，只证明本地绑定已建立，不代表 WBP 已加载或面板已显示。
 void UCatWorldInfoController::Bind(APlayerController* Controller)
 {
 	Unbind();
-	if (Controller && Controller->IsLocalController()) BoundController = Controller;
+	if (Controller && Controller->IsLocalController())
+	{
+		BoundController = Controller;
+		UE_LOG(LogCatUI, Log, TEXT("Event=WorldInfoScreenLayoutBound World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Layout=FixedScreenColumn"),
+			*GetNameSafe(Controller->GetWorld()), static_cast<int32>(Controller->GetNetMode()), Controller->HasAuthority(),
+			static_cast<int32>(Controller->GetLocalRole()), *Controller->GetName());
+	}
 }
 
 // 解绑流程：先将 Targeting 的额外观察距离归零，再移除每张正式 WBP 并清弱引用和刷新计时；不写入源组件或玩家输入状态。
@@ -153,8 +161,12 @@ void UCatWorldInfoController::RefreshCandidates()
 	}
 }
 
-// 显示帧：低频更新候选并按焦点/优先级/距离排序；先投影并排除离屏，再按序号重读快照，测量正式 WBP 后寻找空位。
-// 黑幕与模态页期间整层收起；锚点离屏直接隐藏，否则按上、下、右、左尝试完整放置，均越界或遮挡高优先级牌时隐藏。
+// 显示帧流程：
+// 1. 未绑定则返回；否则累计刷新倒计时，每 0.2 秒更新候选，随后按焦点、优先级、距离和源路径排序。
+// 2. 无 Pawn、显示鼠标光标或日切输入被阻断时收起整层；每张牌先收起，再排除离开视口、失效或策略隐藏的源。
+// 3. 通知序号变化时重读快照并更新已消费序号；读取失败保持隐藏。可显示的 WBP 先恢复布局参与，再预排版测量尺寸。
+// 4. 按玩家视口与面板尺寸排入屏幕列，不读取物体投影；尺寸无效或放不下的牌收起，继续尝试后面的牌。
+// 5. 成功放置后写入左上角对齐、尺寸与位置，再推进下一张牌的纵向起点；此处不缩放面板或裁切正文。
 void UCatWorldInfoController::Tick(const float DeltaTime)
 {
 	APlayerController* Controller = BoundController.Get();
@@ -177,7 +189,11 @@ void UCatWorldInfoController::Tick(const float DeltaTime)
 		return GetPathNameSafe(A.Source.Get()) < GetPathNameSafe(B.Source.Get());
 	});
 	const FVector2D ViewportSize = UWidgetLayoutLibrary::GetPlayerScreenWidgetGeometry(Controller).GetLocalSize();
-	TArray<FBox2D> Occupied;
+	// 视口局部尺寸、控件期望尺寸及以下偏移均使用本地玩家屏幕的 UMG 布局单位，不是物理像素。
+	// 列的默认左边位于视口水平中心右侧 48 单位，顶部位于高度的 20%；屏幕边距为 16，牌间距为 8。
+	const double ScreenMargin = 16.0;
+	double NextTop = ViewportSize.Y * 0.2;
+	bool bColumnStarted = false;
 	for (FCatWorldInfoDisplay& Entry : Displays)
 	{
 		UCatWorldInfoWidget* Widget = Entry.Widget;
@@ -186,9 +202,6 @@ void UCatWorldInfoController::Tick(const float DeltaTime)
 		Widget->SetVisibility(ESlateVisibility::Collapsed);
 		if (bSuppressed || !Widget->IsInViewport() || !Source || !Source->GetOwner() || Source->GetOwner()->IsHidden()
 			|| !Source->bInfoEnabled || Entry.Detail == ECatWorldInfoDetail::Hidden) continue;
-		FVector2D Position;
-		if (!UWidgetLayoutLibrary::ProjectWorldLocationToWidgetPosition(Controller, Source->GetComponentLocation(), Position, true)) continue;
-		if (Position.X < 0 || Position.Y < 0 || Position.X > ViewportSize.X || Position.Y > ViewportSize.Y) continue;
 		if (Entry.RenderedSerial != Source->GetInfoSerial())
 		{
 			FCatWorldInfoViewData Data;
@@ -199,33 +212,26 @@ void UCatWorldInfoController::Tick(const float DeltaTime)
 		Widget->SetVisibility(ESlateVisibility::HitTestInvisible);
 		Widget->ForceLayoutPrepass();
 		const FVector2D Size = Widget->GetDesiredSize();
-		FVector2D TopLeft = FVector2D::ZeroVector;
-		FBox2D Rect(ForceInit);
-		bool bPlaced = false;
-		// 只围绕仍在屏内的真实锚点找空位，不截断正文或夹向屏幕边缘；侧放允许小窗口容纳较高的详情页。
-		const FVector2D Candidates[] = {
-			Position - FVector2D(Size.X * 0.5, Size.Y + 8),
-			Position + FVector2D(-Size.X * 0.5, 8),
-			Position + FVector2D(8, -Size.Y * 0.5),
-			Position - FVector2D(Size.X + 8, Size.Y * 0.5)
-		};
-		for (const FVector2D& Candidate : Candidates)
-		{
-			Rect = FBox2D(Candidate, Candidate + Size);
-			if (Size.X <= 0 || Size.Y <= 0 || Rect.Min.X < 0 || Rect.Min.Y < 0 || Rect.Max.X > ViewportSize.X || Rect.Max.Y > ViewportSize.Y
-				|| Occupied.ContainsByPredicate([&](const FBox2D& Other) { return Rect.Intersect(Other); })) continue;
-			TopLeft = Candidate;
-			bPlaced = true;
-			break;
-		}
-		if (!bPlaced)
+		if (Size.ContainsNaN() || ViewportSize.ContainsNaN() || Size.X <= 0 || Size.Y <= 0
+			|| Size.X > ViewportSize.X - ScreenMargin * 2 || Size.Y > ViewportSize.Y - ScreenMargin * 2)
 		{
 			Widget->SetVisibility(ESlateVisibility::Collapsed);
 			continue;
 		}
+		// 只有本帧首张可放置牌调整纵向起点以完整容纳自身；后续牌沿用累积高度，放不下时不占空间。
+		if (!bColumnStarted) NextTop = FMath::Clamp(NextTop, ScreenMargin, ViewportSize.Y - Size.Y - ScreenMargin);
+		if (NextTop + Size.Y > ViewportSize.Y - ScreenMargin)
+		{
+			Widget->SetVisibility(ESlateVisibility::Collapsed);
+			continue;
+		}
+		// 横向对每张牌分别夹限；小窗口或较宽面板会向左收边，因此不保证左边始终在准心右侧或各牌完全对齐。
+		const FVector2D TopLeft(FMath::Clamp(ViewportSize.X * 0.5 + 48.0, ScreenMargin, ViewportSize.X - Size.X - ScreenMargin), NextTop);
 		Widget->SetAlignmentInViewport(FVector2D::ZeroVector);
 		Widget->SetDesiredSizeInViewport(Size);
+		// TopLeft 已是 UMG 布局坐标，关闭此接口的 DPI 移除步骤，避免再次换算导致位置偏移。
 		Widget->SetPositionInViewport(TopLeft, false);
-		Occupied.Add(Rect);
+		NextTop += Size.Y + 8.0;
+		bColumnStarted = true;
 	}
 }
