@@ -4,6 +4,8 @@
 #include "Tests/AutomationEditorCommon.h"
 #include "Animation/AnimInstance.h"
 #include "Character/CatCharacter.h"
+#include "Character/CatCharacterMovementComponent.h"
+#include "Engine/NetDriver.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Character/Physics/CatPhysicsPrototypeVisualComponent.h"
 #include "Camera/CameraActor.h"
@@ -39,6 +41,98 @@
 
 namespace CatLocomotionNetwork
 {
+	/** Real PIE net drivers with delayed/lost packets. Proves response before authority receipt,
+	 * eventual reconciliation, predicted jump and rejection of pre-teleport saved input. */
+	class FPredictionVerify final : public IAutomationLatentCommand
+	{
+	public:
+		explicit FPredictionVerify(FAutomationTestBase* InTest) : Test(InTest), Started(FPlatformTime::Seconds()) {}
+		bool Update() override
+		{
+			const double Now = FPlatformTime::Seconds();
+			if (Now - Started > 60) { Test->AddError(FString::Printf(TEXT("prediction network timeout Stage=%d"), Stage)); return true; }
+			UWorld* Server = nullptr; UWorld* Client = nullptr;
+			for (const auto& Context : GEngine->GetWorldContexts())
+				if (Context.WorldType == EWorldType::PIE && Context.World())
+				{
+					if (Context.World()->GetNetMode() == NM_ListenServer) Server = Context.World();
+					if (Context.World()->GetNetMode() == NM_Client) Client = Context.World();
+				}
+			if (!Server || !Client) return false;
+			auto* PC = Client->GetFirstPlayerController();
+			auto* Local = PC ? Cast<ACatCharacter>(PC->GetPawn()) : nullptr;
+			if (!Local || !PC->PlayerState || PC->AcknowledgedPawn != Local) return false;
+			ACatCharacter* Remote = nullptr;
+			for (TActorIterator<ACatCharacter> It(Server); It; ++It)
+				if (It->GetPlayerState() && It->GetPlayerState()->GetPlayerId() == PC->PlayerState->GetPlayerId()) Remote = *It;
+			if (!Remote) return false;
+			auto* LocalBody = Local->GetPhysicalBodyComponent(); auto* RemoteBody = Remote->GetPhysicalBodyComponent();
+			if (Stage == 0)
+			{
+				PC->SetActorTickEnabled(false);
+				for (auto It = Server->GetPlayerControllerIterator(); It; ++It) if (It->Get()) It->Get()->SetActorTickEnabled(false);
+				for (TActorIterator<ACatCharacter> It(Server); It; ++It)
+					It->GetPhysicalBodyComponent()->TeleportBodyFromAuthority(FTransform(FRotator::ZeroRotator,
+						FVector(*It == Remote ? 0 : -500, -150, It->GetPhysicalBodyComponent()->GetStandRootHeightCm())), TEXT("PredictionSetup"));
+				Stage = 1; StageStarted = Now; return false;
+			}
+			if (Stage == 1)
+			{
+				if (Now - StageStarted < 1 || LocalBody->GetControlEpoch() != RemoteBody->GetControlEpoch()
+					|| !LocalBody->IsGrounded() || !RemoteBody->IsGrounded()) return false;
+				FPacketSimulationSettings Packets; Packets.PktLag = 120; Packets.PktLagVariance = 20; Packets.PktLoss = 5;
+				Server->GetNetDriver()->SetPacketSimulationSettings(Packets);
+				Client->GetNetDriver()->SetPacketSimulationSettings(Packets);
+				StartLocal = Local->GetActorLocation(); StartRemote = Remote->GetActorLocation();
+				LocalBody->SetMoveIntent(FVector::ForwardVector);
+				Stage = 2; StageStarted = Now; return false;
+			}
+			if (Stage == 2)
+			{
+				const double Travel = Local->GetActorLocation().X - StartLocal.X;
+				if (Travel > .5 && FMath::Abs(Remote->GetActorLocation().X - StartRemote.X) < .1) bMovedBeforeServer = true;
+				if (Now - StageStarted < 3) return false;
+				Test->TestTrue(TEXT("owning client moves before delayed ServerMove arrives"), bMovedBeforeServer);
+				Test->TestTrue(TEXT("authority eventually executes timestamped inputs"), Remote->GetActorLocation().X > StartRemote.X + 100);
+				LocalBody->SetMoveIntent(FVector::ZeroVector);
+				Stage = 3; StageStarted = Now; return false;
+			}
+			if (Stage == 3)
+			{
+				if (Now - StageStarted < 1.5) return false;
+				Test->TestTrue(TEXT("lost/delayed inputs converge after stopping"), FVector::Dist(Local->GetActorLocation(), Remote->GetActorLocation()) < 3);
+				Test->TestTrue(TEXT("both endpoints stop without residual predicted velocity"), LocalBody->GetVelocity().Size2D() < 2 && RemoteBody->GetVelocity().Size2D() < 2);
+				StartLocal = Local->GetActorLocation(); StartRemote = Remote->GetActorLocation();
+				LocalBody->RequestJump(); Stage = 4; StageStarted = Now; return false;
+			}
+			if (Stage == 4)
+			{
+				if (Local->GetActorLocation().Z > StartLocal.Z + 1 && FMath::Abs(Remote->GetActorLocation().Z - StartRemote.Z) < .1) bJumpedBeforeServer = true;
+				if (Now - StageStarted < 2) return false;
+				Test->TestTrue(TEXT("jump predicts before authority response"), bJumpedBeforeServer);
+				Test->TestTrue(TEXT("predicted jump lands on both endpoints"), LocalBody->IsGrounded() && RemoteBody->IsGrounded());
+				LocalBody->SetMoveIntent(FVector::ForwardVector); Stage = 5; StageStarted = Now; return false;
+			}
+			if (Stage == 5)
+			{
+				if (Now - StageStarted < .4) return false;
+				LocalBody->SetMoveIntent(FVector::ZeroVector);
+				RemoteBody->TeleportBodyFromAuthority(FTransform(FRotator::ZeroRotator, FVector(0, 200, RemoteBody->GetStandRootHeightCm())), TEXT("PredictionEpochReset"));
+				Stage = 6; StageStarted = Now; return false;
+			}
+			if (Now - StageStarted < 2) return false;
+			Test->TestEqual(TEXT("control epoch replicated to predicting owner"), LocalBody->GetControlEpoch(), RemoteBody->GetControlEpoch());
+			Test->TestTrue(TEXT("old saved movement cannot undo teleport"), FVector::Dist(Local->GetActorLocation(), Remote->GetActorLocation()) < 3 && FMath::Abs(Local->GetActorLocation().Y - 200) < 1);
+			Test->AddInfo(TEXT("Event=cmc_prediction_network_verified LagMs=120 VarianceMs=20 LossPercent=5 Layers=runtime_behavior"));
+			return true;
+		}
+	private:
+		FAutomationTestBase* Test;
+		double Started, StageStarted = 0;
+		int32 Stage = 0;
+		FVector StartLocal, StartRemote;
+		bool bMovedBeforeServer = false, bJumpedBeforeServer = false;
+	};
 	class FRestore final : public IAutomationLatentCommand
 	{
 	public:
@@ -111,7 +205,7 @@ namespace CatLocomotionNetwork
 			if (!Server || !Client) return false;
 			APlayerController* Local = Client->GetFirstPlayerController();
 			auto* ClientCat = Local ? Cast<ACatCharacter>(Local->GetPawn()) : nullptr;
-			if (!ClientCat || !Local->PlayerState) return false;
+			if (!ClientCat || !Local->PlayerState || Local->AcknowledgedPawn != ClientCat) return false;
 			ACatCharacter* ServerCat = nullptr;
 			for (TActorIterator<ACatCharacter> It(Server); It; ++It)
 				if (It->GetPlayerState() && It->GetPlayerState()->GetPlayerId() == Local->PlayerState->GetPlayerId()) ServerCat = *It;
@@ -161,7 +255,7 @@ namespace CatLocomotionNetwork
 				for (auto* Visual : {ServerVisual, ClientVisual})
 					Test->TestTrue(TEXT("formal ABP contributes standing foot placement on each endpoint"), Visual->GetLocomotionObservation().GroundMask == 15);
 				Test->TestTrue(TEXT("server retains sole CMC movement authority"), ServerBody->UsesCharacterMovement() && !ServerBody->GetBody()->IsSimulatingPhysics());
-				Test->TestFalse(TEXT("client foot IK consumes snapshots without enabling local body simulation"), ClientBody->GetBody()->IsSimulatingPhysics());
+				Test->TestFalse(TEXT("client foot IK consumes CMC prediction without enabling a Chaos body"), ClientBody->GetBody()->IsSimulatingPhysics());
 				if (Test->HasAnyErrors()) return true;
 				if (FApp::CanEverRender()) Capture(Client, bCute ? TEXT("CuteStandingIK") : TEXT("FormalStandingIK"));
 				Stage = 2;
@@ -286,7 +380,7 @@ namespace CatLocomotionNetwork
 
 }
 
-static bool RunLocomotionNetwork(FAutomationTestBase* Test, bool bCute)
+static bool RunLocomotionNetwork(FAutomationTestBase* Test, bool bCute, bool bPrediction = false)
 {
 	const FString ClassPath = bCute ? TEXT("/Game/Character/BP_CuteCatCharacter.BP_CuteCatCharacter_C") : TEXT("/Game/Character/BP_CatCharacter.BP_CatCharacter_C");
 	if (!Test->TestTrue(TEXT("requires an idle validation editor"), GEditor && GEngine && !GEditor->PlayWorld)) return false;
@@ -326,7 +420,8 @@ static bool RunLocomotionNetwork(FAutomationTestBase* Test, bool bCute)
 		if (Driver.DefName == TEXT("GameNetDriver"))
 			Driver.DriverClassName = Driver.DriverClassNameFallback = TEXT("/Script/OnlineSubsystemUtils.IpNetDriver");
 	ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
-	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<CatLocomotionNetwork::FVerify>(Test,bCute));
+	if (bPrediction) FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<CatLocomotionNetwork::FPredictionVerify>(Test));
+	else FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<CatLocomotionNetwork::FVerify>(Test,bCute));
 	ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
 	FAutomationTestFramework::Get().EnqueueLatentCommand(Restore);
 	return true;
@@ -341,4 +436,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatCuteLocomotionNetworkTest,
 	"Catfishing.Locomotion.Network.CuteCatStrideAndReachOnServerAndClient",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 bool FCatCuteLocomotionNetworkTest::RunTest(const FString& Parameters) { return RunLocomotionNetwork(this,true); }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatCMCPredictionNetworkTest,
+	"Catfishing.CMC.Network.CuteCatPredictsAndReconcilesWithLagAndLoss",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FCatCMCPredictionNetworkTest::RunTest(const FString& Parameters) { return RunLocomotionNetwork(this,true,true); }
 #endif

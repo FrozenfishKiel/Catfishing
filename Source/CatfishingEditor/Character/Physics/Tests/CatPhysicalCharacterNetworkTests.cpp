@@ -251,7 +251,7 @@ public:
 				return Wait(TEXT("initial replicated placement"));
 			Test->TestTrue(TEXT("server body uses upright CMC"),ServerBody->UsesCharacterMovement());
 			Test->TestFalse(TEXT("server body cannot freely tumble"),ServerBody->GetBody()->IsSimulatingPhysics());
-			Test->TestFalse(TEXT("client observes server body snapshots"),ClientBody->GetBody()->IsSimulatingPhysics());
+			Test->TestFalse(TEXT("client predicts its CMC capsule without simulating a Chaos body"),ClientBody->GetBody()->IsSimulatingPhysics());
 			// Only the owning client changes view. Server yaw must arrive through the physical input RPC, not a test write.
 			Local->SetControlRotation(ReachView);
 			Stage=2; StageStarted=Now;
@@ -352,7 +352,7 @@ public:
 			Test->TestFalse(TEXT("client production HUD clears replicated grip after Flush"),Widget->GetLastHUDViewState().bLeftHandGripped);
 			Test->TestNull(TEXT("authority contact target cleaned"),ServerGrab->GetGripTarget(true));
 			Test->TestNull(TEXT("client contact target cleaned"),ClientGrab->GetGripTarget(true));
-			Test->AddInfo(FString::Printf(TEXT("Event=physical_formal_network_release_verified ServerWorld=%s ClientWorld=%s PlayerId=%d ServerRevision=%u ClientRevision=%u Result=FormalInputViewGripForceFlushHUD ServerObserved=1 ClientObserved=1 Prediction=0"),
+			Test->AddInfo(FString::Printf(TEXT("Event=physical_formal_network_release_verified ServerWorld=%s ClientWorld=%s PlayerId=%d ServerRevision=%u ClientRevision=%u Result=FormalInputViewGripForceFlushHUD ServerObserved=1 ClientObserved=1 Prediction=CMC"),
 				*Server->GetName(),*Client->GetName(),Local->PlayerState->GetPlayerId(),ServerGrab->GetGripRevision(true),ClientGrab->GetGripRevision(true)));
 			return true;
 		}

@@ -126,7 +126,7 @@ namespace CatFishingGroupNetwork
 			for (UWorld* Client : Clients)
 			{
 				auto* Local = Cast<ACatfishingPlayerController>(Client->GetFirstPlayerController());
-				if (!Local || !Local->PlayerState || !Local->GetPawn()) return false;
+				if (!Local || !Local->PlayerState || !Local->GetPawn() || Local->AcknowledgedPawn != Local->GetPawn()) return false;
 				ACatfishingPlayerController* Remote = nullptr;
 				for (TActorIterator<ACatfishingPlayerController> It(Server); It; ++It)
 					if (!It->IsLocalController() && It->PlayerState
@@ -292,6 +292,10 @@ namespace CatFishingGroupNetwork
 					}
 					UCatPhysicsGrabComponent* AuthorityGrab = AuthorityCats[JoinIndex + 1]->GetPhysicalBodyComponent()->GetGrab();
 					AActor* AuthorityTarget = AuthorityCats[JoinIndex];
+					// Final articulated-model separation can leave this helper beyond hand reach.
+					// Approach through the owner's real CMC input, then release movement at contact.
+					const FVector Approach = ClientGripTargets[JoinIndex]->GetActorLocation() - LocalBody->GetOwner()->GetActorLocation();
+					LocalBody->SetMoveIntent(LocalBody->GetGrab()->IsGripping(true) ? FVector::ZeroVector : Approach.GetSafeNormal2D());
 					if (!AuthorityGrab->IsGripping(true) || AuthorityGrab->GetGripTarget(true) != AuthorityTarget
 						|| !LocalBody->GetGrab()->IsGripping(true) || LocalBody->GetGrab()->GetGripTarget(true) != ClientGripTargets[JoinIndex]
 						|| ClientRods[JoinIndex]->GetOperatorCount() != 1)

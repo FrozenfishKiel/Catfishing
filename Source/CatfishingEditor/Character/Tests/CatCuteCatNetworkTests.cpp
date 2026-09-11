@@ -79,7 +79,7 @@ namespace CatCuteNetwork
 			if (!Server || !Client) return false;
 			APlayerController* Local=Client->GetFirstPlayerController();
 			ACatCharacter* ClientCat=Local ? Cast<ACatCharacter>(Local->GetPawn()) : nullptr;
-			if (!ClientCat || !Local->PlayerState) return false;
+			if (!ClientCat || !Local->PlayerState || Local->AcknowledgedPawn != ClientCat) return false;
 			ACatCharacter* ServerCat=nullptr;
 			for (TActorIterator<ACatCharacter> It(Server); It; ++It)
 				if (It->GetPlayerState() && It->GetPlayerState()->GetPlayerId()==Local->PlayerState->GetPlayerId()) ServerCat=*It;
@@ -222,6 +222,11 @@ namespace CatCuteNetwork
             auto* Body=Cats[0]->GetPhysicalBodyComponent();
             if (Stage==0)
             {
+                for (auto* World : Clients)
+                {
+                    const auto* Local = World->GetFirstPlayerController();
+                    if (!Local || !Local->GetPawn() || Local->AcknowledgedPawn != Local->GetPawn()) return false;
+                }
                 for (auto* World:{Server,Clients[0],Clients[1]})
                     for (auto It=World->GetPlayerControllerIterator();It;++It) if (It->Get()) It->Get()->SetActorTickEnabled(false);
                 int32 Placement=0;
