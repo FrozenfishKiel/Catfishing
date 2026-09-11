@@ -1,3 +1,5 @@
+#include "Inventory/CatInventorySettings.h"
+#include "Fishing/Tests/CatFishingEquipmentTestFixtures.h"
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -17,9 +19,8 @@ namespace CatFishingBrokenRodPackTests
 {
 	struct FFixture
 	{
-		UCatEquipmentSettings* Settings = GetMutableDefault<UCatEquipmentSettings>();
-		int32 SavedCapacity = Settings->InventorySlotCapacity;
-		bool bSavedAutoGrantStarterScoopNet = Settings->bAutoGrantStarterScoopNet;
+		UCatInventorySettings* Settings = GetMutableDefault<UCatInventorySettings>();
+		int32 SavedCapacity = Settings->PlayerInventorySlotCapacity;
 		FTestWorldWrapper WorldWrapper;
 		ACatfishingPlayerController* Controller = nullptr;
 		ACatfishingPlayerState* PlayerState = nullptr;
@@ -31,14 +32,12 @@ namespace CatFishingBrokenRodPackTests
 
 		~FFixture()
 		{
-			Settings->InventorySlotCapacity = SavedCapacity;
-			Settings->bAutoGrantStarterScoopNet = bSavedAutoGrantStarterScoopNet;
+			Settings->PlayerInventorySlotCapacity = SavedCapacity;
 		}
 
 		bool Initialize(FAutomationTestBase& Test)
 		{
-			Settings->InventorySlotCapacity = 3;
-			Settings->bAutoGrantStarterScoopNet = false;
+			Settings->PlayerInventorySlotCapacity = 3;
 			if (!Test.TestTrue(TEXT("creates a real service world"), WorldWrapper.CreateTestWorld(EWorldType::Game))) return false;
 			WorldWrapper.ForwardErrorMessages(&Test);
 			if (!Test.TestTrue(TEXT("starts actor presentation lifecycle"), WorldWrapper.BeginPlayInTestWorld())) return false;
@@ -76,7 +75,7 @@ namespace CatFishingBrokenRodPackTests
 			if (!Test.TestTrue(TEXT("reserves a real fishing session"), Equipment->BeginFishingUse(SessionId,
 				RodItemId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId,
 				Loadout.RodDefinitionId, Loadout.BaitDefinitionId, Loadout.FloatDefinitionId,
-				Equipment->GetSnapshot().Revision).bReserved)) return false;
+				Equipment->GetSnapshot().Revision).bBaitFrozen)) return false;
 			if (!Test.TestTrue(TEXT("commits bait"), Equipment->CommitFishingBaitDeferred(SessionId).bApplied)) return false;
 			const FCatFishingUseOperationResult Worn = Equipment->ApplyFishingRodWear(SessionId, 1, Loadout.RodDurability + 1.0);
 			if (!Test.TestTrue(TEXT("wear breaks the actual inventory instance"), Worn.bApplied && Worn.bRodBroken)) return false;
@@ -97,9 +96,9 @@ namespace CatFishingBrokenRodPackTests
 		int32 CountStoredRod() const
 		{
 			int32 Count = 0;
-			for (const FCatRunInventorySlot& Slot : Equipment->GetSnapshot().InventorySlots)
+			for (const FCatInventoryEntry& Slot : CatFishingTest::Entries(Equipment))
 			{
-				if (Slot.ItemInstanceId == RodItemId && Slot.Quantity > 0) ++Count;
+				if (CatFishingTest::InstanceId(Slot) == RodItemId && Slot.StackCount > 0) ++Count;
 			}
 			return Count;
 		}
@@ -123,7 +122,7 @@ bool FCatBrokenRodPackCapacityTest::RunTest(const FString& Parameters)
 	const int64 EquipmentRevision = Fixture.Equipment->GetSnapshot().Revision;
 	const int64 RodRevision = Fixture.Rod->GetPresentationState().RodActorRevision;
 	AddExpectedErrorPlain(TEXT("Event=fishing_rod_pack_rejected"), EAutomationExpectedErrorFlags::Contains, 1);
-	AddExpectedErrorPlain(TEXT("Event=inventory_transfer_rejected"), EAutomationExpectedErrorFlags::Contains, 1);
+	AddExpectedErrorPlain(TEXT("Event=inventory_return_held_current_inventory_rejected"), EAutomationExpectedErrorFlags::Contains, 1);
 	const FCatFishingCommandResult Rejected = Fixture.Fishing->PackRod(Fixture.Controller, Fixture.PackCommand());
 	TestFalse(TEXT("full inventory rejects pack"), Rejected.bCommitted);
 	TestEqual(TEXT("capacity rejection keeps its domain error"), Rejected.Error, ECatFishingCommandError::GuardCapacityExceeded);
@@ -136,7 +135,7 @@ bool FCatBrokenRodPackCapacityTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("reply includes the restored actor revision"), Rejected.RodActorRevision > RodRevision);
 	TestEqual(TEXT("reply revision matches current actor"), Rejected.RodActorRevision, Fixture.Rod->GetPresentationState().RodActorRevision);
 	TestEqual(TEXT("failed pack preserves service ownership lookup"), Fixture.Fishing->FindDeployedRod(Fixture.PlayerState), Fixture.Rod);
-	Fixture.Settings->InventorySlotCapacity = 4;
+	Fixture.Settings->PlayerInventorySlotCapacity = 4;
 	const FCatFishingCommandResult Packed = Fixture.Fishing->PackRod(Fixture.Controller, Fixture.PackCommand());
 	TestTrue(TEXT("new request can pack the same broken rod after capacity is available"), Packed.bCommitted);
 	TestEqual(TEXT("successful retry returns exactly the same instance once"), Fixture.CountStoredRod(), 1);
@@ -163,7 +162,7 @@ bool FCatBrokenRodPackObserverTest::RunTest(const FString& Parameters)
 	bool bObserverSawPackedRod = false;
 	bool bActorRevisionAdvanced = false;
 	FCatFishingCommandResult NestedPack;
-	const FDelegateHandle Observer = Fixture.Equipment->OnSnapshotChanged.AddLambda([&]()
+	const FDelegateHandle Observer = CatFishingTest::Inventory(Fixture.Equipment)->OnInventoryObservedChanged.AddLambda([&]()
 	{
 		bObserverRan = true;
 		bObserverSawPackedRod = !Fixture.Rod->GetPresentationState().bDeployed;
@@ -173,7 +172,7 @@ bool FCatBrokenRodPackObserverTest::RunTest(const FString& Parameters)
 		NestedPack = Fixture.Fishing->PackRod(Fixture.Controller, Fixture.PackCommand());
 	});
 	const FCatFishingCommandResult Packed = Fixture.Fishing->PackRod(Fixture.Controller, Fixture.PackCommand());
-	Fixture.Equipment->OnSnapshotChanged.Remove(Observer);
+	CatFishingTest::Inventory(Fixture.Equipment)->OnInventoryObservedChanged.Remove(Observer);
 	TestTrue(TEXT("inventory observer ran during the real return"), bObserverRan);
 	TestTrue(TEXT("observer sees world rod already withdrawn"), bObserverSawPackedRod);
 	TestTrue(TEXT("observer exercised an actor revision change"), bActorRevisionAdvanced);

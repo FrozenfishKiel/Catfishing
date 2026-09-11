@@ -12,7 +12,7 @@ DECLARE_MULTICAST_DELEGATE(FCatShopInventoryComponentChanged);
 
 /**
  * 挂在商店摊位上的库存组件，代表“这个摊位当前卖什么”和“每个货架项还剩多少”。
- * 它从策划 DataTable 构建固定货架和随机候选；团队公款、交易账本和公共仓库发货仍由 ShopEconomy 服务与订单协调器处理。
+ * 它从策划 DataTable 构建固定货架和随机候选；团队公款、交易账本和公共仓库发货仍由 ShopEconomy 服务与商店交易入口处理。
  */
 UCLASS(ClassGroup = (Catfishing), BlueprintType, Blueprintable, meta = (BlueprintSpawnableComponent))
 class CATFISHING_API UCatShopInventoryComponent : public UActorComponent
@@ -29,7 +29,7 @@ public:
 	/** 进入 World 时在 authority 上生成本摊位库存并注册给 ShopEconomy 服务；客户端只等待稳定 ID 和公开快照。 */
 	virtual void BeginPlay() override;
 
-	/** 离开 World 时从 ShopEconomy 服务注销本摊位库存，避免旧摊位继续出现在公开货架快照中。 */
+	/** 离开 World 时从 ShopEconomy 服务注销本摊位库存，避免失效摊位继续出现在公开货架快照中。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	/** 返回本摊位库存的稳定 ID；购买命令和公开库存快照用它保证 EntryId 只在同一个摊位内解释。 */
@@ -40,7 +40,7 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Shop")
 	bool IsRuntimeCatalogReady() const;
 
-	/** 按本组件持有的出售表重新生成开局货架；成功后保留新库存，失败时清空并记录目录不可用。 */
+	/** 按本组件持有的出售表重新生成开局货架；成功后写入新库存，失败时清空并记录目录不可用。 */
 	bool RebuildInitialInventoryFromCatalog();
 
 	/** 按本组件持有的出售表刷新当前货架；调用方决定刷新时机，本函数只处理同一 RequestId 的幂等和随机抽取。 */
@@ -52,7 +52,7 @@ public:
 	/** 查询本摊位当前某个 EntryId 的库存；EntryId 只在本组件的 ShopInventoryId 范围内有意义。 */
 	bool TryGetStockSnapshot(FName EntryId, FCatShopStockSnapshot& OutSnapshot) const;
 
-	/** 查询本摊位当前某个 EntryId 对应的目录原文；订单协调器用它在扣款前先问公共仓库能否接收。 */
+	/** 查询本摊位当前某个 EntryId 对应的目录原文；商店交易入口用它在扣款前先问公共仓库能否接收。 */
 	bool TryGetCatalogEntry(FName EntryId, FCatShopCatalogEntry& OutEntry) const;
 
 	/** authority 整车订单提交时一次性扣减多条货架库存；任一有限库存不足时整批保持原状。 */
@@ -85,7 +85,7 @@ private:
 		/** 本货架项当前剩余订单次数；无限库存条目不会因为购买修改它。 */
 		int32 RemainingStock = 0;
 
-		/** 本货架项的库存版本；有限库存扣减或每日补货时递增，方便 UI 识别快照变化。 */
+		/** 本货架项的快照版本；有限货架扣减或每日补货时递增，方便 UI 识别快照变化。 */
 		int64 Revision = 0;
 	};
 
@@ -104,7 +104,7 @@ private:
 	void CollectDisplayCatalogEntriesFromTable(const UDataTable& CatalogTable,
 		TArray<FCatShopCatalogEntry>& OutEntries) const;
 
-	/** 把一组已校验目录项写成当前货架库存；重复 EntryId 或非法项会让整轮重建失败并清空临时结果。 */
+	/** 把一组已校验目录项写成当前货架库存；重复 EntryId 或非法项会让整轮重建失败并清空构建结果。 */
 	bool RebuildStockFromCatalogEntries(const TArray<FCatShopCatalogEntry>& CatalogEntries, FString& OutError);
 
 	/** 把一条内部库存记录复制成公开库存快照；空记录返回默认快照，拒绝结果可安全携带。 */

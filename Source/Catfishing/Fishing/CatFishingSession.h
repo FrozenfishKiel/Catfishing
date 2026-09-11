@@ -4,7 +4,7 @@
 #include "GameFramework/Actor.h"
 #include "GameplayTagContainer.h"
 #include "Fishing/CatFishingTypes.h"
-#include "Equipment/CatEquipmentTypes.h"
+#include "Fishing/CatFishingUseResults.h"
 #include "Data/CatFishSelectionTypes.h"
 #include "Fishing/Integration/CatFishingCommandTypes.h"
 #include "CatFishingSession.generated.h"
@@ -14,7 +14,7 @@ class ACatFishingHookActor;
 class ACatFishPickupActor;
 class UCatEquipmentComponent;
 class UCatFishDefinition;
-class UCatItemsService;
+class UCatFishContainerService;
 class UCatFishingFightRunner;
 class UStateTreeComponent;
 struct FCatFightStepResult;
@@ -235,7 +235,7 @@ private:
 	TMap<FString, FCatScoopResult> ScoopTerminalCache;
 
 	/** Items 唯一写服务弱引用；World teardown 不被本 Actor 强持。 */
-	TWeakObjectPtr<UCatItemsService> ItemsService;
+	TWeakObjectPtr<UCatFishContainerService> ItemsService;
 
 	/** StateTree StartLogic 同步进入首状态时允许 EnterPhase 写入的短生命周期标记。 */
 	bool bStartupInProgress = false;

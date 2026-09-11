@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Collection/CatImprintTypes.h"
-#include "Items/CatItemTypes.h"
+#include "FishContainers/CatFishContainerTypes.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "CatRunImprintService.generated.h"
 

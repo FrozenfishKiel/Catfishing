@@ -1,3 +1,4 @@
+#include "Inventory/CatInventoryComponent.h"
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -162,7 +163,7 @@ namespace CatFishingSlackAimNetwork
 					if (Input && MenuAction)
 						for (const TUniquePtr<FEnhancedInputActionEventBinding>& Binding : Input->GetActionEventBindings())
 							if (Binding && Binding->GetAction() == MenuAction) { MenuBinding = Binding->GetHandle(); break; }
-					if (ClientController->AcknowledgedPawn != ClientCharacter || !UI || !UI->GetInventoryModel()
+					if (ClientController->AcknowledgedPawn != ClientCharacter || !UI || !ClientCharacter->GetInventoryComponent() || !ClientCharacter->GetInventoryComponent()->GetInventoryModel()
 						|| !UI->GetInventoryPageController() || MenuBinding == 0)
 					{
 						ReadyInputComponent.Reset();

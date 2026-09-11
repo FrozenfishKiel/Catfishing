@@ -17,6 +17,17 @@
 #include "UI/Frontend/CatFrontendSaveModel.h"
 #include "UI/Frontend/CatFrontendSettingsModel.h"
 
+namespace CatFrontendRootLoading
+{
+	// Start 加载接管判断流程：只读取 Online 的正式 Start 请求和错误事实；命中后 Frontend Root 停止生产动态行，具体加载文案和进度由全局遮罩承担。
+	static bool IsGameplayStartOwnedByGlobalLoading(const FCatOnlineSnapshot& Snapshot)
+	{
+		return Snapshot.LastError == ECatOnlineError::None
+			&& Snapshot.ActiveOperation == ECatOnlineOperation::Start
+			&& Snapshot.RequestId.IsValid();
+	}
+}
+
 // 存档行配置流程：保存摘要的稳定 SlotId，写入真实显示名和最近保存时间；未知扩展元数据不会被 UI 补成虚构进度。
 void UCatFrontendSaveSlotRowWidget::ConfigureRow(UCatFrontendRootWidget* InRootWidget, const FCatSaveSlotSummary& Summary)
 {
@@ -78,7 +89,7 @@ void UCatFrontendRoomFriendRowWidget::NativeOnInitialized()
 	InviteFriendButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleInviteClicked);
 }
 
-// 好友邀请流程：只把当前行 opaque 句柄交给 Root；句柄过期或平台拒绝由 RoomModel/Online 产生正式反馈。
+// 好友邀请流程：只把当前行 opaque 句柄交给 Root；句柄失效或平台拒绝由 RoomModel/Online 产生正式反馈。
 void UCatFrontendRoomFriendRowWidget::HandleInviteClicked()
 {
 	if (UCatFrontendRootWidget* Root = RootWidget.Get(); Root && FriendHandle.IsValid())
@@ -104,7 +115,7 @@ void UCatFrontendRoomPlayerSlotWidget::ConfigureEmptySlot()
 }
 
 // 协作者装配流程：
-// 1. 先解除旧 Model 通知，避免 LocalPlayer 切换时旧 World 的刷新落入当前 Root。
+// 1. 先解除已解绑 Model 通知，避免 LocalPlayer 切换时失效 World 的刷新落入当前 Root。
 // 2. 保存新 Controller 与三个专属 Model，解析子 WBP 控件树并绑定实际按钮。
 // 3. 最后订阅 Model 变化并立即刷新原生控件；可选蓝图事件只用于纯表现扩展，Root 不复制业务数据或发起底层请求。
 void UCatFrontendRootWidget::InitializeFrontend(UCatFrontendPageController* InController, UCatFrontendSaveModel* InSaveModel,
@@ -124,11 +135,12 @@ void UCatFrontendRootWidget::InitializeFrontend(UCatFrontendPageController* InCo
 	HandleSettingsModelChanged();
 }
 
-// 协作者拆除流程：先解除 Model 与按钮委托，再清空协作者引用；Root 不主动取消 Session、存档或设置操作，避免 View 生命周期反向改写业务。
+// 协作者拆除流程：先解除 Model 与按钮委托，再清空动态行和协作者引用；Root 不主动取消 Session、存档或设置操作，避免 View 生命周期反向改写业务。
 void UCatFrontendRootWidget::ResetFrontend()
 {
 	UnbindModelChanges();
 	UnbindPageControls();
+	ClearDynamicRows();
 	AudioOutputDeviceIdsByOption.Reset();
 	PageController = nullptr;
 	SaveModel = nullptr;
@@ -268,7 +280,7 @@ void UCatFrontendRootWidget::RequestConfirmDeleteSaveSlot() { if (PageController
 // 返回点击流程：交给有效 Controller 依次处理确认、读档等待或离房；具体 Show 调用和终态通知负责刷新，本入口不猜目标页。
 void UCatFrontendRootWidget::RequestCancel() { if (PageController) { PageController->RequestCancel(); } }
 
-// 好友刷新点击流程：交给有效 Controller 请求平台刷新，再重读房间反馈与现有快照；请求完成前不会把旧缓存标成新结果。
+// 好友刷新点击流程：交给有效 Controller 请求平台刷新，再重读房间反馈与现有快照；请求完成前不会把失效缓存标成新结果。
 void UCatFrontendRootWidget::RequestRefreshFriends() { if (PageController) { PageController->RequestRefreshFriends(); } HandleRoomModelChanged(); }
 
 // 邀请点击流程：把当前行的 opaque 句柄交给有效 Controller，再刷新房间反馈；Root 不解析好友身份或把受理解释为对方已加入。
@@ -289,7 +301,7 @@ void UCatFrontendRootWidget::RequestCancelFrontendSettings() { if (PageControlle
 // 恢复默认点击流程：交给有效 Controller 请求默认草稿，再回填全部设置控件；实际应用仍需玩家后续确认。
 void UCatFrontendRootWidget::RequestRestoreFrontendSettingsDefaults() { if (PageController) { PageController->RequestRestoreFrontendSettingsDefaults(); } HandleSettingsModelChanged(); }
 
-// 输出设备刷新请求流程：将按钮意图交给 Controller 发起正式异步枚举，再立即按 pending 状态回填控件；不复用旧设备列表或直接访问 AudioMixer。
+// 输出设备刷新请求流程：将按钮意图交给 Controller 发起正式异步枚举，再立即按 pending 状态回填控件；不复用已失效设备列表或直接访问 AudioMixer。
 void UCatFrontendRootWidget::RequestRefreshAudioOutputDevices() { if (PageController) { PageController->RequestRefreshAudioOutputDevices(); } HandleSettingsModelChanged(); }
 
 // 邀请码复制流程：直接读取 RoomModel 已确认的 joinlobby URI，非空时写入系统剪贴板并更新房间提示；Model 缺失或 URI 为空时不改变剪贴板。
@@ -335,7 +347,7 @@ FReply UCatFrontendRootWidget::NativeOnKeyDown(const FGeometry& InGeometry, cons
 	return Super::NativeOnKeyDown(InGeometry, InKeyEvent);
 }
 
-// UMG 销毁流程：先解除 View 侧委托和协作者引用，再交还父类；不在销毁路径执行 Save、Online 或 Settings 的业务补偿。
+// UMG 销毁流程：先解除 View 侧委托、动态行和协作者引用，再交还父类；不在销毁路径执行 Save、Online 或 Settings 的业务补偿。
 void UCatFrontendRootWidget::NativeDestruct()
 {
 	ResetFrontend();
@@ -520,7 +532,7 @@ void UCatFrontendRootWidget::UnbindModelChanges()
 	SettingsModelChangedHandle.Reset();
 }
 
-// 存档刷新流程：按来源刷新反馈并重建真实槽位行；Save 或 Online 操作未结束时禁用写入与读取按钮，Root 不取消在途命令或复制业务状态。
+// 存档刷新流程：按来源刷新反馈和可操作性；Start 加载交给全局遮罩后只清失效行，普通前端状态才重建真实槽位行。
 void UCatFrontendRootWidget::HandleSaveModelChanged()
 {
 	RefreshFlowFeedback();
@@ -534,13 +546,28 @@ void UCatFrontendRootWidget::HandleSaveModelChanged()
 	if (DeleteSelectedSaveButton) { DeleteSelectedSaveButton->SetIsEnabled(bCanSubmit && bHasSelection); }
 	if (ConfirmDeleteSaveButton) { ConfirmDeleteSaveButton->SetIsEnabled(bCanSubmit && PageController && !PageController->GetPendingDeleteSlotId().IsNone()); }
 	if (SaveRowsScrollBox) { SaveRowsScrollBox->SetIsEnabled(bCanSubmit); }
+	if (CatFrontendRootLoading::IsGameplayStartOwnedByGlobalLoading(Snapshot))
+	{
+		ClearDynamicRows();
+		BP_RenderSaveList();
+		return;
+	}
 	RebuildSaveRows();
 	BP_RenderSaveList();
 }
 
-// 房间刷新流程：按来源刷新正式反馈、好友与成员行，并同步存档页的 Online busy 可操作性；所有数据只读，蓝图事件不承担必要呈现。
+// 房间刷新流程：普通前端状态同步存档页可操作性、房间反馈、好友与成员行；Start 加载期间只清动态行和禁用按钮，避免已遮挡业务页在全局遮罩下继续创建行控件。
 void UCatFrontendRootWidget::HandleRoomModelChanged()
 {
+	const FCatOnlineSnapshot Snapshot = RoomModel ? RoomModel->GetSnapshot() : FCatOnlineSnapshot();
+	if (CatFrontendRootLoading::IsGameplayStartOwnedByGlobalLoading(Snapshot))
+	{
+		RefreshFlowFeedback();
+		RefreshRoomPresentation();
+		ClearDynamicRows();
+		BP_RenderRoom();
+		return;
+	}
 	HandleSaveModelChanged();
 	RefreshRoomPresentation();
 	RebuildRoomRows();
@@ -672,7 +699,7 @@ void UCatFrontendRootWidget::HandleSettingsModelChanged()
 	BP_RenderFrontendSettings();
 }
 
-// 存档行重建流程：清空旧行后仅从 SaveModel 的当前真实摘要创建紧凑 WBP；每行在 ConfigureRow 中保存稳定 SlotId，列表为空时不补虚构条目。
+// 存档行重建流程：清空失效行后仅从 SaveModel 的当前真实摘要创建紧凑 WBP；每行以 Root 自身作为 Owner 跟随当前 WidgetTree，避免失效行挂在 GameInstance 下拖住失效 World。
 void UCatFrontendRootWidget::RebuildSaveRows()
 {
 	if (!SaveRowsScrollBox)
@@ -693,7 +720,7 @@ void UCatFrontendRootWidget::RebuildSaveRows()
 	}
 	for (const FCatSaveSlotSummary& Summary : SaveModel->GetSlotSummaries())
 	{
-		UCatFrontendSaveSlotRowWidget* Row = CreateWidget<UCatFrontendSaveSlotRowWidget>(GetOwningPlayer(), RowClass);
+		UCatFrontendSaveSlotRowWidget* Row = CreateWidget<UCatFrontendSaveSlotRowWidget>(this, RowClass);
 		if (Row)
 		{
 			Row->ConfigureRow(this, Summary);
@@ -703,8 +730,8 @@ void UCatFrontendRootWidget::RebuildSaveRows()
 }
 
 // 房间行重建流程：
-// 1. 先读取 RoomModel 的唯一快照并清空旧好友/成员行，输入筛选只影响当前显示，不写回 Online。
-// 2. 每个好友行保存其 opaque FriendHandle，成员行只消费已确认 Lobby 成员；不依赖行下标或文本。
+// 1. 先读取 RoomModel 的唯一快照并清空失效好友/成员行，输入筛选只影响当前显示，不写回 Online。
+// 2. 每个好友行保存其 opaque FriendHandle，成员行只消费已确认 Lobby 成员；行实例跟随 Root WidgetTree，不在 GameInstance 下残留。
 // 3. 只有 Snapshot 给出正容量时才补显示空槽，避免把未知成员数量扩展为假玩家。
 void UCatFrontendRootWidget::RebuildRoomRows()
 {
@@ -726,7 +753,7 @@ void UCatFrontendRootWidget::RebuildRoomRows()
 		else for (const FCatOnlineFriendSummary& Friend : Snapshot.Friends)
 		{
 			if (!Filter.IsEmpty() && !Friend.DisplayName.Contains(Filter, ESearchCase::IgnoreCase)) { continue; }
-			UCatFrontendRoomFriendRowWidget* Row = CreateWidget<UCatFrontendRoomFriendRowWidget>(GetOwningPlayer(), FriendRowClass);
+			UCatFrontendRoomFriendRowWidget* Row = CreateWidget<UCatFrontendRoomFriendRowWidget>(this, FriendRowClass);
 			if (Row)
 			{
 				Row->ConfigureRow(this, Friend);
@@ -746,7 +773,7 @@ void UCatFrontendRootWidget::RebuildRoomRows()
 		}
 		for (const FCatOnlineRoomMember& Member : Snapshot.RoomMembers)
 		{
-			UCatFrontendRoomPlayerSlotWidget* Row = CreateWidget<UCatFrontendRoomPlayerSlotWidget>(GetOwningPlayer(), PlayerRowClass);
+			UCatFrontendRoomPlayerSlotWidget* Row = CreateWidget<UCatFrontendRoomPlayerSlotWidget>(this, PlayerRowClass);
 			if (Row)
 			{
 				Row->ConfigureRow(Member);
@@ -755,7 +782,7 @@ void UCatFrontendRootWidget::RebuildRoomRows()
 		}
 		for (int32 SlotIndex = Snapshot.RoomMembers.Num(); SlotIndex < Snapshot.MaxPlayers; ++SlotIndex)
 		{
-			UCatFrontendRoomPlayerSlotWidget* Row = CreateWidget<UCatFrontendRoomPlayerSlotWidget>(GetOwningPlayer(), PlayerRowClass);
+			UCatFrontendRoomPlayerSlotWidget* Row = CreateWidget<UCatFrontendRoomPlayerSlotWidget>(this, PlayerRowClass);
 			if (Row)
 			{
 				Row->ConfigureEmptySlot();
@@ -763,6 +790,14 @@ void UCatFrontendRootWidget::RebuildRoomRows()
 			}
 		}
 	}
+}
+
+// 动态行释放流程：逐个清空运行期填充的 ScrollBox，让存档、好友和玩家行随 Root 的 WidgetTree 释放；该路径不读取或修改任何业务 Model。
+void UCatFrontendRootWidget::ClearDynamicRows()
+{
+	if (SaveRowsScrollBox) { SaveRowsScrollBox->ClearChildren(); }
+	if (FriendsScrollBox) { FriendsScrollBox->ClearChildren(); }
+	if (PlayersScrollBox) { PlayersScrollBox->ClearChildren(); }
 }
 
 // 房间表现刷新流程：从 Snapshot 写入真实 joinlobby URI、访问策略和开始可用性；无法确认 Lobby 或策略时明确显示不可用而不生成替代值。
@@ -869,7 +904,7 @@ void UCatFrontendRootWidget::HandleVoiceChatChanged(bool bIsChecked) { if (!bRef
 // 失焦静音输入流程：回填保护外写入正式失焦音量草稿；当前 AudioDevice 不会在点击时被立即改变。
 void UCatFrontendRootWidget::HandleMuteAudioWhenUnfocusedChanged(bool bIsChecked) { if (!bRefreshingSettingsControls && SettingsModel) { SettingsModel->SetDraftMuteAudioWhenUnfocused(bIsChecked); } }
 
-// 输出设备选择流程：只将当前 View 映射中对应的稳定平台 ID 提交给 Model；过期显示项和空映射安全忽略。
+// 输出设备选择流程：只将当前 View 映射中对应的稳定平台 ID 提交给 Model；失效显示项和空映射安全忽略。
 void UCatFrontendRootWidget::HandleAudioOutputDeviceSelectionChanged(FString SelectedItem, ESelectInfo::Type SelectionType)
 {
 	if (!bRefreshingSettingsControls && SettingsModel)

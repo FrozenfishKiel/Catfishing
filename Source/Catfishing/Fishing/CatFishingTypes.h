@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Environment/CatWaterTypes.h"
-#include "Items/CatItemTypes.h"
+#include "FishContainers/CatFishContainerTypes.h"
 #include "CatFishingTypes.generated.h"
 
 /** 单次钓鱼长流程的公开阶段；转移拓扑只由 ST_FishingSession 资产编排。 */

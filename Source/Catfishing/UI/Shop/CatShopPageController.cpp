@@ -7,7 +7,7 @@
 #include "UI/Shop/CatShopModel.h"
 #include "UI/Shop/CatShopWidget.h"
 
-// 绑定流程：先解除旧绑定，再保存 Controller/Model/View 和来源摊位；随后订阅投影、关闭、购物车意图和服务器结果，最后渲染首帧。
+// 绑定流程：先解除失效绑定，再保存 Controller/Model/View 和来源摊位；随后订阅投影、关闭、购物车意图和服务器结果，最后渲染首帧。
 bool UCatShopPageController::Bind(APlayerController* InController, UCatShopModel* InModel, UCatShopWidget* InView,
 	ACatShopKioskActor* InSourceShop)
 {

@@ -7,7 +7,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Presentation/CatFishPresentationDefinition.h"
-#include "Items/World/CatFishPickupActor.h"
+#include "Items/Fish/CatFishPickupActor.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishGroundPresentationTest,
 	"Catfishing.Unit.Fishing.Presentation.DeadFishStayAboveGroundAtTheirOriginalSize",

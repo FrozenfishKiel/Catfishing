@@ -1,3 +1,6 @@
+#include "Inventory/CatInventorySettings.h"
+#include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
+#include "Fishing/Tests/CatFishingEquipmentTestFixtures.h"
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -83,11 +86,11 @@ bool FCatStarterRodDurabilityBaselineTest::RunTest(const FString& Parameters)
 	(void)Parameters;
 	const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
 	const UCatEquipmentDefinition* StarterRod = EquipmentSettings
-		? EquipmentSettings->FindRuntimeDefinition(TEXT("StarterRodT1")) : nullptr;
+		? GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(TEXT("StarterRodT1")) : nullptr;
 	if (!TestNotNull(TEXT("正式装备目录可加载初级鱼竿"), StarterRod)) return false;
 	TestEqual(TEXT("初级鱼竿定义 ID 稳定"), StarterRod->EquipmentDefinitionId,
 		FName(TEXT("StarterRodT1")));
-	TestEqual(TEXT("初级鱼竿最大耐久为 150，开场读取实例剩余值"), StarterRod->MaximumRodDurability, 150.0);
+	TestEqual(TEXT("初级鱼竿保持原项目资产的 500 最大耐久，开场读取实例剩余值"), CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(StarterRod)->MaximumRodDurability, 500.0);
 	return !HasAnyErrors();
 }
 

@@ -1,4 +1,4 @@
-﻿#if WITH_DEV_AUTOMATION_TESTS
+#if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
@@ -430,7 +430,6 @@ bool FCatFishingPlaceChumMailboxTest::RunTest(const FString& Parameters)
 	First.bCommitted = true;
 	First.Error = ECatChumFieldError::None;
 	First.FieldId = FGuid::NewGuid();
-	First.EquipmentRevision = 8;
 	First.ChumFieldSetRevision = 4;
 	Component->DeliverPlaceChumResultFromAuthority(First);
 	FCatPlaceChumResult Spatial;

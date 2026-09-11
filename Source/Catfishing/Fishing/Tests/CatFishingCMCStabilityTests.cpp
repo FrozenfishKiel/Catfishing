@@ -1,3 +1,4 @@
+#include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "Character/Physics/Tests/CatPhysicalTestWorld.h"
@@ -60,8 +61,8 @@ bool FCatFishingCMCStabilityTest::RunTest(const FString& Parameters)
         const auto Tick = [&](float Dt) { Body->SetMoveIntent(FVector::ZeroVector); Scene.World.TickTestWorld(Dt); };
         for (int32 I=0; I<Rate/2; ++I) Tick(1.f/Rate);
         auto* Rod = World->SpawnActorDeferred<ACatFishingRodActor>(ACatFishingRodActor::StaticClass(),FTransform::Identity);
-        if (!Rod || !Rod->ConfigureCanonicalAnchorsFromAuthority(Definition->RodTipLocalTransform,
-            Definition->StandLocalTransform,Definition->GripLocalTransform)
+        if (!Rod || !Rod->ConfigureCanonicalAnchorsFromAuthority(Definition->FindFragment<UCatEquipmentFragment_Rod>()->RodTipLocalTransform,
+            Definition->FindFragment<UCatEquipmentFragment_Rod>()->StandLocalTransform,Definition->FindFragment<UCatEquipmentFragment_Rod>()->GripLocalTransform)
             || !Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(),FGuid::NewGuid(),TEXT("ShortCMC"),NAME_None,Player,nullptr,true,false)) return false;
         Rod->FinishSpawning(FTransform::Identity);
         if (!Rod->BeginPhysicalHoldFromAuthority(Player,true)

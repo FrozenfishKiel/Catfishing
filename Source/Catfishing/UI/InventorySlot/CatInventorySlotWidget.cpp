@@ -4,111 +4,63 @@
 #include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
 #include "Engine/Texture2D.h"
+#include "Framework/Game/CatfishingPlayerController.h"
 #include "Input/Reply.h"
 #include "InputCoreTypes.h"
+#include "Inventory/CatInventoryItemDefinition.h"
+#include "Inventory/CatInventoryItemInstance.h"
+#include "Logging/CatLog.h"
 
-namespace
+// 先保存明确的库存和格位，再按条目更新图片与数量；空格或定义尚未到达时清掉旧图，正式 WBP 保留原有布局与悬停表现。
+void UCatInventorySlotWidget::SetSlotContext(const int32 InSlotIndex, UCatInventoryComponent* InInventory,
+	const FCatInventoryEntry& InEntry)
 {
-	// 库存格来源判断流程：把随身背包和营地公共仓库都视为同一类可整理的运行期库存格；具体写入哪个宿主由 PageController 再决定。
-	bool IsRunInventorySlot(const FCatInventorySlotView& Slot)
-	{
-		if (Slot.SlotSource == ECatInventorySlotSource::InventoryObject)
-		{
-			return Slot.InventorySlotIndex != INDEX_NONE;
-		}
-		if (Slot.SlotSource == ECatInventorySlotSource::CampInventoryObject)
-		{
-			return Slot.CampInventorySlotIndex != INDEX_NONE;
-		}
-		return false;
-	}
-
-	// 库存 Drop 判断流程：格子 Widget 只确认源和目标都是运行期库存格；同源整理或跨源转移由 PageController 转成明确服务器命令。
-	bool IsRunInventoryDropPair(const FCatInventorySlotView& SourceSlot, const FCatInventorySlotView& TargetSlot)
-	{
-		return SourceSlot.bOccupied
-			&& IsRunInventorySlot(SourceSlot)
-			&& IsRunInventorySlot(TargetSlot);
-	}
-
-	// 容器 Drop 判断流程：Items 容器仍只允许占用源格拖到容器目标格；目标空格也要能接住拖拽。
-	bool IsContainerDropPair(const FCatInventorySlotView& SourceSlot, const FCatInventorySlotView& TargetSlot)
-	{
-		return TargetSlot.SlotSource == ECatInventorySlotSource::ContainerObject
-			&& SourceSlot.SlotSource == ECatInventorySlotSource::ContainerObject
-			&& SourceSlot.bOccupied
-			&& SourceSlot.ObjectKind != ECatContainedObjectKind::Unknown
-			&& SourceSlot.ObjectInstanceId.IsValid();
-	}
-
-	// 格子接收判断流程：DragOver 和 Drop 共用同一套判定，避免悬停时漏事件、落下时又试图补救。
-	bool IsAcceptedDropPair(const FCatInventorySlotView& SourceSlot, const FCatInventorySlotView& TargetSlot)
-	{
-		return IsRunInventoryDropPair(SourceSlot, TargetSlot)
-			|| IsContainerDropPair(SourceSlot, TargetSlot);
-	}
-}
-
-// 渲染流程：
-// 1. 缓存主界面的只读投影，再同步文本、数量、缩略图引用和选中状态给蓝图字段。
-// 2. 可选图片控件会同步加载当前缩略图并写入 Brush；缺少资源时折叠图片控件，避免沿用上一次的显示内容。
-// 3. 可选数量控件按 bBlueprintShowQuantity 自动显隐，最后触发蓝图扩展点；格子不持有容器数组或任何写入口。
-void UCatInventorySlotWidget::RenderSlot(const FCatInventorySlotView& SlotView)
-{
-	LastSlotView = SlotView;
-	BlueprintDisplayText = SlotView.DisplayText;
-	BlueprintDisplayName = SlotView.DisplayName;
-	BlueprintDescription = SlotView.Description;
-	BlueprintThumbnail = SlotView.Thumbnail;
-	BlueprintQuantity = SlotView.Quantity;
-	BlueprintQuantityText = SlotView.QuantityText;
-	bBlueprintShowQuantity = SlotView.bShowQuantity;
-	bBlueprintStackable = SlotView.bStackable;
-	bBlueprintOccupied = SlotView.bOccupied;
-	bBlueprintSelected = SlotView.bSelected;
-	if (DisplayTextBlock)
-	{
-		DisplayTextBlock->SetText(BlueprintDisplayText);
-	}
+	SlotIndex = InSlotIndex;
+	SourceInventory = InInventory;
+	InventoryEntry = InEntry;
+	const UCatInventoryItemDefinition* Definition = InventoryEntry.Instance ? InventoryEntry.Instance->GetItemDefinition() : nullptr;
+	UTexture2D* Thumbnail = Definition && InventoryEntry.StackCount > 0 ? Definition->GetInventoryThumbnail().LoadSynchronous() : nullptr;
 	if (ThumbnailImage)
 	{
-		if (UTexture2D* LoadedThumbnail = BlueprintThumbnail.LoadSynchronous())
-		{
-			ThumbnailImage->SetBrushFromTexture(LoadedThumbnail, true);
-			ThumbnailImage->SetVisibility(ESlateVisibility::Visible);
-		}
-		else
-		{
-			ThumbnailImage->SetVisibility(ESlateVisibility::Collapsed);
-		}
+		ThumbnailImage->SetBrushFromTexture(Thumbnail, true);
+		ThumbnailImage->SetVisibility(Thumbnail ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	}
 	if (QuantityTextBlock)
 	{
-		QuantityTextBlock->SetText(BlueprintQuantityText);
-		QuantityTextBlock->SetVisibility(bBlueprintShowQuantity
-			                                 ? ESlateVisibility::Visible
-			                                 : ESlateVisibility::Collapsed);
+		QuantityTextBlock->SetText(FText::AsNumber(InventoryEntry.StackCount));
+		QuantityTextBlock->SetVisibility(InventoryEntry.StackCount > 1 ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	}
-	BP_RenderSlot(LastSlotView);
 }
 
-// 状态读取流程：返回最近投影的只读引用；调用者只能展示或比较下标，不能通过它修改后端容器。
-const FCatInventorySlotView& UCatInventorySlotWidget::GetLastSlotView() const
+// 只暴露本格的显示副本；蓝图可据此渲染状态，但库存事实仍以服务器按 SourceInventory 和 SlotIndex 重读为准。
+const FCatInventoryEntry& UCatInventorySlotWidget::GetInventoryEntry() const
 {
-	return LastSlotView;
+	return InventoryEntry;
 }
 
-// 初始化流程：允许 UUserWidget 接收鼠标交互；正式视觉结构仍完全由 WBP Designer 提供。
+// 本地格子只提交库存宿主和位置；不等待上一动作，也不拿 UI 数量作为操作前提，服务器统一复核权限和真实物品。
+void UCatInventorySlotWidget::RequestUseItem()
+{
+	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwningPlayer());
+	if (!Controller || !SourceInventory || SlotIndex == INDEX_NONE || !InventoryEntry.Instance || InventoryEntry.StackCount <= 0)
+	{
+		return;
+	}
+	const FGuid RequestId = FGuid::NewGuid();
+	UE_LOG(LogCatUI, Log, TEXT("Event=ui_inventory_use_submitted World=%s NetMode=%d Request=%s SourceHost=%s SourceIndex=%d"),
+		*GetPathNameSafe(GetWorld()), static_cast<int32>(Controller->GetNetMode()), *RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+		*GetNameSafe(SourceInventory->GetOwner()), SlotIndex);
+	Controller->ServerUseInventoryItemFromHost(RequestId, SourceInventory->GetOwner(), SlotIndex);
+}
+
+// 允许格子接收鼠标和键盘；其他初始化继续使用 UUserWidget。
 void UCatInventorySlotWidget::NativeOnInitialized()
 {
 	Super::NativeOnInitialized();
 	SetIsFocusable(true);
 }
 
-// 鼠标按下流程：
-// 1. 左键只交给 Slate 检测拖拽，不在拖拽阈值确认前广播选择或刷新本页。
-// 2. 右键只广播上下文意图，主界面按格子来源直接构造动作。
-// 3. 其他按键不消费，避免格子截断父级面板快捷键。
+// 左键只检测拖拽，避免按下时重建控件中断鼠标捕获；右键复用唯一使用入口。
 FReply UCatInventorySlotWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
 {
 	if (InMouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
@@ -117,102 +69,90 @@ FReply UCatInventorySlotWidget::NativeOnMouseButtonDown(const FGeometry& InGeome
 	}
 	if (InMouseEvent.GetEffectingButton() == EKeys::RightMouseButton)
 	{
-		OnContextRequested.Broadcast(LastSlotView);
+		RequestUseItem();
 		return FReply::Handled();
 	}
 	return Super::NativeOnMouseButtonDown(InGeometry, InMouseEvent);
 }
 
-// 鼠标松开流程：只有未被拖拽消费的普通左键点击会走到这里；这时再更新本页本地选中，不会影响 Drop 命中。
+// 普通点击在松开时选择父页使用按钮所指的格位；拖拽由 Slate 的独立 Drop 事件结束。
 FReply UCatInventorySlotWidget::NativeOnMouseButtonUp(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
 {
-	(void)InGeometry;
 	if (InMouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
 	{
-		OnSlotSelected.Broadcast(LastSlotView);
+		OnSlotSelected.Broadcast(SlotIndex);
 		return FReply::Handled();
 	}
 	return Super::NativeOnMouseButtonUp(InGeometry, InMouseEvent);
 }
 
-// 拖拽流程：
-// 1. 运行期库存和 Items 容器的占用格都能启动拖拽；空格可作为目标，但不能作为源。
-// 2. 拖拽会冻结一份源格只读投影，后续 Drop 使用这份数据而不是源 Widget 指针。
-// 3. 不可拖、源事实不完整或 Operation 创建失败时直接放弃，不广播拖拽开始。
-// 4. Operation 先读取当前格子的实际几何尺寸，几何异常时回退到 72x72，再包住临时图片控件；图片只来自 DragSource.Thumbnail，不读文字，也不回退上一次控件 Brush。
-// 5. 创建完成后不再额外通知上层刷新；真正列表变化只来自 Drop 后的后端结果。
+// 只为非空库存格创建载荷；源位置保存到操作对象，预览取当前定义图片，临时控件随拖拽操作释放。
 void UCatInventorySlotWidget::NativeOnDragDetected(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent,
-                                                   UDragDropOperation*& OutOperation)
+	UDragDropOperation*& OutOperation)
 {
-	(void)InMouseEvent;
 	OutOperation = nullptr;
-	const bool bRunInventoryDrag = LastSlotView.bOccupied && IsRunInventorySlot(LastSlotView);
-	const bool bContainerDrag = LastSlotView.SlotSource == ECatInventorySlotSource::ContainerObject
-		&& LastSlotView.bOccupied && LastSlotView.ObjectKind != ECatContainedObjectKind::Unknown
-		&& LastSlotView.ObjectInstanceId.IsValid();
-	if (!LastSlotView.bCanDrag || (!bRunInventoryDrag && !bContainerDrag))
+	if (!SourceInventory || SlotIndex == INDEX_NONE || !InventoryEntry.Instance || InventoryEntry.StackCount <= 0)
 	{
 		return;
 	}
-	const FCatInventorySlotView DragSource = LastSlotView;
-	UCatInventoryDragDropOperation* DragOperation = NewObject<UCatInventoryDragDropOperation>(this);
-	if (!DragOperation)
+	UCatInventoryDragDropOperation* Operation = NewObject<UCatInventoryDragDropOperation>(this);
+	Operation->SourceInventory = SourceInventory;
+	Operation->SourceSlotIndex = SlotIndex;
+	Operation->Pivot = EDragPivot::CenterCenter;
+	FVector2D PreviewSize = InGeometry.GetLocalSize();
+	if (PreviewSize.X <= 1.0f || PreviewSize.Y <= 1.0f)
 	{
-		return;
+		PreviewSize = FVector2D(72.0f, 72.0f);
 	}
-	OutOperation = DragOperation;
-	DragOperation->SourceSlot = DragSource;
-	DragOperation->Pivot = EDragPivot::CenterCenter;
-	FVector2D ResolvedDragPreviewSize = InGeometry.GetLocalSize();
-	if (ResolvedDragPreviewSize.X <= 1.0f || ResolvedDragPreviewSize.Y <= 1.0f)
+	USizeBox* Preview = NewObject<USizeBox>(Operation);
+	UImage* Image = NewObject<UImage>(Preview);
+	Preview->SetWidthOverride(PreviewSize.X);
+	Preview->SetHeightOverride(PreviewSize.Y);
+	if (const UCatInventoryItemDefinition* Definition = InventoryEntry.Instance->GetItemDefinition())
 	{
-		ResolvedDragPreviewSize = FVector2D(72.0f, 72.0f);
+		Image->SetBrushFromTexture(Definition->GetInventoryThumbnail().LoadSynchronous(), false);
 	}
-	USizeBox* DragVisualRoot = NewObject<USizeBox>(DragOperation);
-	UImage* DragImage = DragVisualRoot ? NewObject<UImage>(DragVisualRoot) : nullptr;
-	if (DragVisualRoot && DragImage)
-	{
-		DragVisualRoot->SetWidthOverride(ResolvedDragPreviewSize.X);
-		DragVisualRoot->SetHeightOverride(ResolvedDragPreviewSize.Y);
-		if (UTexture2D* LoadedThumbnail = DragSource.Thumbnail.LoadSynchronous())
-		{
-			DragImage->SetBrushFromTexture(LoadedThumbnail, false);
-			DragImage->SetDesiredSizeOverride(ResolvedDragPreviewSize);
-		}
-		DragVisualRoot->AddChild(DragImage);
-		OutOperation->DefaultDragVisual = DragVisualRoot;
-	}
+	Preview->AddChild(Image);
+	Operation->DefaultDragVisual = Preview;
+	OutOperation = Operation;
 }
 
-// 拖拽悬停流程：
-// 1. 只识别本类创建的轻量载荷；其他 UMG 拖拽继续交回父类。
-// 2. 当前格如果能作为目标，就在悬停阶段直接接住事件，避免空营地格被同屏背包页或父级面板抢走 Drop。
-// 3. 本函数不改选择、不刷新列表、不提交服务器命令，只稳定 Slate 的目标命中。
-bool UCatInventorySlotWidget::NativeOnDragOver(const FGeometry& InGeometry,
-	const FDragDropEvent& InDragDropEvent, UDragDropOperation* InOperation)
+// 空格也能接收库存拖拽；这里只决定 Slate 事件归属，库存内容完全不变。
+bool UCatInventorySlotWidget::NativeOnDragOver(const FGeometry& InGeometry, const FDragDropEvent& InDragDropEvent,
+	UDragDropOperation* InOperation)
 {
-	const UCatInventoryDragDropOperation* DragOperation = Cast<UCatInventoryDragDropOperation>(InOperation);
-	if (DragOperation && IsAcceptedDropPair(DragOperation->SourceSlot, LastSlotView))
+	const UCatInventoryDragDropOperation* Operation = Cast<UCatInventoryDragDropOperation>(InOperation);
+	if (Operation && Operation->SourceInventory && Operation->SourceSlotIndex != INDEX_NONE && SourceInventory && SlotIndex != INDEX_NONE)
 	{
 		return true;
 	}
 	return Super::NativeOnDragOver(InGeometry, InDragDropEvent, InOperation);
 }
 
-// Drop 流程：
-// 1. 只接受本类创建的 UCatInventoryDragDropOperation，其他 UMG 拖拽交回父类。
-// 2. 运行期库存格允许同源整理和跨源转移；Items 容器槽仍只接受容器到容器的移动。
-// 3. 本格只广播源和目标快照，不做本地数组搬运；服务器复制回来后 Model 会重建最终显示。
+// 和 AOInventoryUI 一样从源/目标库存及格位提交交换；同格无操作，其他请求由 owning Controller 送到服务器。
+// 服务器可同步触发本机 Model 更新并重建 UI，因此提交前固定全部参数，提交后不再读取本格。
 bool UCatInventorySlotWidget::NativeOnDrop(const FGeometry& InGeometry, const FDragDropEvent& InDragDropEvent,
-                                           UDragDropOperation* InOperation)
+	UDragDropOperation* InOperation)
 {
-	(void)InGeometry;
-	(void)InDragDropEvent;
-	const UCatInventoryDragDropOperation* DragOperation = Cast<UCatInventoryDragDropOperation>(InOperation);
-	if (!DragOperation || !IsAcceptedDropPair(DragOperation->SourceSlot, LastSlotView))
+	const UCatInventoryDragDropOperation* Operation = Cast<UCatInventoryDragDropOperation>(InOperation);
+	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwningPlayer());
+	if (!Operation || !Controller || !Operation->SourceInventory || !SourceInventory
+		|| Operation->SourceSlotIndex == INDEX_NONE || SlotIndex == INDEX_NONE)
 	{
 		return Super::NativeOnDrop(InGeometry, InDragDropEvent, InOperation);
 	}
-	OnSlotDropRequested.Broadcast(DragOperation->SourceSlot, LastSlotView);
+	if (Operation->SourceInventory == SourceInventory && Operation->SourceSlotIndex == SlotIndex)
+	{
+		return true;
+	}
+	const FGuid RequestId = FGuid::NewGuid();
+	AActor* SourceHost = Operation->SourceInventory->GetOwner();
+	AActor* TargetHost = SourceInventory->GetOwner();
+	const int32 SourceIndex = Operation->SourceSlotIndex;
+	const int32 TargetIndex = SlotIndex;
+	UE_LOG(LogCatUI, Log, TEXT("Event=ui_inventory_slot_drop_submitted World=%s NetMode=%d Request=%s SourceHost=%s SourceIndex=%d TargetHost=%s TargetIndex=%d"),
+		*GetPathNameSafe(GetWorld()), static_cast<int32>(Controller->GetNetMode()), *RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+		*GetNameSafe(SourceHost), SourceIndex, *GetNameSafe(TargetHost), TargetIndex);
+	Controller->ServerMoveInventoryItemBetweenHosts(RequestId, SourceHost, SourceIndex, TargetHost, TargetIndex);
 	return true;
 }

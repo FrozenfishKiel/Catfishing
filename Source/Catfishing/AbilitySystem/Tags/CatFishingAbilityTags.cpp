@@ -33,10 +33,16 @@ namespace CatFishingAbilityTags
 	UE_DEFINE_GAMEPLAY_TAG(GameplayCue_Fishing_Reel, "Cat.GameplayCue.Fishing.Reel");
 	UE_DEFINE_GAMEPLAY_TAG(Cosmetic_Fishing_ScoopSwing, "Cat.Cosmetic.Fishing.ScoopSwing");
 	UE_DEFINE_GAMEPLAY_TAG(Cosmetic_Fishing_HookPull, "Cat.Cosmetic.Fishing.HookPull");
-	UE_DEFINE_GAMEPLAY_TAG(Cosmetic_Fishing_LineBroken, "Cat.Cosmetic.Fishing.LineBroken");
 	UE_DEFINE_GAMEPLAY_TAG(Cosmetic_Fishing_LineCut, "Cat.Cosmetic.Fishing.LineCut");
 	UE_DEFINE_GAMEPLAY_TAG(Cosmetic_Fishing_CatInWater, "Cat.Cosmetic.Fishing.CatInWater");
 	UE_DEFINE_GAMEPLAY_TAG(Data_Fishing_FightStaminaDelta, "Cat.Data.Fishing.FightStaminaDelta");
-	UE_DEFINE_GAMEPLAY_TAG(Data_Run_BaseQuotaTarget, "Cat.Data.Run.BaseQuotaTarget");
-	UE_DEFINE_GAMEPLAY_TAG(Data_Run_Sacrifice_RawContribution, "Cat.Data.Run.Sacrifice.RawContribution");
+	UE_DEFINE_GAMEPLAY_TAG(Data_Run_BaseDailyOfferingTarget, "Cat.Data.Run.BaseDailyOfferingTarget");
+	UE_DEFINE_GAMEPLAY_TAG(Data_Run_Offering_SmallFishCount, "Cat.Data.Run.Offering.SmallFishCount");
+	UE_DEFINE_GAMEPLAY_TAG(Data_Run_Offering_MediumFishCount, "Cat.Data.Run.Offering.MediumFishCount");
+	UE_DEFINE_GAMEPLAY_TAG(Data_Run_Offering_LargeFishCount, "Cat.Data.Run.Offering.LargeFishCount");
+	UE_DEFINE_GAMEPLAY_TAG(Data_Run_Offering_GiantFishCount, "Cat.Data.Run.Offering.GiantFishCount");
+	UE_DEFINE_GAMEPLAY_TAG(Data_Run_Offering_StinkyFishCount, "Cat.Data.Run.Offering.StinkyFishCount");
+	UE_DEFINE_GAMEPLAY_TAG(Data_Run_Offering_BaseProgressGain, "Cat.Data.Run.Offering.BaseProgressGain");
+	UE_DEFINE_GAMEPLAY_TAG(Data_Run_Offering_BaseProgressLoss, "Cat.Data.Run.Offering.BaseProgressLoss");
+	UE_DEFINE_GAMEPLAY_TAG(Cosmetic_Fishing_LineBroken, "Cat.Cosmetic.Fishing.LineBroken");
 }

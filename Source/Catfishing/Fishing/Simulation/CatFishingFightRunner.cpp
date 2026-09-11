@@ -20,8 +20,8 @@
 
 #include "GameFramework/PlayerState.h"
 
-#include "Items/CatWorldItemSettings.h"
-#include "Items/World/CatWorldSurfaceResolver.h"
+#include "FishContainers/CatFishPickupSettings.h"
+#include "FishContainers/World/CatWorldSurfaceResolver.h"
 #include "Logging/CatLog.h"
 #include "Misc/ScopeExit.h"
 #include "Fishing/Debug/CatFishingMotionDiagnostics.h"
@@ -570,7 +570,7 @@ bool UCatFishingFightRunner::TryResolveGroundedFishPosition(const FVector& Desir
 	OutSurfaceNormal = FVector::UpVector;
 	OutSurfaceActor = nullptr;
 	UWorld* World = Session.IsValid() ? Session->GetWorld() : nullptr;
-	const UCatWorldItemSettings* ItemSettings = GetDefault<UCatWorldItemSettings>();
+	const UCatFishPickupSettings* ItemSettings = GetDefault<UCatFishPickupSettings>();
 	if (!World || !ItemSettings || QueryPosition.ContainsNaN())
 	{
 		return false;

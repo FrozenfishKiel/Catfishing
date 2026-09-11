@@ -1,6 +1,9 @@
 #include "Inventory/CatInventorySettings.h"
 
-// 目录项校验流程：稳定 ID 和定义资产必须互相对齐，避免旧 ID 被错误映射到另一种物品。
+#include "Data/CatFishCatalogSettings.h"
+#include "Data/CatFishDefinition.h"
+
+// 目录项校验流程：稳定 ID 和定义资产必须互相对齐，避免无效 ID 被错误映射到另一种物品。
 bool FCatInventoryCatalogDefinition::IsRuntimeReady() const
 {
 	UCatInventoryItemDefinition* Definition = ItemDefinition.LoadSynchronous();
@@ -36,10 +39,16 @@ UCatInventoryItemDefinition* UCatInventorySettings::FindRuntimeDefinition(const 
 		Match = Definition.ItemDefinition.LoadSynchronous();
 	}
 
-	return Match;
+	if (Match != nullptr)
+	{
+		return Match;
+	}
+
+	const UCatFishCatalogSettings* FishCatalog = GetDefault<UCatFishCatalogSettings>();
+	return FishCatalog != nullptr ? FishCatalog->FindRuntimeDefinition(DefinitionId) : nullptr;
 }
 
-// 玩家随身容量读取流程：只把配置值夹到非负；旧 Equipment 覆盖逻辑留在迁移适配层，库存设置本身不反向依赖 Equipment。
+// 玩家随身容量读取流程：只把配置值夹到非负；InventorySettings 是随身库存容量的唯一配置源。
 int32 UCatInventorySettings::GetPlayerInventorySlotCapacity() const
 {
 	return FMath::Max(0, PlayerInventorySlotCapacity);

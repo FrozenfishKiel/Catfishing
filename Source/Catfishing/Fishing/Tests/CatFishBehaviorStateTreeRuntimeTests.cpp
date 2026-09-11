@@ -1,3 +1,7 @@
+#include "Inventory/CatInventorySettings.h"
+#include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
+#include "Equipment/Fragments/CatEquipmentFragment_Bait.h"
+#include "Fishing/Tests/CatFishingEquipmentTestFixtures.h"
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -214,35 +218,32 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 
 	// 补齐生产消费者：只准备已经中鱼的事务状态，之后由真正的 HandleFixedStep
 	// 执行树、受力、最终水面落位、ASC 付款及 Session 发布，不手工提交 Step 或余额。
-	UCatEquipmentSettings* EquipmentSettings = GetMutableDefault<UCatEquipmentSettings>();
-	TGuardValue<TArray<TSoftObjectPtr<UCatEquipmentDefinition>>> SavedDefinitions(EquipmentSettings->Definitions, {});
-	TGuardValue<ECatDomainPolicy> SavedTrust(EquipmentSettings->ProfileLoadoutTrustPolicy, ECatDomainPolicy::Enabled);
-	TGuardValue<int32> SavedSlots(EquipmentSettings->InventorySlotCapacity, 12);
-	TGuardValue<int32> SavedStacks(EquipmentSettings->InventoryQuantityStackCapacity, 20);
-	TGuardValue<FName> SavedWood(EquipmentSettings->DriftwoodDefinitionId, FName(TEXT("IntentRuntimeWood")));
+	UCatInventorySettings* EquipmentSettings = GetMutableDefault<UCatInventorySettings>();
+	TGuardValue<TArray<FCatInventoryCatalogDefinition>> SavedDefinitions(EquipmentSettings->Definitions, {});
+	TGuardValue<ECatDomainPolicy> SavedTrust(GetMutableDefault<UCatEquipmentSettings>()->ProfileLoadoutTrustPolicy, ECatDomainPolicy::Enabled);
+	TGuardValue<int32> SavedSlots(EquipmentSettings->PlayerInventorySlotCapacity, 12);
+	TGuardValue<int32> SavedStacks(EquipmentSettings->DefaultQuantityStackCapacity, 20);
 	TArray<TStrongObjectPtr<UCatEquipmentDefinition>> Definitions;
-	const auto AddDefinition = [&](const FName Id, const ECatEquipmentKind Kind)
+	const auto AddDefinition = [&](const FName Id, const CatFishingTest::EFixtureKind Kind)
 	{
 		UCatEquipmentDefinition* Definition = NewObject<UCatEquipmentDefinition>();
 		Definitions.Emplace(Definition);
 		Definition->EquipmentDefinitionId = Id;
 		Definition->FunctionalRouteId = Definition->LoadoutSlotId = Id;
-		Definition->Kind = Kind;
+		CatFishingTest::Configure(Definition, Kind);
 		Definition->bEnableRuntimeDefinition = true;
-		EquipmentSettings->Definitions.Add(TSoftObjectPtr<UCatEquipmentDefinition>(Definition));
+		EquipmentSettings->Definitions.Add({Definition->EquipmentDefinitionId, Definition});
 		return Definition;
 	};
-	UCatEquipmentDefinition* RodDefinition = AddDefinition(TEXT("IntentRuntimeRod"), ECatEquipmentKind::Rod);
-	RodDefinition->MaximumRodDurability = 1000.0;
-	RodDefinition->MaximumLineLengthCentimeters = 1500.0;
-	RodDefinition->HighTensionWearMultiplier = 1.0;
+	UCatEquipmentDefinition* RodDefinition = AddDefinition(TEXT("IntentRuntimeRod"), CatFishingTest::EFixtureKind::Rod);
+	CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->MaximumRodDurability = 1000.0;
+	CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->MaximumLineLengthCentimeters = 1500.0;
+	CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->HighTensionWearMultiplier = 1.0;
 	RodDefinition->UseActorClass = ACatFishingRodActor::StaticClass();
-	RodDefinition->UseInventoryEffect = ECatEquipmentUseInventoryEffect::HoldInstanceUntilUnUse;
-	UCatEquipmentDefinition* BaitDefinition = AddDefinition(TEXT("IntentRuntimeBait"), ECatEquipmentKind::Bait);
+	UCatEquipmentDefinition* BaitDefinition = AddDefinition(TEXT("IntentRuntimeBait"), CatFishingTest::EFixtureKind::Bait);
 	BaitDefinition->bRunConsumable = true;
-	BaitDefinition->BiteRateMultiplier = BaitDefinition->MinimumBiteDelayMultiplier = 1.0;
-	AddDefinition(TEXT("IntentRuntimeFloat"), ECatEquipmentKind::Float)->MaximumCastDistanceCentimeters = 1000.0;
-	AddDefinition(EquipmentSettings->DriftwoodDefinitionId, ECatEquipmentKind::Driftwood)->bRunConsumable = true;
+	CatFishingTest::Fragment<UCatEquipmentFragment_Bait>(BaitDefinition)->BiteRateMultiplier = CatFishingTest::Fragment<UCatEquipmentFragment_Bait>(BaitDefinition)->MinimumBiteDelayMultiplier = 1.0;
+	CatFishingTest::Fragment<UCatEquipmentFragment_Float>(AddDefinition(TEXT("IntentRuntimeFloat"), CatFishingTest::EFixtureKind::Float))->MaximumCastDistanceCentimeters = 1000.0;
 	for (const TStrongObjectPtr<UCatEquipmentDefinition>& Definition : Definitions)
 		if (!TestTrue(TEXT("生产付款夹具的装备定义完整"), Definition->IsRuntimeDefinitionReady())) return false;
 
@@ -327,7 +328,7 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		const FGuid SessionId = FGuid::NewGuid();
 		if (!TestTrue(TEXT("会话预留真实鱼竿和饵漂"), Equipment->BeginFishingUse(SessionId,
 			RodItemId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId,
-			Loadout.RodDefinitionId, Loadout.BaitDefinitionId, Loadout.FloatDefinitionId, Loadout.Revision).bReserved)
+			Loadout.RodDefinitionId, Loadout.BaitDefinitionId, Loadout.FloatDefinitionId, Loadout.Revision).bBaitFrozen)
 			|| !TestTrue(TEXT("会话完成中鱼扣饵"), Equipment->CommitFishingBaitDeferred(SessionId).bApplied)) return false;
 		if (!TestTrue(TEXT("鱼竿绑定真实操作者及库存实例"), Rod->InitializeAuthoritativeIdentity(
 			FGuid::NewGuid(), RodItemId, Loadout.RodDefinitionId, NAME_None, Player, nullptr, true, false))) return false;
@@ -372,8 +373,8 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		Init.Config.CatStaminaMaximum = CatStaminaMaximum;
 		Init.Config.FishFullEffortSpeedCentimetersPerSecond = 180.0;
 		Init.Config.FishStaminaPerUnfulfilledMeter = Price;
-		Init.Config.MaximumLineLengthCentimeters = RodDefinition->MaximumLineLengthCentimeters;
-		Init.Config.RodDurability = RodDefinition->MaximumRodDurability;
+		Init.Config.MaximumLineLengthCentimeters = CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->MaximumLineLengthCentimeters;
+		Init.Config.RodDurability = CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->MaximumRodDurability;
 		Init.Config.ReelSpeedCentimetersPerSecond = 80.0;
 		Init.InitialState.CatStamina = CatStaminaMaximum;
 		Init.InitialState.FishStamina = FishDefinition->FishFightStamina;

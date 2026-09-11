@@ -37,7 +37,7 @@ protected:
 	 * 输入按下的本地表现钩子（挥网等语义唯一、成败都要播的即时动作）。
 	 * 蓝图子类实现它播 Montage/音效；只在本地控制端、命令提交前调用，绝不携带任何玩法结果。
 	 * Primary 因同一输入存在瞄准/提竿/收线三种语义，不调用此钩子；抛竿由 Hook CastFlight 复制状态驱动。
-	 * 结果驱动的动画（拖拽循环、完美中鱼、断线）不属于这里，用 Snapshot/表现事件驱动。
+	 * 结果驱动的动画（拖拽循环、完美中鱼、切线/落水）不属于这里，用 Snapshot/表现事件驱动。
 	 */
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category = "Catfishing|Presentation")
 	void BP_OnLocalInputActivated();

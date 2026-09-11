@@ -24,8 +24,7 @@ sheet → CSV，`_manifest.json` 记每个节点的 token / revision / 导出时
 - 九册与子页：`Knowledge/Feishu/GDD 系统分册/`（含「钓鱼规则」＝唯一实现规格书）
 - 内容表（道具四表 / 鱼表格 / UI 表）：同目录下的 `*.csv`
 - 裁决与修改记录：`Knowledge/Feishu/裁决同步/`
-- `Knowledge/GDD/` 是 2026-08 的旧快照，三册已改名（装备与道具→道具、鱼类图鉴→鱼、印记图鉴→印记），
-  以 `Knowledge/Feishu/` 为准。
+- 本地 GDD 快照已按人工要求删除；以 `Knowledge/Feishu/` 为准。
 
 ## 一条要先知道的
 

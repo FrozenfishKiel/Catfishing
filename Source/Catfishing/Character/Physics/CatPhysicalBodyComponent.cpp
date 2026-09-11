@@ -622,6 +622,7 @@ void UCatPhysicalBodyComponent::ReleaseConnectionsFromAuthority(FName Reason)
 	if (!HasAuthority()) return;
 	JumpTractionUntilSeconds = 0;
 	if (Grab) Grab->ReleaseAllFromAuthority(Reason);
+	if (!GetWorld()) return;
 	for (TActorIterator<AActor> It(GetWorld()); It; ++It)
 		if (*It != GetOwner())
 			if (UCatPhysicsGrabComponent* Other = It->FindComponentByClass<UCatPhysicsGrabComponent>())
@@ -804,7 +805,7 @@ void UCatPhysicalBodyComponent::LogState(FName Event, FName Reason) const
 void UCatPhysicalBodyComponent::EndPlay(EEndPlayReason::Type EndPlayReason)
 {
 	ReleaseConnectionsFromAuthority(TEXT("EndPlay"));
-	if (auto* Policy = GetWorld()->GetSubsystem<UCatLightPropSubsystem>())
+	if (auto* Policy = GetWorld() ? GetWorld()->GetSubsystem<UCatLightPropSubsystem>() : nullptr)
 	{
 		Policy->UnregisterBody(Body);
 		if (CharacterMovement) Policy->UnregisterBody(CastChecked<ACharacter>(GetOwner())->GetCapsuleComponent());

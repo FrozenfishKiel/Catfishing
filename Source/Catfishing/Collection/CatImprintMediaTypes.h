@@ -14,11 +14,11 @@ struct FCatImprintMediaRecipientAuthorization
 	UPROPERTY(BlueprintReadWrite)
 	FString RecipientStableNetId;
 
-	/** 收件人进入本次媒体分发时的成员资格纪元；后续拉取或 ACK 必须带回同一纪元，服务器借此拒绝旧房间成员继续访问。 */
+	/** 收件人进入本次媒体分发时的成员资格纪元；后续拉取或 ACK 必须带回同一纪元，服务器借此拒绝已离开的房间成员继续访问。 */
 	UPROPERTY(BlueprintReadWrite)
 	int64 MembershipRevision = 0;
 
-	/** 收件人进入本次媒体分发时的媒体权限纪元；权限表一旦变化，旧 cursor 会失效，避免撤权后继续续传。 */
+	/** 收件人进入本次媒体分发时的媒体权限纪元；权限表一旦变化，失效 cursor 会失效，避免撤权后继续续传。 */
 	UPROPERTY(BlueprintReadWrite)
 	int64 PermissionRevision = 0;
 };
@@ -146,7 +146,7 @@ struct FCatImprintMediaResult
 	UPROPERTY(BlueprintReadOnly)
 	FGuid MediaId;
 
-	/** 当前媒体传输 Revision；拒绝时返回最新值，避免调用方继续用旧 cursor 写入。 */
+	/** 当前媒体传输 Revision；拒绝时返回最新值，避免调用方继续用失效 cursor 写入。 */
 	UPROPERTY(BlueprintReadOnly)
 	int64 Revision = 0;
 

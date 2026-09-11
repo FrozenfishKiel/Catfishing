@@ -39,7 +39,7 @@ void UCatLightPropComponent::RestoreOrdinaryPhysics()
 {
 	if (!Body) return;
 	SetGripCarrierFromAuthority(nullptr);
-	if (auto* Policy = GetWorld()->GetSubsystem<UCatLightPropSubsystem>()) Policy->UnregisterBody(Body);
+	if (auto* Policy = GetWorld() ? GetWorld()->GetSubsystem<UCatLightPropSubsystem>() : nullptr) Policy->UnregisterBody(Body);
 	if (GetOwner()->HasAuthority())
 	{
 		Body->SetEnableGravity(true);
@@ -159,6 +159,6 @@ void UCatLightPropComponent::LogState(const FName Event, const FName Reason) con
 void UCatLightPropComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	bEndingPlay = true;
-	if (auto* Policy = GetWorld()->GetSubsystem<UCatLightPropSubsystem>()) Policy->UnregisterBody(Body);
+	if (auto* Policy = GetWorld() ? GetWorld()->GetSubsystem<UCatLightPropSubsystem>() : nullptr) Policy->UnregisterBody(Body);
 	Super::EndPlay(EndPlayReason);
 }

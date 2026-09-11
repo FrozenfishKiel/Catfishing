@@ -26,8 +26,8 @@
 #include "Framework/Game/CatfishingPlayerState.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/PlayerState.h"
-#include "Items/CatWorldItemSettings.h"
-#include "Items/World/CatFishPickupActor.h"
+#include "FishContainers/CatFishPickupSettings.h"
+#include "Items/Fish/CatFishPickupActor.h"
 #include "OnlineSubsystemTypes.h"
 #include "StateTree.h"
 
@@ -334,7 +334,7 @@ bool FCatFishingExhaustedPickupHandoffTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("reserves real fishing bait"), Equipment->BeginFishingUse(SessionId,
 		Loadout.RodItemInstanceId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId,
 		Loadout.RodDefinitionId, Loadout.BaitDefinitionId, Loadout.FloatDefinitionId,
-		Equipment->GetSnapshot().Revision).bReserved)) return false;
+		Equipment->GetSnapshot().Revision).bBaitFrozen)) return false;
 	TestTrue(TEXT("tip and grip are separated by a real rod length"), Rod->ConfigureCanonicalAnchorsFromAuthority(
 		FTransform(FVector(250.0, 0.0, 100.0)), FTransform::Identity, FTransform::Identity));
 	Session->Snapshot.FishingSessionId = SessionId;
@@ -358,7 +358,7 @@ bool FCatFishingExhaustedPickupHandoffTest::RunTest(const FString& Parameters)
 	Session->HandleFightRunnerStepFromAuthority(Step, 0.0, ECatFishMotionIntent::AutoHauling);
 	TestFalse(TEXT("water fish cannot become pickup before dry ground is confirmed"), Session->IsTerminal());
 	Session->FightRunner->bFishBeached = true;
-	const double Reach = GetDefault<UCatWorldItemSettings>()->LandingCompletionDistanceToRodCentimeters;
+	const double Reach = GetDefault<UCatFishPickupSettings>()->LandingCompletionDistanceToRodCentimeters;
 	Encounter->SetActorLocation(LandingPosition + FVector(Reach + 10.0, 0.0, 0.0));
 	Session->HandleFightRunnerStepFromAuthority(Step, 0.0, ECatFishMotionIntent::AutoHauling);
 	TestFalse(TEXT("grounded fish outside tip reach keeps being hauled"), Session->IsTerminal());
@@ -676,7 +676,6 @@ bool FCatFishingSessionScoopMouthCarryTest::RunTest(const FString& Parameters)
 	Definition->bEnableRuntimeDefinition = true;
 	Definition->FishDefinitionId = TEXT("FullStaminaScoopFish");
 	Definition->BodyClass = ECatFishBodyClass::Standard;
-	Definition->SacrificeContribution = 1;
 	Definition->RarityTierId = TEXT("Common");
 	Definition->RegionIds = {TEXT("LakeA")};
 	Definition->TimeOfDay = {ECatEnvironmentTimeOfDay::Morning};
@@ -685,7 +684,6 @@ bool FCatFishingSessionScoopMouthCarryTest::RunTest(const FString& Parameters)
 	Definition->MinimumWeightKilograms = 0.5;
 	Definition->MaximumWeightKilograms = 8.0;
 	Definition->MinimumFightParticipants = 1;
-	Definition->FishStrength = 1.0;
 	Definition->FishFightStamina = 100.0;
 	Definition->BitePersonalityId = TEXT("Nibble");
 	Definition->FightPersonalityId = TEXT("Steady");

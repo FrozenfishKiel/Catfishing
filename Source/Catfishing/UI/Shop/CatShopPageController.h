@@ -79,19 +79,19 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<ACatShopKioskActor> BoundSourceShop;
 
-	/** Model 投影变化订阅句柄；Unbind 必须从同一 Model 移除，避免旧页面继续渲染。 */
+	/** Model 投影变化订阅句柄；Unbind 必须从同一 Model 移除，避免失效页面继续渲染。 */
 	FDelegateHandle ModelViewChangedHandle;
 
 	/** View 关闭意图订阅句柄；Unbind 必须从同一 View 移除，避免销毁期按钮重复关闭。 */
 	FDelegateHandle ViewCloseHandle;
 
-	/** View 商品加购意图订阅句柄；Unbind 必须从同一 View 移除，避免旧商品按钮迟到改购物车。 */
+	/** View 商品加购意图订阅句柄；Unbind 必须从同一 View 移除，避免失效商品按钮迟到改购物车。 */
 	FDelegateHandle ViewAddEntryHandle;
 
-	/** View 购物车删除意图订阅句柄；Unbind 必须从同一 View 移除，避免旧垃圾桶迟到改购物车。 */
+	/** View 购物车删除意图订阅句柄；Unbind 必须从同一 View 移除，避免失效垃圾桶迟到改购物车。 */
 	FDelegateHandle ViewRemoveCartLineHandle;
 
-	/** View 支付意图订阅句柄；Unbind 必须从同一 View 移除，避免旧支付按钮迟到提交。 */
+	/** View 支付意图订阅句柄；Unbind 必须从同一 View 移除，避免失效支付按钮迟到提交。 */
 	FDelegateHandle ViewPayCartHandle;
 
 	/** 服务器领域结果订阅句柄；只在本次商店页生命周期内监听，关闭时必须解除。 */

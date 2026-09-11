@@ -103,7 +103,7 @@ FCatShopWalletSnapshot UCatShopEconomyService::GetWalletSnapshot() const
 	return Wallet;
 }
 
-// 库存读取流程：先清输出，再从指定摊位库存读取 EntryId；服务不再维护全局货架 Map。
+// 库存读取流程：先清输出，再从指定摊位库存读取 EntryId；服务不维护全局货架 Map。
 bool UCatShopEconomyService::TryGetStockSnapshot(const UCatShopInventoryComponent* ShopInventory,
 	const FName EntryId, FCatShopStockSnapshot& OutSnapshot) const
 {
@@ -128,7 +128,7 @@ bool UCatShopEconomyService::TryGetCatalogEntry(const UCatShopInventoryComponent
 }
 
 // 重放判定流程：用与 PurchaseCatalogCart 完全相同的三段拼出幂等键，再只查终态表是否已有该键。
-// 键的拼法必须和整车购买写口逐字一致，否则协调器会以为是首次、白跑一趟交付前置校验；这也是它没有独立成一套判据的原因。
+// 键的拼法必须和整车购买写口逐字一致，否则商店交易入口会把重试当成首次请求，白跑一趟交付前置校验。
 // 只读：不比对载荷签名（载荷不一致由购买写口自己判 InvalidPayload），不看成败，不改任何状态。
 bool UCatShopEconomyService::HasCatalogCartTerminal(const FCatShopCartCommand& Command) const
 {
@@ -144,7 +144,7 @@ TArray<FCatShopTransactionRecord> UCatShopEconomyService::GetTransactionLedgerSn
 }
 
 // 整车报价流程：
-// 1. 先校验请求身份、来源摊位和购物车行，再合并重复 EntryId，保证后续库存与价格只算一次聚合数量。
+// 1. 先校验请求身份、来源摊位和购物车行，再合并重复 EntryId，保证库存与价格只算一次聚合数量。
 // 2. 逐行读取服务器当前货架目录和库存，计算本行小计、交付数量和整车总价；客户端传来的价格或数量倍率一律不用。
 // 3. 最后按团队公款版本和余额整体裁决；任何一行库存不足、目录缺失或总价溢出都会让整车拒绝。
 bool UCatShopEconomyService::ResolveCatalogCartForAuthority(const FCatShopCartCommand& Command,
@@ -253,7 +253,7 @@ bool UCatShopEconomyService::ResolveCatalogCartForAuthority(const FCatShopCartCo
 
 // 整车购买流程：
 // 1. 先用身份、CartPurchase 和 RequestId 查询幂等终态；成功订单重放时重读账本/库存，把交付状态带回最新值。
-//    若首次终态是拒绝，重放必须保留原错误，不能把一次失败请求伪装成已经结算。
+//    若首次终态是拒绝，重放必须返回首次错误，不能把一次失败请求伪装成已经结算。
 // 2. 首次命令复用整车报价判据，然后让摊位库存整批扣减；扣库存失败时公款和账本保持不变。
 // 3. 库存扣完后一次扣总价，并为每个 EntryId 写一条待交付账本，免费商品也以 0 元购买行进入同一交付链。
 FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const FCatShopCartCommand& Command,
@@ -352,7 +352,7 @@ FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const 
 }
 
 // 估价流程：runtime 未就绪或收鱼价没被裁定时直接失败，否则用开局冻结的档位表求值。
-// 这里不做任何兜底：飞书没给斜率，返回一个编出来的价钱比让玩家暂时卖不了鱼危险得多。
+// 这里不编造估价参数：产品没有显式裁定收鱼价时，整笔拒绝比写入一个推测价更容易排查。
 bool UCatShopEconomyService::TryAppraiseFishSale(const double WeightKilograms, int32& OutSaleValue) const
 {
 	OutSaleValue = 0;
@@ -363,14 +363,14 @@ bool UCatShopEconomyService::TryAppraiseFishSale(const double WeightKilograms, i
 	return UCatShopEconomySettings::TryEvaluateFishPurchasePrice(FishPurchasePriceAnchors, WeightKilograms, OutSaleValue);
 }
 
-// 售鱼预检流程：在 Items 不可逆删除鱼前只读验证同一售鱼载荷是否能进入公款；这里不写账本，避免预检本身变成第二个提交点。
+// 售鱼预检流程：在库存不可逆删除鱼前只读验证同一售鱼载荷是否能进入公款；这里不写账本，避免预检本身变成第二个提交点。
 bool UCatShopEconomyService::ValidateFishSale(const FCatShopFishSaleCommand& Command, ECatDomainCommandError& OutError,
 	int64& OutCurrentWalletRevision) const
 {
 	OutError = ECatDomainCommandError::None;
 	OutCurrentWalletRevision = Wallet.Revision;
 	if (!Command.Context.RequestId.IsValid() || Command.Context.StableNetId.IsEmpty()
-		|| !Command.FishInstanceId.IsValid() || !Command.ItemsCommitId.IsValid())
+		|| !Command.FishInstanceId.IsValid() || !Command.InventoryCommitId.IsValid())
 	{
 		OutError = ECatDomainCommandError::InvalidPayload;
 		return false;
@@ -412,15 +412,15 @@ bool UCatShopEconomyService::ValidateFishSale(const FCatShopFishSaleCommand& Com
 	return true;
 }
 
-// 售鱼入账流程：先要求身份、鱼实例和 Items 提交证据都在，再按公款版本并发，最后用重量自己估一次价并和调用方报价核对。
-// 鱼的删除仍然必须先由 Items 完成，这里不碰鱼；价格则相反，只认服务器估出来的那个数。
+// 售鱼入账流程：先要求身份、鱼实例和库存提交证据都在，再按公款版本并发，最后用重量自己估一次价并和调用方报价核对。
+// 鱼的删除仍然必须先由库存完成，这里不碰鱼；价格则相反，只认服务器估出来的那个数。
 FCatShopTransactionResult UCatShopEconomyService::ApplyFishSale(const FCatShopFishSaleCommand& Command)
 {
 	FCatShopTransactionResult Result;
 	Result.Command.RequestId = Command.Context.RequestId;
 	Result.Wallet = Wallet;
 	if (!Command.Context.RequestId.IsValid() || Command.Context.StableNetId.IsEmpty()
-		|| !Command.FishInstanceId.IsValid() || !Command.ItemsCommitId.IsValid())
+		|| !Command.FishInstanceId.IsValid() || !Command.InventoryCommitId.IsValid())
 	{
 		Result.Command.Error = ECatDomainCommandError::InvalidPayload;
 		Result.Command.Revision = Wallet.Revision;
@@ -511,7 +511,7 @@ FCatShopTransactionResult UCatShopEconomyService::ApplyFishSale(const FCatShopFi
 	return Result;
 }
 
-// 交付确认流程：先按确认 RequestId 重放，再用 TransactionId 找到原订单；成功终态可幂等返回，失败终态必须保留原错误。
+// 交付确认流程：先按确认 RequestId 重放，再用 TransactionId 找到原订单；成功终态可幂等返回，失败终态必须返回首次错误。
 // 只允许原买家用真实下游回执把 Pending 推进到 Delivered。
 FCatShopTransactionResult UCatShopEconomyService::ConfirmTransactionDelivery(
 	const FCatShopDeliveryConfirmationCommand& Command)
@@ -520,8 +520,7 @@ FCatShopTransactionResult UCatShopEconomyService::ConfirmTransactionDelivery(
 	Result.Command.RequestId = Command.Context.RequestId;
 	Result.Wallet = Wallet;
 	if (!Command.Context.RequestId.IsValid() || Command.Context.StableNetId.IsEmpty()
-		|| !Command.TransactionId.IsValid() || !Command.DeliveryReceiptId.IsValid()
-		|| Command.DeliveryRevision <= 0)
+		|| !Command.TransactionId.IsValid() || !Command.DeliveryReceiptId.IsValid())
 	{
 		Result.Command.Error = ECatDomainCommandError::InvalidPayload;
 		Result.Command.Revision = Wallet.Revision;
@@ -587,7 +586,6 @@ FCatShopTransactionResult UCatShopEconomyService::ConfirmTransactionDelivery(
 			Record->bDeliveryPending = false;
 			Record->bDeliveryConfirmed = true;
 			Record->DeliveryReceiptId = Command.DeliveryReceiptId;
-			Record->DeliveryRevision = Command.DeliveryRevision;
 			Result.Command.bCommitted = true;
 			Result.Command.Error = ECatDomainCommandError::None;
 			Result.Transaction = *Record;
@@ -628,7 +626,7 @@ bool UCatShopEconomyService::AdvanceShopDay(const int32 NewDayIndex)
 // 显式刷新流程：
 // 1. 先验证 runtime、命令门、来源摊位库存、注册关系和 RequestId；刷新触发时机仍由调用方决定。
 // 2. 具体抽取、库存替换和变化广播交给来源摊位库存组件，服务不读取全局商店表。
-// 3. 成功后公款、账本和交易幂等缓存原样保留；公开快照会通过组件变化订阅刷新。
+// 3. 成功后公款、账本和交易幂等缓存不被修改；公开快照会通过组件变化订阅刷新。
 bool UCatShopEconomyService::RefreshShopInventoryFromCatalog(UCatShopInventoryComponent* ShopInventory,
 	const FGuid& RequestId, const FCatShopRefreshRequest& Request)
 {
@@ -675,8 +673,8 @@ FCatShopPublicEconomySnapshot UCatShopEconomyService::BuildPublicSnapshot(
 		FCatShopPublicTransaction PublicTransaction = MakePublicTransaction(Record);
 		if (ResolveActorPlayerState)
 		{
-			// 解析不到就保持空：那说明这笔交易记录的操作者已经离局或还没进入 Active。
-			// 与其挑一个还在场的人顶上，不如让表现层显示未知操作者。
+			// 解析不到就保持空：这说明这笔交易记录的操作者已经离局或尚未进入 Active。
+			// 与其挑一个场内玩家顶上，不如让表现层显示未知操作者。
 			PublicTransaction.ActorPlayerState = ResolveActorPlayerState(Record.StableNetId);
 		}
 		Snapshot.Transactions.Add(MoveTemp(PublicTransaction));
@@ -705,7 +703,7 @@ bool UCatShopEconomyService::ReopenCommandsForDebugForceNextDay()
 }
 #endif
 
-// 设置加载流程：清空旧交易事实后读取默认对象；公款和售鱼价仍是局级配置，商店货架库存由每个摊位库存组件自己生成。
+// 设置加载流程：清空失效交易事实后读取默认对象；公款和售鱼价仍是局级配置，商店货架库存由每个摊位库存组件自己生成。
 void UCatShopEconomyService::LoadRuntimeEconomyFromSettings()
 {
 	Wallet = FCatShopWalletSnapshot();
@@ -721,7 +719,7 @@ void UCatShopEconomyService::LoadRuntimeEconomyFromSettings()
 	{
 		return;
 	}
-	// 没裁过起始资金时 StartingTeamWalletBalance 是哨兵 -1，此时 bRuntimeReady 已经是 false，四个写口全部 fail-closed；
+	// 起始资金未裁定时 StartingTeamWalletBalance 是哨兵 -1，此时 bRuntimeReady 已经是 false，四个写口全部 fail-closed；
 	// 这里仍夹到 0 只是为了不让快照对外暴露一个负余额，不代表哨兵被当成"裁定 0 元"接受了。
 	Wallet.Balance = FMath::Max(0, Settings->StartingTeamWalletBalance);
 	Wallet.Revision = 1;
@@ -820,7 +818,7 @@ FString UCatShopEconomyService::MakeTerminalKey(const FString& StableNetId, cons
 
 // 购物车载荷签名流程：
 // 1. 正常购物车先按购买写口相同规则归一化，再冻结公款前提、来源摊位和 EntryId/选购次数。
-// 2. 非法购物车也保留原始行签名，避免不同坏载荷都落到空 Lines= 后绕过同 RequestId 漂移检查。
+// 2. 非法购物车也记录原始行签名，避免不同坏载荷都落到空 Lines= 后绕过同 RequestId 漂移检查。
 // 3. 价格、库存和发货数量不进签名，它们来自服务器摊位目录和公开经济事实，重放时只能回读不能由客户端指定。
 FString UCatShopEconomyService::MakeCartPayloadSignature(const FCatShopCartCommand& Command)
 {
@@ -851,23 +849,23 @@ FString UCatShopEconomyService::MakeCartPayloadSignature(const FCatShopCartComma
 		*FString::Join(LineParts, TEXT(",")));
 }
 
-// 售鱼载荷签名流程：冻结公款前提、鱼实例、Items 提交证据、重量和估值；同 RequestId 改任一项都不是合法重放。
+// 售鱼载荷签名流程：冻结公款前提、鱼实例、库存提交证据、重量和估值；同 RequestId 改任一项都不是合法重放。
 // 重量必须进签名：它是收购价的唯一输入，同一个 RequestId 换一条更重的鱼重放就等于换了一笔生意。
 FString UCatShopEconomyService::MakeFishSalePayloadSignature(const FCatShopFishSaleCommand& Command)
 {
-	return FString::Printf(TEXT("Expected=%lld|Fish=%s|ItemsCommit=%s|Weight=%.6f|Value=%d"),
+	return FString::Printf(TEXT("Expected=%lld|Fish=%s|InventoryCommit=%s|Weight=%.6f|Value=%d"),
 		Command.Context.ExpectedRevision,
 		*Command.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
-		*Command.ItemsCommitId.ToString(EGuidFormats::DigitsWithHyphens),
+		*Command.InventoryCommitId.ToString(EGuidFormats::DigitsWithHyphens),
 		Command.WeightKilograms, Command.SaleValue);
 }
 
-// 交付载荷签名流程：冻结原交易、下游回执、下游版本和公款前提；回执漂移必须拒绝而不是重放。
+// 交付载荷签名流程：冻结原交易、下游回执和公款前提；回执漂移必须拒绝而不是重放。
 FString UCatShopEconomyService::MakeDeliveryPayloadSignature(const FCatShopDeliveryConfirmationCommand& Command)
 {
-	return FString::Printf(TEXT("Expected=%lld|Transaction=%s|Receipt=%s|DeliveryRevision=%lld"),
+	return FString::Printf(TEXT("Expected=%lld|Transaction=%s|Receipt=%s"),
 		Command.Context.ExpectedRevision, *Command.TransactionId.ToString(EGuidFormats::DigitsWithHyphens),
-		*Command.DeliveryReceiptId.ToString(EGuidFormats::DigitsWithHyphens), Command.DeliveryRevision);
+		*Command.DeliveryReceiptId.ToString(EGuidFormats::DigitsWithHyphens));
 }
 
 // 载荷比对流程：终态缓存必须伴随签名一起存在且完全一致；缺失签名按不安全缓存处理并拒绝漂移。

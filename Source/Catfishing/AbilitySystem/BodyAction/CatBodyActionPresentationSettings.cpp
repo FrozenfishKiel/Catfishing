@@ -18,7 +18,7 @@ namespace
 
 UCatBodyActionPresentationSettings::UCatBodyActionPresentationSettings()
 {
-	// 构造流程：为六个仍由 Ability 承担前摇和表现生命周期的 Camp/Social 动作建立标签配置；库存、献祭、偷鱼和 Wet 反馈走各自业务服务或表现层。
+	// 构造流程：为六个仍由 Ability 承担前摇和表现生命周期的 Camp/Social 动作建立标签配置；库存、供品结算、偷鱼和 Wet 反馈走各自业务服务或表现层。
 	ActionPresentationConfigs.Reserve(6);
 	const FGameplayTag BodyActionEventTags[] = {
 		CatFishingAbilityTags::AbilityEvent_Body_CampRest.GetTag(),

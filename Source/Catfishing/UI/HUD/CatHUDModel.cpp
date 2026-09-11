@@ -1,4 +1,4 @@
-﻿#include "UI/HUD/CatHUDModel.h"
+#include "UI/HUD/CatHUDModel.h"
 
 #include "AbilitySystemComponent.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"

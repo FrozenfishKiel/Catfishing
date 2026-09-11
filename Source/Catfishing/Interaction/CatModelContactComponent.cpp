@@ -165,11 +165,14 @@ bool UCatModelContactComponent::FindPeerContact(const UCatModelContactComponent*
 
 void UCatModelContactComponent::EndPlay(const EEndPlayReason::Type Reason)
 {
+    if (GetWorld() && GetOwner())
+    {
     for (TActorIterator<ACatCharacter> It(GetWorld()); It; ++It)
         It->GetCapsuleComponent()->IgnoreActorWhenMoving(GetOwner(), false);
     if (GetOwner()->HasAuthority())
         for (TActorIterator<AActor> It(GetWorld()); It; ++It)
             if (auto* Grab = It->FindComponentByClass<UCatPhysicsGrabComponent>()) Grab->ReleaseTargetFromAuthority(GetOwner(), TEXT("ModelContactEndPlay"));
+    }
     for (UCatModelContactBody* Contact : Bodies) if (IsValid(Contact)) Contact->DestroyComponent();
     Bodies.Reset(); Pose = nullptr;
     Super::EndPlay(Reason);

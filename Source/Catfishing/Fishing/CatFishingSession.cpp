@@ -1,4 +1,7 @@
 #include "Fishing/CatFishingSession.h"
+#include "Inventory/CatInventorySettings.h"
+#include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
+#include "Equipment/Fragments/CatEquipmentFragment_Bait.h"
 #include "Fishing/Simulation/CatFishingBiteTimingModel.h"
 
 #include "Character/CatCharacter.h"
@@ -37,9 +40,9 @@
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentSettings.h"
-#include "Items/CatItemsService.h"
-#include "Items/CatWorldItemSettings.h"
-#include "Items/World/CatFishPickupActor.h"
+#include "FishContainers/CatFishContainerService.h"
+#include "FishContainers/CatFishPickupSettings.h"
+#include "Items/Fish/CatFishPickupActor.h"
 #include "Net/UnrealNetwork.h"
 #include "StateTree.h"
 #include "TimerManager.h"
@@ -584,7 +587,7 @@ bool ACatFishingSession::PrepareSessionFromAuthority(const FCatFishingAttemptSna
 	FisherStableNetId = StableNetId;
 	CatchFisherStableNetId = StableNetId;
 
-	ItemsService = GetWorld() ? GetWorld()->GetSubsystem<UCatItemsService>() : nullptr;
+	ItemsService = GetWorld() ? GetWorld()->GetSubsystem<UCatFishContainerService>() : nullptr;
 	// 捕获物会在力竭回收后生成世界鱼；抛竿准备只要求 Items 服务存在，不绑定或搜索任何鱼护。
 	bPrepared = ItemsService.IsValid();
 	return bPrepared;
@@ -652,10 +655,10 @@ bool ACatFishingSession::ScheduleWaitingProbeFromStateTree()
 	double BaitRateMultiplier = 1.0;
 	double BaitMinimumDelayMultiplier = 1.0;
 	// 鱼饵按其配置的倍率修正基础上钩率与最小延迟。
-	if (const UCatEquipmentDefinition* Bait = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(AttemptSnapshot.BaitDefinitionId))
+	if (const UCatEquipmentDefinition* Bait = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(AttemptSnapshot.BaitDefinitionId))
 	{
-		BaitRateMultiplier = Bait->BiteRateMultiplier;
-		BaitMinimumDelayMultiplier = Bait->MinimumBiteDelayMultiplier;
+		BaitRateMultiplier = Bait->FindFragment<UCatEquipmentFragment_Bait>()->BiteRateMultiplier;
+		BaitMinimumDelayMultiplier = Bait->FindFragment<UCatEquipmentFragment_Bait>()->MinimumBiteDelayMultiplier;
 	}
 	// 初次调度时钩子还在飞行；窝料必须采样服务器冻结的水面落点。
 	FCatChumSample ChumSample;
@@ -959,7 +962,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	const UCatFightPersonalityDefinition* Personality = FishDefinition && Settings
 		? Settings->FindFightPersonality(FishDefinition->FightPersonalityId) : nullptr;
 	UStateTree* FishBehaviorStateTree = Settings ? Settings->FishBehaviorStateTree.LoadSynchronous() : nullptr;
-	const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(
+	const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(
 		AttemptSnapshot.RodDefinitionId);
 	UCatEquipmentComponent* Equipment = CastEquipment.Get(); // 钓鱼用途/饵料预留始终属于原始抛竿者，物理抓握不改变结算对象。
 	UCatAbilitySystemComponent* AbilitySystem = FisherCharacter.IsValid()
@@ -1030,7 +1033,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	Config.ExhaustedReelForceNewtons = FightBalance->ExhaustedReelForceNewtons;
 	Config.ExhaustedCatTowAccelerationCentimetersPerSecondSquared = FightBalance->ExhaustedCatTowAccelerationCentimetersPerSecondSquared;
 	Snapshot.FishStrength = Config.FishStrength;
-	Config.RodPhysicsLengthCentimeters = RodDefinition->RodPhysicsLengthCentimeters;
+	Config.RodPhysicsLengthCentimeters = RodDefinition->FindFragment<UCatEquipmentFragment_Rod>()->RodPhysicsLengthCentimeters;
 	Config.CatStaminaMaximum = CatStaminaMaximumFromAttributes;
 	Config.CatStaminaCostPerStrengthCentimeter = FightBalance->CatStaminaCostPerStrengthCentimeter;
 	Config.CatRodStaminaCostPerStrengthRadian = FightBalance->CatRodStaminaCostPerStrengthRadian;
@@ -1055,7 +1058,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	Config.MinimumRodLeverageMultiplier = FightBalance->HeldRodMinimumLeverageMultiplier;
 	Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond =
 		FightBalance->MaximumFishConstraintCorrectionSpeedCentimetersPerSecond;
-	Config.MaximumLineLengthCentimeters = RodDefinition->MaximumLineLengthCentimeters;
+	Config.MaximumLineLengthCentimeters = RodDefinition->FindFragment<UCatEquipmentFragment_Rod>()->MaximumLineLengthCentimeters;
 	// 只读取本场绑定的同一根鱼竿实例；定义上限仅用于新购和维修，开场不能补耐久。
 	bool bRodBroken = false;
 	if (!Equipment->GetFishingRodDurability(Snapshot.FishingSessionId, Config.RodDurability, bRodBroken)
@@ -1067,8 +1070,8 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 			*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
 		return false;
 	}
-	Config.FishFullEffortRodWearPerSecond = RodDefinition->BaseDurabilityWearPerSecond;
-	Config.TautRodWearMultiplier = FMath::Max(1.0, RodDefinition->HighTensionWearMultiplier);
+	Config.FishFullEffortRodWearPerSecond = RodDefinition->FindFragment<UCatEquipmentFragment_Rod>()->BaseDurabilityWearPerSecond;
+	Config.TautRodWearMultiplier = FMath::Max(1.0, RodDefinition->FindFragment<UCatEquipmentFragment_Rod>()->HighTensionWearMultiplier);
 	Config.EscapeSlackCentimeters = FightBalance->EscapeSlackCentimeters;
 	if (!Config.IsValid()) return false; // 配置自检（如任何数值非有限/非法组合）未通过则拒绝启动搏斗。
 
@@ -1426,7 +1429,7 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 	{
 		const ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
 		const ACatFishingRodActor* Rod = Snapshot.RodActor;
-		const UCatWorldItemSettings* ItemSettings = GetDefault<UCatWorldItemSettings>();
+		const UCatFishPickupSettings* ItemSettings = GetDefault<UCatFishPickupSettings>();
 		if (!Encounter || !Rod || !FightRunner)
 		{
 			HandleFightRunnerFailureFromAuthority(TEXT("ExhaustedReelDependency"));
@@ -1491,7 +1494,7 @@ bool ACatFishingSession::CommitCatchEquipmentFromAuthority()
 bool ACatFishingSession::SpawnExhaustedFishPickupFromAuthority(const FVector& SurfaceLocation)
 {
 	UWorld* World = GetWorld();
-	const UCatWorldItemSettings* Settings = GetDefault<UCatWorldItemSettings>();
+	const UCatFishPickupSettings* Settings = GetDefault<UCatFishPickupSettings>();
 	if (!HasAuthority() || !World || !Settings || !FishDefinition || !AttemptSnapshot.WaterRegion.IsValid()
 		|| !FightRunner || !FightRunner->IsFishBeachedForAuthority() || !Snapshot.FishEncounterActor)
 	{

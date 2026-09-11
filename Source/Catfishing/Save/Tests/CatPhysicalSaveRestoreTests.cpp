@@ -6,6 +6,7 @@
 #include "Components/SphereComponent.h"
 #include "Engine/GameInstance.h"
 #include "Equipment/CatEquipmentComponent.h"
+#include "Fishing/Tests/CatFishingEquipmentTestFixtures.h"
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "Framework/Game/CatfishingPlayerState.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
@@ -29,28 +30,33 @@ bool FCatPhysicalCharacterSaveRestoreConsumerTest::RunTest(const FString& Parame
 	const FUniqueNetIdRef UniqueId = FUniqueNetIdString::Create(TEXT("PhysicalSaveConsumer"), TEXT("TEST"));
 	Player->SetUniqueId(FUniqueNetIdRepl(UniqueId));
 	Controller->PlayerState = Player;
+	Controller->SetAsLocalPlayerController();
 	Controller->Possess(Cat);
 	Scene.Step(5);
 	UCatSaveSubsystem* Save = Instance->GetSubsystem<UCatSaveSubsystem>();
 	if (!TestNotNull(TEXT("真实GameInstance的存档子系统"), Save)) return false;
+	if (!TestTrue(TEXT("满足本机玩家存档恢复契约"), Controller->IsLocalController())) return false;
 	// 只准备已读取的存档载荷，不在回归中覆盖玩家的任何磁盘槽。
 	Save->PendingRestoreSaveGame = NewObject<UCatRunSaveGame>(Save);
 	Save->bWorldRestoreApplied = true;
-	FCatSavedPlayerRunState& Saved = Save->PendingRestoreSaveGame->Players.AddDefaulted_GetRef();
-	Saved.StableNetId = UniqueId->ToString();
+	Save->PendingRestoreSaveGame->bHasWorldSnapshot = true;
+	Save->PendingRestoreSaveGame->bHasPlayerSnapshot = true;
+	FCatSavedPlayerRunState& Saved = Save->PendingRestoreSaveGame->PlayerSnapshot;
 	Saved.CharacterTransform = FTransform(FRotator(0, 30, 0), FVector(400, 100, 20));
-	FCatEquipmentLoadoutSnapshot Before;
+	UCatEquipmentComponent* Equipment = Cat->GetEquipmentComponent();
+	if (!TestTrue(TEXT("夹具实际发放两份鱼饵"), Equipment->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(), Equipment->GetSnapshot().Revision, TEXT("BugBait"), 2).bCommitted)) return false;
 	FText Failure;
-	if (!TestTrue(TEXT("存档夹具读取实际库存"), Cat->GetEquipmentComponent()->ExportSnapshotFromAuthority(Before, Failure))) return false;
-	// 此夹具未选择钓具；保留已发放的真实库存实例及其数量。
-	for (const FCatRunInventorySlot& Slot : Before.InventorySlots)
+	const TArray<FCatInventoryEntry> Before = CatFishingTest::Entries(Equipment);
+	Saved.EquipmentSnapshot.BaitDefinitionId = Equipment->GetSnapshot().BaitDefinitionId;
+	Saved.EquipmentSnapshot.BaitItemInstanceId = Equipment->GetSnapshot().BaitItemInstanceId;
+	for (const FCatInventoryEntry& Slot : Before)
 	{
-		FCatSavedRunInventorySlot& SavedSlot = Saved.EquipmentSnapshot.InventorySlots.AddDefaulted_GetRef();
-		SavedSlot.DefinitionId = Slot.DefinitionId;
-		SavedSlot.ItemInstanceId = Slot.ItemInstanceId;
-		SavedSlot.Quantity = Slot.Quantity;
-		SavedSlot.RodDurability = Slot.RodDurability;
-		SavedSlot.bRodBroken = Slot.bRodBroken;
+		FCatSavedRunInventorySlot& SavedSlot = Saved.InventorySlots.AddDefaulted_GetRef();
+		SavedSlot.DefinitionId = CatFishingTest::DefinitionId(Slot);
+		SavedSlot.ItemInstanceId = CatFishingTest::InstanceId(Slot);
+		SavedSlot.Quantity = Slot.StackCount;
+		SavedSlot.RodDurability = CatFishingTest::Durability(Slot);
+		SavedSlot.bRodBroken = CatFishingTest::Broken(Slot);
 	}
 	auto* Physical = Cat->GetPhysicalBodyComponent();
 	const uint32 PreviousEpoch = Physical->GetResetEpoch();
@@ -60,13 +66,12 @@ bool FCatPhysicalCharacterSaveRestoreConsumerTest::RunTest(const FString& Parame
 	for (const bool bLeft : {true, false})
 		TestTrue(TEXT("恢复同时移动两只独立手刚体"), Physical->GetHand(bLeft)->GetComponentLocation().Equals(
 			Saved.CharacterTransform.TransformPosition(UCatPhysicsGrabComponent::RestHandLocal(bLeft)), .01));
-	FCatEquipmentLoadoutSnapshot After;
-	if (!TestTrue(TEXT("恢复后仍能导出正式库存"), Cat->GetEquipmentComponent()->ExportSnapshotFromAuthority(After, Failure))) return false;
-	TestEqual(TEXT("恢复保留库存槽数"), After.InventorySlots.Num(), Before.InventorySlots.Num());
-	for (int32 Index = 0; Index < FMath::Min(After.InventorySlots.Num(), Before.InventorySlots.Num()); ++Index)
+	const TArray<FCatInventoryEntry> After = CatFishingTest::Entries(Equipment);
+	TestEqual(TEXT("恢复保留库存槽数"), After.Num(), Before.Num());
+	for (int32 Index = 0; Index < FMath::Min(After.Num(), Before.Num()); ++Index)
 	{
-		TestEqual(TEXT("物品实例不重生"), After.InventorySlots[Index].ItemInstanceId, Before.InventorySlots[Index].ItemInstanceId);
-		TestEqual(TEXT("物品数量不变化"), After.InventorySlots[Index].Quantity, Before.InventorySlots[Index].Quantity);
+		TestEqual(TEXT("物品实例身份不变化"), CatFishingTest::InstanceId(After[Index]), CatFishingTest::InstanceId(Before[Index]));
+		TestEqual(TEXT("物品数量不变化"), After[Index].StackCount, Before[Index].StackCount);
 	}
 	const FTransform Later(FVector(700, 100, 20));
 	if (!Physical->TeleportBodyFromAuthority(Later, TEXT("AfterRestoreMovement"))) return false;
@@ -76,7 +81,7 @@ bool FCatPhysicalCharacterSaveRestoreConsumerTest::RunTest(const FString& Parame
 	TestTrue(TEXT("重复恢复不覆盖玩家新位置"), Cat->GetActorTransform().Equals(Later, .01));
 	Save->PendingRestoreSaveGame = nullptr;
 	Save->bWorldRestoreApplied = false;
-	Save->RestoredPlayerStableNetIds.Reset();
+	Save->bLocalPlayerRestoredInCurrentWorld = false;
 	return !HasAnyErrors();
 }
 

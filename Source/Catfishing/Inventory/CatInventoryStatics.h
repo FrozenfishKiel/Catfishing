@@ -1,10 +1,12 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Framework/Core/CatDomainCommandTypes.h"
 #include "Inventory/CatInventoryItemDefinition.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "CatInventoryStatics.generated.h"
 
+class ACatCharacter;
 class UCatInventoryComponent;
 class UCatInventoryItemInstance;
 
@@ -42,7 +44,7 @@ struct FCatInventoryInstanceEntry
 	TObjectPtr<UCatInventoryItemInstance> ItemInstance = nullptr;
 };
 
-/** 一次统一收货事务的完整批次；组件会先确认整批能放下，再正式写入，避免半批成功。 */
+/** 一次统一收货事务的完整批次；组件会先确认整批能放下，正式命令再决定是否需要更强的失败回滚边界。 */
 USTRUCT(BlueprintType)
 struct FCatInventoryReceiveBatch
 {
@@ -77,12 +79,20 @@ public:
 	/** 按库存组件优先级寻找第一个能完整接收整批物品的组件，并把批次正式写入那里。 */
 	static bool TryAddInventoryBatchToActor(AActor* TargetActor, const FCatInventoryReceiveBatch& ReceiveBatch);
 
-	/** 收集目标 Actor 公开的库存组件并按统一收货优先级排序；适配层用它显式选择目标库存。 */
+	/** 在两个可触达 Actor 的正式库存之间移动物品；外部只提交宿主和槽位，组件负责正式格子事务。 */
+	static FCatDomainCommandResult MoveItemBetweenInventoryHostsFromAuthority(ACatCharacter* ControlledCharacter,
+		FGuid RequestId, AActor* SourceInventoryHost, int32 SourceSlotIndex, AActor* TargetInventoryHost, int32 TargetSlotIndex);
+
+	/** 使用某个可触达 Actor 正式库存中的一格物品；鱼、草药和装备类效果都由物品实例自己裁决。 */
+	static FCatDomainCommandResult UseItemFromInventoryHostFromAuthority(ACatCharacter* ControlledCharacter,
+		FGuid RequestId, AActor* SourceInventoryHost, int32 SourceSlotIndex);
+
+	/** 收集目标 Actor 上的库存组件并按统一收货优先级排序；Actor 级入口用它显式选择目标库存。 */
 	static void AppendInventoryComponentsFromActor(const AActor* TargetActor,
 		TArray<UCatInventoryComponent*>& OutInventoryComponents);
 
 private:
-	/** 从 Actor 组件上的库存接口收集候选库存；函数只负责发现和排序，不执行容量或写入判断。 */
+	/** 从 Actor 组件列表收集候选库存；函数只负责发现和排序，不执行容量或写入判断。 */
 	static void CollectInventoryComponentsFromActor(const AActor* TargetActor,
 		TArray<UCatInventoryComponent*>& OutInventoryComponents);
 };

@@ -23,5 +23,5 @@ bool UCatChumFieldSettings::IsRuntimeReady() const
 		&& FMath::IsFinite(MaxPlacementRangeCentimeters) && MaxPlacementRangeCentimeters > 0.0 // 最大投放距离合法
 		&& FMath::IsFinite(MaxAimDeviationDegrees) && MaxAimDeviationDegrees > 0.0 && MaxAimDeviationDegrees <= 180.0 // 瞄准容差角度在合理范围内
 		&& Channel >= 0 && Channel < static_cast<int32>(ECC_MAX) // 视线碰撞通道必须是引擎已知的合法枚举值
-		&& FMath::IsFinite(ExpiredCleanupIntervalSeconds) && ExpiredCleanupIntervalSeconds > 0.0; // 过期清理定时器间隔合法
+		&& FMath::IsFinite(ExpiredCleanupIntervalSeconds) && ExpiredCleanupIntervalSeconds > 0.0; // 到期清理定时器间隔合法
 }

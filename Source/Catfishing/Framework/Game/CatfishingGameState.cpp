@@ -8,8 +8,8 @@
 #include "Logging/CatLog.h"
 #include "Net/UnrealNetwork.h"
 
-// 构造流程：先创建 ChumField 公开复制组件，再创建 GameState 自己拥有的 Run ASC、最终额度集和来源倍率集；
-// ASC 立即开启复制并采用 Lyra 口径的 Mixed 模式，最后把两套属性集稳定挂到同一 ASC，后续 GameMode 只应用 GE，不再找第二份额度宿主。
+// 构造流程：先创建 ChumField 公开复制组件，再创建 GameState 自己拥有的 Run ASC、最终供品/世界进度集和来源倍率集；
+// ASC 立即开启复制并采用 Lyra 口径的 Mixed 模式，最后把两套属性集稳定挂到同一 ASC；GameMode 的数值写入只通过 GE 提交。
 ACatfishingGameState::ACatfishingGameState()
 {
 	ChumFieldReplication = CreateDefaultSubobject<UCatChumFieldReplicationComponent>(TEXT("ChumFieldReplication"));
@@ -40,7 +40,7 @@ UAbilitySystemComponent* ACatfishingGameState::GetRunAbilitySystemComponentFromA
 	return HasAuthority() ? RunAbilitySystemComponent : nullptr;
 }
 
-// GameState 组件初始化流程：按 Lyra 的 GameState ASC 口径先完成父类组件初始化，再把唯一 Run ASC 的 Owner/Avatar 都绑定为本 GameState；失败只记录依赖缺口，不运行额度兜底公式。
+// GameState 组件初始化流程：按 Lyra 的 GameState ASC 口径先完成父类组件初始化，再把唯一 Run ASC 的 Owner/Avatar 都绑定为本 GameState；失败只记录依赖缺口，不运行替代公式。
 void ACatfishingGameState::PostInitializeComponents()
 {
 	Super::PostInitializeComponents();

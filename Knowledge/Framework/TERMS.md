@@ -9,7 +9,7 @@
 **Frontend**：前台菜单地图，承载 LocalPlayer UI 和 Online 入口，不生成玩法 Character。
 _Avoid_: Lobby、准备房。
 
-**Lake**：一局玩法地图，承载 Run、Fishing、Camp、Items、Social 和 Character。昼夜、营地和结算都在这里发生。
+**Lake**：一局玩法地图，承载 Run、Fishing、Camp、FishContainers、Inventory、Social 和 Character。昼夜、营地和结算都在这里发生。
 _Avoid_: 白天地图、夜晚地图、营地地图。
 
 **Session**：UE/Steam 联机会话，由 `UCatOnlineSubsystem` 适配。它不是地图，也不是局内 Run 状态。
@@ -37,22 +37,25 @@ _Avoid_: 客户端 Run 真相。
 **Environment State**：`Run Public State` 里的环境事实，表达本局此刻的天气、白天鱼情时段和公共自然事件，由服务器根据 Run 快照求值后复制。
 _Avoid_: 本地光照参数、角色 Wet 状态、客户端天气真相、独立环境管理器。
 
-**Cat Character**：局内猫身体 Actor，同时是 ASC Owner/Avatar，持有身体组件和装备入口，不持有个人鱼护。
+**Cat Character**：局内猫身体 Actor，同时是 ASC Owner/Avatar，持有身体组件和钓具读模型入口；个人鱼护由鱼容器系统持有。
 _Avoid_: 玩家档案、PlayerState 身体。
 
 **Condition**：Wet、Downed、Recovery 等离散身体状态，由 `UCatConditionComponent` 持有。
 _Avoid_: ASC 属性、社交状态。
 
-**Survival Attribute**：Poison、FishingStrength、FightStamina 三项 GAS 属性，由 `UCatSurvivalAttributeSet` 持有；Hunger 和 Fatigue 是已废弃的运行时数值，不属于当前 AttributeSet。
+**Survival Attribute**：Poison、FishingStrength、FightStamina 三项 GAS 属性，由 `UCatSurvivalAttributeSet` 持有；Hunger 和 Fatigue 不在当前 AttributeSet 范围内。
 _Avoid_: Character 普通字段、PlayerState 属性。
 
 ## 物件、鱼与容器
 
-**Equipment**：功能型装配和一局耗材，包括竿、饵、漂、窝料、草药、浮木和耐久。
-_Avoid_: Items、永久解锁。
+**Equipment**：钓具选择读模型和 Fishing 使用协调，保存当前竿/饵/漂/抄网选择、绑定鱼竿磨损和失败预算；正式物品实例、数量、随身背包和公共仓库由 `Inventory` 持有。
+_Avoid_: 鱼容器、正式库存、永久解锁。
 
-**Items**：鱼实例与容器事务系统，不是泛道具系统。
+**FishContainers**：鱼实例与鱼容器事务系统，不是泛道具系统。
 _Avoid_: Item 基类、装备系统。
+
+**Inventory**：正式道具实例、背包和公共库存的运行时系统。
+_Avoid_: 鱼容器、钓具选择状态、Profile 解锁。
 
 **Fish Instance**：局内唯一实物鱼，包含实例 ID、鱼种 ID、重量和容器归属。
 _Avoid_: 鱼种、图鉴记录。
@@ -60,7 +63,7 @@ _Avoid_: 鱼种、图鉴记录。
 **Container**：鱼护、共享鱼缸等局内容器聚合，带 Revision。
 _Avoid_: 背包、跨局仓库。
 
-**Escrow**：偷鱼或献祭过程中被服务器临时锁定的鱼事实。
+**Escrow**：偷鱼过程中被服务器临时锁定的鱼事实。
 _Avoid_: 客户端暂存、复制数组副本。
 
 ## 钓鱼与捕获
@@ -99,7 +102,7 @@ _Avoid_: 授予本身、成像结果。
 **RequestId**：命令幂等键的一部分，用于网络重试返回首次终态。
 _Avoid_: Revision、随机日志 ID。
 
-**Revision**：读取后写入的版本校验，用于拒绝陈旧视图。
+**Revision**：读取后写入的版本校验，用于拒绝提交时已经落后的视图。
 _Avoid_: RequestId、时间戳。
 
 **Terminal Cache**：聚合保存的首次终态缓存，让同键重放不重复提交。

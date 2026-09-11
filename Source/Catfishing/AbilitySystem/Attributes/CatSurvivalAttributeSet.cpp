@@ -1,10 +1,6 @@
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 
 #include "AbilitySystemComponent.h"
-#include "Engine/World.h"
-#include "GameFramework/Pawn.h"
-#include "GameFramework/PlayerState.h"
-#include "Logging/CatLog.h"
 #include "Net/UnrealNetwork.h"
 
 namespace
@@ -21,15 +17,18 @@ namespace
 		return FMath::IsFinite(Value) ? FMath::Max(1.0f, Value) : 1.0f;
 	}
 
-	// 当前体力规整流程：FightStamina 是短周期消耗值，必须保持在 0 到当前上限之间；上限缺失时归零并让会话入口 fail-closed。
+	// 当前体力规整流程：FightStamina 是短周期消耗值；上限已经播种时夹在 0 到上限之间，裸 ASC 测试或初始化早帧尚无上限时只保证非负，正式会话入口仍负责拒绝未就绪上限。
 	float ClampFightStaminaValue(const float Value, const float MaxValue)
 	{
 		if (!FMath::IsFinite(Value))
 		{
 			return 0.0f;
 		}
-		const float EffectiveMax = FMath::IsFinite(MaxValue) && MaxValue > 0.0f ? MaxValue : 0.0f;
-		return FMath::Clamp(Value, 0.0f, EffectiveMax);
+		if (!FMath::IsFinite(MaxValue) || MaxValue <= 0.0f)
+		{
+			return FMath::Max(0.0f, Value);
+		}
+		return FMath::Clamp(Value, 0.0f, MaxValue);
 	}
 }
 
@@ -94,7 +93,7 @@ void UCatSurvivalAttributeSet::PostAttributeChange(const FGameplayAttribute& Att
 	}
 }
 
-// FishingStrength 复制通知流程：把旧基值交给 ASC，使客户端属性 delegate 与服务器最终力量收敛；不派生多人合力结论。
+// FishingStrength 复制通知流程：把变更前基值交给 ASC，使客户端属性 delegate 与服务器最终力量收敛；不派生多人合力结论。
 void UCatSurvivalAttributeSet::OnRep_FishingStrength(const FGameplayAttributeData& OldFishingStrength)
 {
 	GAMEPLAYATTRIBUTE_REPNOTIFY(UCatSurvivalAttributeSet, FishingStrength, OldFishingStrength);
@@ -104,38 +103,6 @@ void UCatSurvivalAttributeSet::OnRep_FishingStrength(const FGameplayAttributeDat
 void UCatSurvivalAttributeSet::OnRep_FightStamina(const FGameplayAttributeData& OldFightStamina)
 {
 	GAMEPLAYATTRIBUTE_REPNOTIFY(UCatSurvivalAttributeSet, FightStamina, OldFightStamina);
-
-	const float OldValue = OldFightStamina.GetCurrentValue();
-	const float NewValue = FightStamina.GetCurrentValue();
-	const bool bFirstSample = !bHasFightStaminaDiagnostic;
-	if (!bFirstSample && OldValue == NewValue) return;
-	AActor* OwnerActor = GetOwningActor();
-	const APawn* OwnerPawn = Cast<APawn>(OwnerActor);
-	const APlayerState* PlayerState = OwnerPawn ? OwnerPawn->GetPlayerState() : nullptr;
-	const UWorld* World = OwnerActor ? OwnerActor->GetWorld() : GetWorld();
-	const double WorldSeconds = World ? World->GetTimeSeconds() : 0.0;
-	const bool bReachedZero = OldValue > 0.0f && NewValue <= 0.0f;
-	const bool bRecoveredFromZero = OldValue <= 0.0f && NewValue > 0.0f;
-	// 诊断只读本身体已经复制的 ASC 上限，不加载猫种类资产，也不维护另一份玩法上限。
-	const float Maximum = GetMaxFightStamina();
-	const bool bMaximumKnown = FMath::IsFinite(Maximum) && Maximum > 0.0f;
-	const bool bRecovered = bMaximumKnown && OldValue < Maximum && NewValue >= Maximum;
-	if (!bFirstSample && !bReachedZero && !bRecoveredFromZero && !bRecovered
-		&& WorldSeconds < NextFightStaminaDiagnosticWorldSeconds) return;
-
-	UE_LOG(LogCatFishing, Display,
-		TEXT("Event=fishing_cat_stamina_received OwnerActor=%s PlayerState=%s PlayerId=%d "
-			"World=%s NetMode=%d Authority=%s LocalRole=%d Old=%.9g New=%.9g "
-			"MaximumKnown=%s Maximum=%.9g Edge=%s"),
-		*GetNameSafe(OwnerActor), *GetNameSafe(PlayerState), PlayerState ? PlayerState->GetPlayerId() : INDEX_NONE,
-		*GetNameSafe(World), World ? static_cast<int32>(World->GetNetMode()) : INDEX_NONE,
-		OwnerActor && OwnerActor->HasAuthority() ? TEXT("true") : TEXT("false"),
-		OwnerActor ? static_cast<int32>(OwnerActor->GetLocalRole()) : INDEX_NONE, OldValue, NewValue,
-		bMaximumKnown ? TEXT("true") : TEXT("false"), Maximum,
-		bFirstSample ? TEXT("Initial") : bReachedZero ? TEXT("Depleted")
-			: bRecovered ? TEXT("Recovered") : bRecoveredFromZero ? TEXT("RecoveredFromZero") : TEXT("Changed"));
-	NextFightStaminaDiagnosticWorldSeconds = WorldSeconds + 1.0;
-	bHasFightStaminaDiagnostic = true;
 }
 
 // MaxFightStamina 复制通知流程：使用标准 RepNotify 更新搏斗体力上限；显示层和接力会话都只观察 ASC 的同一份上限。

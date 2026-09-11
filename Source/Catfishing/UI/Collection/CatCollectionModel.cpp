@@ -19,7 +19,7 @@ bool UCatCollectionModel::Bind(ULocalPlayer* InLocalPlayer)
 	return true;
 }
 
-// 解绑流程：从原 Profile 移除变化订阅并清空投影，避免跨 LocalPlayer 显示旧图鉴。
+// 解绑流程：从原 Profile 移除变化订阅并清空投影，避免跨 LocalPlayer 显示失效图鉴。
 void UCatCollectionModel::Unbind()
 {
 	if (UCatProfileSubsystem* Profile = BoundProfile.Get())

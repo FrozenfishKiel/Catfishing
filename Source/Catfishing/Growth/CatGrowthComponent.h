@@ -27,7 +27,7 @@ public:
 	/** 提供服务器最终值或客户端最近复制值；外部不能通过返回值消耗选择或伪造 Buff。 */
 	const FCatGrowthSnapshot& GetSnapshot() const;
 
-	/** 在实物鱼被不可逆移除前只读校验成长配置和鱼定义经验；返回 None 才允许上层提交 Items 事务。 */
+	/** 在实物鱼被不可逆移除前只读校验成长配置和鱼定义经验；返回 None 才允许上层提交库存事务。 */
 	ECatDomainCommandError ValidateFishGrowth(const UCatFishDefinition* FishDefinition) const;
 
 	/** 实物鱼消费提交后按同一个 RequestId 增加经验；重复 RequestId 只重放终态，不重复发槽。 */

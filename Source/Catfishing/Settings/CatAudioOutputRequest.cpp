@@ -6,7 +6,7 @@
 #include "HAL/PlatformTime.h"
 #include "Logging/CatLog.h"
 
-// 启动流程：只允许未启动过的对象接管一次操作，避免复用时旧原生回调误认新请求；固定 World、设备和目标并登记八秒限额，实际操作从下一次 Tick 开始，调用方先保留请求身份。
+// 启动流程：只允许未启动过的对象接管一次操作，避免复用时失效原生回调误认新请求；固定 World、设备和目标并登记八秒限额，实际操作从下一次 Tick 开始，调用方先保留请求身份。
 void UCatAudioOutputRequest::Start(UWorld* World, const FString& DeviceId, FOnCompleted InCompleted)
 {
 	if (DeadlineSeconds != 0.0)
@@ -70,7 +70,7 @@ const TArray<FAudioOutputDeviceInfo>& UCatAudioOutputRequest::GetDevices() const
 }
 
 // 轮询流程：
-// 1. 检查真实时间截止值及 World 是否仍使用创建请求时的设备；失效时结束，不能给新设备接受旧查询结果。
+// 1. 检查真实时间截止值及 World 是否仍使用创建请求时的设备；失效时结束，不能给新设备接受失效查询结果。
 // 2. 枚举只提交一次，平台查询在音频线程执行；通过设备强句柄而非跨线程裸 World 指针保证寿命。
 // 3. 切换先查询当前设备，受理后持续查询至目标活动；每次最多一个查询，不反复提交切换命令。
 bool UCatAudioOutputRequest::TickRequest(float)

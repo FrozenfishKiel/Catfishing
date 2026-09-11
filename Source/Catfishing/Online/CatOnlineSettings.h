@@ -43,7 +43,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Reconnect")
 	ECatPolicyDecision VoluntaryLeaveRecovery = ECatPolicyDecision::Undecided;
 
-	/** 断线记录保留秒数；负值表示尚未裁定 TTL，任何恢复/过期分支不得读取它作为时长。 */
+	/** 断线记录保留秒数；负值表示尚未裁定 TTL，任何恢复/失效分支不得读取它作为时长。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Reconnect", meta = (ClampMin = "-1"))
 	int32 ReconnectRecordTtlSeconds = INDEX_NONE;
 
@@ -51,7 +51,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Reconnect")
 	int64 RecoverableFailureMask = -1;
 
-	/** 重连记录过期后是否允许按新玩家准入；Undecided 时不得恢复或静默当作中途加入。 */
+	/** 重连记录失效后是否允许按新玩家准入；Undecided 时不得恢复或静默当作中途加入。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Reconnect")
 	ECatPolicyDecision ExpiredAdmission = ECatPolicyDecision::Undecided;
 

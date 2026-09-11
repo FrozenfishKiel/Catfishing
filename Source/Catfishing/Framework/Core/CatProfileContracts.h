@@ -10,7 +10,7 @@ enum class ECatProfileGrantKind : uint8
 {
 	/** 捕获已提交后记录鱼种、真实重量与首次条件。 */
 	FishRecorded,
-	/** 鱼种剪影记录；保留稳定枚举值以兼容既有存档和 Grant，触发资格由钓鱼领域提交。 */
+	/** 合格逃鱼候选归约为剪影；除“重试耗尽”外的资格仍由外部裁决。 */
 	FishSilhouette,
 	/** CapturePlan 本地成像成功后授予一张印记索引。 */
 	Imprint,
@@ -24,7 +24,7 @@ enum class ECatFishCollectionState : uint8
 {
 	/** 从未获得合格候选或捕获事实。 */
 	Unknown,
-	/** 曾经合格交手但未捕获。 */
+	/** 合格交手后未捕获。 */
 	Silhouette,
 	/** 至少一次捕获事务已经提交。 */
 	Recorded
@@ -165,7 +165,7 @@ struct FCatFishCollectionRecord
 	UPROPERTY(SaveGame)
 	FCatCaptureConditionSnapshot FirstCaptureCondition;
 
-	/** 合格剪影候选累计次数；Recorded 后仍保留历史。 */
+	/** 合格剪影候选累计次数；Recorded 后继续保留累计值。 */
 	UPROPERTY(SaveGame)
 	int32 EncounterCount = 0;
 };

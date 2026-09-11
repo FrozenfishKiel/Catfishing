@@ -70,7 +70,7 @@ void UCatLakeMainMenuWidget::RenderMenu(const FCatLakeMainMenuViewState& ViewSta
 	BP_RenderMenu(LastMenuViewState);
 }
 
-// 命令页显示流程：显式切回暂停菜单的纵向按钮列表并隐藏设置页；没有 Switcher 的资产用根容器显隐兜底，但不创建新控件。
+// 命令页显示流程：显式切回暂停菜单的纵向按钮列表并隐藏设置页；没有 Switcher 的资产改用根容器显隐，但不创建新控件。
 void UCatLakeMainMenuWidget::ShowCommandMenu()
 {
 	if (LakeMainMenuPageSwitcher && LakeCommandPanel)
@@ -113,7 +113,7 @@ void UCatLakeMainMenuWidget::ShowSettingsPanel()
 	}
 }
 
-// 设置页查询流程：优先读取 Switcher 的激活页；旧布局没有 Switcher 时退回设置根可见性，只服务 ESC 的局部返回判断。
+// 设置页查询流程：优先读取 Switcher 的激活页；既有布局没有 Switcher 时退回设置根可见性，只服务 ESC 的局部返回判断。
 bool UCatLakeMainMenuWidget::IsShowingSettingsPanel() const
 {
 	if (LakeMainMenuPageSwitcher && LakeSettingsPanel)
@@ -256,7 +256,7 @@ FReply UCatLakeMainMenuWidget::NativeOnKeyDown(const FGeometry& InGeometry, cons
 	return Super::NativeOnKeyDown(InGeometry, InKeyEvent);
 }
 
-// Designer 按钮绑定流程：每个按钮先移除本对象旧绑定再新增，覆盖 Construct 重入和 WBP 热重建。
+// Designer 按钮绑定流程：每个按钮先移除本对象失效绑定再新增，覆盖 Construct 重入和 WBP 热重建。
 void UCatLakeMainMenuWidget::BindDesignerButtons()
 {
 	if (SettingsButton)
@@ -330,7 +330,7 @@ void UCatLakeMainMenuWidget::UnbindSettingsModelChanges()
 	SettingsModelChangedHandle.Reset();
 }
 
-// 设置控件绑定流程：先移除旧动态委托再添加当前 View 的委托，和 UnbindSettingsControls 形成生命周期配对。
+// 设置控件绑定流程：先移除失效动态委托再添加当前 View 的委托，和 UnbindSettingsControls 形成生命周期配对。
 // 命令按钮只广播菜单 Action，草稿输入只写入 Controller 注入的 SettingsModel，避免局内设置页复制主界面业务状态。
 void UCatLakeMainMenuWidget::BindSettingsControls()
 {
@@ -703,7 +703,7 @@ void UCatLakeMainMenuWidget::HandleMuteAudioWhenUnfocusedChanged(bool bIsChecked
 	}
 }
 
-// 输出设备选择流程：用本次刷新建立的显示项映射找正式设备 ID；映射缺失时忽略过期 UI 选择。
+// 输出设备选择流程：用本次刷新建立的显示项映射找正式设备 ID；映射缺失时忽略失效 UI 选择。
 void UCatLakeMainMenuWidget::HandleAudioOutputDeviceSelectionChanged(FString SelectedItem, ESelectInfo::Type SelectionType)
 {
 	if (bRefreshingSettingsControls)

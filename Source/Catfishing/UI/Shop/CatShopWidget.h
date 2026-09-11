@@ -65,7 +65,7 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatShopWidget> OwnerShopWidget;
 
-	/** 本页签正在展示的只读分类投影；每次商店刷新会整体覆盖它，不在旧值上增量修改。 */
+	/** 本页签正在展示的只读分类投影；每次商店刷新会整体覆盖它，不在变更前值上增量修改。 */
 	UPROPERTY(Transient)
 	FCatShopCategoryView CategoryView;
 
@@ -123,7 +123,7 @@ private:
 	/** 将当前商品投影写入 Designer 命名控件；如果蓝图实现扩展事件，会在原生文本更新后继续接管表现。 */
 	void ApplyGoodsItemToDesignerWidgets();
 
-	/** 生成卡片中部的后备文字符号；它只服务缺少商品图标时的视觉识别，不参与分类和结算。 */
+	/** 生成卡片中部的缺图文字符号；它只服务缺少商品图标时的视觉识别，不参与分类和结算。 */
 	FString ResolveGoodsGlyph() const;
 
 	/** 生成卡片底部库存/已选提示；它让正式 WBP 保持简洁，同时仍能看到当前本地购物车数量。 */
@@ -133,7 +133,7 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatShopWidget> OwnerShopWidget;
 
-	/** 本商品卡正在展示的只读商品投影；每次商店刷新会整体覆盖它，不在旧值上增量修改。 */
+	/** 本商品卡正在展示的只读商品投影；每次商店刷新会整体覆盖它，不在变更前值上增量修改。 */
 	UPROPERTY(Transient)
 	FCatShopEntryView EntryView;
 
@@ -141,7 +141,7 @@ private:
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UButton> GoodsButton;
 
-	/** Designer 里的商品名文本；存在时写入商品表或定义回退出的显示名。 */
+	/** Designer 里的商品名文本；存在时写入商品表或定义解析出的显示名。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> GoodsNameTextBlock;
 
@@ -149,7 +149,7 @@ private:
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UImage> GoodsIconImage;
 
-	/** Designer 里的商品符号文本；存在时在没有正式贴图的情况下显示商品名首字作为后备识别。 */
+	/** Designer 里的商品符号文本；存在时在没有正式贴图的情况下显示商品名首字作为缺图识别。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> GoodsGlyphTextBlock;
 
@@ -204,7 +204,7 @@ private:
 	/** 将当前购物车行投影写入 Designer 命名控件；支付 pending 时会禁用删除按钮。 */
 	void ApplyCartLineToDesignerWidgets();
 
-	/** 生成购物车行的后备文字符号；它只用于缺少商品图标时的右侧列表识别。 */
+	/** 生成购物车行的缺图文字符号；它只用于缺少商品图标时的右侧列表识别。 */
 	FString ResolveCartLineGlyph() const;
 
 	/** 拥有本购物车行的商店页，表示删除意图最终要回到哪个页面；弱引用避免行控件延长页面生命周期。 */
@@ -239,7 +239,7 @@ private:
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UImage> CartLineIconImage;
 
-	/** Designer 里的商品符号文本；存在时在没有正式贴图的情况下显示商品名首字作为后备识别。 */
+	/** Designer 里的商品符号文本；存在时在没有正式贴图的情况下显示商品名首字作为缺图识别。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> CartLineGlyphTextBlock;
 
@@ -451,15 +451,15 @@ private:
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UPanelWidget> CartLinesPanel;
 
-	/** 当前由 C++ 创建的分类页签 WBP；保存引用是为了页面重绘或销毁时解除点击绑定并移出旧页签。 */
+	/** 当前由 C++ 创建的分类页签 WBP；保存引用是为了页面重绘或销毁时解除点击绑定并移出失效页签。 */
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UCatShopCategoryTabWidget>> DynamicCategoryTabs;
 
-	/** 当前由 C++ 创建的商品卡 WBP；保存引用是为了页面重绘或销毁时解除点击绑定并移出旧卡片。 */
+	/** 当前由 C++ 创建的商品卡 WBP；保存引用是为了页面重绘或销毁时解除点击绑定并移出失效卡片。 */
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UCatShopGoodsItemWidget>> DynamicGoodsItems;
 
-	/** 当前由 C++ 创建的购物车行 WBP；保存引用是为了购物车刷新或销毁时解除点击绑定并移出旧行。 */
+	/** 当前由 C++ 创建的购物车行 WBP；保存引用是为了购物车刷新或销毁时解除点击绑定并移出失效行。 */
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UCatShopCartLineWidget>> DynamicCartLineWidgets;
 };

@@ -54,7 +54,7 @@ private:
 	/** 单个收件人的授权与 ACK 进度；授权版本被冻结，后续请求必须重新带入匹配。 */
 	struct FRecipientRecord
 	{
-		/** 该收件人在传输开始时的身份、成员和权限基线；读取与 ACK 都用它和请求版本相互校验，避免授权变化被旧 cursor 绕过。 */
+		/** 该收件人在传输开始时的身份、成员和权限基线；读取与 ACK 都用它和请求版本相互校验，避免授权变化被失效 cursor 绕过。 */
 		FCatImprintMediaRecipientAuthorization Authorization;
 
 		/** 下一块必须 ACK 的序号；它也是断点续传 cursor。 */
@@ -88,7 +88,7 @@ private:
 		/** 所有 Chunk 是否已入齐并通过整体 hash 校验。 */
 		bool bReadyForRecipients = false;
 
-		/** Host 失败、整体 hash 不匹配或 teardown 后的终态；失败后不再接受新读写。 */
+		/** Host 失败、整体 hash 不匹配或 teardown 后的终态；失败后关闭新读写。 */
 		bool bFailed = false;
 
 		/** 媒体聚合版本；Manifest、Chunk、ACK 或失败终态都会递增。 */
@@ -126,7 +126,7 @@ private:
 	static FString MakeBeginPayloadSignature(const FCatCapturePlan& Plan,
 		const TArray<FCatImprintMediaRecipientAuthorization>& Recipients);
 
-	/** 构造 Manifest 请求的业务载荷签名；Host 不能用旧 RequestId 偷换媒体合同。 */
+	/** 构造 Manifest 请求的业务载荷签名；Host 不能用失效 RequestId 偷换媒体合同。 */
 	static FString MakeManifestPayloadSignature(const FCatImprintMediaManifest& Manifest);
 
 	/** 构造 Chunk 请求的业务载荷签名；同一块重试必须仍是同一份字节。 */
@@ -138,7 +138,7 @@ private:
 
 	/**
 	 * 尝试从终态缓存解析幂等重放；内核复用共享模板 CatQueryTerminalReplay，签名漂移会带着已知 MediaId/Revision 返回
-	 * InvalidPayload 而不是复用旧成功。
+	 * InvalidPayload 而不是复用失效成功。
 	 */
 	bool TryResolveTerminalReplay(const FString& TerminalKey, const FString& PayloadSignature,
 		FCatImprintMediaResult& OutResult) const;

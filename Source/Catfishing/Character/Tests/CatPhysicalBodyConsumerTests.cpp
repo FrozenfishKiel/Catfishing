@@ -18,7 +18,7 @@
 #include "GameFramework/WorldSettings.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
 #include "Interaction/CatInteractionSettings.h"
-#include "Items/World/CatFishPickupActor.h"
+#include "Items/Fish/CatFishPickupActor.h"
 
 namespace CatPhysicalConsumerTest
 {

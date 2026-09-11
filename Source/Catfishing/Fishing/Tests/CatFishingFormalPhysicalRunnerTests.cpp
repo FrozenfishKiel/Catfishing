@@ -1,3 +1,6 @@
+#include "Inventory/CatInventorySettings.h"
+#include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
+#include "Fishing/Tests/CatFishingEquipmentTestFixtures.h"
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -48,7 +51,7 @@ bool FCatFishingFormalPhysicalRunnerTest::RunTest(const FString& Parameters)
 	UClass* CatClass = LoadClass<ACatCharacter>(nullptr,
 		TEXT("/Game/Character/BP_CatCharacter.BP_CatCharacter_C"));
 	UStateTree* Tree = LoadObject<UStateTree>(nullptr, TEXT("/Game/Data/StateTrees/ST_FishFight.ST_FishFight"));
-	const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(TEXT("StarterRodT1"));
+	const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(TEXT("StarterRodT1"));
 	UCatFishDefinition* FishAsset = LoadObject<UCatFishDefinition>(nullptr,
 		TEXT("/Game/Catfishing/Data/Fish/Fish_RiverPattern.Fish_RiverPattern"));
 	if (!TestTrue(TEXT("formal cat, rod definition, fish definition and behavior tree load"),
@@ -152,7 +155,7 @@ bool FCatFishingFormalPhysicalRunnerTest::RunTest(const FString& Parameters)
 		const FGuid SessionId = FGuid::NewGuid();
 		if (!TestTrue(TEXT("reserves the actual deployed rod and bait/float instances"), Equipment->BeginFishingUse(SessionId,
 			Loadout.RodItemInstanceId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId,
-			Loadout.RodDefinitionId, Loadout.BaitDefinitionId, Loadout.FloatDefinitionId, Loadout.Revision).bReserved)
+			Loadout.RodDefinitionId, Loadout.BaitDefinitionId, Loadout.FloatDefinitionId, Loadout.Revision).bBaitFrozen)
 			|| !TestTrue(TEXT("commits the hooked bait through its resource transaction"), Equipment->CommitFishingBaitDeferred(SessionId).bApplied)) return false;
 		ON_SCOPE_EXIT { Equipment->ReleaseFishingUse(SessionId); };
 		double InitialDurability = 0;
@@ -212,11 +215,11 @@ bool FCatFishingFormalPhysicalRunnerTest::RunTest(const FString& Parameters)
 		Init.Config.CatStaminaMaximum = MaximumStamina;
 		Init.Config.FishFullEffortSpeedCentimetersPerSecond = 75;
 		Init.Config.ReelSpeedCentimetersPerSecond = 80;
-		Init.Config.MaximumLineLengthCentimeters = RodDefinition->MaximumLineLengthCentimeters;
+		Init.Config.MaximumLineLengthCentimeters = CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->MaximumLineLengthCentimeters;
 		Init.Config.RodDurability = InitialDurability;
-		Init.Config.RodPhysicsLengthCentimeters = RodDefinition->RodPhysicsLengthCentimeters;
-		Init.Config.FishFullEffortRodWearPerSecond = RodDefinition->BaseDurabilityWearPerSecond;
-		Init.Config.TautRodWearMultiplier = RodDefinition->HighTensionWearMultiplier;
+		Init.Config.RodPhysicsLengthCentimeters = CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->RodPhysicsLengthCentimeters;
+		Init.Config.FishFullEffortRodWearPerSecond = CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->BaseDurabilityWearPerSecond;
+		Init.Config.TautRodWearMultiplier = CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->HighTensionWearMultiplier;
 		Init.InitialState.CatStamina = MaximumStamina; Init.InitialState.FishStamina = 1000;
 		Init.InitialState.FishWorldPosition = FishStart; Init.InitialState.LineLengthCentimeters = InitialLineLength;
 		Init.SteeringConfig.OutwardEffortRange = FVector2D(.8, .8);
@@ -268,7 +271,7 @@ bool FCatFishingFormalPhysicalRunnerTest::RunTest(const FString& Parameters)
 				- Receiver->GetDiscardedLineImpulseNewtonSecondsForDiagnostics();
 			MaximumImpulseLedgerError = FMath::Max(MaximumImpulseLedgerError, ImpulseRemainder.Size());
 			MaximumQueuedSeconds = FMath::Max(MaximumQueuedSeconds, Receiver->GetQueuedLineSecondsForDiagnostics());
-			const FVector ActualTip = (RodDefinition->RodTipLocalTransform * Receiver->GetObservedActorTransform()).GetLocation();
+			const FVector ActualTip = (CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->RodTipLocalTransform * Receiver->GetObservedActorTransform()).GetLocation();
 			MaximumTipReadError = FMath::Max(MaximumTipReadError,
 				FVector::Distance(ActualTip, Rod->GetRodTipWorldTransform().GetLocation()));
 			MaximumLineError = FMath::Max(MaximumLineError,

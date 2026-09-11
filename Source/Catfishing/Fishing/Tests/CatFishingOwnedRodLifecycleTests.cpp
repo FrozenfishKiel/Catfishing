@@ -1,3 +1,5 @@
+#include "Inventory/CatInventorySettings.h"
+#include "Fishing/Tests/CatFishingEquipmentTestFixtures.h"
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -57,7 +59,6 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 	for (int32 ExitScenario = 0; ExitScenario < 4; ++ExitScenario)
 	{
 		UCatEquipmentSettings* EquipmentSettings = GetMutableDefault<UCatEquipmentSettings>();
-		TGuardValue<bool> NoStarterNet(EquipmentSettings->bAutoGrantStarterScoopNet, false);
 		FTestWorldWrapper Wrapper;
 		if (!TestTrue(TEXT("creates owned-rod authority world"), Wrapper.CreateTestWorld(EWorldType::Game))) return false;
 		Wrapper.ForwardErrorMessages(this);
@@ -161,8 +162,8 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 		const auto Quantity = [](const UCatEquipmentComponent* Equipment, FName DefinitionId)
 		{
 			int32 Total = 0;
-			for (const FCatRunInventorySlot& Slot : Equipment->GetSnapshot().InventorySlots)
-				if (Slot.DefinitionId == DefinitionId) Total += Slot.Quantity;
+			for (const FCatInventoryEntry& Slot : CatFishingTest::Entries(Equipment))
+				if (CatFishingTest::DefinitionId(Slot) == DefinitionId) Total += Slot.StackCount;
 			return Total;
 		};
 		const FCatEquipmentLoadoutSnapshot OwnerBeforeDeploy = Owner.Equipment->GetSnapshot();
@@ -170,12 +171,11 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 		FCatPlaceRodCommand Place;
 		Place.RequestId = FGuid::NewGuid();
 		Place.ExpectedEquipmentRevision = OwnerBeforeDeploy.Revision;
-		Place.ExpectedInventoryRevision = Owner.Character->GetInventoryComponent()->GetInventoryRevision();
 		const FCatFishingCommandResult Placed = Fishing->PlaceRod(Owner.Controller, Place);
 		if (!TestTrue(TEXT("production PlaceRod deploys owner's physical rod"), Placed.bCommitted)) return false;
 		ACatFishingRodActor* Rod = Fishing->FindDeployedRodById(Placed.RodActorId);
 		if (!TestNotNull(TEXT("placed rod is registered"), Rod)) return false;
-		const UCatEquipmentDefinition* RodDefinition = EquipmentSettings->FindRuntimeDefinition(TEXT("ShopRodT2"));
+		const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(TEXT("ShopRodT2"));
 		TestEqual(TEXT("rod is the formal configured Blueprint"), Rod->GetClass(), RodDefinition->UseActorClass.Get());
 		TestEqual(TEXT("physical ledger owner is frozen in deployment Instigator"), Rod->GetInstigator(), static_cast<APawn*>(Owner.Character));
 		const auto Context = [&]()
@@ -223,9 +223,9 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("publication-time exit refunds owner bait"), Quantity(Owner.Equipment, TEXT("BugBait")), 4);
 			TestFalse(TEXT("publication-time exit releases owner reservation"), Owner.Equipment->HasActiveFishingUse());
 			TestFalse(TEXT("publication-time exit releases owner rod lock"), Owner.Equipment->HasActiveFishingUse());
-			FCatInventoryEndpointSnapshot ReturnedLock;
+			FCatInventoryEntry ReturnedLock;
 			TestEqual(TEXT("publication-time exit leaves original physical rod available for recall"),
-				Owner.Equipment->ReadInventoryTransferEndpoint(TEXT("ActiveUse"), OwnerRodId, ReturnedLock), ECatDomainCommandError::None);
+				CatFishingTest::ReadHeldRod(Owner.Equipment, OwnerRodId, ReturnedLock), ECatDomainCommandError::None);
 			TestEqual(TEXT("publication-time exit leaves no registered session"), Fishing->GetTrackedSessionCountForDiagnostics(), 0);
 			int32 HookCount = 0;
 			for (TActorIterator<ACatFishingHookActor> It(World); It; ++It) ++HookCount;
@@ -252,9 +252,8 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("post-reservation failure retains dependency diagnosis"), Failed.Command.Error, ECatFishingCommandError::DependencyUnavailable);
 			TestEqual(TEXT("failed cast restores owner bait"), Quantity(Owner.Equipment, TEXT("BugBait")), 4);
 			TestFalse(TEXT("failed cast closes owner reservation"), Owner.Equipment->HasActiveFishingUse());
-			FCatInventoryEndpointSnapshot AvailableRod;
-			TestEqual(TEXT("failed cast releases original rod transfer lock"), Owner.Equipment->ReadInventoryTransferEndpoint(
-				TEXT("ActiveUse"), OwnerRodId, AvailableRod), ECatDomainCommandError::None);
+			FCatInventoryEntry AvailableRod;
+			TestEqual(TEXT("failed cast releases original rod transfer lock"), CatFishingTest::ReadHeldRod(Owner.Equipment, OwnerRodId, AvailableRod), ECatDomainCommandError::None);
 			const int64 AfterFailureRevision = Owner.Equipment->GetSnapshot().Revision;
 			const auto Replay = Fishing->BeginCast(Owner.Controller, FailedCommand);
 			TestEqual(TEXT("failed request replays first rollback revision"), Replay.Command.EquipmentRevision, Failed.Command.EquipmentRevision);
@@ -279,9 +278,8 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("same request replays same session"), Replayed.Command.FishingSessionId, CastResult.Command.FishingSessionId);
 		TestEqual(TEXT("same request cannot reserve a second bait"), Owner.Equipment->GetSnapshot().Revision, BoundRevision);
 		TestEqual(TEXT("same rod has only one registered session"), Fishing->GetTrackedSessionCountForDiagnostics(), 1);
-		FCatInventoryEndpointSnapshot LockedRod;
-		TestEqual(TEXT("active owned session locks owner's ActiveUse transfer"), Owner.Equipment->ReadInventoryTransferEndpoint(
-			TEXT("ActiveUse"), OwnerRodId, LockedRod), ECatDomainCommandError::InvalidPhase);
+		FCatInventoryEntry LockedRod;
+		TestEqual(TEXT("active owned session locks owner's ActiveUse transfer"), CatFishingTest::ReadHeldRod(Owner.Equipment, OwnerRodId, LockedRod), ECatDomainCommandError::InvalidPhase);
 
 		// 真实定时器推进正式 Hook BP；没有直接伪造落水回调或 Session 阶段。
 		const double FlightDuration = Hook->GetPresentationState().CastTrajectory.DurationSeconds;
@@ -346,6 +344,7 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 			bool bDepartureDeploymentRetired = false;
 			bool bRetirementPreservedRod = false;
 			FCatEquipmentLoadoutSnapshot DepartureSnapshot;
+			TArray<FCatInventoryEntry> DepartureInventory;
 			FText DepartureExportFailure;
 			const FDelegateHandle MigrationObserver = Owner.Equipment->OnSnapshotChanged.AddLambda([&]()
 			{
@@ -354,6 +353,7 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 				bSecondMigrationCommitted |= Fishing->PreserveFishingResourcesForEquipmentShutdown(Owner.Equipment);
 				// 托管发布时，离场保存只捕获留下的普通背包，不能复制在用竿和已经预留的鱼饵。
 				bDepartureSnapshotExported = Owner.Equipment->ExportSnapshotFromAuthority(DepartureSnapshot, DepartureExportFailure);
+				DepartureInventory = CatFishingTest::Entries(Owner.Equipment);
 				if (bDepartureSnapshotExported)
 					bDepartureDeploymentRetired = Owner.Equipment->RetireDeploymentAfterPersistentCapture(*Owner.State);
 				bRetirementPreservedRod = IsValid(Rod) && Fishing->FindDeployedRodById(Placed.RodActorId) == Rod;
@@ -364,11 +364,11 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("custody publishes after moving the original records"), bObservedMovedState);
 			TestFalse(TEXT("publication reentry cannot transfer the same records twice"), bSecondMigrationCommitted);
 			TestTrue(*FString::Printf(TEXT("departing host exports after custody: %s"), *DepartureExportFailure.ToString()), bDepartureSnapshotExported);
-			TestFalse(TEXT("departing save cannot duplicate the active rod"), DepartureSnapshot.InventorySlots.ContainsByPredicate(
-				[OwnerRodId](const FCatRunInventorySlot& Slot) { return Slot.ItemInstanceId == OwnerRodId; }));
+			TestFalse(TEXT("departing save cannot duplicate the active rod"), DepartureInventory.ContainsByPredicate(
+				[OwnerRodId](const FCatInventoryEntry& Slot) { return CatFishingTest::InstanceId(Slot) == OwnerRodId; }));
 			TestNotEqual(TEXT("departing selection cannot refer to the custody rod"), DepartureSnapshot.RodItemInstanceId, OwnerRodId);
 			int32 SavedBait = 0;
-			for (const auto& Slot : DepartureSnapshot.InventorySlots) if (Slot.DefinitionId == TEXT("BugBait")) SavedBait += Slot.Quantity;
+			for (const auto& Slot : DepartureInventory) if (CatFishingTest::DefinitionId(Slot) == TEXT("BugBait")) SavedBait += Slot.StackCount;
 			TestEqual(TEXT("departure saves only the three unreserved bait portions"), SavedBait, 3);
 			TestTrue(TEXT("departing deployment retirement succeeds after custody"), bDepartureDeploymentRetired);
 			TestTrue(TEXT("persistence retirement preserves the active physical rod"), bRetirementPreservedRod);
@@ -379,7 +379,7 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 			if (!TestEqual(TEXT("exactly one server custodian survives owner destruction"), CustodianCount, 1)) return false;
 			TestEqual(TEXT("custody retains original private ownership identity"), Custodian->GetOriginalOwnerStableId(), OriginalId);
 			TestFalse(TEXT("custodian remains server-only"), Custodian->GetIsReplicated());
-			TestTrue(TEXT("ordinary backpack is not copied to custody"), Custodian->GetEquipment()->GetSnapshot().InventorySlots.IsEmpty());
+			TestFalse(TEXT("ordinary backpack items are not copied to custody"), CatFishingTest::Entries(Custodian->GetEquipment()).ContainsByPredicate([](const FCatInventoryEntry& Entry) { return Entry.Instance != nullptr && Entry.StackCount > 0; }));
 			ReservationEquipment = RodLedger = Custodian->GetEquipment();
 			TestFalse(TEXT("resource host destruction preserves the session"), Session->IsTerminal());
 			TestEqual(TEXT("resource host destruction grants nobody control"), Rod->GetOperatorCount(), 0);
@@ -410,18 +410,17 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 			OriginalBait + CustodyBait, ExitScenario == 3 ? 3 : 4);
 		if (ExitScenario == 1) TestEqual(TEXT("cancel returns only the reserved portion to the current custodian"), CustodyBait, 1);
 		TestFalse(TEXT("terminal closes the exact original reservation"), ReservationEquipment->HasActiveFishingUse());
-		FCatInventoryEndpointSnapshot ReleasedRod;
-		TestEqual(TEXT("terminal releases the original rod transfer lock"), RodLedger->ReadInventoryTransferEndpoint(
-			TEXT("ActiveUse"), OwnerRodId, ReleasedRod), ECatDomainCommandError::None);
-		if (!TestEqual(TEXT("one original physical rod survives"), ReleasedRod.Slots.Num(), 1)) return false;
-		TestEqual(TEXT("physical rod identity never changes"), ReleasedRod.Slots[0].ItemInstanceId, OwnerRodId);
-		TestEqual(TEXT("physical rod preserves exactly the committed durability"), ReleasedRod.Slots[0].RodDurability, ExpectedDurability);
+		FCatInventoryEntry ReleasedRod;
+		TestEqual(TEXT("terminal releases the original rod transfer lock"), CatFishingTest::ReadHeldRod(RodLedger, OwnerRodId, ReleasedRod), ECatDomainCommandError::None);
+		if (!TestEqual(TEXT("one original physical rod survives"), int32(ReleasedRod.Instance != nullptr), 1)) return false;
+		TestEqual(TEXT("physical rod identity never changes"), CatFishingTest::InstanceId(ReleasedRod), OwnerRodId);
+		TestEqual(TEXT("physical rod preserves exactly the committed durability"), CatFishingTest::Durability(ReleasedRod), ExpectedDurability);
 		TestEqual(TEXT("physical assistance never writes helper fishing stamina"), Helper.Character->GetCatAbilitySystemComponent()->GetNumericAttribute(
 			UCatSurvivalAttributeSet::GetFightStaminaAttribute()), HelperStamina);
 		TestFalse(TEXT("physical assistance never acquires a fishing equipment reservation"), Helper.Equipment->HasActiveFishingUse());
 		TestNull(TEXT("physical assistance never acquires a session index"), UCatFishingViewBridge::FindFishingSessionForPlayerState(World, Helper.State));
 		AddInfo(FString::Printf(TEXT("Event=owned_rod_service_lifecycle_verified Scenario=%d SessionId=%s RodItemInstanceId=%s Operators=%d Durability=%.3f Evidence=runtime_behavior"),
-			ExitScenario, *CastResult.Command.FishingSessionId.ToString(), *OwnerRodId.ToString(), Rod->GetOperatorCount(), ReleasedRod.Slots[0].RodDurability));
+			ExitScenario, *CastResult.Command.FishingSessionId.ToString(), *OwnerRodId.ToString(), Rod->GetOperatorCount(), CatFishingTest::Durability(ReleasedRod)));
 	}
 	return !HasAnyErrors();
 }

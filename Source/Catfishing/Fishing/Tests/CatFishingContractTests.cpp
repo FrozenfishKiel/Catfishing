@@ -129,7 +129,7 @@ bool FCatFishingConcurrencyFieldsContractTest::RunTest(const FString& Parameters
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishingPlaceChumContractTest,
-	"Catfishing.Unit.Fishing.Contracts.PlaceChumUsesWaterAndEquipmentConcurrencyNotSessionIdentity",
+	"Catfishing.Unit.Fishing.Contracts.PlaceChumUsesWaterHandleAndInventoryItemIdentity",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 // Protects the Water concurrency boundary: Chum writes are region aggregations, not Fishing Session mutations.
@@ -141,7 +141,7 @@ bool FCatFishingPlaceChumContractTest::RunTest(const FString& Parameters)
 	const FCatPlaceChumResult Result;
 	const UScriptStruct* CommandStruct = FCatPlaceChumCommand::StaticStruct();
 	const TCHAR* RequiredCommandFields[] = {
-		TEXT("RequestId"), TEXT("ExpectedWaterRegionHandle"), TEXT("ExpectedEquipmentRevision"),
+		TEXT("RequestId"), TEXT("ExpectedWaterRegionHandle"),
 		TEXT("ChumDefinitionId"), TEXT("Quantity"), TEXT("ClientCandidateWorldPoint")
 	};
 	const TCHAR* ForbiddenSessionFields[] = {
@@ -159,7 +159,6 @@ bool FCatFishingPlaceChumContractTest::RunTest(const FString& Parameters)
 	}
 	TestFalse(TEXT("Contribute Chum request id defaults invalid"), Command.RequestId.IsValid());
 	TestFalse(TEXT("Place Chum exact water handle defaults invalid"), Command.ExpectedWaterRegionHandle.IsValid());
-	TestEqual(TEXT("Place Chum equipment revision defaults zero"), Command.ExpectedEquipmentRevision, int64{ 0 });
 	TestTrue(TEXT("Contribute Chum definition id defaults unset"), Command.ChumDefinitionId.IsNone());
 	TestEqual(TEXT("Contribute Chum quantity defaults fail closed"), Command.Quantity, int32{ 0 });
 
@@ -167,27 +166,6 @@ bool FCatFishingPlaceChumContractTest::RunTest(const FString& Parameters)
 	TestNotNull(TEXT("Place Chum result exposes corrected point"),
 		FindFProperty<FProperty>(ResultStruct, TEXT("ServerCorrectedCenter")));
 	TestFalse(TEXT("Place Chum result defaults uncommitted"), Result.bCommitted);
-	return !HasAnyErrors();
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FCatFishingLegacyScoopAdapterContractTest,
-	"Catfishing.Unit.Fishing.Contracts.LegacyScoopAdapterCarriesExplicitSessionIdentity",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
-
-// Protects legacy Scoop routing: its session id is supplied by the old API, not stored in FCatScoopCommand.
-bool FCatFishingLegacyScoopAdapterContractTest::RunTest(const FString& Parameters)
-{
-	(void)Parameters;
-
-	FCatScoopCommand LegacyCommand;
-	LegacyCommand.Context.RequestId = FGuid::NewGuid();
-	LegacyCommand.Context.ExpectedRevision = 17;
-	const FGuid FishingSessionId = FGuid::NewGuid();
-	const FCatFishingSessionCommandContext Context = MakeFishingSessionCommandContext(FishingSessionId, LegacyCommand);
-	TestEqual(TEXT("Adapter preserves legacy Scoop request id"), Context.RequestId, LegacyCommand.Context.RequestId);
-	TestEqual(TEXT("Adapter preserves legacy Scoop expected revision"), Context.ExpectedRevision, LegacyCommand.Context.ExpectedRevision);
-	TestEqual(TEXT("Adapter carries explicit legacy Scoop session id"), Context.FishingSessionId, FishingSessionId);
 	return !HasAnyErrors();
 }
 

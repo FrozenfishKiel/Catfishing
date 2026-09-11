@@ -22,7 +22,7 @@ project_root: .
 # 技术栈：语言与框架
 tech_stack: C++ / Blueprint（模块：Catfishing、CatfishingEditor）
 
-# 源码范围：目录与排除项；写目录和排除规则，别写会过期的文件计数
+# 源码范围：目录与排除项；写目录和排除规则，别写会会失效的文件计数
 source_scope: Source/ 下 .cpp/.h 为源码；Config/ 与 Scripts/ 可文本检查；Content/ 为资产不计入文本扫描；设计文档镜像在 Knowledge/Feishu/（飞书导出，只读）
 
 # 可检查程度：按「检查动作」分档，不要只按扩展名一刀切

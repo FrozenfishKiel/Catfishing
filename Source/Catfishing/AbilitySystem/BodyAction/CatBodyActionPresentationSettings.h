@@ -28,7 +28,7 @@ class CATFISHING_API UCatBodyActionPresentationSettings : public UDeveloperSetti
 {
 	GENERATED_BODY()
 public:
-	/** 建立六个正式 BodyAction 的默认表现记录；库存、献祭、偷鱼和 Wet 反馈不进入这张表现表。 */
+	/** 建立六个正式 BodyAction 的默认表现记录；库存、供品结算、偷鱼和 Wet 反馈不进入这张表现表。 */
 	UCatBodyActionPresentationSettings();
 	/** 查找事件标签对应的显式表现配置；重复配置时以最后一条为准，空标签直接拒绝。 */
 	const FCatBodyActionPresentationConfig* FindPresentationConfig(FGameplayTag BodyActionEventTag) const;

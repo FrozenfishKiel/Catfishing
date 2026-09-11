@@ -37,7 +37,7 @@ namespace
 		FLinearColor Color = FLinearColor::White;
 	};
 
-	// 中文字体选择流程：开发调试面板优先使用 Windows 常见中文字体；找不到时回退引擎 DroidSansFallback，最后才使用 CoreStyle 默认字体并把字形缺口留给人工截图发现。
+	// 中文字体选择流程：开发调试面板优先使用 Windows 常见中文字体；找不到时使用引擎随带中文字体资源，最后才使用 CoreStyle 默认字体并把字形缺口留给人工截图发现。
 	FSlateFontInfo MakeRunEnvironmentDebugPanelFont()
 	{
 		static constexpr int32 FontSize = 13;
@@ -63,11 +63,11 @@ namespace
 			}
 		}
 #endif
-		// 非 Windows 或系统字体缺失时再使用引擎随带 fallback 字体；若连它也不存在，最后回到 CoreStyle，只保证面板出现，不承诺中文字形一定完整。
-		const FString EngineFallbackFont = FPaths::EngineContentDir() / TEXT("Slate/Fonts/DroidSansFallback.ttf");
-		if (FPaths::FileExists(EngineFallbackFont))
+		// 非 Windows 或系统字体缺失时再使用引擎随带中文字体资源；若引擎字体也不可用，CoreStyle 只保证面板能创建。
+		const FString EngineDefaultFont = FPaths::EngineContentDir() / TEXT("Slate/Fonts/DroidSansFallback.ttf");
+		if (FPaths::FileExists(EngineDefaultFont))
 		{
-			return MakeCompositeFontInfo(EngineFallbackFont);
+			return MakeCompositeFontInfo(EngineDefaultFont);
 		}
 		return FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), FontSize);
 	}
@@ -133,8 +133,8 @@ namespace
 		{
 		case ECatRunEndReason::None:
 			return TEXT("无");
-		case ECatRunEndReason::QuotaFailed:
-			return TEXT("额度失败");
+		case ECatRunEndReason::WorldProgressDepleted:
+			return TEXT("世界进度归零");
 		case ECatRunEndReason::Success:
 			return TEXT("成功");
 		case ECatRunEndReason::HostExit:
@@ -207,12 +207,12 @@ namespace
 		{
 		case ECatRunTransitionReason::None:
 			return TEXT("无");
-		case ECatRunTransitionReason::QuotaReached:
-			return TEXT("额度达成(QuotaReached)");
-		case ECatRunTransitionReason::QuotaFailed:
-			return TEXT("额度失败(QuotaFailed)");
+		case ECatRunTransitionReason::DayEnded:
+			return TEXT("白天结束(DayEnded)");
+		case ECatRunTransitionReason::WorldProgressDepleted:
+			return TEXT("世界进度归零(WorldProgressDepleted)");
 		case ECatRunTransitionReason::AllEligibleReady:
-			return TEXT("全员准备(AllEligibleReady)");
+			return TEXT("供品结算完成(AllEligibleReady)");
 		case ECatRunTransitionReason::SettlementComplete:
 			return TEXT("结算完成(SettlementComplete)");
 		case ECatRunTransitionReason::HostExit:
@@ -314,29 +314,17 @@ namespace
 		return World->GetFirstPlayerController();
 	}
 
-	// 局内玩家统计流程：从 GameState 的 PlayerArray 读取已复制 PlayerState，统计当前可见玩家和个人 ready；不读取 GameMode 私有资格集合。
-	void CountVisibleReadyPlayers(const ACatfishingGameState& GameState, const APlayerController* Controller,
-		int32& OutPlayers, int32& OutReadyPlayers, bool& bOutLocalReady)
+	// 局内玩家统计流程：从 GameState 的 PlayerArray 读取已复制 PlayerState 数量；面板只展示当前可见玩家。
+	void CountVisiblePlayers(const ACatfishingGameState& GameState, int32& OutPlayers)
 	{
 		OutPlayers = 0;
-		OutReadyPlayers = 0;
-		bOutLocalReady = false;
 		for (APlayerState* PlayerState : GameState.PlayerArray)
 		{
-			const ACatfishingPlayerState* CatPlayerState = Cast<ACatfishingPlayerState>(PlayerState);
-			if (!CatPlayerState)
+			if (!PlayerState)
 			{
 				continue;
 			}
 			++OutPlayers;
-			if (CatPlayerState->IsReadyForNextDay())
-			{
-				++OutReadyPlayers;
-			}
-			if (Controller && Controller->PlayerState == CatPlayerState)
-			{
-				bOutLocalReady = CatPlayerState->IsReadyForNextDay();
-			}
 		}
 	}
 
@@ -358,22 +346,22 @@ namespace
 		}
 	}
 
-	// 健康判断流程：只用公开状态和可选服务器私有快照做诊断文本，不修复、不推进、不隐藏异常；同时把失败结算夜、全员 ready 后等待推进等常见测试误读翻成人话。
+	// 健康判断流程：只用公开状态和可选服务器私有快照做诊断文本，不修复、不推进、不隐藏异常；同时把失败结算夜、供品结算后等待推进等常见测试误读翻成人话。
 	FString BuildRunEnvironmentHealthText(const FCatRunPublicState& RunState,
 		const FCatRunAuthorityDebugSnapshot* AuthoritySnapshot)
 	{
 		if (RunState.Environment.SourceRunRevision != RunState.Revision)
 		{
-			return TEXT("异常：Environment Revision 没有对齐当前 Run Revision，可能正在显示旧环境事实。");
+			return TEXT("异常：Environment Revision 没有对齐当前 Run Revision，可能正在显示失效环境事实。");
 		}
 		if (RunState.Phase.Phase == ECatRunPhase::DayActive
-			&& (!RunState.Phase.bFishingAllowed || !RunState.Phase.bQuotaOpen))
+			&& (!RunState.Phase.bFishingAllowed || !RunState.Phase.bHasDeadline))
 		{
 			if (AuthoritySnapshot && AuthoritySnapshot->bDebugSkipToNextDayRequested)
 			{
-				return TEXT("等待 StateTree 进入普通夜晚：跳天加速已经用正式额度命令关闭额度和钓鱼，正在等状态机消费 QuotaReached。");
+				return TEXT("等待 StateTree 进入普通夜晚：跳天加速已经关闭白天截止和钓鱼，正在等状态机消费 DayEnded。");
 			}
-			return TEXT("异常：公开阶段仍是白天，但钓鱼/额度已经关闭；通常表示 StateTree 没有进入夜晚。");
+			return TEXT("异常：公开阶段仍是白天，但钓鱼或截止已经关闭；通常表示 StateTree 没有进入夜晚。");
 		}
 		if (RunState.Phase.Phase == ECatRunPhase::DayActive
 			&& (!RunState.Phase.bHasDeadline
@@ -398,12 +386,12 @@ namespace
 			if (RunState.Phase.Phase == ECatRunPhase::NormalNight
 				&& AuthoritySnapshot->bAllEligibleReadyEventSent)
 			{
-				return TEXT("等待 StateTree 推进：全员 ready 事件已发出，但公开阶段还在普通夜晚；如果持续不变，说明事件没有进入下一天分支。");
+				return TEXT("等待 StateTree 推进：供品结算继续事件已发出，但公开阶段还在普通夜晚；如果持续不变，说明事件没有进入下一天分支。");
 			}
 			if (RunState.Phase.Phase == ECatRunPhase::NormalNight
 				&& AuthoritySnapshot->bDebugSkipToNextDayRequested)
 			{
-				return TEXT("跳天加速正在普通夜晚走正式 ready：如果 ready 数量没有追上资格数量，需要看玩家是否仍在可见且合资格集合里。");
+				return TEXT("跳天加速正在普通夜晚提交正式供品结算；如果一直不前进，需要看供品结算 GE 或 StateTree 事件是否被拒绝。");
 			}
 			if (!AuthoritySnapshot->bRunCommandsOpen
 				&& RunState.Phase.Phase != ECatRunPhase::Ending && RunState.Phase.Phase != ECatRunPhase::Ended)
@@ -433,7 +421,7 @@ namespace
 			TextColor });
 		Lines.Add({ TEXT("辅助指令：跳到夜晚=cat.RunEnvironmentSocial.SkipToNight ｜ 正常跳下一天=cat.RunEnvironmentSocial.SkipToNextDay"),
 			TextColor });
-		Lines.Add({ TEXT("作弊救援：强制下一天=cat.RunEnvironmentSocial.ForceNextDay（失败夜继续测，或普通夜全员 ready 卡住时用）"),
+		Lines.Add({ TEXT("作弊救援：强制下一天=cat.RunEnvironmentSocial.ForceNextDay（失败夜继续测，或普通夜供品结算事件卡住时用）"),
 			WarningColor });
 
 		const ACatfishingGameState* GameState = World ? World->GetGameState<ACatfishingGameState>() : nullptr;
@@ -471,9 +459,7 @@ namespace
 				RunState.Phase, MorningEndServerTimeSeconds, DuskStartServerTimeSeconds);
 
 		int32 PlayerCount = 0;
-		int32 ReadyPlayerCount = 0;
-		bool bLocalReady = false;
-		CountVisibleReadyPlayers(*GameState, Controller, PlayerCount, ReadyPlayerCount, bLocalReady);
+		CountVisiblePlayers(*GameState, PlayerCount);
 
 		int32 ChumFieldCount = 0;
 		int32 NaturalChumFieldCount = 0;
@@ -510,9 +496,10 @@ namespace
 		Lines.Add({ FString::Printf(TEXT("RunId：%s ｜ 第 %d 天 ｜ 阶段：%s ｜ Revision：%lld"),
 			*RunState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunState.Phase.DayIndex,
 			*FormatRunPhaseForPanel(RunState.Phase.Phase), RunState.Revision), TextColor });
-		Lines.Add({ FString::Printf(TEXT("Run 门禁：有截止 %s ｜ 可钓鱼 %s ｜ 额度开放 %s ｜ 额度 %d / %d ｜ 终局原因 %s"),
+		Lines.Add({ FString::Printf(TEXT("Run 门禁：有截止 %s ｜ 可钓鱼 %s ｜ 供品开放 %s ｜ 供品 %d / %d ｜ 世界进度 %d(%+d) ｜ 终局原因 %s"),
 			FormatBoolForPanel(RunState.Phase.bHasDeadline), FormatBoolForPanel(RunState.Phase.bFishingAllowed),
-			FormatBoolForPanel(RunState.Phase.bQuotaOpen), RunState.QuotaProgress, RunState.QuotaTarget,
+			FormatBoolForPanel(RunState.Phase.bOfferingOpen), RunState.LastOfferingPoints, RunState.DailyOfferingTarget,
+			RunState.WorldProgress, RunState.LastWorldProgressDelta,
 			*FormatEndReasonForPanel(RunState.EndReason)), TextColor });
 
 		Lines.Add({ TEXT("—— Environment 状态 ——"), SectionColor });
@@ -535,9 +522,8 @@ namespace
 			bEnvironmentRevisionMatches ? TextColor : WarningColor });
 
 		Lines.Add({ TEXT("—— Social / Chum 状态 ——"), SectionColor });
-		Lines.Add({ FString::Printf(TEXT("玩家：可见 %d ｜ 夜晚已准备 %d ｜ 本机准备 %s ｜ teardown 完成 %s"),
-			PlayerCount, ReadyPlayerCount, FormatBoolForPanel(bLocalReady),
-			FormatBoolForPanel(RunState.bTeardownComplete)), TextColor });
+		Lines.Add({ FString::Printf(TEXT("玩家：可见 %d ｜ teardown 完成 %s"),
+			PlayerCount, FormatBoolForPanel(RunState.bTeardownComplete)), TextColor });
 		Lines.Add({ FString::Printf(TEXT("求助：类型 %s ｜ Revision %lld ｜ 全局 %s ｜ 半径 %.1f cm ｜ SignalId %s"),
 			*FormatHelpSignalKindForPanel(HelpSignal.Kind), HelpSignal.Revision,
 			FormatBoolForPanel(HelpSignal.bGlobal), HelpSignal.RadiusCentimeters,
@@ -563,8 +549,7 @@ namespace
 				FormatBoolForPanel(AuthoritySnapshotPtr->bRunStateTreeAssigned),
 				FormatBoolForPanel(AuthoritySnapshotPtr->bRunStateTreeRunning),
 				FormatBoolForPanel(AuthoritySnapshotPtr->bRunStartupInProgress)), TextColor });
-			Lines.Add({ FString::Printf(TEXT("服务器私有：夜晚资格 %d ｜ 夜晚 ready %d ｜ 已发全员 ready 事件 %s"),
-				AuthoritySnapshotPtr->NightReadyEligibleCount, AuthoritySnapshotPtr->NightReadyCount,
+			Lines.Add({ FString::Printf(TEXT("服务器私有：已发供品继续事件 %s"),
 				FormatBoolForPanel(AuthoritySnapshotPtr->bAllEligibleReadyEventSent)), TextColor });
 			Lines.Add({ FString::Printf(TEXT("服务器私有：跳天加速 %s ｜ 请求天 %d ｜ 请求 Run %s"),
 				FormatBoolForPanel(AuthoritySnapshotPtr->bDebugSkipToNextDayRequested),
@@ -637,9 +622,7 @@ namespace
 		const bool bEnvironmentRevisionMatches = RunState.Environment.SourceRunRevision == RunState.Revision;
 
 		int32 PlayerCount = 0;
-		int32 ReadyPlayerCount = 0;
-		bool bLocalReady = false;
-		CountVisibleReadyPlayers(*GameState, Controller, PlayerCount, ReadyPlayerCount, bLocalReady);
+		CountVisiblePlayers(*GameState, PlayerCount);
 
 		int32 ChumFieldCount = 0;
 		int32 NaturalChumFieldCount = 0;
@@ -649,20 +632,20 @@ namespace
 		const FCatTheftResult TheftResult = CatController ? CatController->GetLastTheftResult() : FCatTheftResult();
 
 		UE_LOG(LogCatRun, Display,
-			TEXT("Event=run_environment_social_debug_snapshot Trigger=%s World=%s NetMode=%s RunId=%s Revision=%lld Day=%d Phase=%s End=%s ServerNow=%.3f Anchor=%.3f Deadline=%.3f DayElapsed=%.3f DayLength=%.3f DeadlineRemaining=%.3f DayProgress=%.3f HasDeadline=%s FishingAllowed=%s QuotaOpen=%s QuotaProgress=%d QuotaTarget=%d Weather=%s TimeOfDay=%s HasEvent=%s ActiveEvent=%s EnvRevision=%lld EnvRevisionMatch=%s ReadyPlayers=%d PlayerCount=%d LocalReady=%s HelpKind=%s HelpRevision=%lld HelpGlobal=%s HelpRadius=%.3f HelpSignalId=%s HelpX=%.3f HelpY=%.3f HelpZ=%.3f TheftProtocolId=%s TheftFishId=%s TheftError=%s TheftWindow=%s TheftReturned=%s TheftConsumed=%s ChumFields=%d NaturalChumFields=%d TeardownComplete=%s"),
+			TEXT("Event=run_environment_social_debug_snapshot Trigger=%s World=%s NetMode=%s RunId=%s Revision=%lld Day=%d Phase=%s End=%s ServerNow=%.3f Anchor=%.3f Deadline=%.3f DayElapsed=%.3f DayLength=%.3f DeadlineRemaining=%.3f DayProgress=%.3f HasDeadline=%s FishingAllowed=%s OfferingOpen=%s LastOfferingPoints=%d DailyOfferingTarget=%d Weather=%s TimeOfDay=%s HasEvent=%s ActiveEvent=%s EnvRevision=%lld EnvRevisionMatch=%s PlayerCount=%d HelpKind=%s HelpRevision=%lld HelpGlobal=%s HelpRadius=%.3f HelpSignalId=%s HelpX=%.3f HelpY=%.3f HelpZ=%.3f TheftProtocolId=%s TheftFishId=%s TheftError=%s TheftWindow=%s TheftReturned=%s TheftConsumed=%s ChumFields=%d NaturalChumFields=%d TeardownComplete=%s"),
 			Trigger, *World->GetName(), *FormatNetMode(World->GetNetMode()),
 			*RunState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunState.Revision,
 			RunState.Phase.DayIndex, *UEnum::GetValueAsString(RunState.Phase.Phase),
 			*UEnum::GetValueAsString(RunState.EndReason), ServerNow, RunState.Phase.ServerTimeAnchorSeconds,
 			RunState.Phase.DeadlineServerTimeSeconds, DayElapsedSeconds, DayLengthSeconds, DeadlineRemaining,
 			DayProgressPercent, FormatBoolForLog(RunState.Phase.bHasDeadline),
-			FormatBoolForLog(RunState.Phase.bFishingAllowed), FormatBoolForLog(RunState.Phase.bQuotaOpen),
-			RunState.QuotaProgress, RunState.QuotaTarget, *UEnum::GetValueAsString(RunState.Environment.Weather),
+			FormatBoolForLog(RunState.Phase.bFishingAllowed), FormatBoolForLog(RunState.Phase.bOfferingOpen),
+			RunState.LastOfferingPoints, RunState.DailyOfferingTarget, *UEnum::GetValueAsString(RunState.Environment.Weather),
 			*UEnum::GetValueAsString(RunState.Environment.TimeOfDay),
 			FormatBoolForLog(RunState.Environment.bHasActiveEvent),
 			RunState.Environment.ActiveEventId.IsNone() ? TEXT("--") : *RunState.Environment.ActiveEventId.ToString(),
 			RunState.Environment.SourceRunRevision, FormatBoolForLog(bEnvironmentRevisionMatches),
-			ReadyPlayerCount, PlayerCount, FormatBoolForLog(bLocalReady),
+			PlayerCount,
 			*UEnum::GetValueAsString(HelpSignal.Kind), HelpSignal.Revision,
 			FormatBoolForLog(HelpSignal.bGlobal), HelpSignal.RadiusCentimeters,
 			*HelpSignal.SignalId.ToString(EGuidFormats::DigitsWithHyphens),
@@ -676,7 +659,7 @@ namespace
 			ChumFieldCount, NaturalChumFieldCount, FormatBoolForLog(RunState.bTeardownComplete));
 	}
 
-	// 一次性屏幕输出流程：Dump 沿用短暂屏幕消息，但文字与常驻面板共用同一份中文行；消息过期后不留下 UI 或玩法状态。
+	// 一次性屏幕输出流程：Dump 沿用短暂屏幕消息，但文字与常驻面板共用同一份中文行；消息失效后不留下 UI 或玩法状态。
 	void PushRunEnvironmentSocialScreenLines(const UObject& Owner,
 		const TArray<FCatRunEnvironmentDebugPanelLine>& Lines, const float TimeToDisplay)
 	{
@@ -792,7 +775,7 @@ TStatId UCatRunEnvironmentDebugSubsystem::GetStatId() const
 void UCatRunEnvironmentDebugSubsystem::RefreshDebugPanelLifecycle()
 {
 #if !UE_BUILD_SHIPPING
-	// 面板是否存在完全由 CVar 驱动；关闭时销毁 Slate 引用，避免 World 切换后旧面板继续显示上一局状态。
+	// 面板是否存在完全由 CVar 驱动；关闭时销毁 Slate 引用，避免 World 切换后失效面板继续显示上一局状态。
 	if (CVarCatRunEnvironmentSocialDebug.GetValueOnGameThread() == 0)
 	{
 		DestroyDebugPanelWidget();
@@ -852,7 +835,7 @@ void UCatRunEnvironmentDebugSubsystem::CreateDebugPanelWidget()
 #endif
 }
 
-// 面板销毁流程：如果原挂接视口仍存在就从同一个 GameViewport 移除 Slate 实例；视口已销毁时直接清引用，避免多客户端 PIE 或 World 切换后悬挂旧文本。
+// 面板销毁流程：如果原挂接视口仍存在就从同一个 GameViewport 移除 Slate 实例；视口已销毁时直接清引用，避免多客户端 PIE 或 World 切换后悬挂失效文本。
 void UCatRunEnvironmentDebugSubsystem::DestroyDebugPanelWidget()
 {
 #if !UE_BUILD_SHIPPING

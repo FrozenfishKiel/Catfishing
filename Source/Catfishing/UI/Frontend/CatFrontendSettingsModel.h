@@ -128,7 +128,7 @@ public:
 	/** 更新待应用的 UI 比例；将值限制在 0.75 到 2.0 之间，避免不可读或不可操作的前端布局。 */
 	void SetDraftUIScale(float NewUIScale);
 
-	/** 返回亮度调整是否可应用；GEngine 存在时对应真实 DisplayGamma，专用服务器或启动早期无引擎时返回 false。 */
+	/** 返回亮度调整是否可应用；GEngine 存在时对应真实 DisplayGamma，专用服务器或 UI 初始化阶段无引擎时返回 false。 */
 	bool IsBrightnessSettingAvailable() const;
 
 	/** 返回待应用的显示 Gamma；数值沿用 UE Gamma 命令的 0.5 到 5.0 范围，Apply 时写入真实渲染输出。 */
@@ -194,7 +194,7 @@ public:
 	/** 返回待切换的输出设备 ID；空值表示保持平台当前默认设备，真实切换结果由异步回调确认。 */
 	const FString& GetDraftAudioOutputDeviceId() const;
 
-	/** 选择已枚举的输出设备 ID 作为草稿；未知 ID 会被拒绝，防止向 AudioMixer 提交过期或伪造设备标识。 */
+	/** 选择已枚举的输出设备 ID 作为草稿；未知 ID 会被拒绝，防止向 AudioMixer 提交失效或伪造设备标识。 */
 	void SetDraftAudioOutputDeviceId(const FString& NewAudioOutputDeviceId);
 
 	/** 返回输出设备枚举或热切换是否仍在等待 AudioMixer 回调；等待期间 View 必须禁用同类操作以避免覆盖关联结果。 */
@@ -220,7 +220,7 @@ public:
 
 private:
 	/**
-	 * 从正式设置来源重建整份草稿；Initialize、Cancel 与 Apply 后调用，确保页面不保留已提交前的旧值或无效音频草稿。
+	 * 从正式设置来源重建整份草稿；Initialize、Cancel 与 Apply 后调用，确保页面不保留已提交前的变更前值或无效音频草稿。
 	 */
 	void ReloadDraftFromSettings();
 
@@ -331,7 +331,7 @@ private:
 	/** 待热切换的输出设备 ID；页面选择写入，成功回调才同步到正式用户设置并持久化。 */
 	FString DraftAudioOutputDeviceId;
 
-	/** 当前尚未收到最终结果的 AudioMixer 请求；非空即为 pending，完成或 Shutdown 取消并释放，身份校验阻止旧结果写入新页面。 */
+	/** 当前尚未收到最终结果的 AudioMixer 请求；非空即为 pending，完成或 Shutdown 取消并释放，身份校验阻止失效结果写入新页面。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatAudioOutputRequest> ActiveAudioOutputRequest;
 

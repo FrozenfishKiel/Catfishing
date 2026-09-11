@@ -1,3 +1,4 @@
+#include "Fishing/Tests/CatFishingEquipmentTestFixtures.h"
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -200,7 +201,6 @@ namespace CatFishingGroupNetwork
 				FCatPlaceRodCommand Place;
 				Place.RequestId = FGuid::NewGuid();
 				Place.ExpectedEquipmentRevision = Equipment->GetSnapshot().Revision;
-				Place.ExpectedInventoryRevision = PrimaryCat->GetInventoryComponent()->GetInventoryRevision();
 				const auto Placed = Fishing->PlaceRod(Primary, Place);
 				if (!Test->TestTrue(TEXT("real Service places and physically holds the formal rod"), Placed.bCommitted)) return true;
 				RodId = Placed.RodActorId;
@@ -549,8 +549,8 @@ namespace CatFishingGroupNetwork
 					|| !Test->TestNull(TEXT("a remaining physical helper is never promoted automatically"), Rod->GetPresentationState().OperatorPlayerState.Get())
 					|| !Test->TestEqual(TEXT("unattended fishing preserves the deployment owner"), Rod->GetPresentationState().OwnerPlayerState.Get(), Primary->PlayerState.Get())
 					|| !Test->TestFalse(TEXT("the same line and fishing session continue unattended"), Session->IsTerminal())) return true;
-				FCatInventoryEndpointSnapshot Locked;
-				Test->TestEqual(TEXT("unattended fishing keeps the original rod resource lock"), Equipment->ReadInventoryTransferEndpoint(TEXT("ActiveUse"), RodItemId, Locked), ECatDomainCommandError::InvalidPhase);
+				FCatInventoryEntry Locked;
+				Test->TestEqual(TEXT("unattended fishing keeps the original rod resource lock"), CatFishingTest::ReadHeldRod(Equipment.Get(), RodItemId, Locked), ECatDomainCommandError::InvalidPhase);
 				if (Test->HasAnyErrors()) return true;
 				Test->AddInfo(FString::Printf(TEXT("Event=fishing_physical_helpers_network_verified SessionId=%s RodActorId=%s PreviousFishingOperators=1 CurrentFishingOperators=0 PhysicalHelpers=3 HelperASCUnchanged=1 AutoPromotion=0 ControlEpoch=%u OldControlEpoch=%u LineLoad=%.3f Samples=%d MaximumLineLoad=%.3f RodTravelCm=%.3f FishTravelCm=%.3f Server=Listen Clients=3 Evidence=runtime_behavior"),
 					*SessionId.ToString(), *RodId.ToString(), Rod->GetControlEpoch(), OldEpoch, Session->GetSnapshot().NormalizedLineLoad,

@@ -105,7 +105,7 @@ namespace
 		return nullptr;
 	}
 
-	// 同类兜底查找流程：保证没有专门 Tag 的旧关卡也能先跑起来，但不会覆盖已手动指定的对象。
+	// 同类查找流程：保证没有专门 Tag 的关卡也能找到同类表现对象，但不会覆盖已手动指定的对象。
 	template <typename TActor>
 	TActor* FindFirstUsableSceneActor(UWorld* World, const AActor* ExcludedActor = nullptr)
 	{
@@ -124,7 +124,7 @@ namespace
 		return nullptr;
 	}
 
-	// 后处理兜底查找流程：优先全局体，避免找到一个玩家不在体积内的局部 PostProcessVolume。
+	// 后处理查找流程：优先全局体，避免找到一个玩家不在体积内的局部 PostProcessVolume。
 	APostProcessVolume* FindBestPostProcessVolume(UWorld* World)
 	{
 		APostProcessVolume* FirstUsableVolume = nullptr;
@@ -281,7 +281,7 @@ void ACatEnvironmentPresentationActor::Tick(const float DeltaSeconds)
 	}
 }
 
-// EndPlay 流程：先解除 GameState 委托再进入父类收口，避免蓝图表现 Actor 在 World 销毁阶段收到旧快照。
+// EndPlay 流程：先解除 GameState 委托再进入父类收口，避免蓝图表现 Actor 在 World 销毁阶段收到失效快照。
 void ACatEnvironmentPresentationActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	ClearGameStateBinding();
@@ -294,7 +294,7 @@ FCatEnvironmentPresentationState ACatEnvironmentPresentationActor::GetPresentati
 	return PresentationState;
 }
 
-// 绑定流程：按当前 World 找到唯一 GameState；如果目标发生变化先解绑旧委托，再缓存当前公开快照并监听后续复制。
+// 绑定流程：按当前 World 找到唯一 GameState；如果目标发生变化先解绑失效委托，再缓存当前公开快照并监听后续复制。
 bool ACatEnvironmentPresentationActor::RefreshGameStateBinding()
 {
 	UWorld* World = GetWorld();
@@ -318,7 +318,7 @@ bool ACatEnvironmentPresentationActor::RefreshGameStateBinding()
 	return true;
 }
 
-// 清理流程：只移除本 Actor 加到 GameState 的 Run 快照订阅，并清掉本地缓存和投影，防止重绑时混用旧世界状态。
+// 清理流程：只移除本 Actor 加到 GameState 的 Run 快照订阅，并清掉本地缓存和投影，防止重绑时混用失效世界状态。
 void ACatEnvironmentPresentationActor::ClearGameStateBinding()
 {
 	if (ACatfishingGameState* GameState = BoundGameState.Get())
@@ -332,7 +332,7 @@ void ACatEnvironmentPresentationActor::ClearGameStateBinding()
 	PresentationState = FCatEnvironmentPresentationState();
 }
 
-// Run 快照变化流程：从 GameState 重读整份组合事实，然后把新投影交给蓝图；不按旧状态做增量推断。
+// Run 快照变化流程：从 GameState 重读整份组合事实，然后把新投影交给蓝图；不按失效状态做增量推断。
 void ACatEnvironmentPresentationActor::HandleRunPublicStateChanged()
 {
 	if (const ACatfishingGameState* GameState = BoundGameState.Get())
@@ -391,7 +391,7 @@ void ACatEnvironmentPresentationActor::ApplyPresentationState()
 
 // 场景对象解析流程：
 // 1. 只在允许自动发现的本地 World 中工作，专用服务器和关闭自动发现时保持现有引用不动。
-// 2. 先记录旧引用，再按手动引用优先、Tag 次之、同类兜底最后的顺序补齐 Sun、Moon、SkyLight、HeightFog 和 PostProcess。
+// 2. 先记录失效引用，再按手动引用优先、Tag 次之、同类查找最后的顺序补齐 Sun、Moon、SkyLight、HeightFog 和 PostProcess。
 // 3. 引用变化时写 resolved 日志；必要对象仍缺失时只设置一次 bHasLoggedMissingSceneTargets 并写 missing 日志，避免未接线关卡刷屏。
 void ACatEnvironmentPresentationActor::ResolveSceneTargets()
 {

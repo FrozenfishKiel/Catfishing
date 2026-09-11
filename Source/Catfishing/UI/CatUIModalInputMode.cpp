@@ -49,7 +49,7 @@ void CatUIModalInputMode::Open(APlayerController* Controller, UUserWidget* Focus
 }
 
 // 关闭流程：
-// 1. Controller 已经失效时只清空本地恢复记录，避免下一次绑定误用旧页面状态。
+// 1. Controller 已经失效时只清空本地恢复记录，避免下一次绑定误用失效页面状态。
 // 2. Controller 有效时先恢复 GameOnly，让玩家重新获得游戏输入。
 // 3. 如果本页面曾申请输入锁，才恢复打开前鼠标状态并释放一层 SetIgnoreMove/LookInput，保留其他系统可能已经申请的锁。
 // 4. 清空恢复记录，保证下一次打开会重新捕获新的鼠标状态。

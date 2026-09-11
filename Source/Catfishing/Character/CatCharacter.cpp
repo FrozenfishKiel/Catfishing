@@ -26,6 +26,7 @@
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Fishing/Presentation/CatFishingCameraComponent.h"
 #include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatBackPackComponent.h"
 #include "Inventory/CatInventorySettings.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
 
@@ -34,15 +35,7 @@ namespace
 	// 初始随身库存容量迁移流程：角色创建正式库存时默认读 InventorySettings；旧 EquipmentSettings 被测试或诊断改值时保留一次兼容覆盖。
 	int32 ResolveInitialPlayerInventorySlotCapacity()
 	{
-		const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
-		const int32 InventorySlotCapacity =
-			InventorySettings != nullptr ? InventorySettings->GetPlayerInventorySlotCapacity() : 0;
-		const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
-		const int32 LegacySlotCapacity =
-			EquipmentSettings != nullptr ? FMath::Max(0, EquipmentSettings->InventorySlotCapacity)
-			: UCatInventorySettings::ProjectDefaultPlayerInventorySlotCapacity;
-		return LegacySlotCapacity != UCatInventorySettings::ProjectDefaultPlayerInventorySlotCapacity
-			? LegacySlotCapacity : InventorySlotCapacity;
+		return GetDefault<UCatInventorySettings>()->GetPlayerInventorySlotCapacity();
 	}
 }
 
@@ -58,7 +51,7 @@ ACatCharacter::ACatCharacter(const FObjectInitializer& ObjectInitializer)
 	ConditionComponent = CreateDefaultSubobject<UCatConditionComponent>(TEXT("ConditionComponent"));
 	ConditionPresentation = CreateDefaultSubobject<UCatConditionPresentationComponent>(TEXT("ConditionPresentation"));
 	GrowthComponent = CreateDefaultSubobject<UCatGrowthComponent>(TEXT("GrowthComponent"));
-	InventoryComponent = CreateDefaultSubobject<UCatInventoryComponent>(TEXT("InventoryComponent"));
+	InventoryComponent = CreateDefaultSubobject<UCatBackPackComponent>(TEXT("InventoryComponent"));
 	EquipmentComponent = CreateDefaultSubobject<UCatEquipmentComponent>(TEXT("EquipmentComponent"));
 	FishingCameraComponent = CreateDefaultSubobject<UCatFishingCameraComponent>(TEXT("FishingCameraComponent"));
 	GetCharacterMovement()->MaxWalkSpeed=100.0f;
@@ -311,8 +304,6 @@ void ACatCharacter::PossessedBy(AController* NewController)
 		}
 		if (EquipmentComponent)
 		{
-			EquipmentComponent->ApplyConfiguredStarterLoadoutFromAuthority();
-			EquipmentComponent->GrantStarterScoopNetIfConfigured();
 		}
 	}
 }

@@ -34,7 +34,7 @@ struct FCatShopCatalogEntry
 
 	/**
 	 * 单次购买消耗的公款数额。0 是合法取值，表达“这一项显式免费”，免费普通饵就靠它；负数不允许，商店不能反过来发钱。
-	 * 默认值刻意取 -1 作为“这一列还没填”的哨兵，而不是 0：两者在运行期必须能区分开，
+	 * 默认值刻意取 -1 作为“这一列尚未填写”的哨兵，而不是 0：两者在运行期必须能区分开，
 	 * 否则漏填价格的目录项会静默变成免费品，玩家能白拿本该收费的东西。校验因此只放行显式写过的非负价格。
 	 * 这里不设 ClampMin，否则编辑器会把哨兵夹成 0，等于把这条区分能力又抹掉。
 	 */
@@ -49,11 +49,11 @@ struct FCatShopCatalogEntry
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Catalog")
 	bool bUnlimitedStock = false;
 
-	/** 该目录项是否参与运行目录；关闭时配置仍可留在表里，但不会进入当前商店货架。 */
+	/** 该目录项是否参与运行目录；关闭时配置只作为编辑数据存在，不会进入当前商店货架。 */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Catalog")
 	bool bEnabled = true;
 
-	/** 商店层面的上架解锁条件；当前还没有商店解锁事实源，留空才可运行，非空会让该条目 fail-closed。 */
+	/** 商店层面的上架解锁条件；当前没有商店解锁事实源，留空才可运行，非空会让该条目 fail-closed。 */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Catalog")
 	FName RequiredShopUnlockId = NAME_None;
 
@@ -72,7 +72,7 @@ struct FCatShopCatalogEntry
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Catalog", meta = (ClampMin = "0"))
 	int32 DailyRestockQuantity = 0;
 
-	/** 商店展示名覆盖；为空时 UI 回退到物品定义或稳定 ID，后端不读取它做交易裁决。 */
+	/** 商店展示名覆盖；为空时 UI 使用物品定义或稳定 ID，后端不读取它做交易裁决。 */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Presentation")
 	FText DisplayNameOverride;
 
@@ -80,7 +80,7 @@ struct FCatShopCatalogEntry
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Presentation", meta = (MultiLine = "true"))
 	FText DescriptionOverride;
 
-	/** 商店图标覆盖；为空时可回退到装备定义图标，后端库存只保存 DefinitionId 和数量。 */
+	/** 商店图标覆盖；为空时 UI 可使用装备定义图标，后端库存只保存 DefinitionId 和数量。 */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Presentation")
 	TSoftObjectPtr<UTexture2D> IconOverride;
 
@@ -94,7 +94,7 @@ struct FCatShopCatalogEntry
 
 /**
  * 策划维护的商店出售表行；一行既描述商品事实，也描述它是固定上架还是参与刷新随机池。
- * RowName 可作为 EntryId 兜底，这样策划批量增删商品时不用在两列里维护同一个稳定主键。
+ * EntryId 留空时使用 RowName，这样策划批量增删商品时不用在两列里维护同一个稳定主键。
  */
 USTRUCT(BlueprintType)
 struct FCatShopCatalogTableRow : public FTableRowBase
@@ -109,7 +109,7 @@ struct FCatShopCatalogTableRow : public FTableRowBase
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Catalog")
 	FName DefinitionId = NAME_None;
 
-	/** 商品页展示分类；鱼竿、鱼饵、鱼窝等分类都由这列决定，程序不再内置分类枚举。 */
+	/** 商品页展示分类；鱼竿、鱼饵、鱼窝等分类都由这列决定，程序不内置分类枚举。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Presentation")
 	FName DisplayCategoryId = NAME_None;
 
@@ -125,7 +125,7 @@ struct FCatShopCatalogTableRow : public FTableRowBase
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Catalog")
 	int32 UnitPrice = -1;
 
-	/** 本行进入货架时的默认库存；有限库存必须大于 0，无限库存只用它做展示兜底。 */
+	/** 本行进入货架时的默认库存；有限库存必须大于 0，无限库存只用它做展示用数量。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Catalog", meta = (ClampMin = "0"))
 	int32 InitialStock = 0;
 
@@ -133,7 +133,7 @@ struct FCatShopCatalogTableRow : public FTableRowBase
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Catalog")
 	bool bUnlimitedStock = false;
 
-	/** 是否参与运行商店；关闭后本行保留在表里但不会进入货架候选或 UI 候选。 */
+	/** 是否参与运行商店；关闭后本行只作为编辑数据存在，不会进入货架候选或 UI 候选。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Catalog")
 	bool bEnabled = true;
 
@@ -165,7 +165,7 @@ struct FCatShopCatalogTableRow : public FTableRowBase
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Refresh")
 	int32 MaxRefreshedStockOverride = -1;
 
-	/** 商店展示名覆盖；为空时 UI 回退到装备定义名或稳定 ID。 */
+	/** 商店展示名覆盖；为空时 UI 使用装备定义名或稳定 ID。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Presentation")
 	FText DisplayNameOverride;
 
@@ -173,7 +173,7 @@ struct FCatShopCatalogTableRow : public FTableRowBase
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Presentation", meta = (MultiLine = "true"))
 	FText DescriptionOverride;
 
-	/** 商店图标覆盖；为空时 WBP 可以回退到装备定义图标或默认图标。 */
+	/** 商店图标覆盖；为空时 WBP 可以使用装备定义图标或默认图标。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Presentation")
 	TSoftObjectPtr<UTexture2D> IconOverride;
 
@@ -181,7 +181,7 @@ struct FCatShopCatalogTableRow : public FTableRowBase
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Presentation")
 	int32 SortOrder = 0;
 
-	/** 把策划表行转换为运行目录项；RowName 只在 EntryId 留空时作为主键兜底。 */
+	/** 把策划表行转换为运行目录项；RowName 只在 EntryId 留空时作为主键。 */
 	bool TryBuildCatalogEntry(FName RowName, FCatShopCatalogEntry& OutEntry) const;
 
 	/** 解析随机抽中后的库存数量；没有覆盖区间时沿用 InitialStock。 */
@@ -201,7 +201,7 @@ struct FCatShopCatalogRefreshRule
 
 /**
  * 收鱼价体重轴上的一档：重量达到 MinimumWeightKilograms 的鱼按 Price 收购。
- * 用离散档位而不是一条直线，是因为当前设计只裁定了“鱼越重越贵”的方向，没裁定斜率和截距。
+ * 用离散档位而不是一条直线，是因为当前设计只裁定了“鱼越重越贵”的方向，未裁定斜率和截距。
  */
 USTRUCT(BlueprintType)
 struct FCatShopFishWeightPrice

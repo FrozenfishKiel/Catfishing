@@ -15,7 +15,6 @@ struct FUniqueNetIdRepl;
 class FCatGameModeCommandIntentGateTest;
 class FCatGameModeReconnectAdmissionWhitelistTest;
 class FCatGameModeRunEnvironmentSocialPlayerEntrypointContractTest;
-namespace CatSacrificeCoordinatorTest { struct FItemsCommittedRecoveryFixture; }
 #endif
 
 namespace CatGameplayPlayerLimits
@@ -34,7 +33,7 @@ struct FCatRunAuthorityDebugSnapshot
 	/** Run 玩法命令总门当前是否打开；GameMode 是唯一写方，调试面板只用它解释公开 Phase 与服务器命令门是否一致。 */
 	bool bRunCommandsOpen = false;
 
-	/** ST_RunFlow 组件当前是否挂在 GameMode 上；组件缺失时服务器无法消费额度、ready 或结算事件。 */
+	/** ST_RunFlow 组件当前是否挂在 GameMode 上；组件缺失时服务器无法消费供品或结算事件。 */
 	bool bRunStateTreeAssigned = false;
 
 	/** ST_RunFlow 组件当前是否处于运行态；事件只会在运行态下被 StateTree 正式接收。 */
@@ -43,14 +42,8 @@ struct FCatRunAuthorityDebugSnapshot
 	/** Run 启动期间首个 EnterPhase Task 是否仍在回调窗口内；它解释启动阶段短暂“StateTree 已启动但公开阶段尚未稳定”的合法状态。 */
 	bool bRunStartupInProgress = false;
 
-	/** 本轮普通夜晚是否已经发过全员 ready 事件；true 后撤销 ready 不应再重新打开 StateTree 事件窗口。 */
+	/** 本轮普通夜晚是否已经发过继续事件；供品结算后用于诊断当前 StateTree 资产是否消费了当前事件。 */
 	bool bAllEligibleReadyEventSent = false;
-
-	/** 普通夜晚被冻结的可提交翻天 ready 的玩家数量；由服务器在进入 NormalNight 时写入，面板用它核对 ready 是否有资格集合。 */
-	int32 NightReadyEligibleCount = 0;
-
-	/** 普通夜晚已经提交 ready 的玩家数量；由服务器命令写口维护，面板只读显示。 */
-	int32 NightReadyCount = 0;
 
 	/** 最近一次 StateTree 事件或 EnterPhase 的处理结果；用来判断事件已经发出但资产没有发生阶段转移的情况。 */
 	FCatRunTransitionResult LastRunFlowResult;
@@ -103,33 +96,27 @@ public:
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 	/** 生成 Character 前再次验证 PlayerState 的继承 UniqueId 与 Active Controller 匹配，失败时不调用父类生成。 */
 	virtual void HandleStartingNewPlayer_Implementation(APlayerController* NewPlayer) override;
-	/** 玩家重启时只允许从唯一固定营地进入默认生成链；找不到合法营地时保持无 Pawn，不回退到旧 StartSpot 或世界原点。 */
+	/** 玩家重启时只允许从唯一固定营地进入默认生成链；生成和占有完成后再应用存档位置，找不到合法营地时保持无 Pawn。 */
 	virtual void RestartPlayer(AController* NewPlayer) override;
-	/** 查找玩家出生点时忽略客户端 Portal 和历史 StartSpot，只返回当前 World 唯一营地；缺失或重复营地会返回空。 */
+	/** 查找玩家出生点时忽略客户端 Portal 和上一次 StartSpot，只返回当前 World 唯一营地；缺失或重复营地会返回空。 */
 	virtual AActor* FindPlayerStart_Implementation(AController* Player, const FString& IncomingName = TEXT("")) override;
 	/** 选择玩家出生点时只扫描唯一 ACatCampHubActor；普通 PlayerStart 运行时不会成为候选。 */
 	virtual AActor* ChoosePlayerStart_Implementation(AController* Player) override;
 	/** 禁止沿用 Controller 上一次 StartSpot；每次生成都重新按当前唯一营地和当前玩家队列解析。 */
 	virtual bool ShouldSpawnAtStartSpot(AController* Player) override;
-	/** 在唯一营地附近生成 Pawn，接入退出捕获并请求 Save 恢复库存和位置；恢复失败关闭 Run、销毁新 Pawn 并返回空。 */
+	/** 在唯一营地附近生成 Pawn 并接入退出捕获；存档恢复统一由 RestartPlayer 在占有完成后提交。 */
 	virtual APawn* SpawnDefaultPawnFor_Implementation(AController* NewPlayer, AActor* StartSpot) override;
-	/** 对精确 Active 连接捕获或复核最后库存与位置，再解除 Pawn 通知并清准入/ready；无 Pawn 时要求解除占有阶段已捕获。 */
+	/** 对精确 Active 连接捕获或复核最后库存与位置，再解除 Pawn 通知并清准入；无 Pawn 时要求解除占有阶段已捕获。 */
 	virtual void Logout(AController* Exiting) override;
 
-	/** StateTree EnterPhase Task 的唯一阶段写入口；先验证阶段策略，再成对切换截止/时段刷新计时、ready 资格与命令 gate，最后只发布一份组合快照。 */
+	/** StateTree EnterPhase Task 的唯一阶段写入口；先验证阶段策略，再成对切换截止/时段刷新计时、供品窗口与命令 gate，最后只发布一份组合快照。 */
 	FCatRunTransitionResult EnterRunPhaseFromStateTree(ECatRunPhase NewPhase, ECatRunTransitionReason Reason);
 	/** StateTree Condition 只读比较最近一次外部结果原因，不从当前 Phase 反推事件来源。 */
 	bool DoesLastRunFlowResultMatch(ECatRunTransitionReason ExpectedReason) const;
-	/** 消费服务器已确认的额度贡献；StableNetId 由 Controller 适配并以 RequestId/Revision 保证幂等。 */
-	FCatRunCommandResult SubmitQuotaContribution(AController* RequestingController, const FCatQuotaContributionCommand& Command);
-	/** 献祭协调器在消费鱼前只读验证额度命令；不写缓存、Revision 或 StateTree 事件。 */
-	FCatRunCommandResult ValidateCommittedQuotaContributionFromCoordinator(const FCatQuotaContributionCommand& Command) const;
-	/** Items 已 committed 后由一局协调器提交额度；使用服务器私有 StableNetId，不要求玩家仍在线。 */
-	FCatRunCommandResult SubmitCommittedQuotaContributionFromCoordinator(const FCatQuotaContributionCommand& Command);
-	/** 写入普通夜晚的个人翻天确认；只有启动时冻结的合资格集合可以影响全员事件。 */
-	FCatRunCommandResult SubmitNextDayReady(AController* RequestingController, const FCatNextDayReadyCommand& Command);
-	/** 供服务器结算协调器提交完成终态；本方法只发送 StateTree 事件，不在 C++ 选择目标 Phase。 */
-	FCatRunCommandResult CompleteSettlementFromCoordinator(FGuid RequestId, int64 ExpectedRevision);
+	/** 消费服务器已确认的夜晚供品结算；StableNetId 由 Controller 适配并以 RequestId/Revision 保证幂等。 */
+	FCatRunCommandResult SubmitOfferingSettlement(AController* RequestingController, const FCatOfferingSettlementCommand& Command);
+	/** 供 owning client 在成像归档已收口后提交结算完成终态；本方法只发送 StateTree 事件，不在 C++ 选择目标 Phase。 */
+	FCatRunCommandResult CompleteSettlementFromServerRequest(FGuid RequestId, int64 ExpectedRevision);
 	/** Host 离局前关闭新命令、计时器和 StateTree；结果原样携带 Online RequestId/epoch。 */
 	FCatRunTeardownResult RequestRunTeardown(const FCatRunTeardownRequest& Request);
 	/** 返回 Run teardown 终态委托；Online 必须在回调中再次核对 RequestId/epoch。 */
@@ -139,13 +126,13 @@ public:
 #if !UE_BUILD_SHIPPING
 	/** 开发期调试入口：在服务器开放的 DayActive 上，把当前白天从此刻起的剩余时长重设为可进入 UE timer 的正秒数；成功会重写时间窗口、重排 timer、递增 Revision 并发布 RunPublicState，失败返回 false 且不改天数或客户端本地状态。 */
 	bool ApplyDebugDayLengthSeconds(double NewDayLengthSeconds);
-	/** 开发期调试入口：请求服务器把当前开放白天用正式额度命令推进到普通夜晚；已经处于普通夜晚时只确认状态，不提交 ready、不改天数、不直接写 Phase。 */
+	/** 开发期调试入口：请求服务器把当前开放白天推进到普通夜晚；已经处于普通夜晚时只确认状态，不提交供品、不改天数、不直接写 Phase。 */
 	bool ApplyDebugSkipToNight();
-	/** 开发期调试入口：请求服务器用正式额度与夜晚 ready 命令把当前 Run 加速到下一天；返回 true 表示请求已被接收或同日请求已在等待推进，返回 false 表示当前无 authority、无 World、阶段不支持或正式命令 gate 拒绝；Phase 与 DayIndex 仍只由 StateTree 阶段入口写入。 */
+	/** 开发期调试入口：请求服务器用正式白天结束与夜晚供品结算把当前 Run 加速到下一天；返回 true 表示请求已被接收或同日请求已在等待推进，返回 false 表示当前无 authority、无 World、阶段不支持或正式命令 gate 拒绝；Phase 与 DayIndex 仍只由 StateTree 阶段入口写入。 */
 	bool ApplyDebugSkipToNextDay();
-	/** 开发期作弊救援入口：在非 Shipping 的服务器上重启 ST_RunFlow 到下一次 DayActive，仅用于失败结算夜继续人工测试或普通夜全员 ready 后解卡；它绕过产品拓扑但仍让 StateTree 的 DayActive 入口写正式 Run 快照。 */
+	/** 开发期作弊救援入口：在非 Shipping 的服务器上重启 ST_RunFlow 到下一次 DayActive，仅用于失败结算夜继续人工测试或普通夜供品结算事件后解卡；它绕过产品拓扑但仍让 StateTree 的 DayActive 入口写正式 Run 快照。 */
 	bool ApplyDebugForceNextDay();
-	/** 开发期只读诊断入口：把 GameMode 不复制的 StateTree、命令门和夜晚 ready 集合折成一次性副本；调用者只能展示，不能据此推进 Run。 */
+	/** 开发期只读诊断入口：把 GameMode 不复制的 StateTree、命令门和跳天请求折成一次性副本；调用者只能展示，不能据此推进 Run。 */
 	FCatRunAuthorityDebugSnapshot GetAuthorityDebugSnapshotForDebug() const;
 #endif
 	/** Online Client 主动离局前标记当前 Controller；Logout 据此按 VoluntaryLeaveRecovery 决定是否保留重连准入。 */
@@ -156,21 +143,19 @@ public:
 	void NotifyHostExitGrantAckProgress();
 	/** 只读判断当前 Controller 是否仍为 Active 且 Run 玩法命令门开放；teardown/回执协议不调用该 gate。 */
 	bool CanAcceptGameplayCommand(const AController* Controller) const;
-	/** 只读判断当前 Controller 是否可发起新的 Fishing/玩家打窝命令；Social、翻天确认和结算收口不使用这个更窄的白天 gate。 */
+	/** 只读判断当前 Controller 是否可发起新的 Fishing/玩家打窝命令；Social 和结算收口不使用这个更窄的白天 gate。 */
 	bool CanAcceptFishingCommand(const AController* Controller) const;
 	/** 只读确认 Controller 的继承 UniqueId 已与当前 Active 记录精确配对；Save 据此筛选正式玩家，不受玩法命令开关影响，也不读取或复制私有准入表。 */
 	bool IsControllerActive(const AController* Controller) const;
 
 private:
 #if WITH_DEV_AUTOMATION_TESTS
-	/** 自动化夹具直接种入 Active 身份与 Phase，用来验证 Fishing gate 不会误封 Social/Ready/Settlement 宽命令。 */
+	/** 自动化夹具直接种入 Active 身份与 Phase，用来验证 Fishing gate 不会误封 Social/Settlement 宽命令。 */
 	friend class FCatGameModeCommandIntentGateTest;
 	/** 自动化夹具只在测试体内种入并检查私有准入/重连记录，用来证明 Logout、PreLogin 与白名单策略的 fail-closed 边界。 */
 	friend class FCatGameModeReconnectAdmissionWhitelistTest;
 	/** 自动化夹具只给 RunEnvironmentSocial 玩家入口闭环开放最小私有状态访问；测试用同一名 Active 玩家和普通夜晚 Phase 证明 Social 宽 gate 与 Chum 窄 gate 没有分叉，不把求助、保护牌和打窝拆成可独立关闭的小任务。 */
 	friend class FCatGameModeRunEnvironmentSocialPlayerEntrypointContractTest;
-	/** 自动化夹具只种入一份 DayActive Run 状态，用来验证献祭跨 Items/Run 恢复；正式阶段推进仍只走 StateTree。 */
-	friend struct CatSacrificeCoordinatorTest::FItemsCommittedRecoveryFixture;
 #endif
 
 	/** 服务器最小身份记录阶段；Reserved 来自 PreLogin，Active 只在 PostLogin 与具体 Controller 配对。 */
@@ -187,7 +172,7 @@ private:
 	{
 		/** 当前装配阶段；PreLogin 写 Reserved，PostLogin 写 Active。 */
 		EAdmissionPhase Phase = EAdmissionPhase::Reserved;
-		/** Active 阶段的 Controller 弱引用；Logout 只在相等时清理，避免旧连接删除新占用。 */
+		/** Active 阶段的 Controller 弱引用；Logout 只在相等时清理，避免失效连接删除新占用。 */
 		TWeakObjectPtr<AController> Controller;
 	};
 
@@ -197,7 +182,7 @@ private:
 	static FString MakeStableNetIdLogValue(const FUniqueNetIdRepl& UniqueId);
 	/** 判断当前服务器是否处于可使用开发身份的 Editor PIE 无会话环境；任何非 PIE、已有会话或活动 Online 操作都返回 false。 */
 	bool IsPieNoSessionAdmissionAllowed() const;
-	/** PostLogin 身份接缝失败时通过 GameSession 拒绝连接；不调用父类 PostLogin，也不释放无法安全归属的 Reserved 记录，因而不会生成 Character 或擅自实施未裁的过期策略。 */
+	/** PostLogin 身份接缝失败时通过 GameSession 拒绝连接；不调用父类 PostLogin，也不释放无法安全归属的 Reserved 记录，因而不会生成 Character 或擅自实施未裁的失效策略。 */
 	void RejectPostLoginController(APlayerController* NewPlayer, const FString& Reason);
 	/** 从已激活 Controller 读取唯一身份并写入命令上下文；客户端提交的 StableNetId 永远被覆盖。 */
 	bool FillServerCommandIdentity(const AController* Controller, FCatRunCommandContext& Context) const;
@@ -205,31 +190,24 @@ private:
 	static FString MakeRunCommandCacheKey(const FString& StableNetId, ECatRunCommandType CommandType, const FGuid& RequestId);
 	/** 创建与当前 Revision/Phase 对齐的命令结果，集中保证拒绝和提交返回相同事实字段。 */
 	FCatRunCommandResult MakeRunCommandResult(const FGuid& RequestId, bool bCommitted, ECatRunCommandError Error, ECatRunTransitionReason Reason = ECatRunTransitionReason::None) const;
-	/** 命中首次终态时返回只读重放结果；重复请求只报告 AlreadyResolved，不再次写真相。 */
+	/** 命中首次终态时返回只读重放结果；重复请求只报告 AlreadyResolved，真相只由首次提交写入。 */
 	bool TryReplayRunCommand(const FString& CacheKey, FCatRunCommandResult& OutResult) const;
 	/** 保存命令的首次同步终态；后续相同身份、类别与 RequestId 只能读取该记录。 */
 	FCatRunCommandResult CacheRunCommandResult(const FString& CacheKey, const FCatRunCommandResult& Result);
-	/** 只读预演当前 Run ASC 会接受的献祭额度结果；预检和正式提交都通过它在 Items 提交前发现坏倍率、溢出或投影不一致。 */
-	ECatRunCommandError PreviewRunSacrificeContribution(const FCatQuotaContributionCommand& Command, int32& OutAppliedContribution, int64& OutNewProgress) const;
-	/** 已由服务器适配好 StableNetId 的额度唯一实现；玩家 RPC 与献祭协调器都汇入此处。 */
-	FCatRunCommandResult SubmitQuotaContributionInternal(const FCatQuotaContributionCommand& ServerCommand);
-	/** 进入普通夜晚时冻结当前 Active 身份集合并清空个人 ready，未裁的晚加入不会隐式扩容。 */
-	void CaptureNightReadyEligibility();
-	/** 判断当前普通夜晚是否已经收齐冻结资格集合里的所有 ready；只读集合事实，不发送 StateTree 事件。 */
-	bool IsAllNightReadyComplete() const;
-	/** 在 ready 已经覆盖资格集合时发送 AllEligibleReady 事件；普通流程只允许首次发送，调试排障可在仍卡普通夜晚时重发同一个正式事件。 */
-	bool SendAllEligibleReadyEventIfComplete(const TCHAR* Trigger, bool bAllowResend);
-	/** ready 集合首次全部完成时发布公开事实并只发送 AllEligibleReady 事件，不在 C++ 改写 Phase。 */
-	void EvaluateAllEligibleReady();
-	/** 清除旧白天计时回调；只停止 deadline 与环境刷新 Timer，不改公开截止字段，供 DayActive 收口缝隙安全使用。 */
+	/** 只读预演当前 Run ASC 会接受的夜晚供品结算；预检和正式提交都通过它在不可逆结算前发现坏倍率、坏输入或投影不一致。 */
+	ECatRunCommandError PreviewRunOfferingSettlement(const FCatOfferingSettlementCommand& Command, int32& OutOfferedPoints,
+		int32& OutWorldProgressDelta, int32& OutNewWorldProgress, bool& bOutMetDailyTarget) const;
+	/** 已由服务器适配好 StableNetId 的夜晚供品结算唯一实现；祭坛 Actor、调试入口和其他服务器调用方都汇入此处。 */
+	FCatRunCommandResult SubmitOfferingSettlementInternal(const FCatOfferingSettlementCommand& ServerCommand);
+	/** 清除上一白天计时回调；只停止 deadline 与环境刷新 Timer，不改公开截止字段，供 DayActive 收口缝隙安全使用。 */
 	void ClearDayTimers();
-	/** 清除旧白天计时器与公开截止时间；任何新 Phase 在建立自己的副作用前都先调用。 */
+	/** 清除上一白天计时器与公开截止时间；任何新 Phase 在建立自己的副作用前都先调用。 */
 	void ClearDayDeadline();
 	/** 按当前白天截止窗口安排 Morning/Day/Dusk 语义刷新；无效配置只记录诊断，不创建第二套昼夜状态。 */
 	void ScheduleDayEnvironmentRefreshes();
 	/** 白天时段分界到达时重新发布同一 RunPublicState；只有服务器仍处于有效 DayActive 才递增 Revision。 */
 	void HandleDayEnvironmentRefreshElapsed();
-	/** 白天唯一截止回调关闭额度写口并发送 QuotaFailed 事件；夜晚没有倒计时器。 */
+	/** 白天唯一截止回调关闭捕鱼并发送 DayEnded 事件进夜晚；夜晚没有倒计时器。 */
 	void HandleDayDeadlineElapsed();
 	/** 把当前 Run Revision 的只读 DTO 交给 Environment，并将同 Revision 的组合快照发布到 GameState；不改变角色身体或表现状态。 */
 	bool RefreshEnvironmentAndPublish();
@@ -241,25 +219,25 @@ private:
 	void StartPersistenceCheckpointTimer();
 	/** 定期检查点触发时只提交 Save 请求并记录受理结果；异步成功仍由 Save 回调决定，EndPlay 不会假设写盘可完成。 */
 	void HandlePersistenceCheckpoint();
+	/** Pawn 解除占有时由 authority 收口该 Character 的跨系统会话；先终止 Fishing 再取消 Social，避免角色身体生命周期直接持有服务职责。 */
+
 #if !UE_BUILD_SHIPPING
-	/** 开发期跳天加速的当前 Run/Day 是否仍匹配；只用于避免迟到的调试请求碰到下一局或下一天。 */
+	/** 开发期跳天加速的当前 Run/Day 是否仍匹配；只用于避免迟到的调试结算碰到下一局或下一天。 */
 	bool IsDebugSkipToNextDayRequestCurrent() const;
 	/** 开发期跳天加速收口；进入新天、结算或 World 结束时清掉调试请求，不改正式 Run 状态。 */
 	void ClearDebugSkipToNextDayRequest();
-	/** 开发期补额度玩家选择入口；返回当前仍能走正式 Run 命令 gate 的第一名服务器可见玩家，供跳到夜晚和正常跳天共同复用。 */
-	APlayerController* FindDebugQuotaCompletionController() const;
-	/** 开发期跳天加速的资格玩家解析入口；按夜晚冻结的 StableNetId 找回当前 Active Controller，避免调试 ready 走错玩家集合。 */
-	AController* FindDebugNightReadyControllerByStableNetId(const FString& StableNetId) const;
-	/** 开发期补足当日额度入口；只在开放 DayActive 上构造一条正式额度贡献命令，返回 true 表示额度命令首次提交并发出 QuotaReached，返回 false 表示白天 gate、额度差值或 Active Controller 不满足且不会推进 StateTree。 */
-	bool SubmitDebugQuotaCompletionForCurrentDay(const TCHAR* Trigger);
-	/** 开发期跳天加速的夜晚 ready 提交入口；对当前服务器可见且合资格玩家调用正式 SubmitNextDayReady，返回 true 表示已经提交到全员 ready 事件或本来就在等待推进，返回 false 表示阶段不符、没有可提交玩家或正式 ready 命令被拒。 */
-	bool SubmitDebugReadyForEligiblePlayers(const TCHAR* Trigger);
+	/** 开发期结算玩家选择入口；返回当前仍能走正式 Run 命令 gate 的第一名服务器可见玩家，供夜晚调试结算复用。 */
+	APlayerController* FindDebugOfferingController() const;
+	/** 开发期结束当前白天入口；只在开放 DayActive 上关闭捕鱼并发送入夜事件，返回 false 表示白天 gate 不满足且不会推进 StateTree。 */
+	bool SubmitDebugDayEndForCurrentDay(const TCHAR* Trigger);
+	/** 开发期跳天加速的夜晚结算提交入口；构造一份达标调试供品并调用正式结算写口，返回 true 表示已发送继续推进事件。 */
+	bool SubmitDebugOfferingSettlementForCurrentDay(const TCHAR* Trigger);
 	/** 开发期跳天加速的阶段回调入口；正式 Phase 进入后决定是否安排下一步加速或清掉请求。 */
 	void ContinueDebugSkipToNextDayAfterPhaseEntered(ECatRunPhase EnteredPhase);
-	/** 开发期跳天加速的夜晚 ready 延迟入口；用下一帧提交 ready，避免在 StateTree Enter 回调内重入发送事件。 */
-	void ScheduleDebugSkipToNextDayReadySubmission();
-	/** 开发期跳天加速的夜晚 ready 延迟回调；重新核对当前 Run/Day 后只走正式 ready 写口。 */
-	void HandleDebugSkipToNextDayReadyElapsed();
+	/** 开发期跳天加速的夜晚结算延迟入口；用下一帧提交结算，避免在 StateTree Enter 回调内重入发送事件。 */
+	void ScheduleDebugSkipToNextDayOfferingSettlement();
+	/** 开发期跳天加速的夜晚结算延迟回调；重新核对当前 Run/Day 后只走正式结算写口。 */
+	void HandleDebugSkipToNextDayOfferingElapsed();
 #endif
 	/** 启动 gate 失败时保持 NotStarted、关闭写口并发布 StartupFailed，不回退为 C++ 状态机。 */
 	void FailRunStartup(const TCHAR* Reason);
@@ -269,15 +247,15 @@ private:
 	void PublishShopEconomySnapshot();
 	/** 将服务器私有 StableNetId 解析成可复制的 PlayerState。 */
 	APlayerState* ResolvePlayerStateByStableNetId(const FString& StableNetId) const;
-	/** 进入最终结算夜后关闭新商店订单；已经交付的购买物继续留在营地公共仓库快照中。 */
+	/** 进入最终结算夜后关闭新商店订单；已经交付的购买物继续留在营地公共仓库正式库存中。 */
 	void CloseShopForSettlementNight();
 	/** StableNetId 到最小装配记录的服务器唯一映射；GameMode 不复制到客户端，World 销毁时整体释放。 */
 	TMap<FString, FAdmissionRecord> AdmissionRecords;
-	/** 连接丢失身份到服务器世界时间过期点；只在显式 TTL/失败白名单下建立，不恢复旧 FishingSession。 */
+	/** 连接丢失身份到服务器世界时间失效点；只在显式 TTL/失败白名单下建立，不恢复失效 FishingSession。 */
 	TMap<FString, double> ReconnectExpiryByStableNetId;
 	/** Online 在主动 Client leave 前提交的短生命周期身份标记；Logout 消费后立即移除。 */
 	TSet<FString> VoluntaryLeaveStableNetIds;
-	/** 本次 PreLogin 命中未过期记录的身份；PostLogin 用它区分重连和普通中途加入后立即清除。 */
+	/** 本次 PreLogin 命中仍有效记录的身份；PostLogin 用它区分重连和普通中途加入后立即清除。 */
 	TSet<FString> PendingReconnectStableNetIds;
 
 	/** 承载 ST_RunFlow 的唯一运行组件；关闭自动启动后只由 StartPlay gate 显式装载。 */
@@ -294,11 +272,7 @@ private:
 	bool bRunCommandsOpen = false;
 	/** StateTree 正在同步 StartLogic 的短生命周期标记；允许首个 EnterPhase Task 在启动返回前写入。 */
 	bool bRunStartupInProgress = false;
-	/** 本普通夜晚的合资格 StableNetId 快照；加入/重连策略未裁时不会自动添加。 */
-	TSet<FString> NightReadyEligibleIds;
-	/** 本普通夜晚已确认 ready 的 StableNetId 集合；玩家撤销或离开时同步移除。 */
-	TSet<FString> NightReadyIds;
-	/** 本夜是否已经发出全员确认事件；发出后关闭撤销窗口，避免重复 StateTree 事件。 */
+	/** 本夜是否已经发出当前 StateTree 资产继续事件；它只诊断供品结算后的事件消费，不表示玩家个人状态。 */
 	bool bAllEligibleReadyEventSent = false;
 	/** 身份、命令类别与 RequestId 到首次终态的缓存；保证 RPC 重试不会重复提交。 */
 	TMap<FString, FCatRunCommandResult> RunCommandTerminalCache;
@@ -320,7 +294,7 @@ private:
 	int64 ActiveHostExitOperationEpoch = 0;
 	/** 当前 Host exit 是否已完成远端 Destroy ACK 与最终 Grant ACK 的真实等待；只有全部到达才会推进回主菜单链路。 */
 	bool bHostExitAckWaitComplete = false;
-	/** 商店公开经济变化的服务器本机订阅；EndPlay 成对解除，避免旧 World 回调。 */
+	/** 商店公开经济变化的服务器本机订阅；EndPlay 成对解除，避免失效 World 回调。 */
 	FDelegateHandle ShopPublicTransactionHandle;
 
 	/** 商店货架刷新变化的服务器本机订阅；它只触发快照重建，不创建交易广播。 */
@@ -330,9 +304,9 @@ private:
 #if !UE_BUILD_SHIPPING
 	/** 开发期跳天加速请求是否正在等待正式阶段推进；它只表达作弊输入的短生命周期请求，不代表 Run 阶段。 */
 	bool bDebugSkipToNextDayRequested = false;
-	/** 开发期跳天加速请求所属 Run；用于防止上一局的延迟 ready 影响新局。 */
+	/** 开发期跳天加速请求所属 Run；用于防止上一局延迟供品结算影响新局。 */
 	FGuid DebugSkipToNextDayRunId;
-	/** 开发期跳天加速请求所属天数；只有同一天进入普通夜晚时才会自动提交 ready。 */
+	/** 开发期跳天加速请求所属天数；只有同一天进入普通夜晚时才会自动提交供品结算。 */
 	int32 DebugSkipToNextDayDayIndex = 0;
 #endif
 };

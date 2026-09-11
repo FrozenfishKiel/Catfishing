@@ -1,0 +1,62 @@
+# sync-docs-ahead 的项目配置（game-toolkit 3.6.0 起）。有它就按这里分派系统；没有就按目录自动发现。
+# docs 相对 docs_root，code 相对工程根；refs 只作参考不评分；scope 是给分析者的评审范围一句话。
+# 增量模式靠它：文档 revision（_manifest.json）或 code 路径的 git diff 变了才重跑该系统。
+$schema_version: 1
+docs_root: Knowledge/Feishu
+manifest: Knowledge/Feishu/_manifest.json
+systems:
+  - name: 钓鱼系统-核心
+    docs: ["GDD 系统分册/钓鱼系统/钓鱼系统.md", "GDD 系统分册/钓鱼系统/钓鱼规则.md"]
+    refs: ["数值模拟与参数记录.md"]
+    scope: "钓鱼规则.md 的 §1 一竿流程、§3 抛竿与提竿、§4 搏斗与退出、§5 收鱼与归属、§6 外部接口与生命周期、§7 信息与反馈（§2 打窝/等待/抽鱼由另一份报告负责，不要重复评）；钓鱼系统.md 只作总览补充。"
+    code: ["Source/Catfishing/Fishing/**", "Source/Catfishing/AbilitySystem/Fishing/", "Source/Catfishing/Equipment/", "Source/Catfishing/Items/**", "Config/DefaultGame.ini"]
+  - name: 钓鱼系统-打窝聚鱼与多人
+    docs: ["GDD 系统分册/钓鱼系统/钓鱼规则.md", "GDD 系统分册/钓鱼系统/多人钓鱼附篇.md"]
+    refs: ["数值模拟与参数记录.md"]
+    scope: "钓鱼规则.md 只评 §2（2.1 窝点投放补窝、2.2 每漂独立计时、2.3 抽鱼与扣减事务、2.4 游走衰减、2.5 聚鱼时刻、2.6 渔网与死水）+ 多人钓鱼附篇.md 全篇（合力钓鱼、抢收/贡献/求助、合力移动 ρ 三档）。"
+    code: ["Source/Catfishing/Environment/**", "Source/Catfishing/Fishing/**", "Source/Catfishing/Social/", "Source/Catfishing/Items/**", "Config/DefaultGame.ini"]
+  - name: 道具
+    docs: ["GDD 系统分册/道具/道具.md", "GDD 系统分册/道具/道具总表/道具.csv", "GDD 系统分册/道具/鱼竿/Sheet1.csv", "GDD 系统分册/道具/鱼漂/Sheet1.csv", "GDD 系统分册/道具/窝料/Sheet1.csv", "GDD 系统分册/道具/鱼饵/Sheet1.csv"]
+    refs: ["数值模拟与参数记录.md"]
+    scope: "全篇；假饵（点子库·Demo 不做）.csv 排除。表格每行道具、每列参数算一条设计要求，可按表合并成粗粒度行，但说清落在哪、哪些列查不了。"
+    code: ["Source/Catfishing/Equipment/", "Source/Catfishing/Items/**", "Content/Catfishing/Data/Equipment/", "Scripts/configure_starter_rod_line_tuning.py", "Scripts/configure_formal_rod_anchor_baseline.py", "Config/DefaultGame.ini"]
+  - name: 商店
+    docs: ["GDD 系统分册/商店.md", "GDD 系统分册/商店.embedded/DeiSFL.csv", "GDD 系统分册/商店.embedded/GaHeFr.csv"]
+    refs: ["裁决同步/裁决同步 · 道具与商店（王甜甜）.md"]
+    scope: "全篇。"
+    code: ["Source/Catfishing/ShopEconomy/", "Source/Catfishing/UI/Shop/", "Source/Catfishing/Camp/", "Scripts/verify_equipment_shop.ps1", "Scripts/verify_equipment_shop_runtime.py"]
+  - name: 鱼
+    docs: ["GDD 系统分册/鱼/鱼.md", "GDD 系统分册/鱼/鱼表格/第一版.csv", "GDD 系统分册/鱼/鱼表格/入侵物种.md", "GDD 系统分册/鱼/鱼表格/入侵物种.embedded/*.csv"]
+    refs: ["裁决同步/裁决同步 · 鱼／营地／UI 与交互（张佳）.md", "GDD 系统分册/鱼/鱼的行为.md"]
+    scope: "全篇；旧版-已废弃-勿引（饥饿口径）.csv 排除；鱼的行为.md 页头声明「实现不读本页」只作参考。入侵物种页无三行头、未挂号，按候选稿对待：列一行说明不评。"
+    code: ["Source/Catfishing/Data/", "Source/Catfishing/Fishing/Behavior/", "Source/Catfishing/Fishing/Simulation/", "Source/Catfishing/Fishing/StateTree/", "Content/Catfishing/Data/Fish/", "Scripts/verify_showcase_formal_fish_region.py", "Scripts/create_fish_behavior_state_tree.py"]
+  - name: 猫咪与状态
+    docs: ["GDD 系统分册/猫咪与状态/猫咪与状态.md", "GDD 系统分册/猫咪与状态/升级效果.md", "GDD 系统分册/猫咪与状态/吃鱼效果.md", "GDD 系统分册/猫咪与状态/数值成长.md"]
+    refs: ["数值模拟与参数记录.md"]
+    scope: "全篇。"
+    code: ["Source/Catfishing/Character/", "Source/Catfishing/Condition/", "Source/Catfishing/Growth/", "Source/Catfishing/AbilitySystem/**", "Scripts/verify_character_growth_condition.ps1", "Config/DefaultGame.ini"]
+  - name: 营地与局进程
+    docs: ["GDD 系统分册/营地.md", "GDD 系统分册/局与进程.md"]
+    refs: ["裁决同步/裁决同步 · 鱼／营地／UI 与交互（张佳）.md"]
+    scope: "全篇。"
+    code: ["Source/Catfishing/Camp/", "Source/Catfishing/Run/", "Source/Catfishing/Items/**", "Source/Catfishing/Framework/Game/", "Scripts/verify_items_tank_sacrifice_camp.ps1", "Scripts/verify_items_tank_sacrifice_camp_map.py", "Config/DefaultGame.ini"]
+  - name: 环境与氛围
+    docs: ["GDD 系统分册/环境与氛围.md"]
+    refs: []
+    scope: "全篇。该册 §5 仍写聚鱼两源，09-07 已裁单源（环境自然触发归完整版），按裁决评，不按该册字面评。"
+    code: ["Source/Catfishing/Environment/**", "Source/Catfishing/Run/", "Scripts/verify_run_environment_social.ps1", "Scripts/verify_run_environment_social_runtime.py", "Config/DefaultGame.ini"]
+  - name: 联机社交
+    docs: ["GDD 系统分册/联机社交.md"]
+    refs: []
+    scope: "全篇。联机边界另见工程 Docs/Architecture/项目技术方案.md。"
+    code: ["Source/Catfishing/Online/", "Source/Catfishing/Social/", "Source/Catfishing/Framework/**", "Config/DefaultEngine.ini"]
+  - name: 印记与图鉴
+    docs: ["GDD 系统分册/印记.md", "GDD 系统分册/图鉴.md"]
+    refs: []
+    scope: "全篇。09-08 裁：图鉴收集层归上钩者一人，合力与抄网只进演出贡献名单。"
+    code: ["Source/Catfishing/Collection/", "Source/Catfishing/Profile/", "Source/Catfishing/UI/Collection/", "Config/DefaultGame.ini", "Scripts/verify_data_world_profile_album.ps1"]
+  - name: ui与交互
+    docs: ["GDD 系统分册/ui/主界面.md", "GDD 系统分册/ui/Sheet1.csv", "GDD 系统分册/ui/Sheet2.csv", "GDD 系统分册/交互.md"]
+    refs: []
+    scope: "全篇。Interface 层：WBP 蓝图控件查不了，但 C++ Widget/Subsystem/View DTO 与 Config/DefaultInput.ini 可查。两页均自标草稿，键位以钓鱼规则为准（抄鱼 F、抛竿左键）。工程 Docs/Development/UI_WBP拼装接口清单.md 只作参考。"
+    code: ["Source/Catfishing/UI/**", "Source/Catfishing/Interaction/", "Source/Catfishing/Input/", "Config/DefaultInput.ini", "Content/UI/", "Content/Blueprint/"]

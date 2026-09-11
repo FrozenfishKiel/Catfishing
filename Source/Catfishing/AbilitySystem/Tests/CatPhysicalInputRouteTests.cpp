@@ -187,8 +187,7 @@ bool FCatPhysicalInputRouteTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("菜单清主位持续按住状态"),ASC->GetHeldInputCount(),0);
 	Rod->SetPrimaryOperatorFromAuthority(nullptr,Rod->GetPresentationState().RodActorRevision);
 
-	// Reproduce the same-hand handoff: mouse grabs an already deployed owned rod, R commits
-	// control, then the original mouse release must reach Grab without destroying that GripId.
+	// Parked rods reject mouse grabs; R retakes the same rod, and releasing the old mouse route must preserve its explicit hold.
 	Controller->ClearPhysicalControlInput(TEXT("PrepareSameHandRetake"));
 	Other->GetPhysicalBodyComponent()->TeleportBodyFromAuthority(
 		FTransform(FRotator::ZeroRotator,FVector(-200,300,20)),TEXT("RetakeOtherOutOfReach"));
@@ -202,14 +201,13 @@ bool FCatPhysicalInputRouteTest::RunTest(const FString& Parameters)
 	RodBody->SetPhysicsAngularVelocityInRadians(FVector::ZeroVector);
 	Input->HandleAbilityInputTagPressed(CatFishingAbilityTags::Input_Fishing_Primary);
 	for (int32 Frame=0; Frame<60 && !Grab->IsGripping(true); ++Frame) TickInputFrame();
-	if (!TestTrue(TEXT("左鼠标通过真实接触抓回本人已部署竿"), Grab->IsGripping(true) && Grab->GetGripTarget(true)==Rod)) return false;
-	const FGuid RetakeGripId = Grab->GetGripState(true).GripId;
-	TestFalse(TEXT("单纯鼠标抓回仍是持续来源"), Grab->GetGripState(true).bExplicitHold);
-	TestNull(TEXT("单纯物理抓回不授予钓鱼主控"), Service->FindRodOperatedBy(Helper));
+	if (!TestFalse(TEXT("架住的鱼竿即使贴手也拒绝鼠标抓取"), Grab->IsGripping(true))) return false;
+	TestNull(TEXT("尝试物理抓取不授予钓鱼主控"), Service->FindRodOperatedBy(Helper));
 	const auto RetakeEdge = Commands->SubmitRodInteract();
 	FCatFishingCommandResult RetakeResult;
 	if (!TestTrue(TEXT("R 提交本人原竿控制"), Commands->TryGetResult(RetakeEdge.RequestId,RetakeResult) && RetakeResult.bCommitted)) return false;
-	TestTrue(TEXT("R 将同一 GripId 转为显式来源，不重建物理约束"), Grab->GetGripState(true).bExplicitHold && Grab->GetGripState(true).GripId==RetakeGripId);
+	if (!TestTrue(TEXT("R 直接拾回同一鱼竿并建立显式抓握"), Grab->IsGripping(true) && Grab->GetGripTarget(true) == Rod && Grab->GetGripState(true).bExplicitHold)) return false;
+	const FGuid RetakeGripId = Grab->GetGripState(true).GripId;
 	Input->HandleAbilityInputTagReleased(CatFishingAbilityTags::Input_Fishing_Primary);
 	for (int32 Frame=0; Frame<15; ++Frame) TickInputFrame();
 	if (!TestTrue(TEXT("原鼠标松键及真实物理步后仍握同一条 R 约束"), Grab->IsGripping(true) && Grab->GetGripState(true).GripId==RetakeGripId)) return false;

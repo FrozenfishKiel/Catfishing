@@ -10,7 +10,7 @@
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/Simulation/CatFishFightMotionSolver.h"
 #include "Fishing/Simulation/CatFishingFightRunner.h"
-#include "Items/CatWorldItemSettings.h"
+#include "FishContainers/CatFishPickupSettings.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingSurfaceTraversalTest,
 	"Catfishing.Unit.Fishing.Runtime.LiveAndExhaustedFishTraverseRealShoreGapAndSlope",

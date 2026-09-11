@@ -2,7 +2,7 @@
 
 更新时间：2026-09-01
 文档状态：当前有效规则。
-范围：给后续开发和 AI 审查使用，列出当前框架允许、禁止和必须保持的边界。本文不记录历史讨论。
+范围：给后续开发和 AI 审查使用，列出当前框架允许、禁止和必须保持的边界。本文只记录当前规则。
 
 ## 目录归属规则
 
@@ -11,14 +11,15 @@
 - `Character/` 只放角色本体、身体生命周期和 `ACharacter` 直接职责。
 - `AbilitySystem/` 放 `UGameplayAbility`、`UAttributeSet`、Ability 设置和能力相关诊断类。
 - `Condition/` 放 Wet、Downed、Recovery 等离散身体状态。
-- `Equipment/` 放装备定义、功能型装配、一局耗材、鱼竿耐久和失败预算。
-- `Items/` 当前只放鱼实例、容器事务和容器复制适配；不要把所有“物品”都放进来。
+- `Equipment/` 放钓具选择读模型、Fishing 使用冻结、绑定鱼竿磨损和失败预算。
+- `FishContainers/` 只放鱼实例、鱼容器事务和容器复制适配；不要把所有“物品”都放进来。
+- `Inventory/` 放正式道具实例、背包/公共库存和库存槽位事务。
 - `Framework/Game/` 放 GameMode、GameState、PlayerState、PlayerController 等 UE 框架宿主。
 - `UI/` 放 LocalPlayer UI 子系统、Widget、UI 设置和只读 View DTO。
 - `Online/` 放 Session、旅行、邀请、联机策略与平台回调。
 - 模块根目录只保留模块入口、Build 配置和极少数真正跨系统入口。
 
-若一个 Actor 是世界设施，例如营地或鱼缸，应优先判断它的领域身份。它暴露容器并不自动属于 `Items/`；它是营地设施时应由 `Camp/` 拥有，再调用 Items 事务。
+若一个 Actor 是世界设施，例如营地或鱼缸，应优先判断它的领域身份。它暴露容器并不自动属于 `FishContainers/`；它是营地设施时应由 `Camp/` 拥有，再调用鱼容器事务。
 
 ## 唯一写入者
 
@@ -27,19 +28,19 @@
 - Online 的 Session、World、Transport 和 Operation 事实只由 `UCatOnlineSubsystem` 写。
 - Run 阶段、额度、ready、Host exit 等局事实只由 `ACatfishingGameModeBase` 写。
 - GameState 只复制公开快照，不裁决玩法。
-- PlayerState 只保存连接期身份、ready 和公开摘要，不保存 ASC、身体状态、物品或本地档案。
-- Character 持有猫身体 ASC、Condition 和 Equipment；个人鱼护是独立箱子式容器对象，不搬到 Character、PlayerState 或 Profile。
+- PlayerState 只保存连接期身份、ready 和公开摘要，不保存 ASC、身体状态、正式库存、鱼容器或本地档案。
+- Character 持有猫身体 ASC、Condition 和钓具读模型入口；个人鱼护是独立箱子式容器对象，不搬到 Character、PlayerState 或 Profile。
 - FishingSession 持有单次钓鱼阶段、参与者和抢抄终态；Ability、鱼 Actor、UI 不能各自结算同一条鱼。
-- ItemsService 是鱼实例和容器事务唯一写口；FastArray、Widget、StateTree Task 只能消费提交结果。
+- `UCatFishContainerService` 是鱼实例和鱼容器事务唯一写口；FastArray、Widget、StateTree Task 只能消费提交结果。
 - ProfileSubsystem 是本地永久档案唯一写口；服务器不能声明远端 `USaveGame` 已经原子提交。
 
 ## 命令与幂等
 
-共享、竞争、不可逆或可重试命令必须带稳定请求键。`RequestId` 负责幂等，`Revision` 负责拒绝陈旧视图，二者不能替代。
+共享、竞争、不可逆或可重试命令必须带稳定请求键。`RequestId` 负责幂等，`Revision` 负责拒绝提交时已经落后的视图，二者不能替代。
 
 服务器入口必须输出结构化 Result。失败要区分权限、阶段、目标失效、版本冲突、取消、已结算、策略未裁和传输失败；不能只返回 `false` 让调用者猜。
 
-终态缓存由真正的聚合持有。Run 命令在 GameMode，Fishing 起始和阶段命令在 FishingService/FishingSession，容器命令在 ItemsService，Profile Grant 在 ProfileSubsystem 或 RunImprintService 的投递记录中。UI 不持有终态缓存。
+终态缓存由真正的聚合持有。Run 命令在 GameMode，Fishing 起始和阶段命令在 FishingService/FishingSession，鱼容器命令在 `UCatFishContainerService`，正式库存命令在 `Inventory/`，Profile Grant 在 ProfileSubsystem 或 RunImprintService 的投递记录中。UI 不持有终态缓存。
 
 ## 联机与旅行
 
@@ -56,19 +57,19 @@ SteamSockets、NetDriverDefinitions、`bInitServerOnClient` 和双账号 Steam �
 
 ## Character、GAS 与身体状态
 
-`ACatCharacter` 同时作为 ASC Owner 和 Avatar。服务端负责授予 Ability、初始化属性和装备入口；拥有客户端只刷新 ActorInfo、输入映射和 UI 订阅。个人鱼护必须通过独立鱼护对象接入 Items 容器事务，不由 Character 生命周期注册。
+`ACatCharacter` 同时作为 ASC Owner 和 Avatar。服务端负责授予 Ability、初始化属性和装备入口；拥有客户端只刷新 ActorInfo、输入映射和 UI 订阅。个人鱼护必须通过独立鱼护对象接入 FishContainers 容器事务，不由 Character 生命周期注册。
 
-`UCatSurvivalAttributeSet` 属于 `AbilitySystem/`，因为它表达 GAS 属性，不属于 `Character/`。`UCatConditionComponent` 属于 `Condition/`，因为它表达 Wet、Downed、Recovery 等离散状态。`UCatEquipmentComponent` 属于 `Equipment/`，因为它表达功能装配和一局耗材。
+`UCatSurvivalAttributeSet` 属于 `AbilitySystem/`，因为它表达 GAS 属性，不属于 `Character/`。`UCatConditionComponent` 属于 `Condition/`，因为它表达 Wet、Downed、Recovery 等离散状态。`UCatEquipmentComponent` 属于 `Equipment/`，因为它表达钓具选择读模型和 Fishing 使用协调。
 
 Environment 后端只发布 `RunPublicState.Environment`，不扫描或写 Character、Condition、Wet 或表现状态。下雨导致猫湿、雨停自然变干、水体弄湿角色等效果，后续必须作为表现或角色反馈消费层统一设计，不能重新包装成玩家技能。
 
 `UnPossessed`、`EndPlay` 和 Controller 变化必须先收口 Fishing/Social、移除自有 MappingContext、取消 Ability，再清 ActorInfo。`ClearActorInfo` 只清 ASC 缓存，不替代领域清理。
 
-## Run 与献祭
+## Run 与供品结算
 
 Run 的阶段、额度和翻天由 `ACatfishingGameModeBase` 拥有。StateTree 只负责长流程拓扑；C++ 方法只执行阶段副作用、校验、提交和事件发送。
 
-献祭外部入口是 `FCatSacrificeCommand`，由 `UCatSacrificeCoordinator` 协调。外部系统不能直接调用 Items 删除鱼并自行增加额度。协议顺序固定为：Items 预留、Run 预检、Items 不可逆 commit、Run apply。Items 已 commit 后不能回滚鱼，只能补 Run 额度或暴露失败。
+供品结算外部入口是 `FCatOfferingSettlementCommand`，由 `ACatfishingGameModeBase` 统一校验身份、阶段、Revision 和 Run ASC 依赖。外部系统不能直接改世界进度，也不能绕过 FishContainers 自行删除鱼。
 
 ## Fishing 与捕获
 
@@ -78,13 +79,14 @@ Run 的阶段、额度和翻天由 `ACatfishingGameModeBase` 拥有。StateTree 
 
 失败预算一次只允许一种惩罚。丢特殊饵和伤竿不能同时发生。
 
-## Items、Equipment 与 Profile
+## FishContainers、Inventory、Equipment 与 Profile
 
-`Items` 当前的意思是“鱼实例与容器事务”，不是传统意义的泛道具系统。
+`FishContainers` 当前的意思是“鱼实例与鱼容器事务”，不是传统意义的泛道具系统。
 
 - 实物鱼是 `FCatFishInstance`，任一时刻只属于一个容器或 escrow。
-- 容器有 Revision，转移、捕获、吃鱼、偷鱼和献祭预留都走 `UCatItemsService`。
-- 装备、草药、窝料、浮木、鱼竿耐久等由 `Equipment/` 管。
+- 鱼容器有 Revision，转移、捕获、吃鱼、售鱼和偷鱼都走 `UCatFishContainerService`。
+- 背包、公共库存和正式道具实例归 `Inventory/`，不复用鱼容器数组。
+- 装备、草药和窝料等正式物品实例和数量由 `Inventory/` 管；`Equipment/` 只管钓具选择读模型、Fishing 使用冻结、绑定鱼竿磨损和失败预算。
 - 图鉴、印记、解锁和本地相册由 `Profile/` 与 `Collection/` 管。
 
 不要创建万能 `Item` 基类。只有在多个领域确实共享同一交易/容器规则时，才抽小型 DTO 或事务语义。
@@ -103,14 +105,14 @@ Social 只裁决求助、恶作剧、保护牌和偷鱼协议权限，不拥有�
 
 Camp 是固定营地，不是建造系统。营地提供休息、救援落点、鱼缸转移和篝火回看。篝火回看只建立表现和可选 CapturePlan，不写普通夜 ready。
 
-营地同时承担玩家出生点语义，但这不改变 Camp 的领域归属。出生裁决属于 GameMode，合法落点解析属于营地自身，休息、救援、共享鱼缸和篝火回看继续沿用原有 Camp/Condition/Items/Collection 链路。
+营地同时承担玩家出生点语义，但这不改变 Camp 的领域归属。出生裁决属于 GameMode，合法落点解析属于营地自身，休息、救援、共享鱼缸和篝火回看继续沿用 Camp/Condition/FishContainers/Collection 链路。
 
 ## 配置 Gate
 
 未裁策略必须 fail-closed，不能用默认值假装产品已定。
 
 - Online SessionAccess、恢复、StableNetId 暴露等策略由 `UCatOnlineSettings` 集中 gate。
-- Ability、Condition、Equipment、Fishing、Run、Social、Camp、Items、Profile、UI 等设置中的 0、None、Unset 通常表示未裁或未接线。
+- Ability、Condition、Equipment、Fishing、Run、Social、Camp、FishContainers、Inventory、Profile、UI 等设置中的 0、None、Unset 通常表示未裁或未接线。
 - Shipping 下的诊断或 provisional runtime 不能自动开启。
 
 新增默认配置时必须说明它是产品裁决、验证临时值还是 fail-closed gate。不要把临时可运行默认写成最终设计。

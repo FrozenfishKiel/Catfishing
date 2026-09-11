@@ -1,5 +1,28 @@
 # 钓鱼核心架构（技术文档）
 
+## 2026-09-11：保留本地钓鱼玩法并接入远端库存与外围系统
+
+本次按用户要求集成 `0c2b86e` 与 `c8bd5bb`，共同基线 `e6e0313`。保留本地 R 取放/架竿禁抓、双鱼竿、鼠标控竿与过期输入清理、角色物理抓取/脚步动画、鱼行为与线力、单主控结算、无人值守及离场资源托管。其他系统采用远端实现；共享入口按实际职责衔接，未整体覆盖 PlayerController、Equipment 或 Save。开始时的 26 份未提交资产已按 SHA256 备份，在隔离工程按原文件参与验证，不纳入集成提交。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 输入与状态生命周期 | `AbilitySystem/Input/CatAbilityInputBindingComponent` → `Framework/Game/CatfishingPlayerController` → `Fishing/Integration/CatFishingCommandComponent`；`CatFishingRodAimState` | 保留 R 与鼠标分流、停动撤力、0.15s 过期、序号/控制世代；外围库存 RPC 改用远端接口 | 保留本地输入与清理实现，Controller 接远端库存/社交接口；删除远端旧持竿朝向路径 | 先保留接收方，再衔接 Controller | 真正输入到抓取/抛竿/搏鱼及取消清理 | `regression-04` 中 PhysicalGrab.Runtime、SlackAim 与服务测试通过 |
+| 物理计算与鱼行为 | `Fishing/Simulation`、`Fishing/Integration/CatFishingPhysicalRodComponent`、`Data/CatFishPersonalityDefinition`；正式 StateTree | 保留本地公式、单位、120Hz 子步、单主控付费、助手只传力及架竿固定姿态 | 本地实现接入新版定义片段；保留身体、抓取、动画消费者 | 原始资产参数核对后切换字段读取 | 60/120Hz、短卡顿、力/冲量、输入反向与真实 ASC 扣费 | `regression-04` 钓鱼 163 项通过；ASC 恢复精确零判断，保留极低正余额扣款 |
+| 装备定义与资产参数 | `Equipment/CatEquipmentDefinition` → `Equipment/Fragments/*`；`Inventory/CatInventorySettings::Definitions` | 采用远端片段结构和正式目录；钓鱼值沿用本地实际资产 | 本地字段消费者读取对应片段；不恢复旧 Equipment 目录 | 先片段与目录，再本地消费者和测试夹具 | 对照原项目 UE 实际加载值；不能只看旧断言 | 核对 23 份装备资产，对应参数一致；StarterRod 原资产为 500，旧 150 断言已纠正；原始远端资产二进制保留 |
+| 库存、扣饵与实例耐久 | `Equipment::BeginFishingUse/ReleaseFishingUse/ApplyFishingRodWear` → `InventoryComponent` 正式 entry/实例 | 使用远端库存单一事实源；保留本地实例锁、累计磨损去重与通知重入契约 | 内部库存写入可延后通知；先登记/关闭事务及构造回执，再发布；借竿只改原实例和其主人读模型 | 库存原子写入 → 事务 → 读模型 → 通知 | 取消、回调离场、重复请求、借竿费用、满包收竿 | `regression-04` 装备、库存、借竿审计、BrokenRodPack 通过；事件 `fishing_use_frozen/released` 与 `equipment_rod_wear_applied` |
+| 离场、托管与存档 | `GameModeBase::HandleCharacterUnavailable` → `FishingService::PreserveFishingResourcesForEquipmentShutdown` → `CatFishingResourceCustodian`；`SaveSubsystem::CapturePlayerBeforeLogout` | 本地在场会话继续；远端本机存档模型保留，不恢复旧多人存档结构 | 转移同一 held 实例及事务，重绑会话/借竿库存；普通背包留原主；托管提供退饵格；持久化退役只处理原库存仍持有的竿 | 完成全部绑定 → 校正选择 → 通知；登记前的抛竿失败由原事务回滚 | 取消/离线/销毁、保存后不删托管竿、不复制背包；恢复经 PhysicalBody 传送 | `OwnedRodTransactionsSurviveCancellationAndOwnerDeparture` 通过；存档实际往返结果另见本节证据 |
+| UI、动画与正式资产 | 本地 `UI/HUD`、`CatFishingViewBridge`、角色/鱼竿 BP、CuteCat ABP 与本地抓取表现；远端库存 Model/WBP | 本地钓鱼与身体表现保留，库存界面读取远端正式库存 Model | 更新 ViewBridge/HUD 查询，新背包组件由 Character 初始化；保留旧断线表现标签与配置以兼容既有快照 | 原生接口 → BP/WBP/动画加载编译 → 多人验证 | 二进制引用与正式绑定必须实查 | 加载编译 106 个 BP/ABP/WBP；仅水域 BP 的既有默认几何验证错误，详见限制 |
+| 配置、脚本与 Cook 入口 | `DefaultEngine.ini` PhysicsSettings；`DefaultGame.ini`；`Build/Automation`、本地鱼行为/物理抓取生成脚本 | 保留本地物理子步和惯性配置、远端外围配置；不增加第二套运行或 Cook 入口 | 合并共同配置；本地钓鱼脚本保留，废弃额外失败惩罚及剪影生产者不带回 | 消费者就绪后清理旧声明/实现/配置 | 编译 Editor/Game；序列化旧符号扫描 | Editor Development 通过；Game Development 通过；1961 个资产包序列化扫描与 3 个 StateTree 实查均无旧失败预算引用；未新 Cook/打包 |
+| 退出清理兼容 | `CatModelContactComponent::EndPlay`、`CatPhysicalBodyComponent::ReleaseConnectionsFromAuthority/EndPlay`、`CatLightPropComponent::EndPlay` | 远端库存 GC 用例暴露本地组件在 World 已释放后继续访问的问题 | 世界遍历与子系统注销检查 World，保留组件自己的约束/缓存清理 | 同一退出清理链逐项收口 | 原库存 GC 用例与抓取回归；不变更玩法和资产 | `regression-04` 转移后 GC、物理输入均通过 |
+| 其他系统与文档 | 远端 Inventory、FishContainers、ShopEconomy、Run、Online、Save、Frontend；本地本页及唯一差距清单 | 保留远端重构；本轮不另设业务进度账本 | 保留远端需求讨论资料，明确其不是执行进度入口；旧代码清理仍按本地 AGENTS | 最后核对共享职责和两侧差异 | 非钓鱼回归与人工 diff | `regression-04` 包含远端库存和商店发货测试；模块整体验收状态不改变 |
+
+证据根目录：`Saved/Integration/Evidence-20260911`。完整只读资产审查见 `legacy-assets-final.log` 与隔离工程 `Saved/Automation/FishingFailureRemoval/Audit/Audit.json`，1961 包、3 个状态树、0 命中、0 错误。
+
+- `contract`：`build-editor-15.log`、`build-game-02.log`；原装备读取 `local-equipment-values.json` 与核对记录。`regression-04/index.json` 合计 183 项通过（含 12 项带预期拒绝等警告），0 失败、0 未运行。
+- `runtime_behavior`：上述组合实际覆盖正式抛竿/搏鱼、60/120Hz与卡顿、体力扣费、双竿、借竿磨损、满包回滚、离场托管、原库存 GC、物理输入；`network-save-01/index.json` 12/12 通过，包含房主+3客户端协作、控竿、竿弯曲表现、新背包拖放/复制和本机磁盘往返。该轮资产生成用例重写的鱼定义已用原始未提交文件恢复；随后 `final-consumers-01` 在原资产上通过 19 项（CMC、身体、三项多人钓鱼），唯一失败是旧读档夹具未标记本机 Controller，修正夹具后 `save-restore-02` 1/1 通过，保留身体/双手同时移动、实例与数量不变、重复恢复幂等断言。
+- `presentation_delivery`：`asset-audit-01.log` 实际加载编译 106 个项目 BP/ABP/WBP。`/Game/Blueprint/Environment/BP_CatWaterRegion` 的默认对象缺烘焙几何，资产自共同基线未变，校验逻辑仅有远端文案变化；此错误不算本次修复或通过。正式地图真人手感、新 Cook/打包及不加 `-log` 的房主/客户端新包落盘均未验证，不据本次合并关闭 Fishing/Delivery 模块。
+
+
 ## 2026-09-10：恢复 R 取放与悬空架竿
 
 用户要求恢复历史R拿出→R架住→R拾回。对照`be94173`的`PlaceOnGroundFromAuthority`与物理接入前`6b04247^`的取放/会话继承；保留当前单主控与CMC抓推，不恢复历史R入队。基线`62db64a`，源码开始时干净；已有Skeleton、16个Fish、CuteCat动画/材质及GameMode资产修改全部保留。本轮基线Editor已成功；`Report-20260910-173310-034`的Unit.Fishing 164项163通过，唯一失败仍为StarterRod测试150/资产500。并行FootReach任务正在改Grab查询/脚锁，已协调仅共享Parked门禁一行，独立提交。

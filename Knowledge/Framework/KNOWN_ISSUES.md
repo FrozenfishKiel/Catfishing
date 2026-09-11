@@ -4,17 +4,17 @@
 文档状态：当前有效误读清单。
 范围：记录后续代码审查最容易误判的地方，以及应该从哪里开始核查。
 
-## 旧文档仍有空模板描述
+## 交接材料不能压过源码事实
 
-现象：有些文档仍写着工程是空模板、类名是拟定名。
+现象：少数架构纪要写着工程是空模板、类名是拟定名。
 误读：据此判断当前源码没有 A-G 框架，或把已存在的类型当作计划名。
-事实：当前 `Source/Catfishing` 已有 Online、Framework/Game、Character、AbilitySystem、Condition、Equipment、Run、Environment、Fishing、Items、Collection、Profile、Social、Camp、Data、UI 等真实代码。工程事实以当前源码和最新构建证据为准。
+事实：当前 `Source/Catfishing` 已有 Online、Framework/Game、Character、AbilitySystem、Condition、Equipment、Run、Environment、Fishing、FishContainers、Inventory、Collection、Profile、Social、Camp、Data、UI 等真实代码。工程事实以当前源码和最新构建证据为准。
 
-## Items 不是泛道具系统
+## FishContainers 不是泛道具系统
 
-现象：看到 `Items/` 就把装备、草药、窝料、浮木、鱼竿、解锁都往里放。
-误读：把 `Items` 当成传统 RPG item hierarchy。
-事实：当前 `Items/` 是鱼实例和容器事务系统。功能装备与一局耗材在 `Equipment/`，永久解锁和相册在 `Profile/`，捕获/印记授予在 `Collection/`。
+现象：看到鱼护、鱼缸或容器事务，就把装备、草药、窝料、鱼竿、解锁都往同一个系统里放。
+误读：把 `FishContainers/` 当成传统 RPG item hierarchy。
+事实：当前 `FishContainers/` 只拥有鱼实例和鱼容器事务。功能装备、耗材和材料的正式实例与数量在 `Inventory/`，`Equipment/` 只保存钓具选择读模型和 Fishing 使用协调，永久解锁和相册在 `Profile/`，捕获/印记授予在 `Collection/`。
 
 ## 文件分类不能按挂载位置
 
@@ -38,7 +38,7 @@
 
 现象：看到容器复制组件就想直接改数组。
 误读：把网络复制结构当成库存数据模型。
-事实：容器真相在 `UCatItemsService`。`UCatContainerReplicationComponent` 只发布已提交的 `FCatContainerSnapshot`。
+事实：容器真相在 `UCatFishContainerService`。`UCatContainerReplicationComponent` 只发布已提交的 `FCatContainerSnapshot`。
 
 ## CapturePlan、Grant 和 ACK 不同
 
@@ -49,26 +49,26 @@
 ## 巨鱼参与者不等于实物归属者
 
 现象：多人参与搏斗后，认为所有协作者共同拥有鱼或共同抄网。
-误读：复活旧“双人抄网”说法。
+误读：把搏斗协作者当成最终实物归属者。
 事实：协作只影响搏斗阶段和候选/印记。NearShore 抢抄由首个合法提交者得到实物鱼。
 
 ## Social 不裁决身体救援
 
 现象：求助和救援都像“玩家互动”，所以把恢复状态放进 Social。
 误读：Social 管所有玩家互助。
-事实：Social 管权限、广播、偷鱼和保护牌。身体恢复由 Camp、Condition、Character、Equipment 链写入。
+事实：Social 管权限、广播、偷鱼和保护牌。身体恢复由 Camp、Condition 和 Character 链写入；草药恢复由 Condition 通过正式库存结果写回身体状态。
 
 ## PlayerState 不是身体和档案仓库
 
 现象：想把 ASC、物品、Profile 或装备解锁放进 PlayerState，方便复制。
 误读：把“跟玩家有关”当成 PlayerState 所有权。
-事实：PlayerState 当前只保存连接期公开事实。身体随 Character，实物随 Items/Run，永久档案随 LocalPlayer Profile。
+事实：PlayerState 当前只保存连接期公开事实。身体随 Character，实物鱼随 FishContainers/Run，正式库存随 Inventory，永久档案随 LocalPlayer Profile。
 
-## 历史诊断入口和临时 Gate 不是最终玩法
+## 诊断入口和临时 Gate 不是最终玩法
 
-现象：看到旧记录里的 `UCatStageCTestAbility`、provisional 配置或默认 0/None，就当成产品默认。
-误读：把早期框架验证入口当成正式数值/技能。
-事实：Stage C 诊断 Ability 已从正式 Character 生命周期移除；正式 Ability 只从 `DefaultAbilitySet` 和 `AbilityInputConfig` 进入。Poison 的正式写入由 `UCatAbilitySystemComponent::ApplyPoisonDelta` 经 `UCatGE_PoisonDelta` 提交，旧诊断入口不能再作为产品或测试结论引用。
+现象：看到记录里的 `UCatStageCTestAbility`、provisional 配置或默认 0/None，就当成产品默认。
+误读：把框架验证入口当成正式数值/技能。
+事实：Stage C 诊断 Ability 已从正式 Character 生命周期移除；正式 Ability 只从 `DefaultAbilitySet` 和 `AbilityInputConfig` 进入。Poison 的正式写入由 `UCatAbilitySystemComponent::ApplyPoisonDelta` 经 `UCatGE_PoisonDelta` 提交，该诊断入口不能再作为产品或测试结论引用。
 
 ## Steam 只完成单机初始化验证
 

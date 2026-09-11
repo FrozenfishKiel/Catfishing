@@ -19,11 +19,11 @@ namespace
 		return FText::FromString(FString::Printf(TEXT("贝 %d"), Price));
 	}
 
-	// 后备符号流程：
+	// 缺图默认符号流程：
 	// 1. 优先取展示名首字，让图标缺失时仍能从数据本身得到一个可见识别。
 	// 2. 展示名为空时才取稳定 ID 首字，不按鱼竿、鱼饵、鱼窝这些具体业务名写死规则。
-	// 3. 这个符号只服务临时视觉识别，分类、结算和交付都继续读取 ViewState 投影字段。
-	FString MakeFallbackGlyphText(const FText& DisplayNameText, const FName StableFallbackId)
+	// 3. 这个符号只服务缺图状态下的视觉识别，分类、结算和交付都继续读取 ViewState 投影字段。
+	FString MakeDefaultGlyphText(const FText& DisplayNameText, const FName StableDefaultId)
 	{
 		FString DisplayName = DisplayNameText.ToString();
 		DisplayName.TrimStartAndEndInline();
@@ -31,11 +31,11 @@ namespace
 		{
 			return DisplayName.Left(1);
 		}
-		FString FallbackId = StableFallbackId.ToString();
-		FallbackId.TrimStartAndEndInline();
-		if (!FallbackId.IsEmpty())
+		FString DefaultId = StableDefaultId.ToString();
+		DefaultId.TrimStartAndEndInline();
+		if (!DefaultId.IsEmpty())
 		{
-			return FallbackId.Left(1).ToUpper();
+			return DefaultId.Left(1).ToUpper();
 		}
 		return FString();
 	}
@@ -60,7 +60,7 @@ namespace
 
 	// 图标同步流程：
 	// 1. 有正式图标时同步到可选 Image 并显示。
-	// 2. 没有图标或加载失败时折叠 Image，让 WBP 可以露出文字后备层。
+	// 2. 没有图标或加载失败时折叠 Image，让 WBP 可以露出缺图文字层。
 	// 3. 图标只来自商品或购物车投影，不在 UI 里按商品名推断资源。
 	void ApplyOptionalIcon(UImage* IconImage, const TSoftObjectPtr<UTexture2D>& IconOverride)
 	{
@@ -104,7 +104,7 @@ namespace
 }
 
 // 分类页签初始化流程：
-// 1. 保存父商店页弱引用和当前分类投影，旧值会被整行覆盖。
+// 1. 保存父商店页弱引用和当前分类投影，变更前值会被整行覆盖。
 // 2. 重新绑定 Designer 按钮点击，避免重建时出现重复选择。
 // 3. 最后把投影写入命名控件并触发蓝图扩展表现。
 void UCatShopCategoryTabWidget::InitializeCategoryTab(UCatShopWidget* InOwnerShopWidget,
@@ -185,7 +185,7 @@ void UCatShopCategoryTabWidget::ApplyCategoryTabToDesignerWidgets()
 }
 
 // 商品卡初始化流程：
-// 1. 保存父商店页弱引用和当前商品投影，旧值会被整行覆盖。
+// 1. 保存父商店页弱引用和当前商品投影，变更前值会被整行覆盖。
 // 2. 重新绑定 Designer 按钮点击，避免复用或重建时出现重复加购。
 // 3. 最后把投影写入命名控件并触发蓝图扩展表现。
 void UCatShopGoodsItemWidget::InitializeGoodsItem(UCatShopWidget* InOwnerShopWidget,
@@ -246,7 +246,7 @@ void UCatShopGoodsItemWidget::HandleGoodsButtonClicked()
 
 // 商品卡刷新流程：
 // 1. 写入商品名、图标、价格和库存/已选短提示，纯展示控件缺失时只跳过对应表现。
-// 2. 图标来自商品投影，后备符号只取展示名或 EntryId 首字，不按具体商品类别写死 UI 规则。
+// 2. 图标来自商品投影；缺图符号只取展示名或 EntryId 首字，不按具体商品类别写死 UI 规则。
 // 3. 按 Model 给出的 bActionEnabled 禁用按钮并显示 Designer 遮罩，视觉样式仍留在 WBP 里。
 // 4. 最后触发蓝图扩展事件，后续正式贴图或动效可以只改 WBP。
 void UCatShopGoodsItemWidget::ApplyGoodsItemToDesignerWidgets()
@@ -266,10 +266,10 @@ void UCatShopGoodsItemWidget::ApplyGoodsItemToDesignerWidgets()
 	BP_RenderGoodsItem(EntryView);
 }
 
-// 商品卡图形流程：把当前行的展示名和 EntryId 交给统一后备符号函数，避免卡片维护第二套商品分类表。
+// 商品卡图形流程：把当前行的展示名和 EntryId 交给统一缺图默认符号函数，避免卡片维护第二套商品分类表。
 FString UCatShopGoodsItemWidget::ResolveGoodsGlyph() const
 {
-	return MakeFallbackGlyphText(EntryView.DisplayNameText, EntryView.EntryId);
+	return MakeDefaultGlyphText(EntryView.DisplayNameText, EntryView.EntryId);
 }
 
 // 商品卡状态文案流程：优先展示购物车数量，其次展示库存状态；这些都是本地投影，不作为服务器结算输入。
@@ -354,7 +354,7 @@ void UCatShopCartLineWidget::HandleRemoveButtonClicked()
 
 // 购物车行刷新流程：
 // 1. 写入商品名、图标、数量和行小计，纯展示控件缺失时只跳过对应表现。
-// 2. 图标来自购物车行投影，后备符号只取展示名或 EntryId 首字，不在 UI 内写死商品类型。
+// 2. 图标来自购物车行投影；缺图符号只取展示名或 EntryId 首字，不在 UI 内写死商品类型。
 // 3. pending 时禁用删除按钮，避免支付请求发出后本地购物车继续变化。
 // 4. 库存或价格失效时显示无效提示装饰，支付入口会因此保持不可提交。
 // 5. 最后触发蓝图扩展事件，后续正式贴图或动效可以只改 WBP。
@@ -380,7 +380,7 @@ void UCatShopCartLineWidget::ApplyCartLineToDesignerWidgets()
 // 购物车行图形流程：复用展示名和 EntryId，不从购物车行之外读取商品数据或写死商品分类。
 FString UCatShopCartLineWidget::ResolveCartLineGlyph() const
 {
-	return MakeFallbackGlyphText(CartLineView.DisplayNameText, CartLineView.EntryId);
+	return MakeDefaultGlyphText(CartLineView.DisplayNameText, CartLineView.EntryId);
 }
 
 // 商店页构造流程：默认指向正式蓝图子控件资产；如果资产缺失只记录日志，不在运行时生成另一套视觉。
@@ -596,7 +596,7 @@ void UCatShopWidget::RequestCloseShop()
 // 1. 清空分类容器中的 Designer 样例页签或上一轮动态页签。
 // 2. 加载正式分类页签 WBP 类，失败时只记录错误并跳过该区域。
 // 3. 逐条读取 Categories 创建页签 WBP；页签只保存 CategoryId 并转发本地分类选择请求。
-// 4. C++ 不再改子项 Slot 间距、对齐或尺寸，所有排版表现都由父容器和子 WBP 资产决定。
+// 4. C++ 不写子项 Slot 间距、对齐或尺寸，所有排版表现都由父容器和子 WBP 资产决定。
 void UCatShopWidget::RebuildCategoryTabs()
 {
 	if (!CategoryTabsPanel)
@@ -673,7 +673,7 @@ void UCatShopWidget::RebuildGoodsItems()
 // 1. 清空购物车容器中的 Designer 样例行或上一轮动态行。
 // 2. 加载正式购物车行 WBP 类，失败时只记录错误并跳过该区域。
 // 3. 每一行只保存 EntryId、展示投影和 pending 状态，删除按钮只删除一份对应商品。
-// 4. 购物车行的行高、间距和横向排版留给 WBP，C++ 不再写 Slot 样式。
+// 4. 购物车行的行高、间距和横向排版留给 WBP，C++ 不写 Slot 样式。
 void UCatShopWidget::RebuildCartLines()
 {
 	if (!CartLinesPanel)
@@ -766,7 +766,7 @@ void UCatShopWidget::RefreshMainDesignerWidgets()
 	}
 }
 
-// 分类存在性流程：NAME_None 代表“全部”且始终合法；非空分类必须来自当前分类投影，避免固定旧按钮切到空白货架。
+// 分类存在性流程：NAME_None 代表“全部”且始终合法；非空分类必须来自当前分类投影，避免固定失效按钮切到空白货架。
 bool UCatShopWidget::DoesCategoryExist(const FName CategoryId) const
 {
 	if (CategoryId.IsNone())

@@ -10,13 +10,13 @@ enum class ECatRunPhase : uint8
 {
 	/** Run 与环境真相已初始化，但 StateTree 尚未进入首个可玩状态。 */
 	NotStarted,
-	/** 白天额度窗口开启；只有该阶段允许提交额度贡献并持有唯一截止计时器。 */
+	/** 白天捕鱼窗口开启；该阶段只生成并展示当日供品目标，不允许提交供品结算。 */
 	DayActive,
-	/** 当日额度已达成后的普通夜晚；无计时，只等待当前合资格玩家确认翻天。 */
+	/** 白天结束后的普通夜晚；无计时，等待祭坛供品锁定与结算后再进入下一天或终局。 */
 	NormalNight,
-	/** 截止时额度未达成后的失败结算夜；无计时，必须等待 SettlementComplete。 */
+	/** 夜晚结算后世界进度归零的失败结算夜；无计时，必须等待 SettlementComplete。 */
 	FailureSettlementNight,
-	/** 产品明确选择成功终局后使用的成功结算夜；默认策略未裁时不可进入。 */
+	/** 夜晚结算后世界进度达到 100 的成功结算夜；默认策略未裁时不可进入。 */
 	SuccessSettlementNight,
 	/** 结算完成后由 StateTree 进入的一次性收口阶段；禁止再接受玩法命令。 */
 	Ending,
@@ -24,14 +24,14 @@ enum class ECatRunPhase : uint8
 	Ended
 };
 
-/** 一局终止原因；QuotaFailed 是结果原因而不是瞬时 Phase，只有进入失败结算夜后才成为终局原因。 */
+/** 一局终止原因；只有进入对应结算夜后才成为公开终局原因。 */
 UENUM(BlueprintType)
 enum class ECatRunEndReason : uint8
 {
 	/** 当前尚无终局原因。 */
 	None,
-	/** 白天截止时额度不足，并已由 StateTree 进入失败结算夜。 */
-	QuotaFailed,
+	/** 夜晚供品结算后世界进度归零，并已由 StateTree 进入失败结算夜。 */
+	WorldProgressDepleted,
 	/** 成功终局策略已明确并完成相应结算。 */
 	Success,
 	/** 房主主动退出触发强制 teardown；不伪装成自然 StateTree 拓扑。 */
@@ -46,11 +46,11 @@ enum class ECatRunTransitionReason : uint8
 {
 	/** 当前没有待消费的转移原因。 */
 	None,
-	/** 当日额度首次达到目标。 */
-	QuotaReached,
-	/** 白天截止时额度仍不足。 */
-	QuotaFailed,
-	/** 普通夜晚当前合资格玩家全部确认翻天。 */
+	/** 白天计时结束并请求进入普通夜晚。 */
+	DayEnded,
+	/** 夜晚供品结算后世界进度归零。 */
+	WorldProgressDepleted,
+	/** 普通夜晚供品结算已完成，可沿当前 StateTree 资产的继续事件进入下一天。 */
 	AllEligibleReady,
 	/** 失败或成功结算依赖已经收口，可进入 Ending。 */
 	SettlementComplete,
@@ -64,10 +64,8 @@ enum class ECatRunTransitionReason : uint8
 UENUM()
 enum class ECatRunCommandType : uint8
 {
-	/** 已提交献祭结果对当日额度的贡献。 */
-	QuotaContribution,
-	/** 普通夜晚个人翻天确认。 */
-	NextDayReady,
+	/** 普通夜晚祭坛供品已经锁定并提交世界进度结算。 */
+	OfferingSettlement,
 	/** 结算协调器确认所有有界收口已经完成。 */
 	SettlementComplete
 };
@@ -80,13 +78,13 @@ enum class ECatRunCommandError : uint8
 	None,
 	/** 当前路径依赖尚未裁决的数值、准入或终局策略。 */
 	PolicyUndecided,
-	/** Run 已进入 Ending、teardown 或启动失败，不再接受新命令。 */
+	/** Run 已进入 Ending、teardown 或启动失败，服务器会拒绝新命令。 */
 	CommandsClosed,
 	/** 当前公开 Phase 不接受该命令。 */
 	InvalidPhase,
 	/** StableNetId 无效、未 Active 或不匹配当前 Controller。 */
 	InvalidIdentity,
-	/** RequestId、贡献量或其他命令载荷无效。 */
+	/** RequestId、供品数量或其他命令载荷无效。 */
 	InvalidPayload,
 	/** ExpectedRevision 落后或超前于 Run 当前 Revision。 */
 	RevisionConflict,
@@ -94,7 +92,7 @@ enum class ECatRunCommandError : uint8
 	AlreadyResolved,
 	/** 当前 StateTree 没有运行，不能安全接收转移事件。 */
 	StateTreeUnavailable,
-	/** 当前玩家不属于本次普通夜晚的合资格集合。 */
+	/** 当前身份不具备本命令资格。 */
 	NotEligible,
 	/** Run teardown 依赖报告失败，Online 必须保留 Session 并停止退出链。 */
 	TeardownFailed,
@@ -160,13 +158,13 @@ struct FCatRunPhaseSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	bool bHasDeadline = false;
 
-	/** 当前是否允许钓鱼规则消费本阶段；白天截止或额度完成后会先关闭，夜晚始终为 false。 */
+	/** 当前是否允许钓鱼规则消费本阶段；白天截止后会先关闭，夜晚始终为 false。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bFishingAllowed = false;
 
-	/** 当前是否仍接受额度贡献；它在 DayActive 内提供截止/达标竞争的精确服务器边界。 */
+	/** 当前是否接受夜晚供品结算；它只在 NormalNight 内打开，白天不能把鱼直接转换成进度。 */
 	UPROPERTY(BlueprintReadOnly)
-	bool bQuotaOpen = false;
+	bool bOfferingOpen = false;
 };
 
 /** Environment 对外发布的最小只读快照；不包含 Run Phase，避免复制第二份日夜真相。 */
@@ -202,7 +200,7 @@ struct FCatEnvironmentResult
 {
 	GENERATED_BODY()
 
-	/** Environment 是否成功消费输入快照；false 时 Run 会发布同 Revision 的空环境，避免旧环境事实跨阶段残留。 */
+	/** Environment 是否成功消费输入快照；false 时 Run 会发布同 Revision 的空环境，避免失效环境事实跨阶段残留。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bSucceeded = false;
 
@@ -229,19 +227,31 @@ struct FCatRunPublicState
 	UPROPERTY(BlueprintReadOnly)
 	FCatEnvironmentSnapshot Environment;
 
-	/** 当日已提交的额度贡献总量；只由 GameMode 幂等命令写口增加。 */
+	/** 最近一次夜晚结算提交的供品点数；由 Run ASC 结算 GE 覆盖，早晨开始新一天时清零。 */
 	UPROPERTY(BlueprintReadOnly)
-	int32 QuotaProgress = 0;
+	int32 LastOfferingPoints = 0;
 
-	/** 当前已配置的当日目标；默认 Unset，只有 RunSettings 显式 runtime gate 后才发布正值。 */
+	/** 当前已配置的每日供品目标；默认 Unset，只有 RunSettings 显式 runtime gate 后才发布正值。 */
 	UPROPERTY(BlueprintReadOnly)
-	int32 QuotaTarget = 0;
+	int32 DailyOfferingTarget = 0;
+
+	/** 当前世界进度，范围 0 到 100；0 进入失败结算夜，100 在结算后进入成功结算夜。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 WorldProgress = 10;
+
+	/** 最近一次夜晚结算造成的世界进度变化；UI 和保存摘要用它解释上一晚结果，不参与下一次公式。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 LastWorldProgressDelta = 0;
+
+	/** 最近一次夜晚供品是否达到每日目标；臭鱼只影响成功增益，不改变这个达标事实。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bLastOfferingMetTarget = false;
 
 	/** Run Aggregate 的单调 Revision；所有读后写命令必须提交匹配的 ExpectedRevision。 */
 	UPROPERTY(BlueprintReadOnly)
 	int64 Revision = 0;
 
-	/** 当前终局原因；QuotaFailed 只在失败结算夜成立，不作为独立 Phase。 */
+	/** 当前终局原因；只在结算夜或 teardown 成立，不作为独立 Phase。 */
 	UPROPERTY(BlueprintReadOnly)
 	ECatRunEndReason EndReason = ECatRunEndReason::None;
 
@@ -260,7 +270,7 @@ struct FCatRunCommandContext
 	UPROPERTY(BlueprintReadWrite)
 	FGuid RequestId;
 
-	/** 调用方基于公开快照观察到的版本；GameMode 用它拒绝陈旧额度/ready 意图，防止跨阶段写入。 */
+	/** 调用方基于公开快照观察到的版本；GameMode 用它拒绝落后版本的供品结算或结算完成意图，防止跨阶段写入。 */
 	UPROPERTY(BlueprintReadWrite)
 	int64 ExpectedRevision = 0;
 
@@ -268,34 +278,35 @@ struct FCatRunCommandContext
 	FString StableNetId;
 };
 
-/** 已提交献祭结果对 Run 额度的命令；它不拥有鱼或 Items 事务，只消费牺牲协调器提供的 committed Result。 */
+/** 已锁定供品对 Run 世界进度的结算命令；它不拥有鱼或鱼容器事务，只消费当前结算链提供的供品计数事实。 */
 USTRUCT(BlueprintType)
-struct FCatQuotaContributionCommand
+struct FCatOfferingSettlementCommand
 {
 	GENERATED_BODY()
 
-	/** 额度写口的幂等与 Revision 上下文。 */
+	/** 结算写口的幂等与 Revision 上下文。 */
 	UPROPERTY(BlueprintReadWrite)
 	FCatRunCommandContext Context;
 
-	/** 本次已提交结果贡献的正整数；具体额度曲线与人数缩放由 RunSettings gate 决定。 */
+	/** 小型鱼供品数量；Run 结算公式把每条折算为 1 点，不接受客户端直接提交总点数。 */
 	UPROPERTY(BlueprintReadWrite)
-	int32 Contribution = 0;
-};
+	int32 SmallFishCount = 0;
 
-/** 普通夜晚个人翻天确认命令；PlayerState 只复制本人的最终 ready 事实。 */
-USTRUCT(BlueprintType)
-struct FCatNextDayReadyCommand
-{
-	GENERATED_BODY()
-
-	/** Ready 写口的幂等与 Revision 上下文。 */
+	/** 中型鱼供品数量；Run 结算公式把每条折算为 2 点，不接受客户端直接提交总点数。 */
 	UPROPERTY(BlueprintReadWrite)
-	FCatRunCommandContext Context;
+	int32 MediumFishCount = 0;
 
-	/** 玩家希望发布的确认值；全员事件发出后本夜窗口关闭，不能再撤销已触发转移。 */
+	/** 大型鱼供品数量；Run 结算公式把每条折算为 4 点，不接受客户端直接提交总点数。 */
 	UPROPERTY(BlueprintReadWrite)
-	bool bReady = true;
+	int32 LargeFishCount = 0;
+
+	/** 巨型鱼供品数量；Run 结算公式把每条折算为 10 点，不接受客户端直接提交总点数。 */
+	UPROPERTY(BlueprintReadWrite)
+	int32 GiantFishCount = 0;
+
+	/** 臭鱼供品数量；只折扣达标世界进度增益，不改变供品点数或未达标扣减。 */
+	UPROPERTY(BlueprintReadWrite)
+	int32 StinkyFishCount = 0;
 };
 
 /** Run 命令的首次完整终态；重复幂等键只返回 AlreadyResolved 与原提交 Revision，不重复修改真相。 */
@@ -304,7 +315,7 @@ struct FCatRunCommandResult
 {
 	GENERATED_BODY()
 
-	/** 命令是否实际写入 Run 或个人 ready 真相；同步拒绝与重复重放均为 false。 */
+	/** 命令是否实际写入 Run 真相；同步拒绝与重复重放均为 false。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bCommitted = false;
 
@@ -324,13 +335,21 @@ struct FCatRunCommandResult
 	UPROPERTY(BlueprintReadOnly)
 	ECatRunPhase Phase = ECatRunPhase::NotStarted;
 
-	/** 首次提交是否产生 StateTree 转移原因；None 表示只更新数值或个人 ready。 */
+	/** 首次提交是否产生 StateTree 转移原因；None 表示只更新数值而没有推进阶段。 */
 	UPROPERTY(BlueprintReadOnly)
 	ECatRunTransitionReason TransitionReason = ECatRunTransitionReason::None;
 
-	/** 本次 Run GE 实际写入进度的整数贡献；献祭协调器读取它回传结果，不能按效率自行重算。 */
+	/** 本次 Run GE 结算出的供品点数；协调器和 UI 读取它回传结果，不能按鱼表派生值或界面展示自行重算。 */
 	UPROPERTY(BlueprintReadOnly)
-	int32 AppliedContribution = 0;
+	int32 OfferedPoints = 0;
+
+	/** 本次 Run GE 实际写入世界进度的变化量；正数表示达标增长，负数表示未达标扣减。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 AppliedWorldProgressDelta = 0;
+
+	/** 本次 Run GE 写入后的世界进度；GameMode 用同一结果决定失败或成功结算事件。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 NewWorldProgress = 0;
 };
 
 /** StateTree Task、Condition 与事件载荷共享的结构化结果；只有 GameMode 能创建并保存最新值。 */
@@ -364,13 +383,13 @@ struct FCatRunTransitionResult
 	int64 Revision = 0;
 };
 
-/** Host Online Leave 发给 Run 的 teardown 状态；Pending 表示当前 Fishing/Social/Items/Imprint/remote ACK 的统一有界收口尚未完成。 */
+/** Host Online Leave 发给 Run 的 teardown 状态；Pending 表示当前 Fishing/Social/FishContainers/Imprint/remote ACK 的统一有界收口尚未完成。 */
 UENUM()
 enum class ECatRunTeardownStatus : uint8
 {
 	/** Run 已完成本阶段全部收口，Online 可以继续 DestroySession。 */
 	Ready,
-	/** 当前管线已关闭并收口 Fishing/Social/Items/Imprint，正在有界等待远端退出 ACK 与 durable Grant ACK；Online 必须等待同一 RequestId/epoch 回调。 */
+	/** 当前管线已关闭并收口 Fishing/Social/FishContainers/Imprint，正在有界等待远端退出 ACK 与 durable Grant ACK；Online 必须等待同一 RequestId/epoch 回调。 */
 	Pending,
 	/** Run 无法安全收口，Online 必须停止 Destroy/旅行链。 */
 	Failed
@@ -385,7 +404,7 @@ struct FCatRunTeardownRequest
 	/** 当前 Online Leave 的稳定 RequestId。 */
 	FGuid RequestId;
 
-	/** 当前 Online 操作代际；完成回调必须精确匹配，旧 World 结果不得推进新退出。 */
+	/** 当前 Online 操作代际；完成回调必须精确匹配，失效 World 结果不得推进新退出。 */
 	int64 OperationEpoch = 0;
 };
 

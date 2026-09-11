@@ -20,7 +20,7 @@ public:
 	/** 在聚合后的当前值变化前规整身体数值；客户端和服务器观察到的体力都不能越过上限或变成非法值。 */
 	virtual void PreAttributeChange(const FGameplayAttribute& Attribute, float& NewValue) override;
 
-	/** 在体力上限变化后同步收紧当前体力；避免 Max 降低后旧 Current 继续影响搏斗模拟。 */
+	/** 在体力上限变化后同步收紧当前体力；避免 Max 降低后变更前 Current 继续影响搏斗模拟。 */
 	virtual void PostAttributeChange(const FGameplayAttribute& Attribute, float OldValue, float NewValue) override;
 
 	/** FishingStrength 代表钓鱼搏斗中的猫力量；它只服务当前局 Fishing 公式，不进入 Profile 或装备授权。 */
@@ -52,7 +52,7 @@ protected:
 	UFUNCTION()
 	void OnRep_FightStamina(const FGameplayAttributeData& OldFightStamina);
 
-	/** MaxFightStamina 到达客户端时交给 GAS 标准预测收敛；HUD 与会话投影不再从配置反查体力上限。 */
+	/** MaxFightStamina 到达客户端时交给 GAS 标准预测收敛；HUD 与会话投影读取复制后的属性值。 */
 	UFUNCTION()
 	void OnRep_MaxFightStamina(const FGameplayAttributeData& OldMaxFightStamina);
 
