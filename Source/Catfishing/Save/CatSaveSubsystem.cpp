@@ -90,6 +90,7 @@ namespace
 		Summary.DailyOfferingTarget = SaveGame.DailyOfferingTarget;
 		Summary.WorldProgress = SaveGame.WorldProgress;
 		Summary.LastWorldProgressDelta = SaveGame.LastWorldProgressDelta;
+		Summary.bRunCompleted = SaveGame.bRunCompleted;
 		return Summary;
 	}
 
@@ -523,14 +524,24 @@ FCatSaveResult UCatSaveSubsystem::RequestCreateSlot(const FString& DisplayName)
 }
 
 // 读取槽流程：先拒绝 busy、未扫描目录、已进入世界或不在摘要中的 SlotId；通过后异步读取同名单文件 Run。
+// 已终局的槽在这里被拒绝：毕业或团灭之后那一局打完了，不再提供「继续」，玩家要开新局就新建一个槽（2026-09-11 拍）。
+// 拒绝只挡住「继续」这一条路；文件一个不动，仍留在目录里当战绩回看，也仍然只能由玩家自己在前端删。
 // 成功只建立待恢复快照和旅行许可，不从显示名或列表下标反推载荷；失败由回调写入结果文本并清理许可。
 FCatSaveResult UCatSaveSubsystem::RequestLoadSlot(const FName SlotId)
 {
 	const ULocalPlayer* LocalPlayer = GetGameInstance()->GetFirstGamePlayer();
+	const FCatSaveSlotSummary* RequestedSummary = SlotSummaries.FindByPredicate(
+		[SlotId](const FCatSaveSlotSummary& Summary) { return Summary.SlotId == SlotId; });
 	if (!LocalPlayer || bBusy || !bSlotDirectoryLoaded || bWorldRestoreApplied || PendingRestoreSaveGame || !IsValidSlotId(SlotId)
-		|| !SlotSummaries.ContainsByPredicate([SlotId](const FCatSaveSlotSummary& Summary) { return Summary.SlotId == SlotId; }))
+		|| !RequestedSummary)
 	{
 		return MakeResult(false, FText::FromString(TEXT("存档不存在、目录未就绪或正在执行其他操作。")));
+	}
+	if (RequestedSummary->bRunCompleted)
+	{
+		UE_LOG(LogCatRun, Log, TEXT("Event=persistence_slot_read_rejected Slot=%s World=%s Reason=RunCompleted"),
+			*SlotId.ToString(), *GetNameSafe(GetWorld()));
+		return MakeResult(false, FText::FromString(TEXT("这一局已经结束，只能回看不能继续；请新建一个世界开新局。")));
 	}
 	if (!HasRunSaveFileHeader(MakeRunSlotFileName(SlotId)))
 	{
@@ -618,6 +629,8 @@ FCatSaveResult UCatSaveSubsystem::RequestSaveActiveRun()
 	// 游戏线程采样时更新内存快照；异步回调绝不把本轮之后的新采样覆盖回来，保证写盘途中发生的 Logout 捕获仍留给下一次保存。
 	PendingRestoreSaveGame->bHasPlayerSnapshot = SaveGame->bHasPlayerSnapshot;
 	PendingRestoreSaveGame->PlayerSnapshot = SaveGame->PlayerSnapshot;
+	// 终局标记同样先落进内存载荷；即使这一次写盘失败，本局后续的保存也仍然认得「已完结」，不会退回可继续。
+	PendingRestoreSaveGame->bRunCompleted = SaveGame->bRunCompleted;
 	ActiveAsyncRunSaveGame = SaveGame;
 	bBusy = true;
 	const FCatSaveResult Result = MakeResult(true, FText::FromString(TEXT("正在保存当前世界。")));
@@ -934,7 +947,7 @@ FCatSaveResult UCatSaveSubsystem::MakeResult(const bool bAccepted, const FText& 
 // 运行载荷采集流程：
 // 1. 只接受 authority GameMode、唯一营地和已恢复的玩法 World，客户端或前端 World 不会写磁盘。
 // 2. 世界槽只保留一个本机玩家快照；若有在线本机 Controller 就现场采样，否则沿用退出捕获已经写入内存的快照。
-// 3. 最后导出已提交世界鱼与真实 Run 展示元数据；偷鱼窗口、Profile 和 Run 状态机都不会进入载荷。
+// 3. 最后导出已提交世界鱼与真实 Run 展示元数据，并读取终局原因把「已完结」写进载荷；Profile 与 Run 状态机本身都不会进入载荷。
 bool UCatSaveSubsystem::BuildActiveRunSaveGame(UCatRunSaveGame& OutSaveGame, FText& OutFailure) const
 {
 	OutFailure = FText::GetEmpty();
@@ -1046,6 +1059,18 @@ bool UCatSaveSubsystem::BuildActiveRunSaveGame(UCatRunSaveGame& OutSaveGame, FTe
 	OutSaveGame.DailyOfferingTarget = RunPublicState.DailyOfferingTarget;
 	OutSaveGame.WorldProgress = RunPublicState.WorldProgress;
 	OutSaveGame.LastWorldProgressDelta = RunPublicState.LastWorldProgressDelta;
+	// 终局只认两个原因：进度归零＝团灭、Success＝毕业。房主退出（HostExit）是可续的局中断点，不是终局；
+	// StartupFailed 与 None 同理。标记只增不减，终局那一夜之后的任何一次写盘都不会把槽变回「可继续」。
+	const bool bTerminalRun = RunPublicState.EndReason == ECatRunEndReason::WorldProgressDepleted
+		|| RunPublicState.EndReason == ECatRunEndReason::Success;
+	OutSaveGame.bRunCompleted = PendingRestoreSaveGame->bRunCompleted || bTerminalRun;
+	if (OutSaveGame.bRunCompleted)
+	{
+		UE_LOG(LogCatRun, Log,
+			TEXT("Event=persistence_run_completed Slot=%s World=%s EndReason=%d Phase=%d Day=%d WorldProgress=%d"),
+			*ActiveSlotId.ToString(), *GetNameSafe(World), static_cast<int32>(RunPublicState.EndReason),
+			static_cast<int32>(RunPublicState.Phase.Phase), RunPublicState.Phase.DayIndex, RunPublicState.WorldProgress);
+	}
 	return ValidateLoadedRunSaveGame(OutSaveGame, ActiveSlotId, OutFailure);
 }
 
@@ -1072,9 +1097,9 @@ bool UCatSaveSubsystem::ValidateLoadedRunSaveGame(const UCatRunSaveGame& SaveGam
 		return false;
 	}
 	if (!SaveGame.bHasWorldSnapshot && (SaveGame.bHasPlayerSnapshot || !SaveGame.WorldFishContainers.IsEmpty()
-		|| !SaveGame.CampInventory.InventorySlots.IsEmpty()))
+		|| !SaveGame.CampInventory.InventorySlots.IsEmpty() || SaveGame.bRunCompleted))
 	{
-		OutFailure = FText::FromString(TEXT("未开始的新槽夹带已有世界库存，不能按新局进入。"));
+		OutFailure = FText::FromString(TEXT("未开始的新槽夹带已有世界库存或终局标记，不能按新局进入。"));
 		return false;
 	}
 	if (SaveGame.bHasWorldSnapshot && !SaveGame.bHasPlayerSnapshot)

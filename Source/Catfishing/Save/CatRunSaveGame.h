@@ -19,7 +19,7 @@ struct FCatSavedRunInventorySlot
 	UPROPERTY(SaveGame)
 	FGuid ItemInstanceId;
 
-	/** 持久化格的堆叠数量；Inventory 导出会把合法 held 实例放回空格，未提交偷鱼窗口不能保存。 */
+	/** 持久化格的堆叠数量；Inventory 导出会把合法 held 实例放回空格，未提交的容器事务不能保存。 */
 	UPROPERTY(SaveGame)
 	int32 Quantity = 0;
 
@@ -174,6 +174,11 @@ struct FCatSaveSlotSummary
 	/** 最近一次保存时 Run 公开的上一晚世界进度变化；它只用于摘要解释，不参与后续 Run 恢复。 */
 	UPROPERTY(SaveGame, BlueprintReadOnly)
 	int32 LastWorldProgressDelta = 0;
+
+	/** 这一局是否已经终局（毕业或团灭）；true 的槽只能当战绩回看，前端不得提供「继续」，读档入口也会拒绝。
+	 *  文件永远保留：游戏自己不删档，删档只能由玩家在前端主动做（2026-09-11 拍）。 */
+	UPROPERTY(SaveGame, BlueprintReadOnly)
+	bool bRunCompleted = false;
 };
 
 /** 存档请求的同步受理结果；异步磁盘完成情况由 UCatSaveSubsystem 委托单独通知。 */
@@ -265,6 +270,12 @@ public:
 	/** 写盘时权威 Run 上次世界进度变化；它只为存档列表和调试展示保留。 */
 	UPROPERTY(SaveGame)
 	int32 LastWorldProgressDelta = 0;
+
+	/** 这一局是否已经终局（毕业或团灭）；由 Run 的 EndReason 写入且只增不减，房主退出不算终局（那是可续的局中断点）。
+	 *  它是「不再提供继续」的唯一磁盘事实；文件本身一个不动，仍可读出来当战绩回看（2026-09-11 拍）。
+	 *  新增的加法字段：旧 v6 文件没有这项，反序列化后保持 false，正是「没打完、可以继续」，因此不抬 schema 版本。 */
+	UPROPERTY(SaveGame)
+	bool bRunCompleted = false;
 
 	/** 本机玩家快照是否已经写入这个槽；新建空槽为 false，首次保存或离开前捕获成功后为 true。 */
 	UPROPERTY(SaveGame)
