@@ -63,7 +63,10 @@ public:
 	/** 主位右键写口；HookedFight / ExhaustedReel 共用 Runner，未满线时右键优先于收线并回体。 */
 	bool SetSlackingFromAuthority(APlayerState* InputPlayerState, int64 InputSequence, bool bSlacking,
 		const struct FCatFishingRodAimSample* AimRebaseSample = nullptr, FGuid RequestId = FGuid());
-	/** 主操作手离开竿位：搏斗期进入无人值守松线，等口期清空当前钓手；都不结束会话。 */
+	/**
+	 * 主位主动离竿：搏斗期进入无人值守松线，等口期清空当前钓手；都不结束会话。
+	 * 钓鱼规则 §4.6（:230）"落水与猫体力归零不走这条出口"——落水路径先写终局，本入口再被调用时已是终态、直接返回。
+	 */
 	void SuspendOperatorFromAuthority();
 	/** 主控取得/释放的离散发布；旁人抓握不触发。 */
 	void RefreshPrimaryControlFromAuthority();
@@ -78,7 +81,11 @@ public:
 		ECatFishMotionIntent MotionIntent);
 	/** FightRunner/表现写入遇到不可恢复错误时终止会话；FailureStage 会进入日志，便于区分几何、装备、ASC 等故障。 */
 	void HandleFightRunnerFailureFromAuthority(FName FailureStage = NAME_None);
-	/** Condition确认主控危险落水，播放表现并释放其控制；物理旁人不进入本入口。 */
+	/**
+	 * Condition确认主控危险落水：按钓鱼规则 §4.6（:222,228）写 CatInWater 终局——鱼逃、饵已扣、
+	 * 嘴里原有的鱼保留，随后才释放其竿位控制。落水不再转入无人值守放线，那条出口只留给主位主动离竿。
+	 * 物理旁人不进入本入口。
+	 */
 	void HandleCatEnteredDangerousWaterFromAuthority(double ImmersionDepthCentimeters,
 		ACatCharacter* AffectedCharacter = nullptr);
 
@@ -170,6 +177,41 @@ private:
 	/** 只有断线/猫落水拥有当前猫 Montage；其余终局返回空 Tag，不借用错误表现。 */
 	static FGameplayTag ResolveTerminalFisherPresentationTag(ECatFishingOutcome Outcome);
 
+	/**
+	 * 钓鱼规则 §4.2（:176,178）的强度检查序：①竿强瞬断 → ②碾压 → ③常规搏斗。
+	 * 瞬时判定，只在搏斗开始、合力变动（换人/参与者进出）时调用一次，不是搏斗中的持续状态。
+	 * 力量比较统一用 F_total（持竿猫当前力量，不随体力衰减）与已含完美削减的本场鱼力。
+	 * 返回 true 表示①或②已经写下终局，调用方必须立刻停止推进常规搏斗。
+	 */
+	bool EvaluateStrengthCheckOrderFromAuthority(const TCHAR* Trigger);
+
+	/** 读当前持竿猫的 F_total；体力归零不降力量，因此取 ASC 的 FishingStrength 而不是 Runner 的出力值。 */
+	bool TryResolvePrimaryCombinedStrength(double& OutCombinedStrength) const;
+
+	/** 读本场绑定鱼竿定义上的竿强度（静态配置，三档 25/60/210）；0 表示未裁，调用方不得据此瞬断。 */
+	bool TryResolveRodStrength(double& OutRodStrength) const;
+
+	/** 碾压达标：把鱼直接甩到持竿猫脚下的干地并进待拾取，跳过/中断搏斗循环。 */
+	bool FlingFishAshoreFromAuthority();
+
+	/** 岸上世界鱼的唯一生成口；力竭拖岸与碾压甩岸共用，负责收口装备事务、隐藏水中 Encounter 并写 Landed 终态。 */
+	bool SpawnLandedFishPickupFromAuthority(const FVector& SurfaceLocation, const FVector& GroundNormal,
+		const TCHAR* DiagnosticReason);
+
+	/**
+	 * 把本次搏斗摸过这根竿的猫并入演出贡献名单（图鉴 §4:113,118-119，09-08 已裁）。
+	 * 只喂贡献名单这一路：合力拉竿与抄网命中都不登记收集、不刷新个人最佳重量，
+	 * 收集层归属仍是 CatchFisherStableNetId 一人，本函数不碰它。
+	 * 抓握组只认对竿 Actor 的直接抓握；搏斗起始时刻由本会话提供，未开打（负值）时不收集。
+	 */
+	void AppendGripContributorsToParticipants(TArray<FString>& Participants) const;
+
+	/** 进入 ExhaustedReel 时起算翻肚鱼苏醒时限；拖动中照走，上岸后不再苏醒。 */
+	void ScheduleExhaustedRevivalTimerFromAuthority();
+
+	/** 苏醒时限到点：鱼仍未上岸即苏醒逃跑写 Escaped 终局。 */
+	void HandleExhaustedRevivalTimer();
+
 	/** 非搏斗阶段重读主控属性；运行中的Runner拥有唯一费用和力量观察。 */
 	bool RefreshFightSummary();
 
@@ -178,10 +220,12 @@ private:
 
 	/** 在终态快照强制网络更新后设置有界 Actor lifespan；配置缺失时立即销毁以免无界泄漏。 */
 	void ScheduleTerminalDestroy();
+	/** 力竭鱼被真实拖过岸线并收到竿尖可达范围内后的交接口；落点是 Encounter 当前干地位置。 */
 	bool SpawnExhaustedFishPickupFromAuthority(const FVector& SurfaceLocation);
 	/** 抄网成功时生成世界鱼并立即附到抄手嘴部；不读取鱼体力，也不写入鱼护。 */
 	bool SpawnScoopedFishPickupFromAuthority(ACatCharacter* ScoopingCharacter, APlayerState* ScoopingPlayerState,
 		const FString& ScooperStableNetId);
+	/** 渔获收口：确认消耗本场鱼饵，并按钓鱼规则 §4.4（:203）给鱼竿另扣 1 点基础磨损。 */
 	bool CommitCatchEquipmentFromAuthority();
 	void HandleBiteWarningTimer();
 	void HandleProbeTimer();
@@ -229,6 +273,12 @@ private:
 	/** 鱼运行态在会话创建时冻结的真实重量，单位千克。 */
 	double FishWeightKilograms = 0.0;
 
+	/**
+	 * 本场冻结的鱼体力初值：鱼表「体力系数」× 实际重量（钓鱼规则 §4.1:160），入场时再乘完美削减。
+	 * 归一化展示与苏醒判定共用这一个分母，避免和鱼种定额两套口径。
+	 */
+	double FishFightStaminaInitial = 0.0;
+
 	/** 由冻结重量计算的一次性表现缩放；水中 Encounter 与岸上 Pickup 共用，避免交接时尺寸跳变。 */
 	double FishVisualScale = 1.0;
 
@@ -247,21 +297,40 @@ private:
 	/** 鱼是否已从水中 Encounter 交接为世界鱼；true 后所有新抢抄返回 AlreadyResolved。 */
 	bool bCaptureResolved = false;
 
-	/** HookedFight 首次进入时的幂等 stamina 初始化事实；重复阶段事件不能补满已消耗体力。 */
+	/** HookedFight 首次进入时已登记体力域归属的幂等事实；09-11 裁决④之后它不再触发任何补满。 */
 	bool bFightStaminaInitialized = false;
 
-	/** 本场唯一负责的主控体力池；主控放下后解除，终局不能恢复旁人。 */
+	/**
+	 * 本场负责的主控体力池归属；主控放下后解除。
+	 * 09-11 裁决④删掉「进搏斗补满」与各终局的一次性回满之后，它只用于终局诊断：
+	 * 搏斗体力是跨竿资源，会话结束不再把它写回上限。
+	 */
 	TWeakObjectPtr<ACatCharacter> StaminaOwner;
+
+	/**
+	 * 上一次跑强度检查序时观察到的 Snapshot.ActiveCombinedFishingStrength。
+	 * 它只是「合力是否变动」的判据，不是检查里用的 F_total（后者不随体力衰减，见 §4.1:170）。
+	 * 负值表示本场尚未查过。
+	 */
+	double LastStrengthCheckCombinedStrength = -1.0;
+
+	/**
+	 * 本次搏斗的起始服务器世界时间，秒；演出贡献名单向抓握组要「这一竿摸过竿的人」时的筛选窗口起点。
+	 * 与 Snapshot.PhaseStartedServerTime 不是一回事：后者每次换阶段都重置，
+	 * HookedFight→ExhaustedReel 一跨就会把前半场摸过竿的猫漏掉。
+	 * 负值表示本场还没开打，此时一律不收集（世界时间恒为非负）。
+	 */
+	double FightStartedServerTimeSeconds = -1.0;
 
 	FCatFishingAttemptSnapshot AttemptSnapshot;
 	FCatFishSelectionContext FrozenSelectionContext;
 	FCatFishSelectionResult FrozenSelectionResult;
 	ECatFishSelectionResolution SelectionResolution = ECatFishSelectionResolution::None;
-	/** 当前是本次抛竿的第几个咬钩机会；漏按后递增，使下一轮等待与选鱼拥有新的确定性随机流。 */
+	/** 当前是本次抛竿的第几个咬钩机会；入夜收回后重回 Waiting 时递增，使下一轮等待与选鱼拥有新的确定性随机流。 */
 	uint32 BiteOpportunitySequence = 0;
 	/** 从抛竿种子和 BiteOpportunitySequence 派生；等待采样、选鱼与后续搏斗共用。 */
 	uint64 CurrentBiteRandomSeed = 0;
-	/** 服务器是否仍接受当前真咬窗口的首次左键；计时器先关闸，再把 WindowExpired 交给 StateTree。 */
+	/** 服务器是否仍接受当前真咬窗口的首次左键；计时器先关闸，再按 §3.4 写鱼吐钩逃跑终局。 */
 	bool bTrueBiteWindowAcceptingHook = false;
 	FTimerHandle BiteWarningTimerHandle;
 	/** 当前真咬成立时的鱼情；仅用于这次窗口跨夜后的选鱼，不是另一份世界昼夜状态。 */
@@ -269,6 +338,8 @@ private:
 	ECatEnvironmentWeather BiteWeather = ECatEnvironmentWeather::Unknown;
 	FTimerHandle ProbeTimerHandle;
 	FTimerHandle TrueBiteTimerHandle;
+	/** 翻肚鱼苏醒时限计时；进入 ExhaustedReel 起算，拖动中照走，鱼真正上岸或会话收口后清除。 */
+	FTimerHandle ExhaustedRevivalTimerHandle;
 	TMap<FGuid, FCatFishingCommandResult> HookTerminalByRequest;
 	TMap<FGuid, FCatFishingCommandResult> CancelTerminalByRequest;
 	TMap<FGuid, FCatFishingCommandResult> CutLineTerminalByRequest;
