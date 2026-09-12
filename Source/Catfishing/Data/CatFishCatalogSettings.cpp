@@ -223,13 +223,22 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 		// 先确定本鱼种在本次咬钩机会里的个体重量，再用同一重量推导力量和挑战度；选中后复用该重量。
 		const double WeightKilograms = CatFishCatalogSettingsPrivate::SampleIndividualWeight(
 			*Definition, Context);
-		// 鱼力量按逐鱼「力量系数K」换算（钓鱼规则 §4.1）：没有全局换算常数可回退，K 未配置的鱼直接 fail-closed 跳过，
-		// 不能让它带着 0 力量混进抽取池（0 力量会被挑战度判成"最轻松"的候选）。
-		const double StrengthPerKilogram = Definition->FishStrengthPerKilogram;
+		// 鱼力量按逐鱼「力量系数K」换算（钓鱼规则 §4.1）。0 力量绝不能混进抽取池
+		//（会被挑战度判成「最轻松」的候选），但**也不能因为没配就把候选跳掉**：
+		// FishStrengthPerKilogram 是 2026-09-12 新增的列，现有 16 份鱼资产一份都还没填，
+		// 跳光候选 → 落基础池 → 基础池名册仍是设计侧待办（空的）→ 抽不到鱼 → 试探期进不去
+		// → 钓鱼主链整条断掉。所以未配置时回退到迁移前的全局系数（Context.StrengthPerKilogram，
+		// 09-11 退出主链但字段保留正是为此），只在连它都没有时才真跳过。
+		// 资产补完该列后这条回退自然失效，警告也随之消失。
+		double StrengthPerKilogram = Definition->FishStrengthPerKilogram;
 		if (!FMath::IsFinite(StrengthPerKilogram) || StrengthPerKilogram <= 0.0)
 		{
 			++UnsetStrengthCoefficientCount;
-			continue;
+			StrengthPerKilogram = Context.StrengthPerKilogram;
+			if (!FMath::IsFinite(StrengthPerKilogram) || StrengthPerKilogram <= 0.0)
+			{
+				continue;
+			}
 		}
 		const double BaseFishStrength = WeightKilograms * StrengthPerKilogram;
 		// 挑战度是第一道实际玩法门：超出安全上限的个体不会再进入任何生态条件或权重计算。
@@ -266,10 +275,12 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 	}
 	if (UnsetStrengthCoefficientCount > 0)
 	{
-		// 鱼表「力量系数K」列还没落到 Fish_*.uasset；这条鱼不会出现，直到数据侧补值。
+		// 鱼表「力量系数K」列还没落到 Fish_*.uasset，这些候选暂用迁移前的全局系数换算力量。
+		// 数值会偏离设计（尤其巨影 K5 与普通鱼不该同系数），但比把它们跳掉、让钓鱼抽不到鱼强。
 		UE_LOG(LogCatFishing, Warning,
-			TEXT("Event=fish_selection_strength_coefficient_unset Region=%s SkippedCandidates=%d"),
-			*Context.WaterRegion.RegionId.ToString(), UnsetStrengthCoefficientCount);
+			TEXT("Event=fish_selection_strength_coefficient_unset Region=%s FellBackToGlobal=%d Global=%.3f "
+				"Note=MigrationFallbackUntilFishAssetsCarryPerFishK"),
+			*Context.WaterRegion.RegionId.ToString(), UnsetStrengthCoefficientCount, Context.StrengthPerKilogram);
 	}
 	Candidates.Sort([](const FCandidate& Left, const FCandidate& Right)
 	{
