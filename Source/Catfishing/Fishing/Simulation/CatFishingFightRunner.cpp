@@ -1,6 +1,7 @@
 #include "Fishing/Simulation/CatFishingFightRunner.h"
 
 #include "AbilitySystem/Config/CatPhysicalEffortSettings.h"
+#include "AbilitySystem/Physics/CatPhysicalEffortComponent.h"
 #include "Character/CatCharacterMovementComponent.h"
 #include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
@@ -292,6 +293,8 @@ bool UCatFishingFightRunner::UpdateOperatorIntentAndProperties()
 		auto& Sample = OperatorState.PendingMovementSamples.AddDefaulted_GetRef();
 		Sample.DurationSeconds = Now - OperatorState.LastMovementSampleWorldSeconds;
 		Sample.MoveIntentWorld = Intent; Sample.MaximumMoveSpeedCentimetersPerSecond = Physical->MaxMovementSpeedCmS;
+		// 输入前向取视角朝向，不取身体朝向：W 永远是前移（靠水），S 永远是后退（离水）。
+		Sample.InputForwardWorld = FRotator(0.0, Physical->GetViewIntent().Yaw, 0.0).Vector();
 		if (!Intent.IsNearlyZero())
 		{
 			const FVector Direction = Intent.GetSafeNormal();
@@ -333,10 +336,11 @@ bool UCatFishingFightRunner::ApplyOperatorStaminaChanges(const FCatFightStepResu
 		for (const auto& Sample : FrozenOperatorMovementSamples)
 		{
 			FCatFightOperatorMovementCostInput Cost;
-			Cost.MoveIntentWorld = Sample.MoveIntentWorld; Cost.ActualDisplacementCentimeters = Sample.ActualDisplacementCentimeters;
-			Cost.MaximumMoveSpeedCentimetersPerSecond = Sample.MaximumMoveSpeedCentimetersPerSecond; Cost.FixedStepSeconds = Sample.DurationSeconds;
+			Cost.MoveIntentWorld = Sample.MoveIntentWorld; Cost.InputForwardWorld = Sample.InputForwardWorld;
+			Cost.FixedStepSeconds = Sample.DurationSeconds;
 			Cost.ActiveStrength = OperatorState.ActiveFishingStrength;
-			Cost.StaminaPerUnfulfilledMeter = GetDefault<UCatPhysicalEffortSettings>()->StaminaPerUnfulfilledMeter;
+			Cost.ForwardStaminaPerSecond = GetDefault<UCatPhysicalEffortSettings>()->FishingForwardMoveStaminaPerSecond;
+			Cost.BackwardStaminaPerSecond = GetDefault<UCatPhysicalEffortSettings>()->FishingBackwardMoveStaminaPerSecond;
 			Cost.MovementStaminaMultiplier = Config.CatMovementStaminaMultiplier;
 			FCatFightOperatorMovementCostResult Result;
 			if (!FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(Cost, Result)) return false;
@@ -347,6 +351,8 @@ bool UCatFishingFightRunner::ApplyOperatorStaminaChanges(const FCatFightStepResu
 	if (!FMath::IsFinite(RequestedDrain) || RequestedDrain < 0.0) return false;
 	const double Paid = FMath::Min(FrozenOperatorStamina, RequestedDrain);
 	const bool bRecoveryLoaded = bFrozenOperatorUnderLoad || !Step.RodLineForceNewtons.IsNearlyZero(UE_DOUBLE_SMALL_NUMBER);
+	// 放线回体基础为 0（钓鱼规则 §4.5）；这条通道只在猫册三选一给出速率时才有值，
+	// 搏斗外的 5 点/秒自然恢复不走这里，归 CatPhysicalEffortComponent 的周期回体 GE。
 	const double Recovery = Step.bSlackRecoveryActive && !bRecoveryLoaded
 		? FMath::Min(FrozenOperatorStaminaMaximum - FrozenOperatorStamina, Config.SlackStaminaRegenPerSecond * Config.FixedStepSeconds) : 0.0;
 	LastOperatorStaminaDrain = Paid - Recovery;
@@ -355,6 +361,11 @@ bool UCatFishingFightRunner::ApplyOperatorStaminaChanges(const FCatFightStepResu
 	if (!IsValid(ASC) || !ASC->GetOwner() || ASC->GetOwner()->IsActorBeingDestroyed()) return true;
 	State.CatStamina = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
 	LastOperatorStaminaDrain = FrozenOperatorStamina - State.CatStamina;
+	// 统一出力池（2026-09-11 裁决④）：搏斗扣的和抓、推、爬扣的是同一条体力，
+	// 所以搏斗扣体也要武装同一条搏斗外恢复闸，否则钓鱼花掉的体力永远进不了 5 点/秒通道。
+	if (LastOperatorStaminaDrain > 0.0)
+		if (auto* Effort = ASC->GetOwner()->FindComponentByClass<UCatPhysicalEffortComponent>())
+			Effort->NotifyStaminaSpentFromAuthority();
 	if (auto* OwnerSession = Session.Get())
 	{
 		OwnerSession->PublishPrimarySummaryFromAuthority(OperatorState.ActiveFishingStrength, State.CatStamina,

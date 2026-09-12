@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "ActiveGameplayEffectHandle.h"
 #include "Components/ActorComponent.h"
 #include "Physics/Simulation/CatIntentMotionModel.h"
 #include "CatPhysicalEffortComponent.generated.h"
@@ -24,10 +25,19 @@ public:
 	double GetLastPaid() const { return LastPaid; }
 	uint64 GetSettlementSequence() const { return SettlementSequence; }
 	void ObserveStaminaFromReplication(float PreviousStamina);
+	/**
+	 * 统一出力池的扣体回执（2026-09-11 裁决④：抓、推、爬与搏斗花同一条体力）。
+	 * 钓鱼搏斗的扣体走 Runner 自己的写口，不经过本组件，所以由 Runner 在扣成后回调一次，
+	 * 让搏斗花掉的体力和抓握花掉的体力武装同一条恢复闸。
+	 */
+	void NotifyStaminaSpentFromAuthority();
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 private:
 	UFUNCTION() void OnRep_Exhausted();
 	void SetExhausted(bool bValue);
+	/** 开关搏斗外周期回体 GE；速率与写口都归 GE，本组件只裁决什么时候该恢复。 */
+	void SetNaturalRecoveryActive(bool bActive);
 	void LogState(FName Event, FName Result) const;
 	UPROPERTY(ReplicatedUsing=OnRep_Exhausted) bool bExhausted = false;
 	bool bRecoveryPending = false;
@@ -38,4 +48,6 @@ private:
 	double LastPaid = 0;
 	uint64 SettlementSequence = 0;
 	FCatIntentMotionResult LastResult;
+	/** 当前挂着的搏斗外周期回体 GE；空句柄表示此刻不恢复。 */
+	FActiveGameplayEffectHandle NaturalRecoveryHandle;
 };

@@ -40,11 +40,17 @@ struct CATFISHING_API FCatFishingFightRunnerInit
 	uint64 RandomSeed = 0;
 };
 
-/** 一段服务器已接受移动的观察量；按真实采样时间分给固定步，不能重复消费身体位移。 */
+/**
+ * 一段服务器已接受移动的观察量；按真实采样时间分给固定步，不能重复消费身体位移。
+ * 腿部附加按秒计费后只消费 DurationSeconds、MoveIntentWorld 与 InputForwardWorld；
+ * 位移与最大速度保留为观察量，供传送/位移诊断使用，不进腿部账单。
+ */
 struct FCatFightOperatorMovementSample
 {
 	double DurationSeconds = 0.0;
 	FVector MoveIntentWorld = FVector::ZeroVector;
+	/** 采样时刻的输入前向（玩家视角朝向）；W/S 相对它判定，钓鱼中不随身体转向翻转。 */
+	FVector InputForwardWorld = FVector::ForwardVector;
 	FVector ActualDisplacementCentimeters = FVector::ZeroVector;
 	double MaximumMoveSpeedCentimetersPerSecond = 0.0;
 };

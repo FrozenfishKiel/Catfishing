@@ -74,10 +74,13 @@ struct CATFISHING_API FCatFightSimulationConfig
 	double CatRodStaminaMultiplier = 1.0;
 	double CatHoldStaminaMultiplier = 1.0;
 	double CatLoadStaminaMultiplier = 1.0;
-	double SlackStaminaRegenPerSecond = 1.5;
-	double StalemateRodWearPerFishStrength = 0.1;
-	/** 鱼满主动出力的基础每秒磨损，来源为竿定义；按实际u²和方向负载缩放，不读取动画档位。 */
+	/** 放线回体速率，基础为 0；猫册三选一「放线回体速度」是唯一把它抬起来的来源。 */
+	double SlackStaminaRegenPerSecond = 0.0;
+	/** 线绷紧每秒按本场鱼力扣的竿耐久系数；名字沿用旧「僵持」口径，实际闸门是线绷紧。 */
+	double StalemateRodWearPerFishStrength = 0.05;
+	/** 竿定义给的满出力每秒磨损。设计无此项，磨损模型已不消费它，待竿片段一并删除。 */
 	double FishFullEffortRodWearPerSecond = 0.0;
+	/** 竿定义给的高张力磨损倍率。设计无此项，磨损模型已不消费它，待竿片段一并删除。 */
 	double TautRodWearMultiplier = 1.0;
 	double ReelSpeedCentimetersPerSecond = 0.0;
 	/** 满出力参考游速，校准固定水阻并生成 u*参考游速*dt 的本步主动意图。 */

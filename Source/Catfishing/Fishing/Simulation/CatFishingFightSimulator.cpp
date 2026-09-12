@@ -630,6 +630,8 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 	}
 	// 尚有线杯容量时右键独立回体；已放尽则恢复正常做功、支撑与鱼出力费用。
 	// 无人值守放线不恢复旧操作手；零体力强制拖拽也不通过右键退出。
+	// 钓鱼规则 §4.5：放线本身不恢复体力，搏斗中一律不恢复；本通道基础速率为 0，
+	// 只有猫册三选一的「放线回体速度」把它抬起来，所以这里保留通道、不保留基础值。
 	if (bSlackRecovery)
 	{
 		Result.CatStaminaDrain = -FMath::Min(FMath::Max(0.0, Config.CatStaminaMaximum - State.CatStamina),
@@ -667,18 +669,16 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 	const double CatLineForce = bReeling ? EffectiveCatStrength : 0.0;
 	Result.Trace.FishLineForceNewtons = FishLineForce * Config.ForcePerStrengthNewtons;
 	Result.Trace.CatLineForceNewtons = CatLineForce * Config.ForcePerStrengthNewtons;
-	// LineLoad 是鱼主动沿线向外施力的投影，也是鱼竿磨损的唯一方向负载。
-	// Tension 只说明几何约束已经介入，不能在鱼回头或横游时替代 LineLoad，
-	// 否则猫端收线制造的张力会让低负载帧继续按满负载磨线。
+	// LineLoad 是鱼主动沿线向外施力的投影；磨损已不再按它缩放，这里只作为观察量留给诊断。
 	const double WearLoad = OutwardLoad;
 	Result.Trace.WearLoad = WearLoad;
-	// 鱼力竭后的收尾只保留线长约束和拖拽位移；死鱼不再施力，
-	// 猫的收线力也不能独自制造鱼竿磨损，否则拉鱼干仍会耗尽耐久。
-	// 拖落水期间不新增磨损，避免尚未落水就被断竿替代。
+	// 磨损口径（钓鱼规则 §4.4）：线绷紧的每一秒扣「鱼力 × 0.05」，鱼力 75 时每秒 3.75。
+	// 计费量是本场鱼力 F_fish（完美已在入场削减），不是线上力，也不随鱼当前出力比例升降；
+	// 设计里没有出力平方、外向负载与绷线倍率这三个乘子，2026-09-11 一并撤下。
+	// 鱼力竭后的收尾只保留线长约束和拖拽位移：死鱼不再施力，猫的收线力也不能独自磨竿，
+	// 否则拉鱼干仍会耗尽耐久；拖落水期间同样不新增磨损，避免尚未落水就被断竿替代。
 	const double RodWearDelta = !State.bFishExhausted && !bExhaustedCatEscape && bLineRestraining
-		? (FMath::Max(FishLineForce, CatLineForce) * Config.StalemateRodWearPerFishStrength
-			+ Config.FishFullEffortRodWearPerSecond * FMath::Square(FishEffortRatio))
-			* WearLoad * Dt * Config.TautRodWearMultiplier : 0.0;
+		? Config.FishStrength * Config.StalemateRodWearPerFishStrength * Dt : 0.0;
 	Result.RodWearDelta = RodWearDelta;
 	Result.AbsoluteRodWear = State.AbsoluteRodWear + RodWearDelta;
 	Result.Trace.RodWearDelta = RodWearDelta;

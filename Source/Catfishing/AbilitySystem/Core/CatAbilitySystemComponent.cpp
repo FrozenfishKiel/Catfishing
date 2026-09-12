@@ -106,15 +106,6 @@ void UCatAbilitySystemComponent::ProcessAbilityInput(const float DeltaTime, cons
 	{
 		return;
 	}
-	if (bPendingFishingStaminaReset)
-	{
-		RequestFishingStaminaReset();
-		if (bPendingFishingStaminaReset)
-		{
-			ResetAbilityInput();
-			return;
-		}
-	}
 
 	TArray<FGameplayAbilitySpecHandle> AbilitiesToActivate;
 	for (const FGameplayAbilitySpecHandle Handle : InputHeldSpecHandles)
@@ -269,7 +260,8 @@ void UCatAbilitySystemComponent::RevokeConfiguredDefaultAbilitySet()
 // 1. 先要求已建立 Owner/Avatar 的 authority ASC，且本组件尚未成功播种；ActorInfo 未就绪、客户端调用或重占有都不触碰属性基值。
 // 2. 再按 Character 传入的 CatDefinitionId 读取完整配置；配置缺失、未就绪或数值非法时只记录原有诊断并返回 false，不把半套数值写入 ASC。
 // 3. 配置完整后一次写入 Poison、FishingStrength 与 MaxFightStamina 的基值，确保这些身体数值只通过 GAS 边界进入 AttributeSet。
-// 4. 最后沿用现有会话体力初始化入口按新上限回满 FightStamina；全部成功才清掉可能排队的重置请求并记录一次性状态，失败会保留后续 ActorInfo 刷新时的重试机会。
+// 4. 最后按新上限把 FightStamina 播种到满；这是本身体第一次拿到体力，不是搏斗入口——
+//    2026-09-11 裁决④之后体力是跨竿资源，进搏斗与终局路径都不再回满，只有这里播种一次。
 bool UCatAbilitySystemComponent::InitializeCharacterAttributesFromDefinition(const FName CatDefinitionId)
 {
 	if (!GetOwnerActor() || !GetAvatarActor() || !IsOwnerActorAuthoritative()
@@ -297,21 +289,22 @@ bool UCatAbilitySystemComponent::InitializeCharacterAttributesFromDefinition(con
 	SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(), Poison);
 	SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), FishingStrength);
 	SetNumericAttributeBase(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute(), MaxFightStamina);
-	if (!InitializeFishingStaminaForSession())
+	if (!SeedFightStaminaToMaximumFromAuthority())
 	{
 		return false;
 	}
-	bPendingFishingStaminaReset = false;
 	bInitialCharacterAttributesApplied = true;
 	return true;
 }
 
-bool UCatAbilitySystemComponent::InitializeFishingStaminaForSession()
+bool UCatAbilitySystemComponent::SeedFightStaminaToMaximumFromAuthority()
 {
-	// 体力重置流程：
-	// 1. 先拒绝缺 Owner/Avatar 或非 authority 的调用，保证短周期体力只由服务器恢复。
-	// 2. 再从 ASC 当前 MaxFightStamina 读取本身体的上限；上限未播种或非法时返回 false，让会话入口 fail-closed。
+	// 体力播种流程：
+	// 1. 先拒绝缺 Owner/Avatar 或非 authority 的调用，保证短周期体力只由服务器写入。
+	// 2. 再从 ASC 当前 MaxFightStamina 读取本身体的上限；上限未播种或非法时返回 false，让播种入口 fail-closed。
 	// 3. 最后只提交到上限的 delta，沿用正式 GameplayEffect 写口，保持属性委托、复制和日志观察同源。
+	// 只有身体属性播种会走这里。搏斗入口、终局路径不得调用：连续硬仗要有代价，
+	// 空条靠搏斗外 5 点/秒回满（约 20 秒），小鱼干的价值窗就是省下这 20 秒。
 	if (!GetOwnerActor() || !GetAvatarActor() || !IsOwnerActorAuthoritative())
 	{
 		return false;
@@ -327,38 +320,6 @@ bool UCatAbilitySystemComponent::InitializeFishingStaminaForSession()
 		return false;
 	}
 	return FMath::IsNearlyEqual(Current, Baseline) || ApplyFishingStaminaDelta(Baseline - Current);
-}
-
-bool UCatAbilitySystemComponent::RequestFishingStaminaReset()
-{
-	bPendingFishingStaminaReset = true;
-	if (!GetOwnerActor() || !GetAvatarActor())
-	{
-		return true;
-	}
-	if (InitializeFishingStaminaForSession())
-	{
-		bPendingFishingStaminaReset = false;
-	}
-	return !bPendingFishingStaminaReset;
-}
-
-bool UCatAbilitySystemComponent::EnsureFishingStaminaReadyForNewSession()
-{
-	// 会话准入流程：先补做延迟回满，再同时检查当前体力和上限；上限缺失时不能让 FishingSession 用配置再开第二套事实源。
-	if (bPendingFishingStaminaReset)
-	{
-		RequestFishingStaminaReset();
-		if (bPendingFishingStaminaReset)
-		{
-			return false;
-		}
-	}
-	const float Maximum = GetNumericAttribute(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
-	const float Current = GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
-	return GetOwnerActor() && GetAvatarActor()
-		&& FMath::IsFinite(Maximum) && Maximum > 0.0f
-		&& FMath::IsFinite(Current) && Current > 0.0f;
 }
 
 bool UCatAbilitySystemComponent::ApplyPoisonDelta(const float Delta)
@@ -399,15 +360,6 @@ bool UCatAbilitySystemComponent::IsPoisonAtLeast(const float Threshold) const
 	// 阈值读取流程：非法阈值直接关闭裁决；合法阈值只读取当前 ASC Poison，不暴露 AttributeSet 写口给 Condition。
 	return FMath::IsFinite(Threshold)
 		&& GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute()) >= Threshold;
-}
-
-void UCatAbilitySystemComponent::InitAbilityActorInfo(AActor* InOwnerActor, AActor* InAvatarActor)
-{
-	Super::InitAbilityActorInfo(InOwnerActor, InAvatarActor);
-	if (bPendingFishingStaminaReset)
-	{
-		RequestFishingStaminaReset();
-	}
 }
 
 void UCatAbilitySystemComponent::ClearActorInfo()
