@@ -87,18 +87,21 @@ bool FCatFishingCatWorkPacingTest::RunTest(const FString& Parameters)
 	Constraint.CarrierVelocityCentimetersPerSecond = FVector(-40.0, 0.0, 0.0);
 	Constraint.CatRodPositiveWorkRadians = 0.16;
 	const auto Heavy = Step(Settings, Current, Constraint);
+	// 腿部附加按秒计费、只看操作方向：这里是后退（离水）一档，身体实际走了多远不进这笔账。
 	FCatFightOperatorMovementCostInput Movement;
 	Movement.MoveIntentWorld = -FVector::ForwardVector;
-	Movement.ActualDisplacementCentimeters = Constraint.CarrierVelocityCentimetersPerSecond * Settings.FixedStepSeconds;
-	Movement.MaximumMoveSpeedCentimetersPerSecond = 40.0;
+	Movement.InputForwardWorld = FVector::ForwardVector;
 	Movement.FixedStepSeconds = Settings.FixedStepSeconds;
 	Movement.ActiveStrength = Settings.PrimaryOperatorCatStrength;
 	FCatFightOperatorMovementCostResult PersonalMovement;
-	if (!TestTrue(TEXT("真实身体位移独立计算个人账"), FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(Movement, PersonalMovement))) return false;
+	if (!TestTrue(TEXT("腿部移动独立计算个人账"), FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(Movement, PersonalMovement))) return false;
 	const double HeavyRate = (PersonalMovement.StaminaDrain + Heavy.GetRodActionStaminaDrain()) / Settings.FixedStepSeconds;
-	TestTrue(TEXT("完成身体移动意图后只支付真实竿操作账"), Heavy.bSucceeded && FMath::IsFinite(HeavyRate) && HeavyRate > 0.0);
-	TestTrue(TEXT("完成意图的身体不耗体，收线与转杆仍各支付实际做功"),
-		PersonalMovement.StaminaDrain == 0.0 && Heavy.CatReelStaminaDrain > 0.0 && Heavy.CatRodWorkStaminaDrain > 0.0);
+	TestTrue(TEXT("腿部附加与竿操作账各自成立"), Heavy.bSucceeded && FMath::IsFinite(HeavyRate) && HeavyRate > 0.0);
+	TestTrue(TEXT("腿部附加只按后退档收，收线与转杆仍各支付实际做功"),
+		PersonalMovement.bBackward
+		&& FMath::IsNearlyEqual(PersonalMovement.StaminaDrain,
+			Movement.BackwardStaminaPerSecond * Movement.FixedStepSeconds * Movement.MovementStaminaMultiplier, 1e-9)
+		&& Heavy.CatReelStaminaDrain > 0.0 && Heavy.CatRodWorkStaminaDrain > 0.0);
 
 	Settings.CatRodStaminaCostPerStrengthRadian *= 20.0;
 	Settings.CatStaminaCostPerStrengthCentimeter *= 10.0;

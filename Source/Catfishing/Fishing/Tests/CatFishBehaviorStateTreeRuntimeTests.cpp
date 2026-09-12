@@ -349,6 +349,9 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		Session->Snapshot.RodActor = Rod;
 		Session->Snapshot.FishEncounterActor = Fish;
 		Session->Snapshot.FishFightStaminaRemaining = FishDefinition->FishFightStamina;
+		// 归一化分母 2026-09-11 起是本场冻结的初值（鱼体力＝体力系数×实际重量），不再是鱼种定额。
+		// 这个夹具直接写 Snapshot 绕过了选鱼事务，所以要手工补上初值，否则分母为 0。
+		Session->FishFightStaminaInitial = FishDefinition->FishFightStamina;
 		Session->AttemptSnapshot.RodItemInstanceId = RodItemId;
 		Session->CastEquipment = Equipment;
 		Session->FisherCharacter = Character;

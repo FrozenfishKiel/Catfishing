@@ -157,7 +157,7 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 		const double WarningRemaining = World->GetTimerManager().GetTimerRemaining(Session->BiteWarningTimerHandle);
 		TestEqual(TEXT("生产计时器消费冻结落点的新模型并加飞行时间"), BiteRemaining, ExpectedWait + FlightSeconds, 1.e-4);
 		TestEqual(TEXT("计时器保证完整1.5秒预警"), BiteRemaining - WarningRemaining, 1.5, 1.e-4);
-		const uint64 FirstSeed = Session->CurrentBiteRandomSeed;
+		TestTrue(TEXT("本次机会已派到种子"), Session->CurrentBiteRandomSeed != 0);
 		double ObservedWarningTime = -1.0;
 		for (int32 Frame = 0; Frame < 5000 && Session->GetSnapshot().Phase != ECatFishingPhase::TrueBiteWindow; ++Frame)
 		{
@@ -191,26 +191,42 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 			ECatEnvironmentTimeOfDay::Unknown);
 		TestEqual(TEXT("跨夜真咬保留发生时的时段"), Session->BiteTimeOfDay, BiteEnvironment.TimeOfDay);
 		TestEqual(TEXT("跨夜真咬保留发生时的天气"), Session->BiteWeather, BiteEnvironment.Weather);
-		for (int32 Frame = 0; Frame < 500 && Session->GetSnapshot().Phase != ECatFishingPhase::Waiting; ++Frame)
+		// 2026-09-11 裁决前，响应窗超时是「回 Waiting、重新派种子、再给一次机会」；
+		// 现在它是终局（钓鱼规则.md:147 鱼吐钩逃跑、饵已消耗），所以这里等的是结场不是回等待。
+		for (int32 Frame = 0; Frame < 500 && !Session->IsSessionTerminal(); ++Frame)
 			Wrapper.TickTestWorld(0.01f);
-		TestEqual(TEXT("错过窗口后正式回到等待"), Session->GetSnapshot().Phase, ECatFishingPhase::Waiting);
+		TestTrue(TEXT("错过窗口即结场，不再回等待"), Session->IsSessionTerminal());
+		TestNotEqual(TEXT("结场后不停在等待相"), Session->GetSnapshot().Phase, ECatFishingPhase::Waiting);
 		TestEqual(TEXT("漏过快速抖动不会恢复免费退饵资格"), BaitEquipment->CommitFishingBaitDeferred(Session->Snapshot.FishingSessionId).Error,
 			ECatDomainCommandError::AlreadyResolved);
 		TestEqual(TEXT("夜里漏按不生成下一机会"), Session->BiteOpportunitySequence, 1u);
 		TestFalse(TEXT("夜里漏按不再调度咬钩"), World->GetTimerManager().IsTimerActive(Session->ProbeTimerHandle));
 		TestEqual(TEXT("浮漂恢复平静"), Hook->GetPresentationState().BobberMode, ECatFishingBobberPresentationMode::Calm);
+		// 翻天遮罩这一段要的是一个活着的等待会话。超时会话现在是终局，接不下去，
+		// 所以另起一个（写法同本文件下面的 NightSession）。原先那两条「下一机会用新种子」
+		// 的断言依赖的是「同一会话拿到第二次机会」，那条路已随裁决删除，不在此重建。
+		auto* MaskSession = World->SpawnActor<ACatFishingSession>();
+		auto* MaskHook = World->SpawnActor<ACatFishingHookActor>(HookClass);
+		if (!MaskSession || !MaskHook) return false;
+		MaskSession->Snapshot.FishingSessionId = FGuid::NewGuid();
+		MaskSession->Snapshot.CastAttemptId = FGuid::NewGuid();
+		MaskSession->Snapshot.HookActor = MaskHook;
+		MaskSession->AttemptSnapshot = Session->AttemptSnapshot;
+		MaskSession->bPrepared = true;
+		MaskHook->InitializeAuthoritativeIdentity(MaskSession->Snapshot.FishingSessionId, MaskSession->Snapshot.CastAttemptId);
+		Fishing->Sessions.Add(MaskSession->Snapshot.FishingSessionId, MaskSession);
 		Mode->RunPublicState.Phase.Phase = ECatRunPhase::DayActive;
 		Mode->RunPublicState.Phase.bNewFishingBitesAllowed = true;
 		Mode->RunPublicState.DayTransition.bActive = true;
+		TestTrue(TEXT("遮罩期间新抛竿的正式 StateTree 正常启动"), MaskSession->StartPreparedSessionLogicFromAuthority());
 		Fishing->RefreshBiteAvailabilityFromAuthority();
 		TestFalse(TEXT("翻天过场未结束时不允许新咬钩"), Mode->CanGenerateNewFishingBites());
-		TestFalse(TEXT("翻天遮罩期间等待会话不启动咬钩计时"), World->GetTimerManager().IsTimerActive(Session->ProbeTimerHandle));
-		TestEqual(TEXT("翻天遮罩期间不消耗下一咬钩机会"), Session->BiteOpportunitySequence, 1u);
+		TestFalse(TEXT("翻天遮罩期间等待会话不启动咬钩计时"), World->GetTimerManager().IsTimerActive(MaskSession->ProbeTimerHandle));
+		TestEqual(TEXT("翻天遮罩期间不消耗咬钩机会"), MaskSession->BiteOpportunitySequence, 0u);
 		Mode->FinishAltarDayTransition();
 		TestTrue(TEXT("正式过场收口重新开放新咬钩"), Mode->CanGenerateNewFishingBites());
-		TestEqual(TEXT("每个机会只调度一次"), Session->BiteOpportunitySequence, 2u);
-		TestTrue(TEXT("下一机会使用新种子"), Session->CurrentBiteRandomSeed != FirstSeed);
-		TestTrue(TEXT("下一等待计时器已启动"), World->GetTimerManager().IsTimerActive(Session->ProbeTimerHandle));
+		TestEqual(TEXT("收口后才消耗第一次机会"), MaskSession->BiteOpportunitySequence, 1u);
+		TestTrue(TEXT("收口后等待计时器已启动"), World->GetTimerManager().IsTimerActive(MaskSession->ProbeTimerHandle));
 		// 白天刚排队的事件在夜晚才由正式 StateTree 消费，也不能打开新真咬窗口。
 		Session->HandleProbeTimer();
 		Mode->bRunStartupInProgress = true;

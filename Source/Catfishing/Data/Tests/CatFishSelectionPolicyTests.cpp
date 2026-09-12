@@ -26,6 +26,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.Data.FishSelection.FormalCatalogFreezesWeightDerivedStrength",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatPerfectHookReductionRarityTierTest,
+	"Catfishing.Unit.Data.FishSelection.PerfectHookReductionFollowsRarityTier",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
 namespace CatFishSelectionPolicyTestsPrivate
 {
 	static UCatFishPresentationDefinition* MakePresentationDefinition()
@@ -61,6 +66,7 @@ namespace CatFishSelectionPolicyTestsPrivate
 		Definition->TimeOfDay = {ECatEnvironmentTimeOfDay::Morning};
 		Definition->Weather = {ECatEnvironmentWeather::Clear};
 		Definition->SpawnWeight = SpawnWeight;
+		Definition->FishStrengthPerKilogram = 10.0; // 力量系数K 逐鱼配；力量 = 重量 x K。
 		Definition->MinimumWeightKilograms = 1.0;
 		Definition->MaximumWeightKilograms = 1.0;
 		Definition->MinimumFightParticipants = 1;
@@ -154,7 +160,6 @@ bool FCatFishSelectionPostFilterNormalizationTest::RunTest(const FString& Parame
 	Context.ActivePlayerCount = 1;
 	Context.CombinedFishingStrength = 10.0;
 	Context.CombinedFightStamina = 10.0;
-	Context.StrengthPerKilogram = 10.0;
 	Context.RandomSeed = 20260901;
 
 	const FCatFishSelectionResult BypassedResult = Settings->SelectRuntimeDefinition(Context);
@@ -169,8 +174,20 @@ bool FCatFishSelectionPostFilterNormalizationTest::RunTest(const FString& Parame
 		BypassedResult.SelectedNormalizedProbability, ExpectedProbability, UE_DOUBLE_SMALL_NUMBER);
 	TestEqual(TEXT("selected individual weight is frozen once"),
 		BypassedResult.WeightKilograms, 1.0, UE_DOUBLE_SMALL_NUMBER);
-	TestEqual(TEXT("fish strength is sampled weight times shared coefficient"),
+	TestEqual(TEXT("fish strength is sampled weight times that fish's own strength coefficient"),
 		BypassedResult.BaseFishStrength, 10.0, UE_DOUBLE_SMALL_NUMBER);
+
+	// 力量系数K 未配置的鱼直接退出候选，不回退任何全局系数，也不带着 0 力量混进抽取池。
+	AddExpectedMessage(TEXT("Event=fish_selection_strength_coefficient_unset"), ELogVerbosity::Warning);
+	LightFish->FishStrengthPerKilogram = 0.0;
+	HeavyFish->FishStrengthPerKilogram = 0.0;
+	const FCatFishSelectionResult UnsetCoefficientResult = Settings->SelectRuntimeDefinition(Context);
+	TestFalse(TEXT("fish without an authored strength coefficient cannot be selected"),
+		UnsetCoefficientResult.bSelected);
+	TestEqual(TEXT("unset strength coefficient removes the candidate before normalization"),
+		UnsetCoefficientResult.EligibleCandidateCount, 0);
+	LightFish->FishStrengthPerKilogram = 10.0;
+	HeavyFish->FishStrengthPerKilogram = 10.0;
 
 	Settings->bEnableTimeOfDayEligibilityFilter = true;
 	const FCatFishSelectionResult EnabledResult = Settings->SelectRuntimeDefinition(Context);
@@ -196,8 +213,27 @@ bool FCatFormalFishSelectionWeightStrengthTest::RunTest(const FString& Parameter
 	Context.ActivePlayerCount = 1;
 	Context.CombinedFishingStrength = 50.0;
 	Context.CombinedFightStamina = 60.0;
-	Context.StrengthPerKilogram = 10.0;
 	Context.RandomSeed = 20260903;
+	// 逐鱼「力量系数K」在鱼表格里，值要经编辑器落到 Fish_*.uasset；没落之前选鱼链 fail-closed，一条都选不出来。
+	// 先确认这个内容缺口，避免把"资产待补值"报成选鱼逻辑错误；补值后本用例才继续校验 重量 x K 口径。
+	bool bAnyStrengthCoefficientAuthored = false;
+	for (const TSoftObjectPtr<UCatFishDefinition>& Entry : Settings->Definitions)
+	{
+		const UCatFishDefinition* Candidate = Entry.LoadSynchronous();
+		if (Candidate != nullptr && Candidate->FishStrengthPerKilogram > 0.0)
+		{
+			bAnyStrengthCoefficientAuthored = true;
+			break;
+		}
+	}
+	if (!bAnyStrengthCoefficientAuthored)
+	{
+		AddWarning(TEXT("正式鱼表资产尚未填入鱼表格「力量系数K」列；选鱼链按 fail-closed 跳过全部候选，"
+			"补值落到 Fish_*.uasset 后本用例才会校验「重量 x K」口径。"));
+		return !HasAnyErrors();
+	}
+	// 正式目录里可能只有一部分鱼补了 K，未补的那些会各自记一条内容缺口警告，不是用例失败。
+	AddExpectedMessage(TEXT("Event=fish_selection_strength_coefficient_unset"), ELogVerbosity::Warning);
 	const FCatFishSelectionResult First = Settings->SelectRuntimeDefinition(Context);
 	const FCatFishSelectionResult Replay = Settings->SelectRuntimeDefinition(Context);
 	if (!TestTrue(TEXT("formal River catalog still selects an eligible individual"), First.bSelected)
@@ -213,8 +249,63 @@ bool FCatFormalFishSelectionWeightStrengthTest::RunTest(const FString& Parameter
 	TestTrue(TEXT("selected weight stays inside its formal definition"), Definition
 		&& First.WeightKilograms >= Definition->MinimumWeightKilograms
 		&& First.WeightKilograms <= Definition->MaximumWeightKilograms);
-	TestEqual(TEXT("formal runtime strength comes from that exact individual weight"),
-		First.BaseFishStrength, First.WeightKilograms * Context.StrengthPerKilogram, 1e-6);
+	TestEqual(TEXT("formal runtime strength comes from that exact individual weight and the fish's own coefficient"),
+		First.BaseFishStrength,
+		Definition != nullptr ? First.WeightKilograms * Definition->FishStrengthPerKilogram : 0.0, 1e-6);
+	return !HasAnyErrors();
+}
+
+bool FCatPerfectHookReductionRarityTierTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	UCatFishCatalogSettings* Settings = NewObject<UCatFishCatalogSettings>(GetTransientPackage());
+	UCatFishDefinition* CommonFish = NewObject<UCatFishDefinition>(GetTransientPackage());
+	UCatFishDefinition* TopTierFish = NewObject<UCatFishDefinition>(GetTransientPackage());
+	if (!TestNotNull(TEXT("creates transient catalog settings"), Settings)
+		|| !TestNotNull(TEXT("creates transient common fish"), CommonFish)
+		|| !TestNotNull(TEXT("creates transient top tier fish"), TopTierFish))
+	{
+		return false;
+	}
+	CommonFish->RarityTierId = TEXT("TestCommonTier");
+	TopTierFish->RarityTierId = TEXT("TestTopTier");
+	Settings->RarePerfectHookRarityTierIds = {TEXT("TestTopTier")};
+	Settings->CommonPerfectFishStrengthMultiplier = 0.8;
+	Settings->CommonPerfectFishStaminaMultiplier = 0.85;
+	Settings->RarePerfectFishStrengthMultiplier = 0.85;
+	Settings->RarePerfectFishStaminaMultiplier = 0.9;
+	Settings->PerfectInitialLineLengthMultiplier = 0.5;
+
+	const FCatPerfectHookReduction CommonReduction = Settings->ResolvePerfectHookReduction(*CommonFish);
+	TestEqual(TEXT("非最高档按普通鱼取力量系数"),
+		CommonReduction.FishStrengthMultiplier, 0.8, UE_DOUBLE_SMALL_NUMBER);
+	TestEqual(TEXT("非最高档按普通鱼取体力系数"),
+		CommonReduction.FishStaminaMultiplier, 0.85, UE_DOUBLE_SMALL_NUMBER);
+	const FCatPerfectHookReduction TopTierReduction = Settings->ResolvePerfectHookReduction(*TopTierFish);
+	TestEqual(TEXT("清单内的档按稀有鱼取力量系数"),
+		TopTierReduction.FishStrengthMultiplier, 0.85, UE_DOUBLE_SMALL_NUMBER);
+	TestEqual(TEXT("清单内的档按稀有鱼取体力系数"),
+		TopTierReduction.FishStaminaMultiplier, 0.9, UE_DOUBLE_SMALL_NUMBER);
+	TestEqual(TEXT("完美线长系数不按稀有度分档"),
+		TopTierReduction.InitialLineLengthMultiplier, 0.5, UE_DOUBLE_SMALL_NUMBER);
+
+	// 未配置、越界与负值都退回 1.0：完美只会不削减，绝不放大鱼，也不把本场值清零。
+	Settings->CommonPerfectFishStrengthMultiplier = 0.0;
+	Settings->RarePerfectFishStaminaMultiplier = 1.5;
+	Settings->PerfectInitialLineLengthMultiplier = -1.0;
+	TestEqual(TEXT("未配置的普通档系数退回 1.0"),
+		Settings->ResolvePerfectHookReduction(*CommonFish).FishStrengthMultiplier, 1.0, UE_DOUBLE_SMALL_NUMBER);
+	const FCatPerfectHookReduction SanitizedTopTier = Settings->ResolvePerfectHookReduction(*TopTierFish);
+	TestEqual(TEXT("越界的稀有档系数退回 1.0"),
+		SanitizedTopTier.FishStaminaMultiplier, 1.0, UE_DOUBLE_SMALL_NUMBER);
+	TestEqual(TEXT("负的线长系数退回 1.0"),
+		SanitizedTopTier.InitialLineLengthMultiplier, 1.0, UE_DOUBLE_SMALL_NUMBER);
+
+	// 稀有档清单为空时全部按普通鱼取，与设计「其余档按普通鱼」一致。
+	Settings->RarePerfectHookRarityTierIds.Reset();
+	Settings->CommonPerfectFishStrengthMultiplier = 0.8;
+	TestEqual(TEXT("稀有档清单为空时最高档也按普通鱼取"),
+		Settings->ResolvePerfectHookReduction(*TopTierFish).FishStrengthMultiplier, 0.8, UE_DOUBLE_SMALL_NUMBER);
 	return !HasAnyErrors();
 }
 

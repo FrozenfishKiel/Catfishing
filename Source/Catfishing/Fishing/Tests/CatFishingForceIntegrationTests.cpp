@@ -144,21 +144,21 @@ bool FCatFishingActualEndpointTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("an actual rod sample changes the fish constraint"), Moved.bSucceeded
 		&& Moved.ProposedFishWorldPosition.X < S.FishWorldPosition.X
 		&& Moved.Trace.ConstraintRodEndWorldPosition.Equals(Rod.RodTipWorldPosition, 1e-6));
+	// Leg effort is billed per second by input direction; resolved displacement never enters this account.
 	FCatFightOperatorMovementCostInput Personal;
 	Personal.MoveIntentWorld = -FVector::ForwardVector;
-	Personal.MaximumMoveSpeedCentimetersPerSecond = 100.0;
+	Personal.InputForwardWorld = FVector::ForwardVector;
 	Personal.FixedStepSeconds = C.FixedStepSeconds;
 	Personal.ActiveStrength = C.PrimaryOperatorCatStrength;
 	FCatFightOperatorMovementCostResult BlockedCost;
 	if (!TestTrue(TEXT("personal billing accepts a blocked physical body"),
 		FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(Personal, BlockedCost))) return false;
-	TestEqual(TEXT("blocked body has no positive movement work"), BlockedCost.ActualProgressCentimeters, 0.0);
-	TestTrue(TEXT("blocked voluntary effort pays the unfulfilled intention"), BlockedCost.StaminaDrain > 0.0);
-	Personal.ActualDisplacementCentimeters = FVector(-5.0, 0.0, 0.0);
+	TestTrue(TEXT("blocked voluntary effort still pays the backward tier"),
+		BlockedCost.bBackward && BlockedCost.StaminaDrain > 0.0);
 	FCatFightOperatorMovementCostResult ProgressCost;
-	if (!TestTrue(TEXT("personal billing accepts actual progress"),
+	if (!TestTrue(TEXT("personal billing accepts the same intent after real progress"),
 		FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(Personal, ProgressCost))) return false;
-	TestTrue(TEXT("actual forward progress reduces the same directional deficit"), ProgressCost.StaminaDrain < BlockedCost.StaminaDrain);
+	TestEqual(TEXT("actual displacement cannot change the per-second leg tier"), ProgressCost.StaminaDrain, BlockedCost.StaminaDrain, 1e-9);
 	Personal.MoveIntentWorld = FVector::ZeroVector;
 	FCatFightOperatorMovementCostResult PassiveCost;
 	if (!TestTrue(TEXT("personal billing accepts passive drag"),

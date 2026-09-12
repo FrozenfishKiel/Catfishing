@@ -85,6 +85,7 @@ namespace CatRodDurabilityTests
 				AddDefinition(TEXT("DurabilityTestRod"), UCatEquipmentDefinition::FishingRodLoadoutSlotId());
 			UCatEquipmentFragment_Rod* RodFragment = NewObject<UCatEquipmentFragment_Rod>(Rod);
 			Rod->Fragments.Add(RodFragment);
+			RodFragment->FishingStrength = 25.0; // 竿强度按鱼竿表 1 级树枝竿；耐久与强度是两个量，本夹具只动耐久。
 			RodFragment->MaximumRodDurability = 100.0;
 			RodFragment->MaximumLineLengthCentimeters = 1500.0;
 			RodFragment->HighTensionWearMultiplier = 1.0;

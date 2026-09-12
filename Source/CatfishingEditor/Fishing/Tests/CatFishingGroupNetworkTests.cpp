@@ -168,8 +168,8 @@ namespace CatFishingGroupNetwork
 						Cat->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 50.0f);
 						if (Index == 0)
 						{
-							if (!Test->TestTrue(TEXT("only the primary receives a fishing-session stamina baseline"),
-								Cat->GetCatAbilitySystemComponent()->InitializeFishingStaminaForSession())) return true;
+							if (!Test->TestTrue(TEXT("setup seeds only the primary body to full fight stamina"),
+								Cat->GetCatAbilitySystemComponent()->SeedFightStaminaToMaximumFromAuthority())) return true;
 						}
 						else
 						{
