@@ -11,7 +11,7 @@ class UCatFishTankWorldInfoComponent;
 class USceneComponent;
 class USphereComponent;
 
-/** 固定营地的一局共享鱼缸宿主；只承载一份正式鱼库存，不拥有转移、供品结算或偷取规则。 */
+/** 固定营地的一局共享鱼缸宿主；只承载一份正式鱼库存，不拥有转移或供品结算规则（拿鱼就是转移，没有另一套偷取规则）。 */
 UCLASS()
 class CATFISHING_API ACatFishTankActor : public AActor, public ICatInteractable
 {

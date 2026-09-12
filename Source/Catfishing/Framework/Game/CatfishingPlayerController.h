@@ -123,7 +123,9 @@ public:
 	UFUNCTION(Client, Reliable)
 	void ClientReceiveCampCommandResult(const FCatDomainCommandResult& Result);
 
-	/** 在两个正式库存宿主之间移动、合并或交换格子；服务器重读 Actor 和槽位后统一裁决背包整理与营地拖放。 */
+	/** 在两个正式库存宿主之间移动、合并或交换格子；服务器重读 Actor 和槽位后统一裁决背包整理、营地拖放与拿鱼。
+	 *  这条就是「拿鱼」机制本身，不是绕过谁的旁路（2026-09-11 裁决②）：机制层只做客观的拿，不问动机也不问归属，
+	 *  规则是够得着、鱼护在地面、一嘴一条，三条分别由库存触达规则、鱼护落地状态与猫嘴单占用执行。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Inventory")
 	void ServerMoveInventoryItemBetweenHosts(FGuid RequestId, AActor* SourceInventoryHost,
 		int32 SourceSlotIndex, AActor* TargetInventoryHost, int32 TargetSlotIndex);
@@ -185,21 +187,9 @@ public:
 	void ServerUseHerbOnCharacter(ACatCharacter* TargetCharacter, FGuid RequestId,
 		FGuid HerbItemInstanceId);
 
-	/** 开始一条鱼的偷取与追回窗口；Social 覆盖客户端身份并保证每个小偷最多一条。 */
-	UFUNCTION(Server, Reliable)
-	void ServerBeginTheft(FCatTheftCommand Command);
-
-	/** 服务器把 Begin/Catch/到期消费的首次或重放结果发回 owning client；ProtocolId 和身体终态只能通过权威结果取得。 */
-	UFUNCTION(Client, Reliable)
-	void ClientReceiveTheftResult(const FCatTheftResult& Result);
-
-	/** 提供本机最近收到的偷鱼协议结果供 UI 读取；它不授权客户端直接访问 Social、库存或身体写口。 */
-	UFUNCTION(BlueprintPure, Category = "Catfishing|Social")
-	FCatTheftResult GetLastTheftResult() const;
-
-	/** 在进食窗口内按服务器返回的 ProtocolId 追回；Social 按权威主人、状态、距离与共享缸策略授权。 */
-	UFUNCTION(Server, Reliable)
-	void ServerCatchTheft(FGuid TheftProtocolId);
+	// ServerBeginTheft／ClientReceiveTheftResult／GetLastTheftResult／ServerCatchTheft 四条偷鱼 RPC 于 2026-09-11 整条删除。
+	// 偷是玩家玩的时候才有的主观意识，不写进规格；机制层只有客观的拿鱼，走上面的 ServerMoveInventoryItemBetweenHosts。
+	// 一并消失的还有物归原主、追回窗口和扑倒反制——它们都是为「偷」这个判断造的概念，没有客观事实可挂。
 
 	/** 手动发布普通钓鱼或倒地求助；普通信号不会升级为全局任务。 */
 	UFUNCTION(Server, Reliable)
@@ -371,10 +361,6 @@ private:
 	bool CanForwardGameplayCommand() const;
 	/** 查询 Fishing/玩家打窝专用 gate；它复用身份与 teardown 判断，但额外要求 Run 处于 DayActive、允许钓鱼且当前猫没有倒地。 */
 	bool CanForwardFishingCommand() const;
-
-	/** owning client 最近收到的 Social 协议读模型；由可靠结果 RPC 整体替换，不复制回服务器或作为权限/身体事实。 */
-	UPROPERTY(Transient)
-	FCatTheftResult LastTheftResult;
 
 	/** owning client 最近收到的公共领域命令读模型；可靠 Client RPC 整体写入，UI 只读且不会触发第二次领域操作。 */
 	UPROPERTY(Transient)

@@ -6,16 +6,14 @@
 #include "Social/CatSocialTypes.h"
 #include "CatSocialSettings.generated.h"
 
-/** Social 的权限、窗口与信号配置；频率/范围未裁时对应路径全部 fail-closed。 */
+/** Social 的权限、范围与信号配置；频率/范围未裁时对应路径全部 fail-closed。
+ *  这里没有拿鱼的开关：拿鱼是客观的库存移动，只受距离、鱼护落地和防骚扰牌约束，不另设权限档（2026-09-11 拍）。 */
 UCLASS(Config = Game, DefaultConfig, meta = (DisplayName = "Catfishing Social"))
 class CATFISHING_API UCatSocialSettings : public UDeveloperSettings
 {
 	GENERATED_BODY()
 
 public:
-	/** 裁决偷鱼入口、Timer 与追回空间验证能否共同运行；任一权限、窗口或距离未配置都返回 false，避免半协议。 */
-	bool IsTheftReady() const;
-
 	/** 裁决普通恶作剧是否具备权限、冷却和权威交互范围；缺项时所有请求保持 fail-closed。 */
 	bool IsMischiefReady() const;
 
@@ -25,26 +23,6 @@ public:
 	/** Social 总运行 gate；默认关闭。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Runtime")
 	bool bEnableSocialRuntime = false;
-
-	/** 房主裁决的偷鱼权限；Unset 时所有偷鱼命令拒绝。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Theft")
-	ECatDomainPolicy TheftPermission = ECatDomainPolicy::Unset;
-
-	/** 偷鱼到吃完的唯一追回窗口秒数；0 表示未调。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Theft", meta = (ClampMin = "0.0"))
-	double TheftEatingWindowSeconds = 0.0;
-
-	/** 发起偷鱼时角色到来源库存宿主的最大距离，单位厘米；0 表示权威交互边界未裁。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Theft", meta = (ClampMin = "0.0"))
-	double TheftInteractionRangeCentimeters = 0.0;
-
-	/** 追回时合法捕手到当前小偷角色的最大距离，单位厘米；0 表示追逐命中边界未裁。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Theft", meta = (ClampMin = "0.0"))
-	double TheftCatchRangeCentimeters = 0.0;
-
-	/** 偷鱼被抓的正式印记事件 ID；None 时不生成占位候选。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Theft")
-	FName TheftCaughtImprintEventId = NAME_None;
 
 	/** 普通恶作剧权限；ProtectionSign 只在 Enabled 时继续裁决。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Mischief")

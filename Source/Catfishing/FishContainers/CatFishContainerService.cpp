@@ -194,18 +194,16 @@ bool UCatFishContainerService::ShouldCreateSubsystem(UObject* Outer) const
 	return World && World->IsGameWorld() && World->GetNetMode() != NM_Client;
 }
 
-// 反初始化流程：先关闭命令并归还可追回的偷鱼记录，再清组件弱引用、容器和终态缓存；局内实物不会进入下一张地图。
+// 反初始化流程：先关闭命令，再清组件弱引用、容器和终态缓存；局内实物不会进入下一张地图。
 void UCatFishContainerService::Deinitialize()
 {
 	CloseCommandsFromAuthority();
 	Containers.Reset();
-	TheftEscrows.Reset();
 	CaptureTerminalCache.Reset();
 	CaptureByFishingSession.Reset();
 	TransferTerminalCache.Reset();
 	ConsumeTerminalCache.Reset();
 	ConsumeTerminalPayloadByKey.Reset();
-	TheftTerminalCache.Reset();
 	Super::Deinitialize();
 }
 
@@ -273,20 +271,14 @@ void UCatFishContainerService::UnregisterContainer(UCatContainerReplicationCompo
 	{
 		if (It.Value().ReplicationComponent.Get(true) == ReplicationComponent)
 		{
-			if (CountPendingReturnSlots(It.Key()) > 0)
-			{
-				It.Value().ReplicationComponent.Reset();
-			}
-			else
-			{
-				It.RemoveCurrent();
-			}
+			// 容器不再有「已移出但可能放回」的待归还槽；宿主一走记录就整条移除，不保留只剩弱引用的空壳。
+			It.RemoveCurrent();
 			return;
 		}
 	}
 }
 
-// 快照查询流程：按稳定容器 ID 复制公开 DTO；容量属于公开 UI 事实，服务端偷鱼窗口永远不写入输出。
+// 快照查询流程：按稳定容器 ID 复制公开 DTO；容量属于公开 UI 事实。
 bool UCatFishContainerService::TryGetContainerSnapshot(const FGuid ContainerId, FCatContainerSnapshot& OutSnapshot) const
 {
 	const FContainerRecord* Record = Containers.Find(ContainerId);
@@ -347,8 +339,7 @@ FCatCaptureCommitResult UCatFishContainerService::CommitCapture(const FCatCaptur
 	{
 		Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
 	}
-	else if (CountContainedFish(Target->Snapshot) + CountPendingReturnSlots(Command.TargetContainerId)
-		>= Target->Capacity)
+	else if (CountContainedFish(Target->Snapshot) >= Target->Capacity)
 	{
 		Result.Command.Error = ECatDomainCommandError::CapacityExceeded;
 	}
@@ -603,8 +594,7 @@ FCatDomainCommandResult UCatFishContainerService::TransferOwnedFish(const FCatFi
 				Result.Error = TargetFishEnterError;
 			}
 			else if (!bSameContainer && !bTargetOccupied
-				&& CountContainedFish(Target->Snapshot) + CountPendingReturnSlots(Command.TargetContainerId)
-					>= Target->Capacity)
+				&& CountContainedFish(Target->Snapshot) >= Target->Capacity)
 			{
 				Result.Error = ECatDomainCommandError::CapacityExceeded;
 			}
@@ -745,149 +735,10 @@ bool UCatFishContainerService::TryReplayFishConsumeTerminal(const FCatFishConsum
 	return true;
 }
 
-// 偷鱼开始流程：先重放终态，再拒绝恢复窗口并校验命令、源容器、目标鱼和捕获者差异；成功把鱼移入 escrow，清源槽并发布快照序号和返还槽位。
-FCatFishTheftResult UCatFishContainerService::BeginFishTheft(const FCatFishTheftCommand& Command)
-{
-	FCatFishTheftResult Result;
-	Result.Command.RequestId = Command.Context.RequestId;
-	Result.TheftProtocolId = Command.TheftProtocolId;
-	if (!Command.Context.RequestId.IsValid() || Command.Context.StableNetId.IsEmpty()
-		|| !Command.TheftProtocolId.IsValid() || !Command.FishInstanceId.IsValid() || !Command.SourceContainerId.IsValid())
-	{
-		Result.Command.Error = ECatDomainCommandError::InvalidPayload;
-		return Result;
-	}
-	const FString CacheKey = MakeTerminalKey(Command.Context.StableNetId, TEXT("Theft"),
-		Command.SourceContainerId, Command.Context.RequestId);
-	if (const FCatFishTheftResult* Cached = TheftTerminalCache.Find(CacheKey))
-	{
-		Result = *Cached;
-		MarkCommandReplayed(Result.Command);
-		return Result;
-	}
-	FContainerRecord* Source = Containers.Find(Command.SourceContainerId);
-	int32 FishIndex = INDEX_NONE;
-	if (!bCommandsOpen || bRestoringPersistentContainers)
-	{
-		Result.Command.Error = ECatDomainCommandError::CommandsClosed;
-	}
-	else if (!Source)
-	{
-		Result.Command.Error = ECatDomainCommandError::NotFound;
-	}
-	else
-	{
-		FishIndex = FindFishSlotById(Source->Snapshot, Command.FishInstanceId);
-		if (FishIndex == INDEX_NONE)
-		{
-			Result.Command.Error = ECatDomainCommandError::NotFound;
-		}
-		else if (Source->Snapshot.Fish[FishIndex].OwnerStableNetId.IsEmpty()
-			|| Source->Snapshot.Fish[FishIndex].OwnerStableNetId == Command.Context.StableNetId)
-		{
-			Result.Command.Error = ECatDomainCommandError::PermissionDenied;
-		}
-		else if (TheftEscrows.Contains(Command.TheftProtocolId))
-		{
-			// ProtocolId 由 Social 生成且全局唯一；碰撞时不得覆盖另一玩家 escrow，也不能退回使用客户端 RequestId。
-			Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
-		}
-		else
-		{
-			FTheftEscrowRecord& Escrow = TheftEscrows.Add(Command.TheftProtocolId);
-			Escrow.TheftProtocolId = Command.TheftProtocolId;
-			Escrow.ClientRequestId = Command.Context.RequestId;
-			Escrow.SourceContainerId = Command.SourceContainerId;
-			Escrow.SourceContainerSlotIndex = FishIndex;
-			Escrow.Fish = Source->Snapshot.Fish[FishIndex];
-			Escrow.ThiefStableNetId = Command.Context.StableNetId;
-			Source->Snapshot.Fish[FishIndex] = FCatFishInstance();
-			TrimTrailingEmptyFishSlots(Source->Snapshot);
-			++Source->Snapshot.Revision;
-			PublishContainer(*Source);
-			Result.Command.bCommitted = true;
-			Result.Command.Error = ECatDomainCommandError::None;
-			Result.Fish = Escrow.Fish;
-			Result.SourceContainerId = Escrow.SourceContainerId;
-			Result.TheftProtocolId = Escrow.TheftProtocolId;
-		}
-	}
-	Result.Command.Revision = Source ? Source->Snapshot.Revision : 0;
-	TheftTerminalCache.Add(CacheKey, Result);
-	return Result;
-}
-
-// 偷鱼追回流程：按服务器 ProtocolId 定位精确 escrow 与仍存源容器，优先把鱼放回原槽位并发布一次快照序号；随后删除 escrow，客户端 RequestId 永远不能命中别人的鱼。
-FCatFishTheftResult UCatFishContainerService::ReturnStolenFish(const FGuid TheftProtocolId)
-{
-	FCatFishTheftResult Result;
-	Result.TheftProtocolId = TheftProtocolId;
-	FTheftEscrowRecord* Escrow = TheftEscrows.Find(TheftProtocolId);
-	Result.Command.RequestId = Escrow ? Escrow->ClientRequestId : FGuid();
-	FContainerRecord* Source = Escrow ? Containers.Find(Escrow->SourceContainerId) : nullptr;
-	if (!Escrow || !Source)
-	{
-		Result.Command.Error = ECatDomainCommandError::NotFound;
-		return Result;
-	}
-	Result.Fish = Escrow->Fish;
-	Result.SourceContainerId = Escrow->SourceContainerId;
-	Result.TheftProtocolId = Escrow->TheftProtocolId;
-	const int32 ReturnSlotIndex = Escrow->SourceContainerSlotIndex >= 0 && Escrow->SourceContainerSlotIndex < Source->Capacity
-		&& !IsFishSlotOccupied(Source->Snapshot, Escrow->SourceContainerSlotIndex)
-		? Escrow->SourceContainerSlotIndex : FindFirstFreeFishSlot(Source->Snapshot, Source->Capacity);
-	if (ReturnSlotIndex == INDEX_NONE)
-	{
-		Result.Command.Error = ECatDomainCommandError::CapacityExceeded;
-		return Result;
-	}
-	EnsureFishSlot(Source->Snapshot, ReturnSlotIndex);
-	Source->Snapshot.Fish[ReturnSlotIndex] = Escrow->Fish;
-	TrimTrailingEmptyFishSlots(Source->Snapshot);
-	++Source->Snapshot.Revision;
-	PublishContainer(*Source);
-	Result.Command.bCommitted = true;
-	Result.Command.Error = ECatDomainCommandError::None;
-	Result.Command.Revision = Source->Snapshot.Revision;
-	TheftEscrows.Remove(TheftProtocolId);
-	return Result;
-}
-
-// 偷鱼吃掉流程：按服务器 ProtocolId 定位 escrow 后复制不可变鱼事实并删除；鱼已在 Begin 时离开源数组，因此这里保持容器快照不变，也不执行第二次删除。
-FCatFishTheftResult UCatFishContainerService::CommitStolenFishConsumption(const FGuid TheftProtocolId)
-{
-	FCatFishTheftResult Result;
-	Result.TheftProtocolId = TheftProtocolId;
-	FTheftEscrowRecord* Escrow = TheftEscrows.Find(TheftProtocolId);
-	Result.Command.RequestId = Escrow ? Escrow->ClientRequestId : FGuid();
-	if (!Escrow)
-	{
-		Result.Command.Error = ECatDomainCommandError::NotFound;
-		return Result;
-	}
-	Result.Fish = Escrow->Fish;
-	Result.SourceContainerId = Escrow->SourceContainerId;
-	Result.TheftProtocolId = Escrow->TheftProtocolId;
-	Result.Command.bCommitted = true;
-	Result.Command.Error = ECatDomainCommandError::None;
-	if (const FContainerRecord* Source = Containers.Find(Escrow->SourceContainerId))
-	{
-		Result.Command.Revision = Source->Snapshot.Revision;
-	}
-	TheftEscrows.Remove(TheftProtocolId);
-	return Result;
-}
-
-// Teardown 流程：永久关闭新命令，并在组件仍有效时把可追回的偷鱼记录放回源槽；容器数组随后由 World 生命周期释放。
+// Teardown 流程：永久关闭新命令；容器里没有可逆的中间态事务需要回滚，容器数组随后由 World 生命周期释放。
 void UCatFishContainerService::CloseCommandsFromAuthority()
 {
 	bCommandsOpen = false;
-	TArray<FGuid> OpenThefts;
-	TheftEscrows.GetKeys(OpenThefts);
-	for (const FGuid& TheftProtocolId : OpenThefts)
-	{
-		ReturnStolenFish(TheftProtocolId);
-	}
 }
 
 // 容器宿主读取流程：从服务器记录返回真实种类，并把复制组件所属 Actor 作为空间宿主；任一记录或宿主失效都整体失败。
@@ -909,7 +760,9 @@ bool UCatFishContainerService::TryGetContainerHost(const FGuid ContainerId, ECat
 }
 
 // 世界鱼容器导出流程：
-// 1. 先拒绝尚未收口的偷鱼 escrow，避免把已从数组取出但未提交目标容器的鱼误当库存落盘。
+// 1. 先拒绝已关门、客户端上下文和恢复窗口；这三道守卫保证导出读到的是一份静止的服务器真相。
+//    （原先还有第四道「仍有未收口的偷鱼 escrow」——escrow 随偷鱼协议于 2026-09-11 删除，
+//    容器里不再存在「已从数组取出、尚未落到任何容器」的鱼，这个状态在数据模型上已经不可能出现。）
 // 2. 导出所有地图和动态容器，空箱同样记录；动态宿主保留正式类、位置和可延续实体键。
 // 3. 复用鱼容器服务私有恢复校验检查定义、容量、空格与实例唯一性；任一容器无法恢复就整体失败。
 bool UCatFishContainerService::ExportPersistedWorldFishContainers(TArray<FCatPersistentContainerSnapshot>& OutContainers,
@@ -917,10 +770,9 @@ bool UCatFishContainerService::ExportPersistedWorldFishContainers(TArray<FCatPer
 {
 	OutContainers.Reset();
 	OutFailure = FText::GetEmpty();
-	if (!bCommandsOpen || !GetWorld() || GetWorld()->GetNetMode() == NM_Client || bRestoringPersistentContainers
-		|| !TheftEscrows.IsEmpty())
+	if (!bCommandsOpen || !GetWorld() || GetWorld()->GetNetMode() == NM_Client || bRestoringPersistentContainers)
 	{
-		OutFailure = FText::FromString(TEXT("世界鱼容器存在客户端上下文或未收口的可逆事务。"));
+		OutFailure = FText::FromString(TEXT("世界鱼容器已关门、处于客户端上下文或正在恢复中。"));
 		return false;
 	}
 	for (const TPair<FGuid, FContainerRecord>& Pair : Containers)
@@ -952,17 +804,16 @@ bool UCatFishContainerService::ExportPersistedWorldFishContainers(TArray<FCatPer
 }
 
 // 世界鱼容器恢复私有校验流程：
-// 1. 先确认新 World 没有残留事务，再建立当前地图稳定键到鱼容器记录的只读映射。
+// 1. 先确认服务仍开门、不在客户端且不在另一次恢复中，再建立当前地图稳定键到鱼容器记录的只读映射。
 // 2. 地图对象必须全部原位匹配；动态对象只接受真实领域宿主类、组件名和合法 Transform，提前读取现行容量。
 // 3. 校验全部鱼定义、鱼缸资格、空格残留和跨容器重复 ID；这是恢复入口内部使用的只读步骤，不创建 Actor、不改数组或发布复制。
 bool UCatFishContainerService::ValidatePersistedWorldFishContainersForRestore(
 	const TArray<FCatPersistentContainerSnapshot>& SavedContainers, FText& OutFailure) const
 {
 	OutFailure = FText::GetEmpty();
-	if (!bCommandsOpen || !GetWorld() || GetWorld()->GetNetMode() == NM_Client || bRestoringPersistentContainers
-		|| !TheftEscrows.IsEmpty())
+	if (!bCommandsOpen || !GetWorld() || GetWorld()->GetNetMode() == NM_Client || bRestoringPersistentContainers)
 	{
-		OutFailure = FText::FromString(TEXT("世界鱼容器恢复上下文不可用或仍有残留事务。"));
+		OutFailure = FText::FromString(TEXT("世界鱼容器恢复上下文不可用。"));
 		return false;
 	}
 	TMap<FString, FGuid> CurrentByPersistentKey;
@@ -1228,7 +1079,6 @@ bool UCatFishContainerService::RestorePersistedWorldFishContainers(
 	TransferTerminalCache.Reset();
 	ConsumeTerminalCache.Reset();
 	ConsumeTerminalPayloadByKey.Reset();
-	TheftTerminalCache.Reset();
 	for (const TPair<FGuid, FCatContainerSnapshot>& Prepared : PreparedSnapshots)
 	{
 		FContainerRecord* Record = Containers.Find(Prepared.Key);
@@ -1265,16 +1115,3 @@ FString UCatFishContainerService::MakeTerminalKey(const FString& StableNetId, co
 		*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 }
 
-// 返还槽位统计流程：遍历仍在进行的 escrow 并计算精确源容器数量；容量检查把这些鱼视为仍占位，保证追回无需挤掉别的鱼。
-int32 UCatFishContainerService::CountPendingReturnSlots(const FGuid ContainerId) const
-{
-	int32 Count = 0;
-	for (const TPair<FGuid, FTheftEscrowRecord>& Pair : TheftEscrows)
-	{
-		if (Pair.Value.SourceContainerId == ContainerId)
-		{
-			++Count;
-		}
-	}
-	return Count;
-}

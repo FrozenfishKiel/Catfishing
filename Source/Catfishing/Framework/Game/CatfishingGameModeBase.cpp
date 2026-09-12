@@ -622,7 +622,7 @@ APawn* ACatfishingGameModeBase::SpawnDefaultPawnFor_Implementation(AController* 
 
 // Character 不可用收口流程：
 // 1. 先拒绝非 authority、空 Character 或无 World，避免客户端和销毁尾声改写服务器领域服务。
-// 2. 在同一 authority World 内先终止 Fishing 的半场会话，再取消 Social 的偷鱼追回；顺序保证 Social 返还不会观察到仍活动的钓鱼操作。
+// 2. 在同一 authority World 内终止 Fishing 的半场会话；Social 已不持任何要回滚的实物事务，只做可用性记录。
 // 3. 最后记录两项服务是否存在，缺服务时保持幂等降级，不影响随后原有的条件化存档捕获。
 void ACatfishingGameModeBase::HandleCharacterUnavailable(ACatCharacter* Character)
 {
@@ -641,11 +641,9 @@ void ACatfishingGameModeBase::HandleCharacterUnavailable(ACatCharacter* Characte
 		Fishing->ReleaseFishingOperatorForCharacter(Character);
 		bResourcesPreserved = Fishing->PreserveFishingResourcesForEquipmentShutdown(Character->GetEquipmentComponent());
 	}
+	// Social 这里曾经要取消该角色名下的偷鱼协议并把鱼放回来源库存；偷鱼协议 2026-09-11 整条退役后，
+	// Social 不再从任何库存取走实物鱼，角色离开也就没有悬空的鱼要归还——拿鱼是一次就地完成的库存移动。
 	UCatSocialService* Social = World->GetSubsystem<UCatSocialService>();
-	if (Social)
-	{
-		Social->CancelTheftsForCharacter(Character);
-	}
 	UE_LOG(LogCatRun, Log,
 		TEXT("Event=character_unavailable_cleanup Character=%s PlayerId=%d World=%s NetMode=%d Authority=true LocalRole=%d FishingAvailable=%s SocialAvailable=%s ResourcesPreserved=%s Result=CleanupRequested"),
 		*GetNameSafe(Character), DepartingPlayerId, *GetNameSafe(World), static_cast<int32>(World->GetNetMode()),
@@ -1868,13 +1866,8 @@ FCatRunTeardownResult ACatfishingGameModeBase::RequestRunTeardown(const FCatRunT
 		return Result;
 	}
 	Fishing->CloseCommandsAndTerminateAll();
-	const bool bSocialResolved = Social->CloseCommandsAndResolveAll();
-	if (!bSocialResolved)
-	{
-		Result.Status = ECatRunTeardownStatus::Failed;
-		Result.Error = ECatRunCommandError::TeardownFailed;
-		return Result;
-	}
+	// Social 只持权限、冷却和防骚扰牌，关门之后没有待收口的实物事务，因此它不再有「未全部收口」这个失败分支。
+	Social->CloseCommands();
 	// 先完成最终 Grant 重投，再发送远端退出 RPC；同一 Controller 上的 Reliable RPC 顺序保证 Grant 在 Destroy 通知之前到达。
 	const bool bGrantAcksComplete = ImprintService->PrepareForRunTeardown();
 

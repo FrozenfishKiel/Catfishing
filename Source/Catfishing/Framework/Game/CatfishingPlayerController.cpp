@@ -47,7 +47,6 @@
 #include "Profile/CatProfileSubsystem.h"
 #include "UI/CatLocalPlayerUISubsystem.h"
 #include "ShopEconomy/Trading/CatShopTradeController.h"
-#include "Social/CatSocialService.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 
 // 构造流程：创建 Controller 负责的输入与命令路由组件；不读取 Pawn、World 或玩家身份，避免类默认对象阶段产生运行时依赖。
@@ -836,7 +835,13 @@ void ACatfishingPlayerController::DeliverBodyActionCommandResultToOwningClient(
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 通用库存移动 RPC 路由流程：Controller 先执行玩法命令 gate，再把宿主和槽位交给 Actor 级库存入口；正式移动由 Source InventoryComponent 裁决。
+// 通用库存移动 RPC 路由流程：Controller 先执行玩法命令 gate 与本人身体复核，再把宿主和槽位交给 Actor 级库存入口；
+// 正式移动由 Source InventoryComponent 裁决。这条路径同时就是「拿鱼」机制本身——把别人地面鱼护里的鱼拿走走的就是它，
+// 机制不问动机也不问归属（2026-09-11 裁决②）。三条客观规则各有执行位置，这里不复制第二份：
+//   够得着     ＝ CatInventoryAccessRules::IsHostReachable 的距离复核（经 CatInventoryStatics 的端点解析）；
+//   鱼护在地面 ＝ 同一处对 ACatFishGuardActor::IsGrounded 的拒绝，鱼护一旦被叼走或收进包就读写不了里面的鱼；
+//   一嘴一条   ＝ ACatCharacter::TryClaimMouthCarriedActorFromAuthority 的单占用，叼第二条时认领失败。
+// 本入口自己只补两道它原先缺、而同文件其它库存 RPC 都有的复核：角色必须属于当前 World，且倒地的猫不能拿。
 void ACatfishingPlayerController::ServerMoveInventoryItemBetweenHosts_Implementation(
 	const FGuid RequestId, AActor* SourceInventoryHost, const int32 SourceSlotIndex,
 	AActor* TargetInventoryHost, const int32 TargetSlotIndex)
@@ -844,12 +849,42 @@ void ACatfishingPlayerController::ServerMoveInventoryItemBetweenHosts_Implementa
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
+	const UCatConditionComponent* Conditions = ControlledCharacter ? ControlledCharacter->GetConditionComponent() : nullptr;
 	if (!CanForwardGameplayCommand())
 	{
 		Result.Error = ECatDomainCommandError::CommandsClosed;
 		UE_LOG(LogCatfishing, Warning,
 			TEXT("Event=move_inventory_item_between_hosts_rejected Reason=CommandsClosedOrInactive Request=%s"),
 			*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+	}
+	else if (!ControlledCharacter || ControlledCharacter->GetWorld() != GetWorld())
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=move_inventory_item_between_hosts_rejected Reason=MissingCharacter Request=%s Character=%s"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(ControlledCharacter));
+	}
+	else if (!Conditions)
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=move_inventory_item_between_hosts_rejected Reason=MissingConditions Request=%s Character=%s"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(ControlledCharacter));
+	}
+	// 倒地只挡「涉及他人容器」的转移，不挡整理自己的背包。
+	// 裁决②（2026-09-11）管的是拿鱼——从别人的鱼护或共用大缸取鱼，客观规则是够得着、
+	// 鱼护在地面、一嘴一条；整理自己背包不在这条规则的射程内。倒地本身的设计口径只有
+	// 「来源唯一＝吃重毒鱼、队友搬运或休息自愈、献祭到场判定豁免」（猫咪与状态.md），
+	// 从没写过倒地等于冻结；代码里那张「倒地＝全面交互禁用」清单是工程自造、尚未入册
+	// （见 Docs/gap-analysis/2026-09-11/回填清单.md §五），不该顺着扩宽。
+	else if (Conditions->GetSnapshot().bDowned
+		&& (SourceInventoryHost != ControlledCharacter || TargetInventoryHost != ControlledCharacter))
+	{
+		Result.Error = ECatDomainCommandError::PermissionDenied;
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=move_inventory_item_between_hosts_rejected Reason=DownedForeignHost Request=%s Character=%s Source=%s Target=%s"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(ControlledCharacter),
+			*GetNameSafe(SourceInventoryHost), *GetNameSafe(TargetInventoryHost));
 	}
 	else
 	{
@@ -1183,52 +1218,6 @@ void ACatfishingPlayerController::DeliverCampCommandResultToOwningClient(const F
 		return;
 	}
 	ClientReceiveCampCommandResult(Result);
-}
-
-// 偷鱼开始 RPC 路由流程：偷鱼是 Social 持有同一鱼物品实例的短协议，不进入 BodyAction；Controller 只清客户端身份并转交 Social。
-void ACatfishingPlayerController::ServerBeginTheft_Implementation(FCatTheftCommand Command)
-{
-	FCatTheftResult Result;
-	Result.Command.RequestId = Command.Context.RequestId;
-	if (!CanForwardGameplayCommand())
-	{
-		Result.Command.Error = ECatDomainCommandError::CommandsClosed;
-	}
-	else if (UCatSocialService* Social = GetWorld() ? GetWorld()->GetSubsystem<UCatSocialService>() : nullptr)
-	{
-		Command.Context.StableNetId.Reset();
-		Result = Social->BeginTheft(this, Command);
-	}
-	else
-	{
-		Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
-	}
-	ClientReceiveTheftResult(Result);
-}
-
-// 偷鱼结果客户端流程：可靠接收服务器完整终态并整体替换本机读模型；ProtocolId 和身体终态由此到达 UI，客户端不能据缓存修改权威事实。
-void ACatfishingPlayerController::ClientReceiveTheftResult_Implementation(const FCatTheftResult& Result)
-{
-	LastTheftResult = Result;
-}
-
-// 偷鱼结果读取流程：返回最近一次 Begin/Catch/到期消费的本机副本供界面取得 ProtocolId、阶段和身体终态；服务器授权仍重读当前事实。
-FCatTheftResult ACatfishingPlayerController::GetLastTheftResult() const
-{
-	return LastTheftResult;
-}
-
-// 偷鱼追回 RPC 路由流程：追回只按服务器 ProtocolId 进入 Social，不走 BodyAction，也不接受客户端重建 escrow。
-void ACatfishingPlayerController::ServerCatchTheft_Implementation(const FGuid TheftProtocolId)
-{
-	if (!CanForwardGameplayCommand())
-	{
-		return;
-	}
-	if (UCatSocialService* Social = GetWorld() ? GetWorld()->GetSubsystem<UCatSocialService>() : nullptr)
-	{
-		ClientReceiveTheftResult(Social->CatchTheft(this, TheftProtocolId));
-	}
 }
 
 // 手动求助 RPC 路由流程：只把 RequestId 和求助类型投给 Social BodyAction；Ability 未接管时回送依赖错误，不发布信号。

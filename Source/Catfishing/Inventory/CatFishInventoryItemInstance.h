@@ -29,7 +29,7 @@ public:
 	/** 读取来源钓鱼会话；图鉴归档、保存和调试用它串联这条实物鱼的来源。 */
 	FGuid GetSourceFishingSessionId() const;
 
-	/** 读取捕获者稳定身份；服务器售鱼、偷取或后续权限链可以用它，不复制给客户端。 */
+	/** 读取捕获者稳定身份；服务器售鱼与图鉴登记可以用它，不复制给客户端；拿鱼不读它，机制层不问归属。 */
 	const FString& GetFishOwnerStableNetId() const;
 
 	/** 读取冻结真实重量，单位千克；商店估价和 UI 展示必须从同一实例取得。 */

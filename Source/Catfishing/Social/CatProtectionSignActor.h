@@ -22,7 +22,7 @@ public:
 	/** authority 放牌时配置一次受保护玩家和显式正范围；无效输入保持未配置。 */
 	bool ConfigureProtection(APlayerState* InProtectedPlayerState, double InRadiusCentimeters);
 
-	/** 用服务器绑定的目标 PlayerState 与牌子半径裁决恶作剧保护；身份或位置不匹配即不保护，结果不会扩张到偷鱼/救援权限。 */
+	/** 用服务器绑定的目标 PlayerState 与牌子半径裁决恶作剧保护；身份或位置不匹配即不保护，结果不会扩张到拿鱼或救援权限。 */
 	bool ProtectsMischiefAgainst(const APlayerState* TargetPlayerState, const FVector& InteractionLocation) const;
 
 private:
