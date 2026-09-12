@@ -2,6 +2,7 @@
 
 #include "GameFramework/PlayerController.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "Character/CatCharacter.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
@@ -52,6 +53,32 @@ namespace
 			Controller && Controller->HasAuthority() ? TEXT("true") : TEXT("false"),
 			Controller ? static_cast<int32>(Controller->GetLocalRole()) : INDEX_NONE,
 			*CatLogContext::BuildControllerFields(Controller));
+	}
+
+	/**
+	 * 挥空硬直：只在本次挥网判定失败时对本人施加，成功抄到不吃硬直（钓鱼规则 §5.2）。
+	 * 「没够着」「被抢先」「对不可抄的对象出手」都算挥空，所以命中前的早退分支也要走这里。
+	 * 现行口径只锁抄网技能本身——GE 只授 Cat.Cooldown.Fishing.Scoop 一个标签，猫仍可走动、收线、用别的键；
+	 * 设计只写了「无法操作」四个字，没裁是全身硬直还是仅锁抄网，按窄口径实现，缺口记在工程待裁项。
+	 * 时长仍以 FishingSettings 的服务器权威值为准，与 ScoopCooldownGate 读同一个数。
+	 */
+	void ApplyScoopMissStunFromAuthority(const APlayerController* Controller, const double CooldownSeconds)
+	{
+		const ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
+		UAbilitySystemComponent* AbilitySystem = Character ? Character->GetAbilitySystemComponent() : nullptr;
+		if (!AbilitySystem || !FMath::IsFinite(CooldownSeconds) || CooldownSeconds <= 0.0)
+		{
+			return;
+		}
+		const FGameplayEffectContextHandle Context = AbilitySystem->MakeEffectContext();
+		const FGameplayEffectSpecHandle Spec = AbilitySystem->MakeOutgoingSpec(
+			UCatGE_FishingScoopCooldown::StaticClass(), 1.0f, Context);
+		if (!Spec.IsValid())
+		{
+			return;
+		}
+		Spec.Data->SetDuration(static_cast<float>(CooldownSeconds), true);
+		AbilitySystem->ApplyGameplayEffectSpecToSelf(*Spec.Data.Get());
 	}
 
 	/** 构造阶段 gate 拒绝时的统一竿命令回执；旧直连 RPC 用它保留 RequestId，让 UI/Ability 能结束等待态。 */
@@ -866,6 +893,8 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 			DeliverResultFromAuthority(Result);
 			return;
 		}
+		// 硬直闸门先按「上一次挥空」判是否还麻着；本次是否再罚一轮，要等判定结果出来才知道。
+		// TryConsume 会就地武装 3 秒，所以成功抄到的那一路必须显式 Reset 把它撤掉（见下方两处结算）。
 		double RemainingSeconds = 0.0;
 		if (!ScoopCooldownGate.TryConsume(GetWorld()->GetTimeSeconds(), CooldownSeconds, RemainingSeconds))
 		{
@@ -885,6 +914,8 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 			? Fishing->FindNearestScoopableSession(ScoopingCharacter->GetActorLocation(), 1500.0) : nullptr;
 		if (!TargetSession)
 		{
+			// 附近根本没有可抄的会话＝对着空水面挥了一网，按挥空罚硬直。
+			ApplyScoopMissStunFromAuthority(Controller, CooldownSeconds);
 			Result.Error = ECatFishingCommandError::NotNearShore;
 			UE_LOG(LogCatFishing, Warning,
 				TEXT("Event=scoop_target_selection_failed Request=%s Reason=NoEligibleSession SearchOrigin=%s MaxDistanceCm=1500.000 %s"),
@@ -915,6 +946,15 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 			TargetSnapshot.FishingSessionId, Controller, ScoopCommand);
 		Result.bCommitted = ScoopResult.Command.bCommitted;
 		Result.Error = MapDomainCommandError(ScoopResult.Command.Error);
+		// 成功抄到不吃硬直：撤掉上面就地武装的那 3 秒。没够着、被抢先、对不可抄的对象出手都是挥空，照罚。
+		if (Result.bCommitted)
+		{
+			ScoopCooldownGate.Reset();
+		}
+		else
+		{
+			ApplyScoopMissStunFromAuthority(Controller, CooldownSeconds);
+		}
 		const FCatFishingSessionSnapshot& UpdatedSnapshot = TargetSession->GetSnapshot();
 		Result.Revision = UpdatedSnapshot.Revision;
 		Result.SnapshotSequence = UpdatedSnapshot.SnapshotSequence;
@@ -973,7 +1013,26 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 			DeliverResultFromAuthority(Fishing->PlaceRod(Controller, PlaceCommand));
 			return;
 		}
-		// Q 打窝蓄力：与是否有会话无关，等口/遛鱼中都可以补窝。按下只记时刻，松开才投放。
+		// Q 打窝蓄力：没有会话、飞行中和等口都可以补窝；咬钩成立之后本人不能再掏窝料，
+		// 补窝与背包里掏别的道具走同一条主动道具闸门（钓鱼规则 §2.1、§3.3），权威拒绝点在 UCatChumPlacementService::PlaceChum。
+		// 这里先拦一道，是为了不让被闸门挡住的猫先进蓄力预览再在松手时被拒。按下只记时刻，松开才投放。
+		if (CommandType == ECatFishingCommandType::ChumPressed
+			|| CommandType == ECatFishingCommandType::ChumReleased)
+		{
+			if (Fishing->IsActiveItemUseBlockedForController(Controller))
+			{
+				ChumChargeStartServerTime = -1.0; // 闸门期间不留蓄力残留，恢复后不会用到过期的按下时刻。
+				UE_LOG(LogCatFishing, Warning,
+					TEXT("Event=chum_rejected Reason=ActiveFishingItemGate Type=%s Request=%s %s"),
+					*UEnum::GetValueAsString(CommandType),
+					*Edge.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+					*CatLogContext::BuildControllerFields(Controller));
+				// 与 PlaceChum 的闸门拒绝用同一个错误码；ECatChumFieldError 没有 InvalidPhase，两端统一收敛到 CommandsClosed。
+				Result.Error = ECatFishingCommandError::CommandsClosed;
+				DeliverResultFromAuthority(Result);
+				return;
+			}
+		}
 		if (CommandType == ECatFishingCommandType::ChumPressed)
 		{
 			// 只记录服务器时间戳，不做任何弹道/落点计算——真正的投放延后到松开那一刻才算蓄力时长
@@ -1463,6 +1522,15 @@ void UCatFishingCommandComponent::ForwardLegacyScoop(const FGuid FishingSessionI
 		Result.bCommitted = ScoopResult.Command.bCommitted;
 		Result.Error = MapDomainCommandError(ScoopResult.Command.Error);
 		Result.Revision = ScoopResult.Command.Revision;
+		// 与新入口同一条口径：成功抄到撤掉刚武装的硬直，挥空才罚（钓鱼规则 §5.2）。
+		if (Result.bCommitted)
+		{
+			ScoopCooldownGate.Reset();
+		}
+		else
+		{
+			ApplyScoopMissStunFromAuthority(Controller, CooldownSeconds);
+		}
 		if (ACatFishingSession* Session = Fishing->FindSession(FishingSessionId))
 		{
 			const FCatFishingSessionSnapshot& UpdatedSnapshot = Session->GetSnapshot();

@@ -14,11 +14,11 @@ public:
 	/** 绑定抄鱼 Ability Tag，授予后由 Scoop 输入 Tag 激活。 */
 	UCatGA_FishingScoop();
 
-	/** Scoop 按下时播放本地挥网表现并提交抢抄命令；权威结果通过命令回包或会话快照返回。 */
+	/**
+	 * Scoop 按下时播放本地挥网表现并提交抢抄命令；权威结果通过命令回包或会话快照返回。
+	 * 不在这里施加冷却：挥空才吃 3 秒硬直，成功抄到不吃，施加时点在服务器判定之后
+	 * （UCatFishingCommandComponent 的 RequestScoop 权威分支）。
+	 */
 	virtual void ActivateAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 		FGameplayAbilityActivationInfo ActivationInfo, const FGameplayEventData* TriggerEventData) override;
-
-	/** 按 FishingSettings 的服务器权威时长应用独立 Scoop 冷却 GE。 */
-	virtual void ApplyCooldown(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
-		FGameplayAbilityActivationInfo ActivationInfo) const override;
 };

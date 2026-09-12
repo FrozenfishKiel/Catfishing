@@ -6,6 +6,8 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Condition/CatConditionComponent.h"
 #include "Engine/World.h"
+#include "Equipment/CatEquipmentDefinition.h"
+#include "Fishing/CatFishingService.h"
 #include "FishContainers/CatFishGuardActor.h"
 #include "FishContainers/CatFishTankActor.h"
 #include "FishContainers/CatFishPickupSettings.h"
@@ -25,6 +27,28 @@ DEFINE_LOG_CATEGORY_STATIC(LogCatInventory, Log, All);
 
 namespace
 {
+	// 钓鱼主动道具闸门（钓鱼规则 §3.3）：从咬钩成立到本竿结局落定，这只猫不能再主动掏用道具。
+	// 1. 闸门只按使用者本人当前主控竿的会话阶段判；同场其他玩家照常能用道具、能为同一个窝补料。
+	// 2. 抄网是收鱼出口，单独放行；经这条路径的其余物品一律拒绝——吃鱼、放鱼护、恢复品、背包里换装都在内。
+	// 3. 不在这条路径上的两件事各自有归属：窝料投放由 ChumPlacementService 用同一条闸门拦，
+	//    切饵走装备选择 RPC 且设计明确「到点后再切饵无意义但无害」（§3.2），本来就不归这条闸门管。
+	// 4. 备装时已穿戴的被动效果不经过使用路径，不受影响。
+	// 5. FishingService 只在服务器 Game World 创建，客户端预检查不到会话时按放行处理，权威提交那一层仍会拒。
+	bool IsBlockedByActiveFishingItemGate(const AController* RequestingController, const APawn* UserPawn,
+		const UCatInventoryItemDefinition* Definition)
+	{
+		const AController* Controller = RequestingController ? RequestingController
+			: (UserPawn ? UserPawn->GetController() : nullptr);
+		const UWorld* World = UserPawn ? UserPawn->GetWorld() : (Controller ? Controller->GetWorld() : nullptr);
+		UCatFishingService* Fishing = World ? World->GetSubsystem<UCatFishingService>() : nullptr;
+		if (!Fishing || !Fishing->IsActiveItemUseBlockedForController(Controller))
+		{
+			return false;
+		}
+		const UCatEquipmentDefinition* Equipment = Cast<UCatEquipmentDefinition>(Definition);
+		return Equipment == nullptr || !Equipment->CanServeScoopNet();
+	}
+
 	// 商店批量发货需要稳定载荷签名；这里拒绝混入实例项，避免批量购买把运行实例来源混进商店语义。
 	// 1. 只接受定义发货项，实例发货仍走底层 ReceiveBatch。
 	// 2. 按稳定定义 ID 合并重复行，并确认每行定义、数量、运行配置和实例类都能被正式库存创建。
@@ -2534,7 +2558,7 @@ const FCatInventoryEntry* UCatInventoryComponent::GetInventoryEntryAtSlot(const 
 	return &InventoryList.Entries[SlotIndex];
 }
 
-// 使用预检流程：默认使用拥有者 Pawn，槽位、实例和定义都有效后才交给实例自己的真实 Use 语义判断。
+// 使用预检流程：默认使用拥有者 Pawn，槽位、实例和定义都有效后才过钓鱼道具闸门，最后交给实例自己的真实 Use 语义判断。
 bool UCatInventoryComponent::CanUseItemAtSlot(const int32 SlotIndex, APawn* UserPawn) const
 {
 	if (GetOwner() == nullptr)
@@ -2554,6 +2578,11 @@ bool UCatInventoryComponent::CanUseItemAtSlot(const int32 SlotIndex, APawn* User
 
 	const FCatInventoryEntry& Entry = InventoryList.Entries[SlotIndex];
 	if (Entry.Instance == nullptr || Entry.StackCount <= 0 || Entry.Instance->GetItemDefinition() == nullptr)
+	{
+		return false;
+	}
+
+	if (IsBlockedByActiveFishingItemGate(nullptr, UserPawn, Entry.Instance->GetItemDefinition()))
 	{
 		return false;
 	}
@@ -2601,6 +2630,15 @@ FCatDomainCommandResult UCatInventoryComponent::UseItemAtSlotFromAuthority(
 		else if (Definition == nullptr || Definition->GetInventoryDefinitionId().IsNone())
 		{
 			Result.Error = ECatDomainCommandError::InvalidPayload;
+		}
+		else if (IsBlockedByActiveFishingItemGate(UseContext.RequestingController, UseContext.UserPawn, Definition))
+		{
+			// 咬钩成立到本竿结局落定之间禁止主动掏道具；抄网已在闸门内单独放行。
+			// 这是本条唯一的权威拒绝点：随身使用与「指定宿主库存使用」两条 RPC 都汇到这里。
+			DefinitionId = Definition->GetInventoryDefinitionId();
+			ItemInstanceId = Instance->GetItemInstanceId();
+			StackCount = Entry->StackCount;
+			Result.Error = ECatDomainCommandError::InvalidPhase;
 		}
 		else
 		{

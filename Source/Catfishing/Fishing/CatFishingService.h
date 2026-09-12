@@ -70,6 +70,13 @@ public:
 	bool TryGetActiveSessionForController(const AController* Controller, FGuid& OutFishingSessionId,
 		FCatFishingSessionSnapshot& OutSnapshot);
 
+	/**
+	 * 主动道具闸门：从咬钩成立（真咬）到本竿结局落定，这只猫禁止主动掏用道具；抄网是收鱼出口，由调用方单独放行。
+	 * 只读本人当前主控竿上的会话阶段，不牵连同场其他玩家——别人照常能用道具、能为同一个窝补料。
+	 * 补窝走的是同一条闸门，不另立一套搏斗判定（钓鱼规则 §2.1、§3.3）。
+	 */
+	bool IsActiveItemUseBlockedForController(const AController* Controller);
+
 	/** 只读查询该玩家任意一根存活登记竿；不表示当前操作或收纳目标，业务命令须按 RodActorId 解析。 */
 	ACatFishingRodActor* FindDeployedRod(const APlayerState* PlayerState);
 	/** 统计本人场上实体竿；无人值守竿仍占本人名额，助手抓握不改变名额。 */

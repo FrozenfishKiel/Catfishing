@@ -179,6 +179,18 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 		Result.Command.Error = ECatFishingCommandError::DependencyUnavailable;
 		return Finish(Result);
 	}
+	// 单嘴约束：嘴里叼着鱼（或鱼护这类嘴部载体）不能抛竿，得先放进鱼护或扔下（钓鱼规则 §5.2）。
+	// 抢抄与拾取已各自带同一条前置，这里补上抛竿这一路，三个入口共用 GetMouthCarriedActor() 这一个事实源。
+	if (Character->GetMouthCarriedActor() != nullptr)
+	{
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=begin_cast_mouth_occupied RequestId=%s Carried=%s %s"),
+			*Command.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+			*GetNameSafe(Character->GetMouthCarriedActor()),
+			*CatLogContext::BuildControllerFields(FisherController));
+		Result.Command.Error = ECatFishingCommandError::InvalidPhase;
+		return Finish(Result);
+	}
 	const FCatFishingRodPresentationState RodState = Rod->GetPresentationState();
 	const FCatEquipmentLoadoutSnapshot Loadout = Equipment->GetSnapshot();
 	if (Command.RodActorId != RodState.RodActorId || Command.ExpectedRodActorRevision != RodState.RodActorRevision)
@@ -241,27 +253,31 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 		return Finish(Result);
 	}
 	UCatWaterQuerySubsystem* WaterQuery = World->GetSubsystem<UCatWaterQuerySubsystem>();
-	const FCatWaterSpatialResult Water = WaterQuery
+	// 点击点先单独裁决：射程与遮挡判的是玩家「点得对不对」，散布是系统随后加的随机，不让玩家为它买单（钓鱼规则 §3.1）。
+	const FCatWaterSpatialResult ClickedWater = WaterQuery
 		? WaterQuery->ResolveCandidatePointToWater(Command.ClientCandidateWorldPoint, Command.ExpectedWaterRegionHandle)
 		: FCatWaterSpatialResult{};
-	if (!Water.bSucceeded || Water.Containment == ECatWaterContainment::Outside)
+	if (!ClickedWater.bSucceeded || ClickedWater.Containment == ECatWaterContainment::Outside)
 	{
-		Result.Command.Error = Water.Error == ECatWaterQueryError::AmbiguousRegion
+		Result.Command.Error = ClickedWater.Error == ECatWaterQueryError::AmbiguousRegion
 			? ECatFishingCommandError::AmbiguousWater : ECatFishingCommandError::InvalidWaterTarget;
 		return Finish(Result);
 	}
 	const FVector ViewOrigin = Character->GetPawnViewLocation();
-	const FVector ToLandingFromView = Water.WaterSurfaceWorldPoint - ViewOrigin;
-	const FVector ToLandingFromRod = Water.WaterSurfaceWorldPoint - Rod->GetRodTipWorldTransform().GetLocation();
+	// 射程起算点：现行实现是竿尖，设计 §3.1 的 D_click 是猫站立点。已登记的口径偏离，散布沿用同一起点保持自洽。
+	const FVector RangeOrigin = Rod->GetRodTipWorldTransform().GetLocation();
+	const FVector ToLandingFromView = ClickedWater.WaterSurfaceWorldPoint - ViewOrigin;
+	const FVector ToLandingFromRod = ClickedWater.WaterSurfaceWorldPoint - RangeOrigin;
+	const UCatEquipmentFragment_Float* FloatFragment = FloatDefinition->FindFragment<UCatEquipmentFragment_Float>();
 	const double MaxRange = FMath::Min(RodDefinition->FindFragment<UCatEquipmentFragment_Rod>()->MaximumLineLengthCentimeters,
-		FloatDefinition->FindFragment<UCatEquipmentFragment_Float>()->MaximumCastDistanceCentimeters);
+		FloatFragment->MaximumCastDistanceCentimeters);
 	if (!FMath::IsFinite(MaxRange) || MaxRange <= 0.0 || ToLandingFromRod.Length() > MaxRange
 		|| ToLandingFromView.IsNearlyZero() || ToLandingFromRod.IsNearlyZero())
 	{
 		UE_LOG(LogCatFishing, Warning, TEXT("Event=cast_range_rejected World=%s Request=%s DistanceCm=%.2f MaximumCm=%.2f Rod=%s Float=%s Landing=%s %s"),
 			*GetNameSafe(World), *Command.RequestId.ToString(EGuidFormats::DigitsWithHyphens), ToLandingFromRod.Length(), MaxRange,
 			*RodState.RodDefinitionId.ToString(), *Loadout.FloatDefinitionId.ToString(),
-			*Water.WaterSurfaceWorldPoint.ToString(), *CatLogContext::BuildControllerFields(FisherController));
+			*ClickedWater.WaterSurfaceWorldPoint.ToString(), *CatLogContext::BuildControllerFields(FisherController));
 		Result.Command.Error = ECatFishingCommandError::CastOutOfRange;
 		return Finish(Result);
 	}
@@ -269,10 +285,44 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 	TraceParams.AddIgnoredActor(Character);
 	TraceParams.AddIgnoredActor(Rod);
 	FHitResult SightHit;
-	if (World->LineTraceSingleByChannel(SightHit, ViewOrigin, Water.WaterSurfaceWorldPoint,
+	if (World->LineTraceSingleByChannel(SightHit, ViewOrigin, ClickedWater.WaterSurfaceWorldPoint,
 		ECC_Visibility, TraceParams))
 	{
 		Result.Command.Error = ECatFishingCommandError::InvalidWaterTarget;
+		return Finish(Result);
+	}
+	// 落点散布流程（钓鱼规则 §3.1，台账 D-23）：
+	// 1. 以点击点为圆心做均匀圆盘随机偏移，半径＝漂的精准度（高/中/低 ＝ 0.5/1/1.5 米，值配在漂 DA 的误差半径上）。
+	// 2. 偏移偶尔把落点推出射程圆时收敛到边界——「够不到那边」已按点击点拦过，散布不得把玩家推成超程。
+	// 3. 偏出水面即落岸：判空竿收回、不损饵、可重抛。这一步仍在 BeginFishingUse 之前，装备与鱼饵都还没预留，拒绝即零损失。
+	FVector LandingCandidate = ClickedWater.WaterSurfaceWorldPoint;
+	const double ScatterRadiusCentimeters = FloatFragment->MaximumCastErrorRadiusCentimeters;
+	if (FMath::IsFinite(ScatterRadiusCentimeters) && ScatterRadiusCentimeters > 0.0)
+	{
+		// 均匀圆盘：角度取均匀分布，半径按 sqrt 缩放，否则样本会往圆心堆成正态。随机只在服务器摇，客户端观察复制结果。
+		const double ScatterAngleRadians = FMath::FRandRange(0.0, 2.0 * UE_DOUBLE_PI);
+		const double ScatterRadius = ScatterRadiusCentimeters * FMath::Sqrt(FMath::FRandRange(0.0, 1.0));
+		LandingCandidate += FVector(FMath::Cos(ScatterAngleRadians) * ScatterRadius,
+			FMath::Sin(ScatterAngleRadians) * ScatterRadius, 0.0);
+		const FVector ScatteredFromRod = LandingCandidate - RangeOrigin;
+		const double ScatteredDistance = ScatteredFromRod.Length();
+		if (ScatteredDistance > MaxRange && ScatteredDistance > UE_DOUBLE_SMALL_NUMBER)
+		{
+			LandingCandidate = RangeOrigin + ScatteredFromRod * (MaxRange / ScatteredDistance);
+		}
+	}
+	const FCatWaterSpatialResult Water = LandingCandidate.Equals(ClickedWater.WaterSurfaceWorldPoint)
+		? ClickedWater
+		: WaterQuery->ResolveCandidatePointToWater(LandingCandidate, Command.ExpectedWaterRegionHandle);
+	if (!Water.bSucceeded || Water.Containment == ECatWaterContainment::Outside)
+	{
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=cast_scatter_landed_ashore RequestId=%s Float=%s ScatterRadiusCm=%.2f ClickedPoint=%s LandingPoint=%s WaterError=%s %s"),
+			*Command.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *Loadout.FloatDefinitionId.ToString(),
+			ScatterRadiusCentimeters, *ClickedWater.WaterSurfaceWorldPoint.ToString(), *LandingCandidate.ToString(),
+			*UEnum::GetValueAsString(Water.Error), *CatLogContext::BuildControllerFields(FisherController));
+		Result.Command.Error = Water.Error == ECatWaterQueryError::AmbiguousRegion
+			? ECatFishingCommandError::AmbiguousWater : ECatFishingCommandError::InvalidWaterTarget;
 		return Finish(Result);
 	}
 	FGuid SessionId = FGuid::NewGuid();
@@ -1235,6 +1285,31 @@ bool UCatFishingService::TryGetActiveSessionForController(const AController* Con
 	OutFishingSessionId = Snapshot.FishingSessionId;
 	OutSnapshot = Snapshot;
 	return true;
+}
+
+// 主动道具闸门流程：先按主操作位取本人当前会话，再看阶段是否落在「咬钩成立 → 本竿结局落定」这段封闭区间内。
+// 区间起点取真咬而不是试探期：试探期提竿必空竿、不损饵，本竿还没成立（钓鱼规则 §3.3、§3.4）。
+// 区间终点是 Resolved/Terminated——会话一旦终态，TryGetActiveSessionForController 自己就不再返回它。
+// 不在竿上、不是主控、或本人这根竿还在飞行/等口，都不受闸门约束。
+bool UCatFishingService::IsActiveItemUseBlockedForController(const AController* Controller)
+{
+	FGuid FishingSessionId;
+	FCatFishingSessionSnapshot Snapshot;
+	if (!TryGetActiveSessionForController(Controller, FishingSessionId, Snapshot))
+	{
+		return false;
+	}
+	switch (Snapshot.Phase)
+	{
+	case ECatFishingPhase::TrueBiteWindow:
+	case ECatFishingPhase::HookedFight:
+	case ECatFishingPhase::NearShore:
+	case ECatFishingPhase::AutoHauling:
+	case ECatFishingPhase::ExhaustedReel:
+		return true;
+	default:
+		return false;
+	}
 }
 
 // 鱼竿查询流程：先移除双端任一失效的弱条目，再按服务器 PlayerState 身份只读查找。
