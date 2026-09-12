@@ -63,6 +63,9 @@ namespace
 	 * 与 Runner 的逐步磨损是两笔账：逐步磨损按线力计价，这一点只在真的拿到鱼时扣一次。
 	 */
 	constexpr double CatchCompletionRodWearPoints = 1.0;
+	// 碾压甩岸距离（钓鱼规则 §4.2，2026-09-12 拍「沿钓线朝身后甩一段固定距离」）。
+	// 2.5 米是快照：够让鱼飞过猫头顶落在身后、又不至于飞出屏幕。正式值随参数页落 Config。
+	constexpr double OverpowerFlingDistanceCentimeters = 250.0;
 
 	/** 碾压门槛：猫力达到鱼力的这个倍数即碾压甩岸。钓鱼规则 §4.2（:178）。 */
 	constexpr double OverpowerStrengthRatio = 2.0;
@@ -1886,8 +1889,36 @@ bool ACatFishingSession::EvaluateStrengthCheckOrderFromAuthority(const TCHAR* Tr
 			RodStrength, CombinedStrength, FishStrength, *UEnum::GetValueAsString(Snapshot.Phase),
 			*AttemptSnapshot.RodDefinitionId.ToString(),
 			*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
+		// 2026-09-12 拍：瞬断和耐久归零一样**报废鱼竿**。设计对两条路用的是同一个词「断竿」、
+		// 同一套表现（爪里只剩半截竿）、同一个结局类（器材失败）；不报废，强度门槛就没有牙齿——
+		// 拿树枝竿一遍遍去钓巨影，每次只赔一份饵。饵同样要扣：§3.3(:133)「进入咬钩后，无论上鱼、
+		// 超时、放弃、断竿、落水，都消耗 1 份饵」。
+		if (UCatEquipmentComponent* Equipment = CastEquipment.Get())
+		{
+			const FCatFishingUseOperationResult Bait = Equipment->CommitFishingBaitDeferred(Snapshot.FishingSessionId);
+			double RemainingDurability = 0.0;
+			bool bAlreadyBroken = false;
+			Equipment->GetFishingRodDurability(Snapshot.FishingSessionId, RemainingDurability, bAlreadyBroken);
+			if (!bAlreadyBroken && FMath::IsFinite(RemainingDurability) && RemainingDurability > 0.0)
+			{
+				// 磨损接口按累计绝对值写回：把剩余耐久一次性加满即归零，序号严格 +1，不另存第二份账。
+				const FCatFishingUseOperationResult Wear = Equipment->ApplyFishingRodWear(Snapshot.FishingSessionId,
+					Bait.WearSequence + 1, Bait.AbsoluteRodWear + RemainingDurability);
+				if (Wear.bApplied)
+				{
+					RodWearSequence = Wear.WearSequence;
+					Snapshot.RodDurabilityRemaining = Wear.RemainingRodDurability;
+				}
+				UE_LOG(LogCatFishing, Warning,
+					TEXT("Event=fishing_rod_broken SessionId=%s RodItemInstanceId=%s Cause=StrengthSnap "
+						"RodDurability=%.3f Applied=%s"),
+					*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+					*AttemptSnapshot.RodItemInstanceId.ToString(), Wear.RemainingRodDurability,
+					Wear.bApplied ? TEXT("true") : TEXT("false"));
+			}
+		}
 		TerminateSession(ECatFishingOutcome::LineBroken,
-			TEXT("Rod strength did not exceed the smaller of combined strength and fish strength"));
+			TEXT("Rod strength did not exceed the smaller of combined strength and fish strength; rod destroyed"));
 		return true;
 	}
 	// ② 碾压：猫力达到鱼力的 2 倍即碾压，直接把鱼甩上岸；达标立即飞鱼、跳过或中断搏斗循环。
@@ -1927,8 +1958,10 @@ bool ACatFishingSession::FlingFishAshoreFromAuthority()
 			Fisher ? TEXT("valid") : TEXT("null"), *GetNameSafe(Snapshot.FishEncounterActor));
 		return false;
 	}
-	// 落点取持竿猫自己的落脚点：设计只写"直接把鱼甩上岸"，没给落点规则，而持竿者必然站在岸上，
-	// 用他脚下是唯一不需要另造参数（抛距、方向、偏移）的干地点。落点口径正式定下来之前不发明新数值。
+	// 落点（钓鱼规则 §4.2，2026-09-12 拍）：沿钓线方向朝持竿猫身后甩一段固定距离。
+	// 取固定距离而不是按超出倍率缩放——倍率缩放会让 4 倍碾压的鱼飞出屏幕，反而看不见那一下。
+	// 撞水或撞墙就按比例往回收，收不到干地才退回落在猫脚下。
+	// OverpowerFlingDistanceCentimeters 是快照值，正式值随参数页「碾压甩岸距离」行落 Config。
 	TArray<const AActor*> IgnoredActors;
 	IgnoredActors.Reserve(5);
 	IgnoredActors.Add(this);
@@ -1937,26 +1970,43 @@ bool ACatFishingSession::FlingFishAshoreFromAuthority()
 	IgnoredActors.Add(Snapshot.RodActor.Get());
 	IgnoredActors.Add(Snapshot.HookActor.Get());
 	const FVector FootPoint = Fisher->GetBodyFootPointWorld();
-	const FCatWorldSurfaceResult Surface = FCatWorldSurfaceResolver::ResolveHighestBlockingSurface(
-		World, FootPoint, ItemSettings->LandingGroundTraceChannel, IgnoredActors);
-	const FVector LandingPoint = Surface.bSucceeded ? Surface.WorldPosition : FootPoint;
-	const FVector LandingNormal = Surface.bSucceeded ? Surface.SurfaceNormal : FVector::UpVector;
-	// 同一 XY 的地表也可能是湖底：只接受确实高于水面的落点，否则鱼会"甩"进水里变成捡不到的对象。
+	// 「身后」＝钓线的反方向：鱼在水里，猫背对水面，所以从鱼指向猫的水平分量就是甩出去的方向。
+	const FVector ToFisher = FootPoint - Snapshot.FishEncounterActor->GetActorLocation();
+	const FVector BackwardDirection = FVector(ToFisher.X, ToFisher.Y, 0.0).GetSafeNormal();
 	const UCatWaterQuerySubsystem* Water = World->GetSubsystem<UCatWaterQuerySubsystem>();
-	const FCatWaterImmersionResult WaterRelation = Water && AttemptSnapshot.WaterRegion.IsValid()
-		? Water->QueryImmersionAtWorldPoint(LandingPoint, AttemptSnapshot.WaterRegion)
-		: FCatWaterImmersionResult{};
 	constexpr double MinimumDryGroundHeightCentimeters = 1.0;
-	if (!WaterRelation.bSucceeded
-		|| LandingPoint.Z <= WaterRelation.WaterSurfaceWorldPoint.Z + MinimumDryGroundHeightCentimeters)
+	// 依次试满距、2/3、1/3，最后退回脚下（0）；第一个落在干地上的点就用它。
+	static constexpr double DistanceFractions[] = {1.0, 2.0 / 3.0, 1.0 / 3.0, 0.0};
+	FVector LandingPoint = FootPoint;
+	FVector LandingNormal = FVector::UpVector;
+	bool bFoundDryGround = false;
+	for (const double Fraction : DistanceFractions)
+	{
+		const FVector Candidate = BackwardDirection.IsNearlyZero()
+			? FootPoint
+			: FootPoint + BackwardDirection * (OverpowerFlingDistanceCentimeters * Fraction);
+		const FCatWorldSurfaceResult Surface = FCatWorldSurfaceResolver::ResolveHighestBlockingSurface(
+			World, Candidate, ItemSettings->LandingGroundTraceChannel, IgnoredActors);
+		const FVector Point = Surface.bSucceeded ? Surface.WorldPosition : Candidate;
+		// 同一 XY 的地表也可能是湖底：只接受确实高于水面的落点，否则鱼会"甩"进水里变成捡不到的对象。
+		const FCatWaterImmersionResult Relation = Water && AttemptSnapshot.WaterRegion.IsValid()
+			? Water->QueryImmersionAtWorldPoint(Point, AttemptSnapshot.WaterRegion)
+			: FCatWaterImmersionResult{};
+		if (Relation.bSucceeded && Point.Z > Relation.WaterSurfaceWorldPoint.Z + MinimumDryGroundHeightCentimeters)
+		{
+			LandingPoint = Point;
+			LandingNormal = Surface.bSucceeded ? Surface.SurfaceNormal : FVector::UpVector;
+			bFoundDryGround = true;
+			break;
+		}
+	}
+	if (!bFoundDryGround)
 	{
 		UE_LOG(LogCatFishing, Error,
-			TEXT("Event=fishing_overpower_fling_rejected SessionId=%s Landing=%s SurfaceResolved=%s WaterQuery=%s "
-				"WaterSurfaceZ=%.2f Reason=LandingNotDryGround"),
-			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *LandingPoint.ToCompactString(),
-			Surface.bSucceeded ? TEXT("true") : TEXT("false"),
-			WaterRelation.bSucceeded ? TEXT("true") : TEXT("false"),
-			WaterRelation.bSucceeded ? WaterRelation.WaterSurfaceWorldPoint.Z : 0.0);
+			TEXT("Event=fishing_overpower_fling_rejected SessionId=%s FootPoint=%s Backward=%s "
+				"FlingDistance=%.1f Reason=NoDryGroundAlongBackwardArc"),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *FootPoint.ToCompactString(),
+			*BackwardDirection.ToCompactString(), OverpowerFlingDistanceCentimeters);
 		return false;
 	}
 	return SpawnLandedFishPickupFromAuthority(LandingPoint, LandingNormal,
