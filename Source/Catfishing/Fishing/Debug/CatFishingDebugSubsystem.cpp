@@ -192,6 +192,72 @@ namespace CatFishingDebugCommands
 		TEXT("在玩家前方生成可按 E 叼起的死鱼。参数：FishDefinitionId WeightKg PlayerIndex。"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&GiveFishToPlayer),
 		ECVF_Cheat);
+
+#if WITH_DEV_AUTOMATION_TESTS
+	// 授予入口本身挂在 WITH_DEV_AUTOMATION_TESTS 下（CatEquipmentComponent.h:58），
+	// 所以这条命令跟着同一个开关；Editor 与 Development 构建都在。
+
+	// 一套钓具的授予流程：竿／漂／抄网／鱼护走非数量授予，饵与窝料走数量授予，
+	// 最后按正式 Use 入口把竿拿到手——不绕过装备事务，拿到的状态和正常流程一致。
+	static void GiveFishingKitToPlayer(const TArray<FString>& Args, UWorld* World)
+	{
+		const int32 PlayerIndex = Args.IsValidIndex(0) ? FMath::Max(0, FCString::Atoi(*Args[0])) : 0;
+		const int32 Portions = Args.IsValidIndex(1) ? FMath::Clamp(FCString::Atoi(*Args[1]), 1, 99) : 8;
+		APlayerController* Controller = ResolvePlayerController(World, PlayerIndex);
+		ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
+		UCatEquipmentComponent* Equipment = Character ? Character->GetEquipmentComponent() : nullptr;
+		if (!World || !Controller || !Controller->HasAuthority() || !Equipment)
+		{
+			UE_LOG(LogCatFishing, Warning,
+				TEXT("Event=fishing_debug_give_kit_rejected Reason=%s World=%s Controller=%s PlayerIndex=%d"),
+				Controller && !Controller->HasAuthority() ? TEXT("NotAuthority") : TEXT("MissingDependency"),
+				World ? *World->GetName() : TEXT("None"), *GetNameSafe(Controller), PlayerIndex);
+			return;
+		}
+
+		int32 Granted = 0;
+		const auto GrantItem = [&](const FName DefinitionId)
+		{
+			if (Equipment->GrantEquipmentFromAuthority(FGuid::NewGuid(),
+				Equipment->GetSnapshot().Revision, DefinitionId).bCommitted)
+			{
+				++Granted;
+			}
+		};
+		const auto GrantStack = [&](const FName DefinitionId, const int32 Quantity)
+		{
+			if (Equipment->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(),
+				Equipment->GetSnapshot().Revision, DefinitionId, Quantity).bCommitted)
+			{
+				++Granted;
+			}
+		};
+		// 一级竿＋羽毛漂是正式起步装（道具册鱼竿/鱼漂表首行）；抄网与鱼护非必带但手验收鱼要用。
+		for (const FName DefinitionId : {FName(TEXT("StarterRodT1")), FName(TEXT("FeatherFloat")),
+			FName(TEXT("StarterScoopNet")), FName(TEXT("FishGuard"))})
+		{
+			GrantItem(DefinitionId);
+		}
+		GrantStack(TEXT("BugBait"), Portions);
+		GrantStack(TEXT("BugChum"), Portions);
+
+		// 竿要真的拿在手上才是「装备即状态」的钓鱼待机（钓鱼规则 §1:25），否则还得手动点一下背包。
+		const FGuid RodInstanceId = Equipment->GetSnapshot().RodItemInstanceId;
+		const bool bEquipped = RodInstanceId.IsValid()
+			&& Equipment->Use(FGuid::NewGuid(), Equipment->GetSnapshot().Revision, RodInstanceId).bCommitted;
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_debug_give_kit SessionOwner=%s PlayerIndex=%d GrantedEntries=%d Portions=%d RodEquipped=%s"),
+			*GetNameSafe(Character), PlayerIndex, Granted, Portions, bEquipped ? TEXT("true") : TEXT("false"));
+	}
+
+	/** 手验用的一键钓具；只走正式授予与 Use 事务，不直写库存。 */
+	static FAutoConsoleCommandWithWorldAndArgs CmdGiveKit(
+		TEXT("cat.Fishing.Debug.GiveKit"),
+		TEXT("给玩家一整套钓具（一级竿／羽毛漂／抄网／鱼护／虫饵／虫窝料）并把竿拿到手，拿完即可抛竿。")
+		TEXT("参数：PlayerIndex（默认 0）BaitAndChumPortions（默认 8）。"),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&GiveFishingKitToPlayer),
+		ECVF_Cheat);
+#endif
 }
 #endif
 
