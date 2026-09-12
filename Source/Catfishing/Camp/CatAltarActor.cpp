@@ -29,30 +29,56 @@ ACatAltarActor::ACatAltarActor()
 	WorldInfo->SetupAttachment(StatueMesh);
 }
 
-// 复制注册：保留父类字段，再登记计数、错误、营地关联及地面预览；接收端由 RepNotify 通知信息组件，确认集合与世界鱼引用留在服务器。
+// 复制注册：保留父类字段，再登记应到人数、倒计时三项、错误、营地关联及地面预览；接收端由 RepNotify 通知信息组件，
+// 到场集合、发起人和请求标识都留在服务器——客户端不重建「谁同意了」这种事实，也不自行推进或撤销倒计时。
 void ACatAltarActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-	DOREPLIFETIME(ThisClass, ConfirmedCount);
 	DOREPLIFETIME(ThisClass, EligibleCount);
+	DOREPLIFETIME(ThisClass, bCountdownActive);
+	DOREPLIFETIME(ThisClass, CountdownDeadlineServerTimeSeconds);
+	DOREPLIFETIME(ThisClass, CountdownTotalSeconds);
 	DOREPLIFETIME(ThisClass, LastError);
 	DOREPLIFETIME(ThisClass, CampHub);
 	DOREPLIFETIME(ThisClass, bGroundOfferingReady);
 	DOREPLIFETIME(ThisClass, GroundOfferingPoints);
 }
 
-// 到场复核：父类 Tick 后仅服务器更新地面预览；取得 Run 且无活动过渡时再刷新确认名单。
-// 全员满足时从非空确认集合取请求者并调用正式 GameMode 的翻天入口；客户端、无 Run 或尚未全员确认时不发起结算。
+// 到场复核：父类 Tick 后仅服务器更新地面预览；取得 Run 且无活动过渡时再刷新到场名单。
+// 倒计时里只要还有合格的人不在到场圈内就中断；走满截止时间才请求翻天——发起人仍在圈内由他提交，
+// 否则改由任一在场者提交，因为到场本身就是同意，不需要再认一次「是谁按的」。
 void ACatAltarActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	if (HasAuthority()) RefreshGroundOfferingPreview();
+	if (!HasAuthority()) return;
+	RefreshGroundOfferingPreview();
 	const ACatfishingGameState* GameState = GetWorld()->GetGameState<ACatfishingGameState>();
-	if (HasAuthority() && GameState && !GameState->GetRunPublicState().DayTransition.bActive && RefreshConfirmations())
+	if (!GameState || GameState->GetRunPublicState().DayTransition.bActive) return;
+	const bool bEveryoneAttending = RefreshAttendance();
+	if (!bCountdownActive) return;
+	if (!bEveryoneAttending)
 	{
-		AController* Controller = ConfirmedPlayers.CreateConstIterator()->Get();
-		GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>()->BeginAltarDayTransition(this, Controller, FGuid::NewGuid());
+		CancelCountdown(NSLOCTEXT("Catfishing", "AltarAttendanceBroken", "有猫走出到场范围，献祭中断"));
+		return;
 	}
+	if (GetWorld()->GetTimeSeconds() < CountdownDeadlineServerTimeSeconds) return;
+	AController* Committer = CountdownInitiator.IsValid() && PresentPlayers.Contains(CountdownInitiator)
+		? CountdownInitiator.Get() : nullptr;
+	for (const TWeakObjectPtr<AController>& Present : PresentPlayers)
+	{
+		if (Committer) break;
+		Committer = Present.Get();
+	}
+	ACatfishingGameModeBase* GameMode = GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>();
+	if (!Committer || !GameMode)
+	{
+		CancelCountdown(NSLOCTEXT("Catfishing", "AltarCommitterUnavailable", "献祭发起失败，请重新与石像互动"));
+		return;
+	}
+	// 先收掉倒计时字段再进 GameMode：过渡开始后倒计时条不该继续显示，失败时也不会在下一帧拿同一个截止时间重试。
+	const FGuid RequestId = CountdownRequestId;
+	CancelCountdown(FText::GetEmpty());
+	GameMode->BeginAltarDayTransition(this, Committer, RequestId);
 }
 
 // 生命周期退出：仅中止自己拥有的过渡；随后丢弃非拥有的弱引用，由父类完成 Actor 销毁。
@@ -63,7 +89,7 @@ void ACatAltarActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		GameMode->CancelAltarDayTransition(this, NSLOCTEXT("Catfishing", "AltarUnavailable", "祭坛已不可用"));
 	}
 	FrozenFish.Reset();
-	ConfirmedPlayers.Reset();
+	PresentPlayers.Reset();
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -97,12 +123,23 @@ bool ACatAltarActor::CanInteract_Implementation(AController* Controller) const
 	return true;
 }
 
-// 提示生成：读取当前确认计数，拼接固定动作名；仅在 LastError 非空时追加换行错误说明，返回文本而不改变确认状态。
+// 提示生成：倒计时期间显示现算的剩余秒数，其余时候只给固定动作名；仅在 LastError 非空时追加换行说明。
+// 这里不再拼「已确认 N/M」——到场判定本身就是同意，代码不维护第二份确认计数（2026-09-11 裁决⑥）。
 FText ACatAltarActor::GetInteractionPrompt_Implementation() const
 {
-	return FText::Format(NSLOCTEXT("Catfishing", "AltarConfirmPrompt", "献给圣猫  已确认 {0}/{1}{2}"),
-		FText::AsNumber(ConfirmedCount), FText::AsNumber(EligibleCount),
-		LastError.IsEmpty() ? FText::GetEmpty() : FText::Format(NSLOCTEXT("Catfishing", "AltarErrorSuffix", "\n{0}"), LastError));
+	const FText Suffix = LastError.IsEmpty()
+		? FText::GetEmpty() : FText::Format(NSLOCTEXT("Catfishing", "AltarErrorSuffix", "\n{0}"), LastError);
+	double RemainingSeconds = 0.0;
+	double TotalSeconds = 0.0;
+	if (TryGetOfferingCountdown(RemainingSeconds, TotalSeconds))
+	{
+		FNumberFormattingOptions Options;
+		Options.MinimumFractionalDigits = 1;
+		Options.MaximumFractionalDigits = 1;
+		return FText::Format(NSLOCTEXT("Catfishing", "AltarCountdownPrompt", "献给圣猫  倒计时 {0} 秒{1}"),
+			FText::AsNumber(RemainingSeconds, &Options), Suffix);
+	}
+	return FText::Format(NSLOCTEXT("Catfishing", "AltarOfferPrompt", "献给圣猫{0}"), Suffix);
 }
 
 // 距离读取：使用项目既有 E 键上限，所有端采用相同厘米单位。
@@ -111,7 +148,8 @@ double ACatAltarActor::GetInteractionRadius_Implementation() const
 	return GetDefault<UCatInteractionSettings>()->MaximumServerInteractionDistanceCentimeters;
 }
 
-// 确认流程：客户端经 Controller RPC 转发；服务器先剔除失效记录再按玩家去重，只有全员满足才开始冻结供品。
+// 发起流程：客户端经 Controller RPC 转发；服务器先复核全员是否都在到场圈内，再由这一个人开启唯一倒计时。
+// 倒计时已经在走时重复按下只是受理、不重开也不缩短；不再按人去重，也不再累计确认数（2026-09-11 裁决⑥）。
 bool ACatAltarActor::Interact_Implementation(AController* Controller, FGuid RequestId)
 {
 	if (!RequestId.IsValid() || !CanInteract_Implementation(Controller))
@@ -122,41 +160,61 @@ bool ACatAltarActor::Interact_Implementation(AController* Controller, FGuid Requ
 	{
 		ACatfishingPlayerController* Player = Cast<ACatfishingPlayerController>(Controller);
 		if (!Player || !Player->IsLocalController()) return false;
-		UE_LOG(LogCatAltar, Log, TEXT("Event=AltarConfirmationRequested World=%s NetMode=%d Authority=0 LocalRole=%d Altar=%s Player=%s RequestId=%s"),
+		UE_LOG(LogCatAltar, Log, TEXT("Event=AltarCountdownRequested World=%s NetMode=%d Authority=0 LocalRole=%d Altar=%s Player=%s RequestId=%s"),
 			*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *GetName(), *GetNameSafe(Player), *RequestId.ToString());
 		Player->ServerRequestInteraction(this, RequestId);
 		return true;
 	}
-	RefreshConfirmations();
-	const bool bDuplicate = ConfirmedPlayers.Contains(Controller);
-	ConfirmedPlayers.Add(Controller);
+	if (bCountdownActive)
+	{
+		return true;
+	}
+	const bool bEveryoneAttending = RefreshAttendance();
+	const bool bCountdownConfigured = FMath::IsFinite(OfferingCountdownSeconds) && OfferingCountdownSeconds > 0.0f;
+	if (!bEveryoneAttending || !bCountdownConfigured)
+	{
+		LastError = bEveryoneAttending
+			? NSLOCTEXT("Catfishing", "AltarCountdownUnconfigured", "献祭倒计时未配置")
+			: NSLOCTEXT("Catfishing", "AltarAttendanceIncomplete", "还有猫没到祭坛");
+		UE_LOG(LogCatAltar, Log, TEXT("Event=AltarCountdownRejected World=%s NetMode=%d Authority=1 LocalRole=%d Altar=%s Player=%s RequestId=%s Present=%d Eligible=%d Configured=%d"),
+			*GetWorld()->GetName(), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *GetName(), *GetNameSafe(Controller),
+			*RequestId.ToString(), PresentPlayers.Num(), EligibleCount, bCountdownConfigured);
+		OnRep_InfoChanged();
+		ForceNetUpdate();
+		return false;
+	}
+	bCountdownActive = true;
+	CountdownTotalSeconds = OfferingCountdownSeconds;
+	CountdownDeadlineServerTimeSeconds = GetWorld()->GetTimeSeconds() + CountdownTotalSeconds;
+	CountdownInitiator = Controller;
+	CountdownRequestId = RequestId;
 	LastError = FText::GetEmpty();
-	const bool bAllConfirmed = RefreshConfirmations();
-	UE_LOG(LogCatAltar, Display, TEXT("Event=AltarConfirmed World=%s NetMode=%d Authority=1 LocalRole=%d Altar=%s Player=%s RequestId=%s Confirmed=%d Eligible=%d Duplicate=%d"),
+	UE_LOG(LogCatAltar, Display, TEXT("Event=AltarCountdownStarted World=%s NetMode=%d Authority=1 LocalRole=%d Altar=%s Player=%s RequestId=%s Eligible=%d CountdownSeconds=%.3f"),
 		*GetWorld()->GetName(), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *GetName(), *GetNameSafe(Controller),
-		*RequestId.ToString(), ConfirmedCount, EligibleCount, bDuplicate);
+		*RequestId.ToString(), EligibleCount, CountdownTotalSeconds);
+	OnRep_InfoChanged();
 	ForceNetUpdate();
-	return !bAllConfirmed || GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>()->BeginAltarDayTransition(this, Controller, RequestId);
+	return true;
 }
 
 // 名单刷新：
-// 1. 无正式 GameMode 则返回 false；读取 Run 后，换天或供品窗口关闭且尚有确认/错误时重置本轮记录。
+// 1. 无正式 GameMode 则返回 false；读取 Run 后，换天或供品窗口关闭且仍有倒计时/错误时重置本轮记录。
 // 2. 开放夜晚将每名 Active 且非倒地玩家计入分母；具备 Pawn、状态组件且在到场范围内者才进入在场集合。
-// 3. 剔除已不在场的确认并更新计数；人数变化才记录日志、请求复制并通知本地信息牌，最后返回非空且全员确认的结果。
-bool ACatAltarActor::RefreshConfirmations()
+// 3. 在场或分母变化才记录日志、请求复制并通知本地信息牌，最后返回分母非空且全员都在圈内的结果。
+bool ACatAltarActor::RefreshAttendance()
 {
 	ACatfishingGameModeBase* GameMode = GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>();
 	if (!GameMode) return false;
 	const FCatRunPublicState& Run = GameMode->GetRunPublicState();
-	const int32 PreviousConfirmed = ConfirmedCount;
+	const int32 PreviousPresent = PresentPlayers.Num();
 	const int32 PreviousEligible = EligibleCount;
 	const bool bOfferingNight = Run.Phase.Phase == ECatRunPhase::NormalNight && Run.Phase.bOfferingOpen;
-	if (ConfirmationDay != Run.Phase.DayIndex || (!bOfferingNight && (ConfirmedCount > 0 || !LastError.IsEmpty())))
+	if (OfferingDay != Run.Phase.DayIndex || (!bOfferingNight && (bCountdownActive || !LastError.IsEmpty())))
 	{
 		ResetOffering();
-		ConfirmationDay = Run.Phase.DayIndex;
+		OfferingDay = Run.Phase.DayIndex;
 	}
-	TSet<TWeakObjectPtr<AController>> PresentPlayers;
+	PresentPlayers.Reset();
 	EligibleCount = 0;
 	if (bOfferingNight)
 	{
@@ -173,27 +231,44 @@ bool ACatAltarActor::RefreshConfirmations()
 			}
 		}
 	}
-	for (auto It = ConfirmedPlayers.CreateIterator(); It; ++It)
+	if (PreviousPresent != PresentPlayers.Num() || PreviousEligible != EligibleCount)
 	{
-		if (!PresentPlayers.Contains(*It)) It.RemoveCurrent();
-	}
-	ConfirmedCount = ConfirmedPlayers.Num();
-	if (PreviousConfirmed != ConfirmedCount || PreviousEligible != EligibleCount)
-	{
-		UE_LOG(LogCatAltar, Display, TEXT("Event=AltarAttendanceChanged World=%s NetMode=%d Authority=1 LocalRole=%d Altar=%s Day=%d Confirmed=%d Eligible=%d"),
-			*GetWorld()->GetName(), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *GetName(), ConfirmationDay, ConfirmedCount, EligibleCount);
+		UE_LOG(LogCatAltar, Display, TEXT("Event=AltarAttendanceChanged World=%s NetMode=%d Authority=1 LocalRole=%d Altar=%s Day=%d Present=%d Eligible=%d Countdown=%d"),
+			*GetWorld()->GetName(), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *GetName(), OfferingDay,
+			PresentPlayers.Num(), EligibleCount, bCountdownActive);
 		ForceNetUpdate();
 		OnRep_InfoChanged();
 	}
-	return EligibleCount > 0 && ConfirmedCount == EligibleCount;
+	return EligibleCount > 0 && PresentPlayers.Num() == EligibleCount;
 }
 
-// 冻结流程：先核对服务器权限、请求标识、有限正半径及全员确认，再用共用筛选器填充冻结鱼引用和分类命令。
+// 倒计时收口：只清倒计时四个字段并保留传入说明；不动冻结鱼、不改 Run 阶段，也不改当前应到人数。
+// 提交路径传空说明，中断路径传可展示原因；两条路径都必须经过这里，避免信息牌上留着一条走不完的进度条。
+void ACatAltarActor::CancelCountdown(const FText& Error)
+{
+	const bool bWasActive = bCountdownActive;
+	bCountdownActive = false;
+	CountdownDeadlineServerTimeSeconds = 0.0;
+	CountdownTotalSeconds = 0.0;
+	CountdownInitiator.Reset();
+	CountdownRequestId.Invalidate();
+	LastError = Error;
+	if (bWasActive)
+	{
+		UE_LOG(LogCatAltar, Display, TEXT("Event=AltarCountdownEnded World=%s NetMode=%d Authority=%d LocalRole=%d Altar=%s Present=%d Eligible=%d Reason=%s"),
+			*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority() ? 1 : 0, static_cast<int32>(GetLocalRole()),
+			*GetName(), PresentPlayers.Num(), EligibleCount, Error.IsEmpty() ? TEXT("Committed") : *Error.ToString());
+	}
+	OnRep_InfoChanged();
+	ForceNetUpdate();
+}
+
+// 冻结流程：先核对服务器权限、请求标识、有限正半径及全员仍在到场圈内，再用共用筛选器填充冻结鱼引用和分类命令。
 // 收集成功才写入祭坛与命令的请求标识，随后预检同一批鱼；失败输出不可提交，已写的短期引用由调用方 ResetOffering 收口，空集合合法。
 bool ACatAltarActor::FreezeOffering(AController* Controller, FGuid RequestId, FCatOfferingSettlementCommand& OutCommand, FText& OutError)
 {
 	if (!HasAuthority() || !RequestId.IsValid() || !FMath::IsFinite(OfferingRadiusCentimeters) || OfferingRadiusCentimeters <= 0.0f
-		|| !FMath::IsFinite(AttendanceRadiusCentimeters) || AttendanceRadiusCentimeters <= 0.0f || !RefreshConfirmations()) return false;
+		|| !FMath::IsFinite(AttendanceRadiusCentimeters) || AttendanceRadiusCentimeters <= 0.0f || !RefreshAttendance()) return false;
 	int32 PreviewPoints = 0;
 	if (!CollectOffering(FrozenFish, OutCommand, PreviewPoints, OutError)) return false;
 	OfferingRequestId = RequestId;
@@ -267,6 +342,22 @@ bool ACatAltarActor::TryGetGroundOfferingPoints(int32& OutPoints) const
 	return bGroundOfferingReady;
 }
 
+// 倒计时读取：不在倒计时、总秒数无效或客户端拿不到 GameState 时返回 false 并清零，调用方必须显示暂不可用。
+// 剩余秒数从复制的服务器截止时间现算——服务器读自己的世界时钟，客户端读 GameState 的服务器时钟，两端不各存一份倒计时。
+bool ACatAltarActor::TryGetOfferingCountdown(double& OutRemainingSeconds, double& OutTotalSeconds) const
+{
+	OutRemainingSeconds = 0.0;
+	OutTotalSeconds = 0.0;
+	const AGameStateBase* GameState = GetWorld() ? GetWorld()->GetGameState() : nullptr;
+	if (!bCountdownActive || !FMath::IsFinite(CountdownDeadlineServerTimeSeconds)
+		|| !FMath::IsFinite(CountdownTotalSeconds) || CountdownTotalSeconds <= 0.0
+		|| (!HasAuthority() && !GameState)) return false;
+	const double ServerNowSeconds = HasAuthority() ? GetWorld()->GetTimeSeconds() : GameState->GetServerWorldTimeSeconds();
+	OutRemainingSeconds = FMath::Clamp(CountdownDeadlineServerTimeSeconds - ServerNowSeconds, 0.0, CountdownTotalSeconds);
+	OutTotalSeconds = CountdownTotalSeconds;
+	return true;
+}
+
 // 关系读取：只返回有效的显式营地关联，不在 UI 请求中建立或修改营地关系。
 ACatCampHubActor* ACatAltarActor::GetCampHub() const
 {
@@ -279,13 +370,15 @@ void ACatAltarActor::OnRep_InfoChanged()
 	if (WorldInfo) WorldInfo->NotifyInfoChanged();
 }
 
-// 提交前整批预检：重新核对全员资格，再校验同一批地面鱼与消费依赖；新入场或恢复后未确认的玩家会阻止提交，不重新选鱼。
+// 提交前整批预检：重新核对全员仍在到场圈内且提交者本人也在圈内，再校验同一批地面鱼与消费依赖；有人走出圈就阻止提交，不重新选鱼。
+// 名单复核自己可能因为换天而清掉本轮供品，所以复核之后必须再确认一次请求标识仍然是这一批——
+// 否则冻结鱼数组已被清空，下面的循环会对空集合返回真，把「没交齐」伪装成一次合法提交。
 bool ACatAltarActor::ValidateFrozenOffering(AController* Controller, FGuid RequestId, FText& OutError)
 {
 	if (!HasAuthority() || RequestId != OfferingRequestId) return false;
-	if (!RefreshConfirmations() || !ConfirmedPlayers.Contains(Controller))
+	if (!RefreshAttendance() || RequestId != OfferingRequestId || !PresentPlayers.Contains(Controller))
 	{
-		OutError = NSLOCTEXT("Catfishing", "AltarParticipantsChanged", "参与玩家状态已变化，请重新确认");
+		OutError = NSLOCTEXT("Catfishing", "AltarAttendanceChanged", "到场玩家已变化，请重新与石像互动");
 		return false;
 	}
 	for (const TWeakObjectPtr<ACatFishPickupActor>& Fish : FrozenFish)
@@ -317,15 +410,11 @@ bool ACatAltarActor::ConsumeFrozenOffering(AController* Controller, FGuid Reques
 	return true;
 }
 
-// 收口：先释放冻结鱼引用、请求标识和确认集合，再把确认数清零并保存传入错误，最后通知本地信息牌并请求复制。
-// 不销毁未提交的鱼、不改变 Run 阶段或当前应参与人数；人数由下一次名单复核更新。
+// 收口：先释放冻结鱼引用与请求标识，再走统一的倒计时收口保存传入说明并通知本地信息牌。
+// 不销毁未提交的鱼、不改变 Run 阶段或当前应到人数；人数由下一次名单复核更新。
 void ACatAltarActor::ResetOffering(const FText& Error)
 {
 	FrozenFish.Reset();
 	OfferingRequestId.Invalidate();
-	ConfirmedPlayers.Reset();
-	ConfirmedCount = 0;
-	LastError = Error;
-	OnRep_InfoChanged();
-	ForceNetUpdate();
+	CancelCountdown(Error);
 }
