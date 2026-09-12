@@ -6,7 +6,11 @@
 
 class APlayerState;
 
-/** 玩家在钓点放置的防骚扰牌子；持有受保护 PlayerState、固定范围和 Revision，不保护实物鱼或装备。 */
+/**
+ * 玩家在钓点放置的防骚扰牌子；持有受保护 PlayerState、固定范围和 Revision。
+ * 它只挡恶作剧，不保护实物鱼或装备——拿鱼没有任何东西能豁免（2026-09-12 裁决③）。
+ * 「恶作剧权限开关」这层概念已退役，牌子是它唯一的载体；牌子本身保留、待重新设计。
+ */
 UCLASS()
 class CATFISHING_API ACatProtectionSignActor : public AActor
 {

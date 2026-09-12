@@ -10,6 +10,7 @@
 #include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
+#include "TimerManager.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/GameStateBase.h"
 #include "Logging/CatLog.h"
@@ -18,6 +19,13 @@
 #include "UI/CatUISettings.h"
 #include "UI/Collection/CatCollectionPageController.h"
 #include "UI/Collection/CatCollectionWidget.h"
+#include "UI/Collection/CatFishRevealWidget.h"
+#include "Data/CatFishCatalogSettings.h"
+#include "Data/CatFishDefinition.h"
+#include "Framework/Game/CatfishingGameState.h"
+#include "GameFramework/PlayerState.h"
+#include "Profile/CatProfileSubsystem.h"
+#include "Save/CatSaveSubsystem.h"
 #include "UI/Frontend/CatFrontendPageController.h"
 #include "UI/Frontend/CatFrontendRootWidget.h"
 #include "UI/Frontend/CatFrontendRoomModel.h"
@@ -34,6 +42,16 @@
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
 #include "UI/Save/CatLakeMainMenuController.h"
 #include "UI/Save/CatLakeMainMenuWidget.h"
+
+namespace CatLocalPlayerUIFishReveal
+{
+	/**
+	 * 首解锁特写留在屏幕上的最长秒数。它是兜底上限，不是设计给的出口：
+	 * 设计的出口是「Space 继续」，那条路要一个 InputAction 资产，本轮没有。
+	 * 浮层不抢键盘焦点（抢了玩家就动不了），所以必须有个上限，否则它会一直挂在那儿。
+	 */
+	constexpr float AutoDismissSeconds = 8.0f;
+}
 
 namespace CatLocalPlayerUILoadingScreen
 {
@@ -204,6 +222,7 @@ void UCatLocalPlayerUISubsystem::ToggleInventory()
 			CollectionPageController->RequestCloseCollectionFromWidget();
 		}
 		InventoryPageController->ToggleInventory();
+		RefreshHUDAfterPageVisibilityChanged();
 	}
 }
 
@@ -219,7 +238,9 @@ bool UCatLocalPlayerUISubsystem::OpenInventory(UCatInventoryComponent* Inventory
             *GetNameSafe(InventoryViewClass.Get()));
         return false;
     }
-    return InventoryPageController->OpenInventory(Inventory, InventoryViewClass);
+    const bool bOpened = InventoryPageController->OpenInventory(Inventory, InventoryViewClass);
+    RefreshHUDAfterPageVisibilityChanged();
+    return bOpened;
 }
 
 // 状态读取流程：从 PageController 读取唯一背包状态；未装配背包时固定返回 false，避免从 Widget 可见性拼第二份状态。
@@ -251,6 +272,222 @@ void UCatLocalPlayerUISubsystem::ToggleCollection()
 		}
 	}
 	CollectionPageController->ToggleCollection();
+	RefreshHUDAfterPageVisibilityChanged();
+}
+
+// 页面开合读取流程：三页共用一层模态输入锁，任一开着就算「打开了界面」。
+// 它是「打开界面」这件事的唯一事实源——HUD 读它决定世界进度那一位露不露面（交互册 §42），不在 HUD 里存第二份。
+bool UCatLocalPlayerUISubsystem::IsAnyPlayerPageOpen() const
+{
+	return (InventoryPageController && InventoryPageController->IsInventoryOpen())
+		|| (CollectionPageController && CollectionPageController->IsCollectionOpen())
+		|| (LakeMainMenuController && LakeMainMenuController->IsMenuOpen());
+}
+
+// 页面开合后的 HUD 重读流程：只让 HUD 立刻重算一次投影。
+// 世界进度那一位的显隐跟着 IsAnyPlayerPageOpen 走，这里不传值也不缓存，避免出现第二份开合状态。
+void UCatLocalPlayerUISubsystem::RefreshHUDAfterPageVisibilityChanged()
+{
+	if (HUDModel)
+	{
+		HUDModel->Refresh();
+	}
+}
+
+// 本机首解锁特写流程：
+// 1. 事实已经 durable——Profile 在第二次落盘成功之后才广播，所以这里弹出来的东西一定已经写进图鉴。
+// 2. 从正式鱼目录取展示名、介绍与彩页图；鱼种没登记时仍然弹，名字退回鱼种 ID，不静默吞掉一次首解锁。
+// 3. 浮层 WBP 资产不在本轮范围：类没配置时只记一次诊断，不创建原生白盒替身，也不影响已经写好的图鉴记录。
+void UCatLocalPlayerUISubsystem::HandleLocalFishSpeciesFirstRecorded(const FName FishDefinitionId,
+	const double WeightKilograms)
+{
+	if (FishDefinitionId.IsNone())
+	{
+		return;
+	}
+	const UCatUISettings* Settings = GetDefault<UCatUISettings>();
+	TSubclassOf<UCatFishRevealWidget> RevealViewClass;
+	if (Settings)
+	{
+		RevealViewClass = Settings->LoadFishRevealWidgetClass();
+	}
+	if (!RevealViewClass)
+	{
+		if (!bHasLoggedMissingFishRevealWidget)
+		{
+			UE_LOG(LogCatUI, Warning,
+				TEXT("Event=ui_fish_reveal_class_missing Class=%s FishDefinitionId=%s Result=RevealSkippedCollectionStillRecorded"),
+				Settings ? *Settings->FishRevealWidgetClass.ToSoftObjectPath().ToString() : TEXT("None"),
+				*FishDefinitionId.ToString());
+			bHasLoggedMissingFishRevealWidget = true;
+		}
+		return;
+	}
+	APlayerController* Controller = BoundPlayerController.Get();
+	if (!Controller)
+	{
+		return;
+	}
+	if (!FishRevealWidget || FishRevealWidget->GetClass() != RevealViewClass)
+	{
+		if (FishRevealWidget)
+		{
+			FishRevealWidget->OnDismissRequested.RemoveAll(this);
+			FishRevealWidget->RemoveFromParent();
+		}
+		FishRevealWidget = CreateWidget<UCatFishRevealWidget>(Controller, RevealViewClass);
+		if (!FishRevealWidget)
+		{
+			return;
+		}
+		FishRevealWidget->OnDismissRequested.AddWeakLambda(this, [this]()
+		{
+			if (FishRevealWidget)
+			{
+				FishRevealWidget->RemoveFromParent();
+			}
+		});
+	}
+	const UCatFishCatalogSettings* Catalog = GetDefault<UCatFishCatalogSettings>();
+	const UCatFishDefinition* Definition = Catalog ? Catalog->FindRuntimeDefinition(FishDefinitionId) : nullptr;
+	FCatFishRevealViewData ViewData;
+	const FText DisplayName = Definition ? Definition->GetInventoryDisplayName() : FText();
+	ViewData.NameText = DisplayName.IsEmpty() ? FText::FromName(FishDefinitionId) : DisplayName;
+	ViewData.DescriptionText = Definition ? Definition->GetInventoryDescription() : FText();
+	if (FMath::IsFinite(WeightKilograms) && WeightKilograms > 0.0)
+	{
+		FNumberFormattingOptions WeightFormat;
+		WeightFormat.SetMinimumFractionalDigits(2).SetMaximumFractionalDigits(2);
+		ViewData.WeightText = FText::Format(NSLOCTEXT("CatFishReveal", "Weight", "重量：{0} kg"),
+			FText::AsNumber(WeightKilograms, &WeightFormat));
+	}
+	ViewData.ContinueHintText = NSLOCTEXT("CatFishReveal", "Continue", "Space 继续");
+	ViewData.Portrait = Definition ? Definition->GetInventoryThumbnail().LoadSynchronous() : nullptr;
+	if (!FishRevealWidget->IsInViewport())
+	{
+		// 层级比交互提示高、比翻天遮罩低：它是一次性揭示，不该盖住结算过场，也不该被交互提示压住。
+		FishRevealWidget->AddToViewport(3);
+	}
+	FishRevealWidget->RenderReveal(ViewData);
+	// 兜底收起：见 FishRevealDismissTimerHandle 的注释。每次新的一条都重置计时，不会叠加。
+	if (UWorld* RevealWorld = Controller->GetWorld())
+	{
+		RevealWorld->GetTimerManager().ClearTimer(FishRevealDismissTimerHandle);
+		RevealWorld->GetTimerManager().SetTimer(FishRevealDismissTimerHandle, FTimerDelegate::CreateWeakLambda(this, [this]()
+		{
+			if (FishRevealWidget)
+			{
+				FishRevealWidget->RemoveFromParent();
+			}
+		}), CatLocalPlayerUIFishReveal::AutoDismissSeconds, false);
+	}
+	UE_LOG(LogCatUI, Log, TEXT("Event=ui_fish_reveal_shown FishDefinitionId=%s Weight=%.3f"),
+		*FishDefinitionId.ToString(), WeightKilograms);
+}
+
+// 他人解锁提示流程：只读 GameState 复制的那一条广播，按 AnnouncementId 去重；本人那条不在这里重复弹。
+// 提示走 HUD 的一次性播报位，因此它不打断操作、不抢焦点、不进模态层
+// （主界面参考稿逐字写「你仍可移动，交互和继续钓鱼」）。
+void UCatLocalPlayerUISubsystem::HandleFishSpeciesDiscoveryAnnounced()
+{
+	const ACatfishingGameState* GameState = BoundDiscoveryGameState.Get();
+	const APlayerController* Controller = BoundPlayerController.Get();
+	if (!GameState || !Controller)
+	{
+		return;
+	}
+	const FCatFishSpeciesDiscoveryAnnouncement& Announcement = GameState->GetLastFishSpeciesDiscovery();
+	if (!Announcement.AnnouncementId.IsValid() || Announcement.AnnouncementId == LastAnnouncedFishDiscoveryId)
+	{
+		return;
+	}
+	LastAnnouncedFishDiscoveryId = Announcement.AnnouncementId;
+	const int32 LocalPlayerId = Controller->PlayerState ? Controller->PlayerState->GetPlayerId() : 0;
+	if (Announcement.DiscovererPlayerId != 0 && Announcement.DiscovererPlayerId == LocalPlayerId)
+	{
+		// 自己这条已经由本机 Profile 的首解锁特写承担，不再多弹一条同内容的提示。
+		return;
+	}
+	const UCatFishCatalogSettings* Catalog = GetDefault<UCatFishCatalogSettings>();
+	const UCatFishDefinition* Definition = Catalog ? Catalog->FindRuntimeDefinition(Announcement.FishDefinitionId) : nullptr;
+	const FText FishNameText = (Definition && !Definition->GetInventoryDisplayName().IsEmpty())
+		? Definition->GetInventoryDisplayName() : FText::FromName(Announcement.FishDefinitionId);
+	const FText DiscovererText = Announcement.DiscovererDisplayName.IsEmpty()
+		? NSLOCTEXT("CatFishReveal", "UnknownDiscoverer", "有只猫")
+		: FText::FromString(Announcement.DiscovererDisplayName);
+	const FText BroadcastText = FText::Format(
+		NSLOCTEXT("CatFishReveal", "OtherDiscovered", "{0} 发现了新鱼种！{1} - 首次记录"),
+		DiscovererText, FishNameText);
+	if (HUDWidget)
+	{
+		HUDWidget->AnnounceFishSpeciesDiscovery(BroadcastText);
+	}
+	UE_LOG(LogCatUI, Log,
+		TEXT("Event=ui_fish_discovery_announced AnnouncementId=%s FishDefinitionId=%s HUDPresent=%d"),
+		*Announcement.AnnouncementId.ToString(EGuidFormats::DigitsWithHyphens),
+		*Announcement.FishDefinitionId.ToString(), HUDWidget != nullptr);
+}
+
+// 新鱼种广播接线流程：GameState 在客户端可能晚到，所以每次装配与 Controller 变化都重解析一次。
+// 换 GameState 时先从旧宿主解绑，避免旅行后的迟到通知打到已失效的 UI 上。
+void UCatLocalPlayerUISubsystem::RefreshFishDiscoveryBinding()
+{
+	ACatfishingGameState* GameState = GetWorld() ? GetWorld()->GetGameState<ACatfishingGameState>() : nullptr;
+	if (BoundDiscoveryGameState.Get() == GameState && (GameState == nullptr || FishSpeciesDiscoveryHandle.IsValid()))
+	{
+		return;
+	}
+	if (ACatfishingGameState* PreviousGameState = BoundDiscoveryGameState.Get())
+	{
+		PreviousGameState->OnFishSpeciesDiscoveryChanged.Remove(FishSpeciesDiscoveryHandle);
+	}
+	FishSpeciesDiscoveryHandle.Reset();
+	BoundDiscoveryGameState = GameState;
+	if (!GameState)
+	{
+		return;
+	}
+	FishSpeciesDiscoveryHandle = GameState->OnFishSpeciesDiscoveryChanged.AddUObject(
+		this, &ThisClass::HandleFishSpeciesDiscoveryAnnounced);
+	// 接线那一刻已经在场的广播算既往事实，只记不播：中途进局的人不该被上午发生的解锁刷屏。
+	LastAnnouncedFishDiscoveryId = GameState->GetLastFishSpeciesDiscovery().AnnouncementId;
+}
+
+// 新鱼种广播解绑流程：成对移除 GameState 与 Profile 两侧订阅；已记下的广播序号保留，避免解绑再接线时重播同一条。
+void UCatLocalPlayerUISubsystem::ClearFishDiscoveryBinding()
+{
+	if (ACatfishingGameState* GameState = BoundDiscoveryGameState.Get())
+	{
+		GameState->OnFishSpeciesDiscoveryChanged.Remove(FishSpeciesDiscoveryHandle);
+	}
+	FishSpeciesDiscoveryHandle.Reset();
+	BoundDiscoveryGameState.Reset();
+	if (ULocalPlayer* LocalPlayer = GetLocalPlayer())
+	{
+		if (UCatProfileSubsystem* Profile = LocalPlayer->GetSubsystem<UCatProfileSubsystem>())
+		{
+			Profile->OnFishSpeciesFirstRecorded.Remove(FishSpeciesFirstRecordedHandle);
+		}
+	}
+	FishSpeciesFirstRecordedHandle.Reset();
+}
+
+// 背包开关键名诊断流程：只把正式 IMC 解析出来的键名写进日志，不断言、不改映射、不禁用背包。
+// 设计（ui 表第 6 行、主界面.md:95）写的是 B；键位本体在 IMC 资产里，代码这一侧看不见，
+// 对表因此连着两轮只能判 ❓。这条日志让「到底映到了哪个键」在不开编辑器的情况下可查，
+// 改哪一边仍然要策划确认——程序不替它决定，更不为一个未裁的键把背包判死。
+void UCatLocalPlayerUISubsystem::LogInventoryToggleKeyBinding()
+{
+	if (bHasLoggedInventoryToggleKey)
+	{
+		return;
+	}
+	bHasLoggedInventoryToggleKey = true;
+	const UCatUISettings* Settings = GetDefault<UCatUISettings>();
+	const FName ResolvedKeyName = Settings ? Settings->ResolveInventoryToggleKeyName() : NAME_None;
+	UE_LOG(LogCatUI, Log,
+		TEXT("Event=ui_inventory_toggle_key_binding ResolvedKey=%s DesignExpectedKey=B Result=DiagnosticOnly"),
+		ResolvedKeyName.IsNone() ? TEXT("Unresolved") : *ResolvedKeyName.ToString());
 }
 
 // 翻天表现流程：
@@ -561,6 +798,8 @@ bool UCatLocalPlayerUISubsystem::ShouldShowGlobalLoadingScreen(
 	const FCatOnlineSnapshot& Snapshot, FCatGlobalLoadingPresentation& OutPresentation) const
 {
 	OutPresentation = FCatGlobalLoadingPresentation();
+	// 摘要与「等什么」无关，无论进入游戏还是回主菜单都先填一次；填不出来就保持未提供。
+	FillRunSummaryIntoLoadingPresentation(OutPresentation);
 	if (Snapshot.LastError != ECatOnlineError::None)
 	{
 		return false;
@@ -702,6 +941,31 @@ bool UCatLocalPlayerUISubsystem::ShouldShowGlobalLoadingScreen(
 		return true;
 	}
 	return false;
+}
+
+// 本局摘要填充流程：只读本机 Save 子系统当前活动槽的摘要，不打开文件、不发 RPC、不等待网络。
+// 加载期玩法 World 还没起来，所以这里给的是「存档记录的那一天」，不是本局实时天数——两者不是一回事，
+// 写入侧的文案也必须这么说，不能把存档记录冒充成当前进度。
+void UCatLocalPlayerUISubsystem::FillRunSummaryIntoLoadingPresentation(FCatGlobalLoadingPresentation& OutPresentation) const
+{
+	const UGameInstance* GameInstance = GetLocalPlayer() ? GetLocalPlayer()->GetGameInstance() : nullptr;
+	const UCatSaveSubsystem* Save = GameInstance ? GameInstance->GetSubsystem<UCatSaveSubsystem>() : nullptr;
+	const FName ActiveSlotId = Save ? Save->GetActiveSlotId() : NAME_None;
+	if (!Save || ActiveSlotId.IsNone())
+	{
+		return;
+	}
+	const FCatSaveSlotSummary* Summary = Save->GetSlotSummaries().FindByPredicate(
+		[ActiveSlotId](const FCatSaveSlotSummary& Candidate) { return Candidate.SlotId == ActiveSlotId; });
+	if (!Summary)
+	{
+		return;
+	}
+	OutPresentation.bHasRunSummary = true;
+	OutPresentation.RunSummaryDayIndex = Summary->DayIndex;
+	OutPresentation.RunSummaryWorldProgress = Summary->WorldProgress;
+	OutPresentation.RunSummaryDailyOfferingTarget = Summary->DailyOfferingTarget;
+	OutPresentation.RunSummaryTankOfferingPoints = Summary->TankOfferingPoints;
 }
 
 // 全局遮罩显示流程：用 GameInstance 创建或复用正式 WBP 并挂到最高层；类或上下文缺失时记录失败并返回。
@@ -874,6 +1138,53 @@ void UCatLocalPlayerUISubsystem::RefreshGlobalLoadingScreenPresentation(const FC
 	{
 		DayTextBlock->SetText(Presentation.HeadingText.IsEmpty()
 			? FText::FromString(TEXT("正在切换世界")) : Presentation.HeadingText);
+	}
+	// 加载页的本局摘要：天数与三个量。原参考稿的「献祭进度」已作废，进度轴叫世界进度（主界面.md:71）。
+	// 客户端读不到世界槽，逐格写「房主尚未提供」——它是事实陈述，不是错误，也不用 0 冒充。
+	const FText HostNotProvided = NSLOCTEXT("CatLoading", "HostNotProvided", "房主尚未提供");
+	if (UTextBlock* RunDayTextBlock = Cast<UTextBlock>(
+		GlobalLoadingScreenWidget->GetWidgetFromName(TEXT("LoadingRunDayTextBlock"))))
+	{
+		RunDayTextBlock->SetText(Presentation.bHasRunSummary && Presentation.RunSummaryDayIndex > 0
+			? FText::Format(NSLOCTEXT("CatLoading", "RunDay", "存档记录：第 {0} 天"),
+				FText::AsNumber(Presentation.RunSummaryDayIndex))
+			: HostNotProvided);
+	}
+	if (UTextBlock* WorldProgressTextBlock = Cast<UTextBlock>(
+		GlobalLoadingScreenWidget->GetWidgetFromName(TEXT("LoadingWorldProgressTextBlock"))))
+	{
+		WorldProgressTextBlock->SetText(Presentation.bHasRunSummary
+			? FText::Format(NSLOCTEXT("CatLoading", "WorldProgress", "世界进度 {0}%"),
+				FText::AsNumber(Presentation.RunSummaryWorldProgress))
+			: HostNotProvided);
+	}
+	if (UTextBlock* DailyTargetTextBlock = Cast<UTextBlock>(
+		GlobalLoadingScreenWidget->GetWidgetFromName(TEXT("LoadingDailyTargetTextBlock"))))
+	{
+		DailyTargetTextBlock->SetText(Presentation.bHasRunSummary && Presentation.RunSummaryDailyOfferingTarget > 0
+			? FText::Format(NSLOCTEXT("CatLoading", "DailyTarget", "当日任务 {0} 点"),
+				FText::AsNumber(Presentation.RunSummaryDailyOfferingTarget))
+			: HostNotProvided);
+	}
+	if (UTextBlock* TankReserveTextBlock = Cast<UTextBlock>(
+		GlobalLoadingScreenWidget->GetWidgetFromName(TEXT("LoadingTankReserveTextBlock"))))
+	{
+		TankReserveTextBlock->SetText(
+			Presentation.bHasRunSummary && Presentation.RunSummaryTankOfferingPoints >= 0
+			? FText::Format(NSLOCTEXT("CatLoading", "TankReserve", "缸内可献 {0} 点"),
+				FText::AsNumber(Presentation.RunSummaryTankOfferingPoints))
+			: (Presentation.bHasRunSummary
+				? NSLOCTEXT("CatLoading", "TankReserveUnrecorded", "缸内可献 未记录")
+				: HostNotProvided));
+	}
+	if (UProgressBar* WorldProgressBar = Cast<UProgressBar>(
+		GlobalLoadingScreenWidget->GetWidgetFromName(TEXT("LoadingWorldProgressBar"))))
+	{
+		WorldProgressBar->SetVisibility(Presentation.bHasRunSummary
+			? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+		WorldProgressBar->SetIsMarquee(false);
+		WorldProgressBar->SetPercent(Presentation.bHasRunSummary
+			? FMath::Clamp(Presentation.RunSummaryWorldProgress / 100.0f, 0.0f, 1.0f) : 0.0f);
 	}
 	if (UTextBlock* DetailTextBlock = Cast<UTextBlock>(
 		GlobalLoadingScreenWidget->GetWidgetFromName(TEXT("LoadingDetailTextBlock"))))
@@ -1414,6 +1725,17 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	}
 	WorldInfoController = NewObject<UCatWorldInfoController>(this);
 	WorldInfoController->Bind(Controller);
+	// 首解锁特写与新鱼种广播：本人那条读本机 Profile 落盘事实，别人那条读 GameState 公开广播，两条互不代替。
+	if (!FishSpeciesFirstRecordedHandle.IsValid())
+	{
+		if (UCatProfileSubsystem* Profile = GetLocalPlayer() ? GetLocalPlayer()->GetSubsystem<UCatProfileSubsystem>() : nullptr)
+		{
+			FishSpeciesFirstRecordedHandle = Profile->OnFishSpeciesFirstRecorded.AddUObject(
+				this, &ThisClass::HandleLocalFishSpeciesFirstRecorded);
+		}
+	}
+	RefreshFishDiscoveryBinding();
+	LogInventoryToggleKeyBinding();
 	const UWorld* World = GetWorld();
 	const ULocalPlayer* LocalPlayer = GetLocalPlayer();
 	UE_LOG(LogCatUI, Log,
@@ -1442,6 +1764,17 @@ void UCatLocalPlayerUISubsystem::DetachPlayerLakeUI()
 	{
 		WorldInfoController->Unbind();
 		WorldInfoController = nullptr;
+	}
+	ClearFishDiscoveryBinding();
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(FishRevealDismissTimerHandle);
+	}
+	if (FishRevealWidget)
+	{
+		FishRevealWidget->OnDismissRequested.RemoveAll(this);
+		FishRevealWidget->RemoveFromParent();
+		FishRevealWidget = nullptr;
 	}
 	// 先清理全局悬停来源，再移除 View；后续格子的 Destruct 不会再触发过期提示。
 	if (ItemTooltipController)
@@ -1523,6 +1856,9 @@ void UCatLocalPlayerUISubsystem::DetachPlayerLakeUI()
 // HUD 渲染转交流程：Model 已聚合天数、入口显隐和可选调试反馈；Subsystem 只把它交给 HUD WBP。
 void UCatLocalPlayerUISubsystem::HandleHUDModelViewStateChanged()
 {
+	// 客户端的 GameState 可能比 Pawn 晚到，装配那一次接不上新鱼种广播。
+	// HUD Model 自己有等待 GameState 的重试，所以借它的每次投影补一次接线——已经接上时这里直接返回。
+	RefreshFishDiscoveryBinding();
 	if (HUDModel && HUDWidget)
 	{
 		HUDWidget->RenderHUD(HUDModel->GetViewState());
@@ -1550,6 +1886,7 @@ void UCatLocalPlayerUISubsystem::ToggleLakeMainMenu()
 		}
 	}
 	LakeMainMenuController->ToggleMenu();
+	RefreshHUDAfterPageVisibilityChanged();
 }
 
 // HUD 入口动作流程：背包、主菜单和图鉴都转交已有控制器；HUD 不拼业务页面，也不持有保存或离局业务。

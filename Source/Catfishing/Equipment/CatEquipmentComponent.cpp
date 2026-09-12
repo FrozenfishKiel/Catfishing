@@ -1035,6 +1035,82 @@ bool UCatEquipmentComponent::GetFishingRodDurability(const FGuid FishingSessionI
 	return FMath::IsFinite(OutDurability) && OutDurability >= 0.0;
 }
 
+// 断竿报废流程：
+// 1. 先要求 authority、会话记录与正式库存都在；缺任一项都不动库存事实。
+// 2. 按 Begin 冻结的实例 ID 解析当前实例并确认它**真的已断**——没断的竿绝不在这里消失。
+// 3. 按它此刻所在的位置移除：正在部署走 held entry 退役，已经在可见格就清那一格。
+// 4. 最后把指向它的钓具选择清空并重新校正，让自动改选按「库存里已经没有这根竿」跑。
+bool UCatEquipmentComponent::RetireBrokenFishingRodFromAuthority(const FGuid FishingSessionId)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return false;
+	}
+	const FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
+	if (Record == nullptr || !Record->RodItemInstanceId.IsValid())
+	{
+		return false;
+	}
+	UCatInventoryComponent* RodInventory = Record->RodInventory.Get();
+	if (RodInventory == nullptr)
+	{
+		return false;
+	}
+	FCatInventoryEntry RodItem;
+	const UCatEquipmentInventoryItemInstance* FormalRodInstance =
+		ResolveFishingRodFormalInstanceFromInventory(*Record, RodItem);
+	if (FormalRodInstance == nullptr || !FormalRodInstance->IsRodBroken())
+	{
+		return false;
+	}
+
+	const FGuid RodItemInstanceId = Record->RodItemInstanceId;
+	bool bRemoved = RodInventory->RetireHeldInventoryEntryFromAuthority(RodItemInstanceId);
+	if (!bRemoved)
+	{
+		const int32 SlotIndex = RodInventory->FindInventorySlotIndexFromInstanceId(RodItemInstanceId);
+		FCatInventoryEntry RemovedEntry;
+		bRemoved = SlotIndex != INDEX_NONE
+			&& RodInventory->RemoveInventoryEntryAtSlotFromAuthority(SlotIndex, RemovedEntry);
+	}
+	if (!bRemoved)
+	{
+		UE_LOG(LogCatEquipment, Warning,
+			TEXT("Event=equipment_broken_rod_retire_failed SessionId=%s RodItemInstanceId=%s Owner=%s Reason=ItemNotFoundInInventory"),
+			*FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			*RodItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(GetOwner()));
+		return false;
+	}
+
+	// 竿可能是借来的：实例住在竿主的库存里，而这条会话记录挂在抛竿者身上。
+	// 两边的选择读模型都可能指着刚被销毁的那根，所以两边都要清并各自重新校正（与磨损写回的处理同源）。
+	UCatEquipmentComponent* RodOwnerEquipment = RodInventory->GetOwner()
+		? RodInventory->GetOwner()->FindComponentByClass<UCatEquipmentComponent>() : nullptr;
+	const auto ClearRetiredRodSelection = [RodItemInstanceId](UCatEquipmentComponent& Equipment)
+	{
+		if (Equipment.Snapshot.RodItemInstanceId == RodItemInstanceId)
+		{
+			Equipment.Snapshot.RodDefinitionId = NAME_None;
+			Equipment.Snapshot.RodItemInstanceId.Invalidate();
+			Equipment.Snapshot.RodDurability = 0.0;
+			Equipment.Snapshot.bRodBroken = false;
+		}
+		Equipment.ReconcileLoadoutSelectionsWithInventory(nullptr, NAME_None);
+		++Equipment.Snapshot.Revision;
+		Equipment.PublishSnapshot();
+	};
+	ClearRetiredRodSelection(*this);
+	if (RodOwnerEquipment != nullptr && RodOwnerEquipment != this)
+	{
+		ClearRetiredRodSelection(*RodOwnerEquipment);
+	}
+	UE_LOG(LogCatEquipment, Log,
+		TEXT("Event=equipment_broken_rod_retired SessionId=%s RodItemInstanceId=%s Owner=%s Revision=%lld Result=ItemDestroyed"),
+		*FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+		*RodItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(GetOwner()), Snapshot.Revision);
+	return true;
+}
+
 FCatFishingUseOperationResult UCatEquipmentComponent::ReleaseFishingUse(const FGuid FishingSessionId, const bool bReturnCaughtBait)
 {
 	FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);

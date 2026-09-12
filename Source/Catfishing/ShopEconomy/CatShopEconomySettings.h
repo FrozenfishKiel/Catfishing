@@ -37,4 +37,23 @@ public:
 	/** 默认鱼类收购价表；行按鱼种 ID 提供每千克金币系数，缺表、缺行或坏系数由服务端整单拒绝。 */
 	UPROPERTY(Config, EditAnywhere, Category = "FishSale")
 	TSoftObjectPtr<UDataTable> DefaultFishSalePriceTable;
+
+	/**
+	 * 小鱼干的库存稳定 ID（商店册 §3.1.2：收摊后把剩余公款换成小鱼干，给猫猫们在篝火旁娱乐）。
+	 * 留空＝这件道具还没有资产，收摊时跳过兑换并记一行 Log —— 这不是 fail-closed，是「这条玩法还没有载体」。
+	 * 资产做好并登记进 CatInventorySettings.Definitions 之后，把稳定 ID 填在这里就能跑，C++ 侧不用再改。
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Settlement")
+	FName SettlementDriedFishDefinitionId = NAME_None;
+
+	/**
+	 * 一条小鱼干折合多少公款。<= 0 表示这条兑换率未裁，收摊时同样跳过兑换。
+	 * 兑换按整除取，余下不足一条的零钱留在账上不处理——公款本来就跟局走，不需要清零。
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Settlement")
+	int32 SettlementDriedFishCoinCost = 0;
+
+	/** 一次收摊最多兑出多少条小鱼干；防止余额极大时一口气塞爆公库。<= 0 表示不设上限。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Settlement")
+	int32 SettlementDriedFishMaxCount = 0;
 };

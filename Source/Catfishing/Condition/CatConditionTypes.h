@@ -88,4 +88,16 @@ struct FCatConditionSnapshot
 	/** 当前疲惫演出档；纯表现，ABP 与表现组件读它选动作，不参与任何数值裁决。 */
 	UPROPERTY(BlueprintReadOnly)
 	ECatFatigueTier FatigueTier = ECatFatigueTier::None;
+
+	/**
+	 * 周身臭气：吃下臭臭鱼后的「请勿靠近」（联机社交 §3.1.4、猫册子页「吃鱼效果」）。
+	 * 它不是纯演出——臭着期间无法被恶作剧选中、无法被队友搬运回营（搬运算「帮助」，2026-08-21 裁定）。
+	 * **扑倒反制不受它影响**（扑倒不算恶作剧，同日裁定），否则臭臭鱼就成了完美作案 buff。
+	 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bStench = false;
+
+	/** 臭气结束的服务器世界时间（秒）；给表现做倒计时用，权威解除仍由服务器一次性计时器写 bStench。 */
+	UPROPERTY(BlueprintReadOnly)
+	double StenchEndsServerTimeSeconds = 0.0;
 };

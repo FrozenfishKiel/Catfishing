@@ -11,6 +11,22 @@
 #include "Logging/CatLog.h"
 #include "Rendering/DrawElementTypes.h"
 
+// 新鱼种播报流程：只写文字并开始本地计时；控件缺失时记一条诊断即可，别人解锁这件事本来就不阻塞任何人。
+// 它刻意不走 ViewState——ViewState 是「当前事实的投影」，而这是一次性事件，投影里存它会让它随下一次刷新复现。
+void UCatHUDWidget::AnnounceFishSpeciesDiscovery(const FText& BroadcastText)
+{
+	if (!FishDiscoveryBroadcastTextBlock)
+	{
+		UE_LOG(LogCatUI, Warning,
+			TEXT("Event=ui_hud_fish_discovery_slot_missing Widget=%s World=%s Text=\"%s\" Result=FormalWidgetNeedsMigration"),
+			*GetName(), *GetNameSafe(GetWorld()), *BroadcastText.ToString());
+		return;
+	}
+	FishDiscoveryBroadcastTextBlock->SetText(BroadcastText);
+	FishDiscoveryBroadcastTextBlock->SetVisibility(ESlateVisibility::HitTestInvisible);
+	FishDiscoveryBroadcastUntilSeconds = FPlatformTime::Seconds() + CatHUDFishDiscoveryBroadcastLimits::VisibleSeconds;
+}
+
 // HUD 渲染流程：缓存 Model 生成的只读投影，按 Designer 真实绑定控件写入天数、调试文本、钓鱼反馈、入口按钮状态和进度条，再触发蓝图扩展点。
 void UCatHUDWidget::RenderHUD(const FCatHUDViewState& ViewState)
 {
@@ -83,6 +99,71 @@ void UCatHUDWidget::RenderHUD(const FCatHUDViewState& ViewState)
 	if (DayTextBlock)
 	{
 		DayTextBlock->SetText(ViewState.DayText);
+	}
+	if (TimeOfDayTextBlock)
+	{
+		TimeOfDayTextBlock->SetText(ViewState.TimeOfDayText);
+		TimeOfDayTextBlock->SetVisibility(ViewState.bShowTimeOfDay
+			? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
+	// 献祭要区分的三个量（交互册 §42）：前两个白天常驻，世界进度平时隐藏、打开界面时才露面。
+	if (DailyOfferingTargetTextBlock)
+	{
+		DailyOfferingTargetTextBlock->SetText(ViewState.DailyOfferingTargetText);
+		DailyOfferingTargetTextBlock->SetVisibility(ViewState.bShowOfferingCounters
+			? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
+	if (TankOfferableTextBlock)
+	{
+		TankOfferableTextBlock->SetText(ViewState.TankOfferableText);
+		TankOfferableTextBlock->SetVisibility(ViewState.bShowOfferingCounters
+			? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
+	if (WorldProgressTextBlock)
+	{
+		WorldProgressTextBlock->SetText(ViewState.WorldProgressText);
+		WorldProgressTextBlock->SetVisibility(ViewState.bShowWorldProgress
+			? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
+	if (WorldProgressBar)
+	{
+		WorldProgressBar->SetPercent(ViewState.NormalizedWorldProgress);
+		WorldProgressBar->SetVisibility(ViewState.bShowWorldProgress && ViewState.bHasWorldProgress
+			? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
+	if (ViewState.bShowRodDurability && !RodDurabilityTextBlock && !bHasLoggedMissingRodDurability)
+	{
+		// 竿耐久此前只在背包悬停框里出现（ui 与交互对表第 43 行判「量有、位置相反」）；正式 WBP 补齐控件之前先落一条可查诊断。
+		UE_LOG(LogCatUI, Warning,
+			TEXT("Event=ui_hud_rod_durability_slot_missing Widget=%s World=%s Result=FormalWidgetNeedsMigration"),
+			*GetName(), *GetNameSafe(GetWorld()));
+		bHasLoggedMissingRodDurability = true;
+	}
+	if (RodDurabilityTextBlock)
+	{
+		RodDurabilityTextBlock->SetText(ViewState.RodDurabilityText);
+		RodDurabilityTextBlock->SetVisibility(ViewState.bShowRodDurability
+			? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
+	if (RodDurabilityProgressBar)
+	{
+		RodDurabilityProgressBar->SetPercent(ViewState.NormalizedRodDurability);
+		RodDurabilityProgressBar->SetVisibility(ViewState.bShowRodDurability && ViewState.bHasRodDurability
+			? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
+	if (NearDeathTextBlock)
+	{
+		NearDeathTextBlock->SetText(ViewState.NearDeathText);
+		NearDeathTextBlock->SetVisibility(ViewState.bNearDeath
+			? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
+	if (ViewState.bShowTeammates && !bHasLoggedTeammatePanelData)
+	{
+		// 队友条是逐行布局，原生只给数据不建行；这条诊断证明数据已经到了 WBP 手上（多人钓鱼附篇 §4.3:129）。
+		UE_LOG(LogCatUI, Log,
+			TEXT("Event=ui_hud_teammate_panel_data_available Widget=%s World=%s Teammates=%d Result=ViewStateApplied"),
+			*GetName(), *GetNameSafe(GetWorld()), ViewState.Teammates.Num());
+		bHasLoggedTeammatePanelData = true;
 	}
 	if ((!TeamWalletTextBlock || !PurchaseBroadcastTextBlock) && !bHasLoggedMissingShopHUD)
 	{
@@ -251,6 +332,12 @@ void UCatHUDWidget::NativeTick(const FGeometry& MyGeometry, const float InDeltaT
 	const AGameStateBase* TickGameState = TickWorld ? TickWorld->GetGameState() : nullptr;
 	const double TickServerNowSeconds = TickGameState ? TickGameState->GetServerWorldTimeSeconds()
 		: (TickWorld ? TickWorld->GetTimeSeconds() : 0.0);
+	if (FishDiscoveryBroadcastTextBlock && FishDiscoveryBroadcastUntilSeconds > 0.0
+		&& FPlatformTime::Seconds() >= FishDiscoveryBroadcastUntilSeconds)
+	{
+		FishDiscoveryBroadcastUntilSeconds = 0.0;
+		FishDiscoveryBroadcastTextBlock->SetVisibility(ESlateVisibility::Collapsed);
+	}
 	if (PurchaseBroadcastTextBlock && LastHUDViewState.bShowPurchaseBroadcast
 		&& !LastHUDViewState.PurchaseBroadcasts.IsEmpty())
 	{

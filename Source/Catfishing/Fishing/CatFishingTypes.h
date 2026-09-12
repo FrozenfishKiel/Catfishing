@@ -151,6 +151,14 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	TObjectPtr<APlayerState> FisherPlayerState = nullptr;
 
+	/**
+	 * 当前挂着的换人请求由谁发起（多人钓鱼附篇 §2.4）；空表示没有人在等接手。
+	 * 请求无时限挂起、没有超时出口：本竿结束、主控换人或会话终止时自然消失。
+	 * 挂着期间这一竿没有任何特殊状态——体力照扣、归零照走持竿者落水，它只是一块「谁来接一下」的牌子。
+	 */
+	UPROPERTY(BlueprintReadOnly)
+	TObjectPtr<APlayerState> HandoffRequestedByPlayerState = nullptr;
+
 	/** 表现 Actor 的类型化引用；Task 6 不负责生成或初始化它们。 */
 	UPROPERTY(BlueprintReadOnly)
 	TObjectPtr<ACatFishingRodActor> RodActor = nullptr;
@@ -243,6 +251,14 @@ struct FCatFishingSessionSnapshot
 	/** 性格曲线处理后的归一化鱼线受力，范围 [0,1]。 */
 	UPROPERTY(BlueprintReadOnly)
 	float NormalizedLineLoad = 0.0f;
+
+	/**
+	 * 本竿鱼漂的咬钩信号稳定度，范围 [0,1]；真咬成立那一刻由服务器写入，终局时清零。
+	 * 它是鱼漂差异在运行期的落点：表现层按它决定咬钩提示有多明确（漂沉得干不干脆、提示有多强）。
+	 * 稳定度达到全场阈值的那一款（铃铛漂）另有一次不受距离衰减的全场广播，走 GameState 的信号入口。
+	 */
+	UPROPERTY(BlueprintReadOnly)
+	float BiteSignalStability = 0.0f;
 
 	/** 服务器确认的强对抗状态；客户端只消费，不自行按 Transform 猜测。 */
 	UPROPERTY(BlueprintReadOnly)

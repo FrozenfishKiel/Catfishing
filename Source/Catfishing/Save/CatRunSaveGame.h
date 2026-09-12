@@ -175,6 +175,14 @@ struct FCatSaveSlotSummary
 	UPROPERTY(SaveGame, BlueprintReadOnly)
 	int32 LastWorldProgressDelta = 0;
 
+	/**
+	 * 最近一次保存时共享鱼缸里那些鱼折算出的可献点数（加载页要给的第三个量，交互册 §42）。
+	 * 它和上面三项一样只是列表/加载展示元数据，不参与 Run 恢复——恢复靠的是 WorldFishContainers 里的鱼本身。
+	 * INDEX_NONE 表示这份存档没记过这个量（本字段之前写的旧档），前端必须显示「未记录」而不是 0 点。
+	 */
+	UPROPERTY(SaveGame, BlueprintReadOnly)
+	int32 TankOfferingPoints = INDEX_NONE;
+
 	/** 这一局是否已经终局（毕业或团灭）；true 的槽只能当战绩回看，前端不得提供「继续」，读档入口也会拒绝。
 	 *  文件永远保留：游戏自己不删档，删档只能由玩家在前端主动做（2026-09-11 拍）。 */
 	UPROPERTY(SaveGame, BlueprintReadOnly)
@@ -276,6 +284,12 @@ public:
 	 *  新增的加法字段：旧 v6 文件没有这项，反序列化后保持 false，正是「没打完、可以继续」，因此不抬 schema 版本。 */
 	UPROPERTY(SaveGame)
 	bool bRunCompleted = false;
+
+	/** 写盘时共享鱼缸里那些鱼折算出的可献点数；它只服务加载页摘要，不在恢复时写回任何鱼缸。
+	 *  INDEX_NONE 表示这份存档没记过（旧 v6 文件，或体重档未裁时算不出来），前端显示「未记录」而不是 0 点。
+	 *  新增的加法字段：旧文件反序列化后保持 INDEX_NONE，语义正确，因此不抬 schema 版本。 */
+	UPROPERTY(SaveGame)
+	int32 TankOfferingPoints = INDEX_NONE;
 
 	/** 本机玩家快照是否已经写入这个槽；新建空槽为 false，首次保存或离开前捕获成功后为 true。 */
 	UPROPERTY(SaveGame)

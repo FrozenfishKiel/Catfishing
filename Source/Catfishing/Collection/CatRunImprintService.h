@@ -103,6 +103,14 @@ private:
 	/** 在当前 World 查找精确 StableNetId 的项目 PlayerController；断线时返回空且保留投递记录。 */
 	AController* FindControllerByStableNetId(const FString& StableNetId) const;
 
+	/**
+	 * 把一条「某人第一次记录到某鱼种」的公开事实发布到 GameState。
+	 * 它只产生展示用广播：不写任何人的图鉴、不创建 Grant、不影响印记准入。
+	 * AnnouncementId 复用同一次的 FishRecorded GrantId，使重放与复制重发都只对应一条广播。
+	 */
+	void AnnounceFishSpeciesDiscovery(const FString& RecipientStableNetId, FName FishDefinitionId,
+		FGuid AnnouncementId) const;
+
 	/** 创建独立 GrantDeliveryRecord 并尝试投递；调用方必须先保证语义事实只提交一次。 */
 	FGuid EnqueueGrant(FCatProfileGrant Grant);
 

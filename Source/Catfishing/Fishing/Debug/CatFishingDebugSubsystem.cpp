@@ -238,23 +238,31 @@ namespace CatFishingDebugCommands
 		{
 			GrantItem(DefinitionId);
 		}
-		GrantStack(TEXT("BugBait"), Portions);
-		GrantStack(TEXT("BugChum"), Portions);
+		// 饵和窝料各有各的随身携带上限（道具册：普通饵 8 份、窝料 5 份），超出的份数库存那边会直接不收。
+		// 所以这里按各自上限夹一次，免得作弊指令看着给了 8 份窝料、实际只进 5 份，让人以为是 bug。
+		const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+		const int32 BaitPortions = InventorySettings
+			? FMath::Min(Portions, InventorySettings->GetBaitCarryLimit()) : Portions;
+		const int32 ChumPortions = InventorySettings
+			? FMath::Min(Portions, InventorySettings->GetChumCarryLimit()) : Portions;
+		GrantStack(TEXT("BugBait"), BaitPortions);
+		GrantStack(TEXT("BugChum"), ChumPortions);
 
 		// 竿要真的拿在手上才是「装备即状态」的钓鱼待机（钓鱼规则 §1:25），否则还得手动点一下背包。
 		const FGuid RodInstanceId = Equipment->GetSnapshot().RodItemInstanceId;
 		const bool bEquipped = RodInstanceId.IsValid()
 			&& Equipment->Use(FGuid::NewGuid(), Equipment->GetSnapshot().Revision, RodInstanceId).bCommitted;
 		UE_LOG(LogCatFishing, Log,
-			TEXT("Event=fishing_debug_give_kit SessionOwner=%s PlayerIndex=%d GrantedEntries=%d Portions=%d RodEquipped=%s"),
-			*GetNameSafe(Character), PlayerIndex, Granted, Portions, bEquipped ? TEXT("true") : TEXT("false"));
+			TEXT("Event=fishing_debug_give_kit SessionOwner=%s PlayerIndex=%d GrantedEntries=%d Portions=%d BaitPortions=%d ChumPortions=%d RodEquipped=%s"),
+			*GetNameSafe(Character), PlayerIndex, Granted, Portions, BaitPortions, ChumPortions,
+			bEquipped ? TEXT("true") : TEXT("false"));
 	}
 
 	/** 手验用的一键钓具；只走正式授予与 Use 事务，不直写库存。 */
 	static FAutoConsoleCommandWithWorldAndArgs CmdGiveKit(
 		TEXT("cat.Fishing.Debug.GiveKit"),
 		TEXT("给玩家一整套钓具（一级竿／羽毛漂／抄网／鱼护／虫饵／虫窝料）并把竿拿到手，拿完即可抛竿。")
-		TEXT("参数：PlayerIndex（默认 0）BaitAndChumPortions（默认 8）。"),
+		TEXT("参数：PlayerIndex（默认 0）BaitAndChumPortions（默认 8，实际按各自随身上限夹：饵 8／窝料 5）。"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&GiveFishingKitToPlayer),
 		ECVF_Cheat);
 #endif

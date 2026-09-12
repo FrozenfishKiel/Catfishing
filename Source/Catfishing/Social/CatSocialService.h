@@ -25,14 +25,23 @@ public:
 	/** Host teardown 时永久关闭全部新 Social 命令；Social 只持权限与信号，关门之后没有待收口的实物事务。 */
 	void CloseCommands();
 
-	/** 幂等检查普通恶作剧权限、冷却与 ProtectionSign；成功只表示 Social 允许，上层玩法仍负责自身命中/演出。 */
+	/**
+	 * 幂等检查普通恶作剧的距离、目标身体状态与 ProtectionSign；成功只表示 Social 允许，上层玩法仍负责自身命中/演出。
+	 *
+	 * 这里没有频率上限也没有时机限制（联机社交 §3.1.4，熟人自治）：连着整同一只猫、在人家搏斗最紧张的时候整，
+	 * 规则上都允许——被整正是戏。护栏只有两样：被整者立的防骚扰牌，和房主踢人。
+	 * 拒绝项只有三类：够不着、目标倒地、目标在牌子保护内或正臭着（臭臭鱼 90 秒「请勿靠近」）。
+	 */
 	FCatDomainCommandResult RequestMischief(AController* InstigatorController, AController* TargetController,
 		FGuid RequestId, FVector InteractionLocation);
 
-	/** 玩家幂等地在自身附近放置或移动唯一 ProtectionSign；显式范围未裁时拒绝。
-	 *  牌子目前只裁决恶作剧。「立牌＝完整免打扰」按「拿鱼」重述后应当覆盖「别人从你的地面鱼护拿鱼」，
-	 *  但那条豁免的几何口径（保护的是牌子范围内的鱼护，还是鱼的归属者）09-11 仍挂在李前臻名下未裁，
-	 *  所以拿鱼路径暂时不读牌子；没裁的部分不在代码里先补一个半成品（联机社交册 §3.1.5、09-11 回填清单 L215）。 */
+	/**
+	 * 玩家幂等地在自身附近放置或移动唯一 ProtectionSign；显式范围未裁时拒绝。
+	 *
+	 * 牌子只裁决恶作剧，**不挡拿鱼**（2026-09-12 裁决③，联机社交 §3.1.4／§3.1.5）：
+	 * 08-16 那句「立牌＝完整免打扰」随「恶作剧权限开关」这层概念一并退役，代码一直就是这么做的、此前是文档说错了。
+	 * 牌子本身保留、现状不变、待重新设计——那时候从零开始比从一句悬空的话开始干净。
+	 */
 	FCatDomainCommandResult PlaceProtectionSign(AController* RequestingController, FGuid RequestId,
 		FVector SignLocation);
 
@@ -53,8 +62,9 @@ private:
 	/** 判断项目 Character 当前可参与 Social 交互：角色/Condition 有效且未倒地。 */
 	static bool IsCharacterSociallyActive(const ACatCharacter* Character);
 
-	/** 玩家身份到上次普通恶作剧服务器时间；未裁冷却不会写入。 */
-	TMap<FString, double> LastMischiefTimeByPlayer;
+	// 墓碑（2026-09-12）：这里原有 `TMap<FString, double> LastMischiefTimeByPlayer`，配 MischiefCooldownSeconds
+	// 给每名玩家记一次恶作剧时间戳做系统级频率上限。联机社交 §3.1.4 明写不设这道闸，整张表随之删除。
+	// 手动求助的冷却（LastManualHelpTimeByPlayer）是另一回事：那是防信号刷屏，设计没要求取消。
 
 	/** 玩家身份到上次手动求助服务器时间；Giant 系统提示不占用该冷却。 */
 	TMap<FString, double> LastManualHelpTimeByPlayer;

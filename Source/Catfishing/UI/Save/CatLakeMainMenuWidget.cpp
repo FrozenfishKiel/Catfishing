@@ -1,6 +1,7 @@
 #include "UI/Save/CatLakeMainMenuWidget.h"
 
 #include "Blueprint/WidgetTree.h"
+#include "GameFramework/PlayerState.h"
 #include "Components/Button.h"
 #include "Components/CheckBox.h"
 #include "Components/ComboBoxString.h"
@@ -150,6 +151,16 @@ void UCatLakeMainMenuWidget::RequestOpenSettings()
 void UCatLakeMainMenuWidget::RequestOpenCollection()
 {
 	SubmitMenuAction(ECatLakeMainMenuAction::OpenCollection);
+}
+
+// 踢人意图流程：只广播目标，不判断资格、不显示结果。
+// 资格在服务器（房主服务），结果沿公共领域回执回来；Widget 这一侧多做一层判断只会和服务器打架。
+void UCatLakeMainMenuWidget::RequestKickPlayer(APlayerState* TargetPlayerState)
+{
+	if (TargetPlayerState)
+	{
+		OnKickRequested.Broadcast(TargetPlayerState);
+	}
 }
 
 // 保存请求流程：只广播保存意图；Save 子系统负责判断 Host、活动槽、busy 和磁盘结果。

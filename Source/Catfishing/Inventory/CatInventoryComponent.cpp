@@ -498,6 +498,19 @@ UCatInventoryItemInstance* UCatInventoryComponent::AddEntry(
 		return nullptr;
 	}
 
+	// 随身携带总量是格数、单格堆叠之外的第三道（道具册：普通饵 8 份、窝料 5 份）。
+	// 超出的份数不入库，InOutCount 保留余数，bOutFullyAdded 随之为 false，上游整批预检据此整单拒绝。
+	const int32 CarryAllowance = GetRemainingCarryAllowanceForDefinition(*ItemDefinition);
+	const int32 RejectedByCarryLimit = FMath::Max(0, InOutCount - CarryAllowance);
+	if (RejectedByCarryLimit > 0)
+	{
+		InOutCount -= RejectedByCarryLimit;
+		UE_LOG(LogCatInventory, Log,
+			TEXT("Event=inventory_carry_limit_clamped Owner=%s Definition=%s Requested=%d Allowance=%d"),
+			*GetNameSafe(GetOwner()), *ItemDefinition->GetInventoryDefinitionId().ToString(),
+			InOutCount + RejectedByCarryLimit, CarryAllowance);
+	}
+
 	UCatInventoryItemInstance* FirstAcceptedInstance = nullptr;
 	const int32 MaxStackCount = GetMaxStackCountForDefinition(*ItemDefinition);
 
@@ -569,6 +582,7 @@ UCatInventoryItemInstance* UCatInventoryComponent::AddEntry(
 		InventoryList.MarkItemDirty(TargetEntry);
 	}
 
+	InOutCount += RejectedByCarryLimit; // 余数交还调用方，让它看到真实的未入库份数。
 	bOutFullyAdded = InOutCount == 0;
 	if (FirstAcceptedInstance != nullptr)
 	{
@@ -601,6 +615,18 @@ void UCatInventoryComponent::AddEntry(UCatInventoryItemInstance* ItemInstance, i
 	if (TargetDefinition == nullptr)
 	{
 		return;
+	}
+
+	// 与按定义入库同一道随身携带总量；按实例入库同样要过（拾取地上的饵、从公库拖一叠饵进背包都走这里）。
+	const int32 CarryAllowance = GetRemainingCarryAllowanceForDefinition(*TargetDefinition);
+	const int32 RejectedByCarryLimit = FMath::Max(0, InOutCount - CarryAllowance);
+	if (RejectedByCarryLimit > 0)
+	{
+		InOutCount -= RejectedByCarryLimit;
+		UE_LOG(LogCatInventory, Log,
+			TEXT("Event=inventory_carry_limit_clamped Owner=%s Definition=%s Requested=%d Allowance=%d"),
+			*GetNameSafe(GetOwner()), *TargetDefinition->GetInventoryDefinitionId().ToString(),
+			InOutCount + RejectedByCarryLimit, CarryAllowance);
 	}
 
 	UCatInventoryItemInstance* FirstAcceptedInstance = nullptr;
@@ -696,6 +722,7 @@ void UCatInventoryComponent::AddEntry(UCatInventoryItemInstance* ItemInstance, i
 		InventoryList.MarkItemDirty(TargetEntry);
 	}
 
+	InOutCount += RejectedByCarryLimit; // 余数交还调用方，让它看到真实的未入库份数。
 	bOutFullyAdded = InOutCount == 0;
 	if (FirstAcceptedInstance != nullptr)
 	{
@@ -2803,6 +2830,16 @@ UCatInventoryComponent::FInventoryExchangeMutation UCatInventoryComponent::Execu
 	const UCatInventoryItemDefinition* DropDefinition =
 		DropEntry.Instance != nullptr ? DropEntry.Instance->GetItemDefinition() : nullptr;
 
+	// 随身携带总量只在跨库存移动时问：同一份库存内部整理不改变这只猫身上带了多少
+	//（与 09-11 裁决③同源口径——挡的是涉及别处容器的转移，不挡整理自己的背包）。
+	const bool bCrossInventoryExchange = DraggedInventory != DropInventory;
+	const auto ExceedsCarryAllowance = [](const UCatInventoryComponent* Target,
+		const UCatInventoryItemDefinition* Definition, const int32 IncomingCount)
+	{
+		return Target != nullptr && Definition != nullptr && IncomingCount > 0
+			&& Target->GetRemainingCarryAllowanceForDefinition(*Definition) < IncomingCount;
+	};
+
 	if (bDropOccupied
 		&& DraggedDefinition != nullptr
 		&& DropDefinition != nullptr
@@ -2815,6 +2852,11 @@ UCatInventoryComponent::FInventoryExchangeMutation UCatInventoryComponent::Execu
 		if (MovedCount <= 0)
 		{
 			Result.Error = ECatDomainCommandError::AlreadyResolved;
+			return Result;
+		}
+		if (bCrossInventoryExchange && ExceedsCarryAllowance(DropInventory, DraggedDefinition, MovedCount))
+		{
+			Result.Error = ECatDomainCommandError::InvalidPayload;
 			return Result;
 		}
 
@@ -2837,6 +2879,14 @@ UCatInventoryComponent::FInventoryExchangeMutation UCatInventoryComponent::Execu
 		DropInventory->InventoryList.MarkItemDirty(DropEntry);
 		Result.bChanged = true;
 		Result.Error = ECatDomainCommandError::None;
+		return Result;
+	}
+
+	if (bCrossInventoryExchange
+		&& (ExceedsCarryAllowance(DropInventory, DraggedDefinition, DraggedEntry.StackCount)
+			|| (bDropOccupied && ExceedsCarryAllowance(DraggedInventory, DropDefinition, DropEntry.StackCount))))
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
 		return Result;
 	}
 
@@ -2954,6 +3004,32 @@ bool UCatInventoryComponent::SimulateAddItemDefinition(TArray<FSimulatedInventor
 		return true;
 	}
 
+	// 预演必须和正式入库用同一道携带上限，否则整批预检会放行一个入库时会被削减的订单。
+	// 已带份数从**模拟格**里数，不从正式库存数：同一批里两行同类饵必须互相看得见彼此已经占掉的份额。
+	if (EnforcesCarryLimits())
+	{
+		const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+		const ECatInventoryCarryCategory Category = UCatInventorySettings::ResolveCarryCategory(ItemDefinition);
+		const int32 Limit = InventorySettings != nullptr
+			? InventorySettings->GetCarryLimitForCategory(Category) : MAX_int32;
+		if (Category != ECatInventoryCarryCategory::None && Limit != MAX_int32)
+		{
+			int32 SimulatedCategoryTotal = 0;
+			for (const FSimulatedInventorySlot& SimulatedSlot : SimulatedSlots)
+			{
+				if (SimulatedSlot.ItemDefinition != nullptr && SimulatedSlot.StackCount > 0
+					&& UCatInventorySettings::ResolveCarryCategory(*SimulatedSlot.ItemDefinition) == Category)
+				{
+					SimulatedCategoryTotal += SimulatedSlot.StackCount;
+				}
+			}
+			if (SimulatedCategoryTotal + InOutRemainingCount > Limit)
+			{
+				return false;
+			}
+		}
+	}
+
 	const int32 MaxStackCount = GetMaxStackCountForDefinition(ItemDefinition);
 	if (MaxStackCount > 1)
 	{
@@ -3069,6 +3145,50 @@ int32 UCatInventoryComponent::GetMaxStackCountForDefinition(
 	const UCatInventoryItemDefinition& ItemDefinition) const
 {
 	return ItemDefinition.GetMaxStackCount();
+}
+
+// 同类总量统计流程：逐格判分类再累加数量；held entry 不计——借出去的竿漂不是数量型消耗品，不属于任何携带分类。
+int32 UCatInventoryComponent::CountVisibleQuantityForCarryCategory(const ECatInventoryCarryCategory Category) const
+{
+	if (Category == ECatInventoryCarryCategory::None)
+	{
+		return 0;
+	}
+	int32 Total = 0;
+	for (const FCatInventoryEntry& Entry : InventoryList.Entries)
+	{
+		const UCatInventoryItemDefinition* Definition =
+			Entry.Instance != nullptr ? Entry.Instance->GetItemDefinition() : nullptr;
+		if (Definition == nullptr || Entry.StackCount <= 0
+			|| UCatInventorySettings::ResolveCarryCategory(*Definition) != Category)
+		{
+			continue;
+		}
+		Total += Entry.StackCount;
+	}
+	return Total;
+}
+
+// 携带余量读取流程：
+// 1. 不受约束的库存（营地公库、鱼护、商店货架、鱼缸）一律返回 MAX_int32，「携带上限」只管猫身上那一份。
+// 2. 未配置上限的分类同样返回 MAX_int32 —— 漏配的后果是「这条规则还没生效」，不是把饵挡在背包外。
+// 3. 有效上限减去已带份数即余量；负值夹到 0。
+int32 UCatInventoryComponent::GetRemainingCarryAllowanceForDefinition(
+	const UCatInventoryItemDefinition& ItemDefinition) const
+{
+	if (!EnforcesCarryLimits())
+	{
+		return MAX_int32;
+	}
+	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+	const ECatInventoryCarryCategory Category = UCatInventorySettings::ResolveCarryCategory(ItemDefinition);
+	const int32 Limit = InventorySettings != nullptr
+		? InventorySettings->GetCarryLimitForCategory(Category) : MAX_int32;
+	if (Category == ECatInventoryCarryCategory::None || Limit == MAX_int32)
+	{
+		return MAX_int32;
+	}
+	return FMath::Max(0, Limit - CountVisibleQuantityForCarryCategory(Category));
 }
 
 // 实例引用检查流程：清理指定槽位时跳过该槽，确认同一实例没有被其他格继续持有。

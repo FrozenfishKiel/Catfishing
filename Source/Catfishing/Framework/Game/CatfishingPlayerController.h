@@ -212,6 +212,16 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerPlaceProtectionSign(FGuid RequestId, FVector SignLocation);
 
+	/**
+	 * 房主把某人踢出本局（联机社交 §3.1.1、§4 软性：一切社交僵局的兜底，被踢者跟人走的资产无损）。
+	 *
+	 * 房主资格、目标有效性与清理全部由 authority 的 UCatRoomOwnerService 裁决，本 RPC 只做网络适配；
+	 * 结果沿用公共领域回执通道（ClientReceiveCampCommandResult）回送给发起者。
+	 * UI 入口（房间页那颗按钮）不在这里：C++ 侧只保证「谁能按、按下去发生什么」。
+	 */
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Room")
+	void ServerKickPlayer(APlayerState* TargetPlayerState, FGuid RequestId);
+
 	/** Online Client 在 DestroySession 前通知服务器这是主动离局；GameMode 不把它误判为连接故障。 */
 	UFUNCTION(Server, Reliable)
 	void ServerMarkVoluntaryLeave();

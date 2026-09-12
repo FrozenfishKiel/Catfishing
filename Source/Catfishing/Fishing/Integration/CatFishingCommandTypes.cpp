@@ -60,6 +60,10 @@ FText CatFishingCommandFeedback::GetPlayerFacingText(const ECatFishingCommandErr
 		return NSLOCTEXT("Catfishing", "CastOutOfReach", "够不到那边");
 	case ECatFishingCommandError::RodDeploymentLimitReached:
 		return NSLOCTEXT("Catfishing", "RodDeploymentLimit", "场上鱼竿已达上限，请先收起一根。");
+	// 换人接手的体力门槛（多人钓鱼附篇 §2.4）：告诉他是体力不够，否则按了没反应会以为键坏了。
+	// HandoffNotRequested 不给文案：那多半只是误按，没有人在等接手的时候不该弹提示。
+	case ECatFishingCommandError::HandoffStaminaTooLow:
+		return NSLOCTEXT("Catfishing", "HandoffStaminaTooLow", "体力还没缓过来，接不了竿");
 	default:
 		return FText::GetEmpty();
 	}

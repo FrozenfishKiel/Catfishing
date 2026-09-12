@@ -15,4 +15,10 @@ public:
 	UCatBackPackComponent(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 	/** authority 在角色被占有后调用，按 InventorySettings 写入玩家背包容量并建立空槽位。 */
 	void InitializePlayerInventorySlotCapacityFromAuthority();
+
+	/**
+	 * 背包是唯一受「随身携带总量」约束的库存（道具册：普通饵 8 份、窝料 5 份）。
+	 * 营地公库、鱼护、鱼缸和商店货架都不受它管——那几条限制各自另有容量口径。
+	 */
+	virtual bool EnforcesCarryLimits() const override { return true; }
 };

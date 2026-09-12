@@ -5,6 +5,7 @@
 #include "CatUISettings.generated.h"
 
 class UCatCollectionWidget;
+class UCatFishRevealWidget;
 class UCatHUDWidget;
 class UCatDayTransitionWidget;
 class UCatItemTooltipWidget;
@@ -55,6 +56,12 @@ public:
 
 	/** 读取个人图鉴页 WBP 类；缺失时只关闭图鉴入口并记录，不创建原生白盒替身，也不影响 Profile 图鉴记录。 */
 	TSubclassOf<UCatCollectionWidget> LoadCollectionWidgetClass() const;
+
+	/**
+	 * 读取首次解锁鱼种的特写浮层 WBP 类；缺失时只关闭这一次特写并记录一次诊断，
+	 * 既不创建原生白盒替身，也不影响图鉴记录本身——记录早在 Profile 落盘时就写好了。
+	 */
+	TSubclassOf<UCatFishRevealWidget> LoadFishRevealWidgetClass() const;
 
 	/** 返回配置的局内主菜单 Input Action；它应由项目既有 InputContext 映射到 Escape 或等价菜单键。 */
 	UInputAction* LoadMainMenuToggleAction() const;
@@ -125,6 +132,13 @@ public:
 	/** 个人图鉴页 WBP 类；默认指向正式资产，页面只读 Profile durable 快照，不承载局内图鉴板与印记相册。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Collection")
 	TSoftClassPtr<UCatCollectionWidget> CollectionWidgetClass;
+
+	/**
+	 * 首次解锁鱼种的特写浮层 WBP 类；默认指向正式资产路径，资产尚未创建时保持空并由调用方 fail-closed。
+	 * 它只是一次性揭示层，不承载图鉴页——图鉴页是 CollectionWidgetClass。
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Lake|Collection")
+	TSoftClassPtr<UCatFishRevealWidget> FishRevealWidgetClass;
 
 	/** 局内主菜单的正式 Enhanced Input Action 资产；项目应把它维护在既有 InputContext 内，运行时代码只绑定 Action。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Input")

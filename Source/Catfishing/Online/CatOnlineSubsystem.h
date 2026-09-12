@@ -55,7 +55,15 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Online")
 	FCatOnlineResult RequestAcceptInvite(FCatSessionInviteHandle InviteHandle);
 
-	/** 根据已确认 SessionRole 选择 Host exit 或 Client leave；Lake Host 先等最终保存成功再 teardown、Destroy 和回前台，释放本局载荷后才结案，保存失败保留会话。 */
+	/**
+	 * 根据已确认 SessionRole 选择 Host exit 或 Client leave；Lake Host 先等最终保存成功再 teardown、Destroy 和回前台，
+	 * 释放本局载荷后才结案，保存失败保留会话。
+	 *
+	 * 这里的 Host **不是房主**（2026-09-07 决策点⑩两层论）：它是「本进程正在当 listen server」这个网络事实。
+	 * 房主是房间管理层的社交角色，在 UCatRoomOwnerService 手里，离开时只移交给最早加入者、本局接着打。
+	 * 走到这条 Host 分支的是「世界所在的那个进程要退出」，世界随之消失，所以仍然整局收口——
+	 * 让它也能接着打需要真正的 Host Migration（新 listen server ＋ 世界状态跨机迁移 ＋ 全员重连），尚未实现。
+	 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Online")
 	FCatOnlineResult RequestLeave();
 
@@ -68,7 +76,11 @@ public:
 	/** 使用好友缓存中的 opaque 句柄向当前 Host Lobby 发送 Steam 邀请；调用者不能直接接触平台身份。 */
 	FCatOnlineResult RequestInviteFriend(FCatOnlineFriendHandle FriendHandle);
 
-	/** 接受服务器 Host exit 通知；并发先于关联键/角色校验拒绝且不覆盖活动关联键，Client 绕过主动离局策略复用 Destroy/Frontend 管线，返回后释放本机载荷。 */
+	/**
+	 * 接受服务器「承载世界的进程要退出了」通知；并发先于关联键/角色校验拒绝且不覆盖活动关联键，
+	 * Client 绕过主动离局策略复用 Destroy/Frontend 管线，返回后释放本机载荷。
+	 * 房主移交不经过这条路——换房主不通知任何客户端退出，本局继续（联机社交 §3.1.1）。
+	 */
 	FCatOnlineResult RequestRemoteHostExit(FGuid HostExitRequestId);
 
 	/** 组装当前四类事实、RequestId/epoch、opaque 摘要和真实加载进度；实现只复制 Online 已观察到的资源/包/旅行事实，不推进异步状态。 */

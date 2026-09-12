@@ -23,6 +23,20 @@ void ACatfishingPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ThisClass, PublicFishCollection);
 	DOREPLIFETIME(ThisClass, AuthorizedEquipmentUnlockIds);
+	DOREPLIFETIME(ThisClass, bRoomOwner);
+}
+
+// 房主标记写入流程：只接受 authority 并在真实变化时强制网络更新。
+// PlayerState 只是这条事实的复制载体：谁当房主、什么时候移交，全由 UCatRoomOwnerService 裁决，
+// 它保证全场同时最多一个 true（换人时先清旧的再置新的）。
+void ACatfishingPlayerState::SetRoomOwnerFromAuthority(const bool bNewRoomOwner)
+{
+	if (!HasAuthority() || bRoomOwner == bNewRoomOwner)
+	{
+		return;
+	}
+	bRoomOwner = bNewRoomOwner;
+	ForceNetUpdate();
 }
 
 // 公开图鉴写入流程：仅 authority 接受有限数量、唯一非空鱼种、至少一层已解锁和有限非负数值；验证全部通过后整体替换并强制网络更新。

@@ -110,6 +110,21 @@ public:
 	/** Service显式授予主控后的会话接管；保留原扣饵记录和同一竿实例。 */
 	bool ResumePrimaryControlFromAuthority(AController* NewFisherController);
 
+	/**
+	 * 主钓手按键发起或取消换人请求（多人钓鱼附篇 §2.4：按 E 发起、再按 E 取消、无时限挂起）。
+	 * 只有当前主控能发起；返回 false 表示身份或阶段不对，状态一个字没动。
+	 */
+	bool ToggleHandoffRequestFromAuthority(AController* PrimaryController);
+
+	/** 当前是否挂着换人请求；空 PlayerState＝没有。 */
+	bool IsHandoffRequested() const { return Snapshot.HandoffRequestedByPlayerState != nullptr; }
+
+	/** 谁发起的这次换人请求；替补接手时用它复核「发起者仍是当前主控」。 */
+	APlayerState* GetHandoffRequesterPlayerState() const { return Snapshot.HandoffRequestedByPlayerState; }
+
+	/** 清掉挂着的换人请求；主控换人、本竿结束与会话终止都会调用，重复调用无副作用。 */
+	void ClearHandoffRequestFromAuthority(const TCHAR* Reason);
+
 	/** 当前主控私有身份；无人值守为空，服务用于索引。 */
 	const FString& GetFisherStableNetIdForAuthority() const { return FisherStableNetId; }
 
@@ -196,6 +211,13 @@ private:
 
 	/** 读本场绑定鱼竿定义上的竿强度（静态配置，三档 25/60/210）；0 表示未裁，调用方不得据此瞬断。 */
 	bool TryResolveRodStrength(double& OutRodStrength) const;
+
+	/**
+	 * 声明：真咬成立那一刻把本竿鱼漂的咬钩信号发出去——写进公开快照，够门槛的再走一次全场广播。
+	 * 依据：鱼漂表「铃铛漂：咬钩铃响、全场可闻」；稳定度是三款漂唯一的既有差异字段，不为这条新增资产字段。
+	 * 边界：读不到鱼漂定义时只记一行诊断、不广播；它不改变任何咬钩判定，纯表现事实。
+	 */
+	void PublishBiteSignalFromAuthority();
 
 	/** 碾压达标：把鱼直接甩到持竿猫脚下的干地并进待拾取，跳过/中断搏斗循环。 */
 	bool FlingFishAshoreFromAuthority();

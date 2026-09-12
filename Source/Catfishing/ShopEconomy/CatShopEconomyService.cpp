@@ -4,8 +4,13 @@
 #include "AbilitySystem/Effects/CatShopEconomyTransactionEffect.h"
 #include "AbilitySystem/Executions/CatShopEconomyTransactionExecutionCalculation.h"
 #include "AbilitySystemComponent.h"
+#include "Camp/CatCampInventoryActor.h"
 #include "Engine/DataTable.h"
+#include "EngineUtils.h"
 #include "Framework/Game/CatfishingGameState.h"
+#include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventorySettings.h"
+#include "Inventory/CatInventoryStatics.h"
 #include "Logging/CatLog.h"
 #include "ShopEconomy/CatShopCartCommandUtils.h"
 #include "ShopEconomy/CatShopInventoryComponent.h"
@@ -52,6 +57,8 @@ void UCatShopEconomyService::Initialize(FSubsystemCollectionBase& Collection)
 // 反初始化流程：先关闭新交易，再解除摊位库存订阅、清除账本和终态缓存；不把团队公款带入下一局。
 void UCatShopEconomyService::Deinitialize()
 {
+	// 先立起拆除标记再关门：teardown 不是收摊，不能借这条路径再往营地发一批小鱼干。
+	bTearingDown = true;
 	CloseCommands();
 	for (const FRegisteredShopInventorySubscription& Subscription : RegisteredInventoryChangedHandles)
 	{
@@ -684,7 +691,124 @@ FCatShopPublicEconomySnapshot UCatShopEconomyService::BuildPublicSnapshot(
 // 收口本来就是同一件事，差别只在调用时机。
 void UCatShopEconomyService::CloseCommands()
 {
+	if (!bCommandsOpen)
+	{
+		return; // 已经收过摊；重复调用不再兑一次小鱼干，也不做第二次副作用。
+	}
+	// 顺序是先兑后关：兑换要走扣公款这条写口，而写口本身受命令门约束。
+	ConvertSettlementLeftoversToDriedFish();
 	bCommandsOpen = false;
+}
+
+// 收摊兑换流程：
+// 1. 先确认这条玩法有载体——小鱼干的稳定 ID 和兑换率都配齐、且稳定 ID 能在库存目录里解析到可运行定义。
+//    任一项缺失只记一行 Log 并返回 0：小鱼干道具还没有资产是已知的资产缺口，不能因此把收摊挡住。
+// 2. 读当前公款，按兑换率整除得到条数，再按上限夹一次；零条直接返回。
+// 3. 先扣公款再发货。扣款走和购买同一条 GE 写口；发货失败时把刚扣的钱补回去，不留「钱扣了、货没到」。
+int32 UCatShopEconomyService::ConvertSettlementLeftoversToDriedFish()
+{
+	const UCatShopEconomySettings* Settings = GetDefault<UCatShopEconomySettings>();
+	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+	UCatInventoryItemDefinition* DriedFish = Settings && InventorySettings
+		&& !Settings->SettlementDriedFishDefinitionId.IsNone()
+		? InventorySettings->FindRuntimeDefinition(Settings->SettlementDriedFishDefinitionId) : nullptr;
+	const int32 CoinCost = Settings ? Settings->SettlementDriedFishCoinCost : 0;
+	if (bTearingDown)
+	{
+		return 0;
+	}
+	if (!bRuntimeReady || DriedFish == nullptr || CoinCost <= 0
+		|| !DriedFish->IsInventoryRuntimeDefinitionReady())
+	{
+		UE_LOG(LogCatfishing, Log,
+			TEXT("Event=shop_settlement_dried_fish_skipped DefinitionId=%s CoinCost=%d Resolved=%s Reason=NoRuntimeCarrier"),
+			Settings ? *Settings->SettlementDriedFishDefinitionId.ToString() : TEXT("None"), CoinCost,
+			DriedFish ? TEXT("true") : TEXT("false"));
+		return 0;
+	}
+
+	int32 Balance = 0;
+	if (!TryGetTeamWalletBalance(Balance) || Balance < CoinCost)
+	{
+		return 0;
+	}
+	int32 Count = Balance / CoinCost;
+	if (Settings->SettlementDriedFishMaxCount > 0)
+	{
+		Count = FMath::Min(Count, Settings->SettlementDriedFishMaxCount);
+	}
+	if (Count <= 0)
+	{
+		return 0;
+	}
+
+	// 收货去处：有公库角色就进公库，否则退回唯一的营地公共仓库；两个都没有就没地方放，整笔不做。
+	UWorld* World = GetWorld();
+	UCatInventoryComponent* Fallback = nullptr;
+	UCatInventoryComponent* SupplyStore = nullptr;
+	if (World != nullptr)
+	{
+		for (TActorIterator<ACatCampInventoryActor> It(World); It; ++It)
+		{
+			ACatCampInventoryActor* CampInventory = *It;
+			UCatInventoryComponent* Inventory = IsValid(CampInventory) && CampInventory->HasAuthority()
+				? CampInventory->GetInventoryComponent() : nullptr;
+			if (Inventory == nullptr)
+			{
+				continue;
+			}
+			Fallback = Fallback != nullptr ? Fallback : Inventory;
+			if (Inventory->GetTeamStorageRole() == ECatTeamStorageRole::SupplyStore && SupplyStore == nullptr)
+			{
+				SupplyStore = Inventory;
+			}
+		}
+	}
+	UCatInventoryComponent* Target = SupplyStore != nullptr ? SupplyStore : Fallback;
+	if (Target == nullptr)
+	{
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=shop_settlement_dried_fish_skipped Count=%d Reason=NoCampInventory"), Count);
+		return 0;
+	}
+
+	const FGuid RequestId = FGuid::NewGuid();
+	FCatInventoryReceiveBatch Batch;
+	FCatInventoryDefinitionEntry& Entry = Batch.DefinitionEntries.AddDefaulted_GetRef();
+	Entry.ItemDefinition = DriedFish;
+	Entry.Count = Count;
+	if (Target->ValidateInventoryDefinitionBatchGrantFromAuthority(RequestId, FString(), Batch)
+		!= ECatDomainCommandError::None)
+	{
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=shop_settlement_dried_fish_skipped Count=%d Reason=CampInventoryCannotAccept"), Count);
+		return 0;
+	}
+
+	int32 SpendDelta = -CoinCost * Count;
+	if (!TryApplyTeamWalletTransaction(SpendDelta, RequestId))
+	{
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=shop_settlement_dried_fish_skipped Count=%d Reason=WalletSpendRejected"), Count);
+		return 0;
+	}
+	const FCatDomainCommandResult Grant = Target->GrantInventoryDefinitionBatchFromAuthority(
+		RequestId, FString(), Batch);
+	if (!CatIsAcceptedDomainCommandResult(Grant))
+	{
+		// 货没进去就把钱退回来；退款用另一个 RequestId，避免撞上刚才那笔的幂等键。
+		int32 RefundDelta = CoinCost * Count;
+		const bool bRefunded = TryApplyTeamWalletTransaction(RefundDelta, FGuid::NewGuid());
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=shop_settlement_dried_fish_failed Count=%d Error=%s Refunded=%s"),
+			Count, *UEnum::GetValueAsString(Grant.Error), bRefunded ? TEXT("true") : TEXT("false"));
+		return 0;
+	}
+
+	UE_LOG(LogCatfishing, Log,
+		TEXT("Event=shop_settlement_dried_fish_granted Count=%d CoinCost=%d Spent=%d Target=%s"),
+		Count, CoinCost, CoinCost * Count, *GetNameSafe(Target->GetOwner()));
+	return Count;
 }
 
 #if !UE_BUILD_SHIPPING

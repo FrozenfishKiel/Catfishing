@@ -22,3 +22,17 @@ bool UCatConditionSettings::HasDownedSelfRecovery() const
 {
 	return bEnableConditionRuntime && FMath::IsFinite(DownedSelfRecoverySeconds) && DownedSelfRecoverySeconds > 0.0;
 }
+
+// 臭气就绪流程：只认有限正时长。未配＝没有「请勿靠近」，吃鱼的经验、黄条与重毒倒地都照常走，
+// 不把整条进食链拖下水——名册或时长缺一项只让这一个副作用不发生。
+bool UCatConditionSettings::HasStench() const
+{
+	return bEnableConditionRuntime && FMath::IsFinite(StenchSeconds) && StenchSeconds > 0.0;
+}
+
+// 发臭鱼名册流程：逐条比 FishDefinitionId，不做任何名字推断（「含 Stinky 就算」这种猜法会连上臭臭鱼的
+// 皮肤、变体一起误判）。名册空＝这条规则当前没有对象，调用方记一次 Warning 即可。
+bool UCatConditionSettings::IsStenchFish(const FName FishDefinitionId) const
+{
+	return !FishDefinitionId.IsNone() && StenchFishDefinitionIds.Contains(FishDefinitionId);
+}

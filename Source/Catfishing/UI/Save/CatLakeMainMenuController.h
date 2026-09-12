@@ -6,6 +6,7 @@
 #include "CatLakeMainMenuController.generated.h"
 
 class APlayerController;
+class APlayerState;
 class UCatLakeMainMenuWidget;
 class UCatFrontendSettingsModel;
 class UCatLocalPlayerUISubsystem;
@@ -46,6 +47,18 @@ public:
 
 	/** Widget 请求打开个人图鉴；Controller 先关闭本菜单释放模态输入，再把意图交给 LocalPlayer UI 的图鉴页面控制器。 */
 	void RequestCollectionFromWidget();
+
+	/**
+	 * Widget 请求把某人踢出本局（联机社交 §3.1.1 房主兜底）。
+	 *
+	 * 这里只做转交：房主资格、目标有效性与清理全部由服务器的房主服务裁决，本地不预判、不隐藏结果。
+	 * **它放在局内 ESC 菜单而不是前台房间页**，因为 ServerKickPlayer 要的是局内 PlayerState——
+	 * 前台房间页那会儿玩法 World 还不存在。菜单里这颗按钮长什么样、叫什么、放在哪一层，
+	 * 属于未裁的 UI 形态（主界面.md 只画了「组队管理」页，没画踢人按钮），所以原生层不建控件，
+	 * 只留这条可被 WBP 调用的入口：谁能按由 `ACatfishingPlayerState::IsRoomOwner()` 决定。
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|Room")
+	void RequestKickPlayerFromWidget(APlayerState* TargetPlayerState);
 
 	/** Widget 请求保存当前活动世界；Controller 只转交 Save 子系统并显示同步或异步结果文本。 */
 	void RequestSaveFromWidget();

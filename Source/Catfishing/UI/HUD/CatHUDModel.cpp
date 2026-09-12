@@ -9,6 +9,7 @@
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
 #include "Condition/CatConditionComponent.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Framework/Game/CatGameplayTypes.h"
@@ -16,12 +17,20 @@
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
 #include "Growth/CatGrowthComponent.h"
+#include "Camp/CatCampHubActor.h"
+#include "Equipment/CatEquipmentComponent.h"
+#include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
+#include "FishContainers/CatFishTankActor.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "UI/WorldInfo/CatFishTankWorldInfoComponent.h"
 #include "Inventory/CatInventoryItemDefinition.h"
 #include "Inventory/CatInventorySettings.h"
 #include "Logging/CatLog.h"
 #include "ShopEconomy/Trading/CatShopTradingTypes.h"
 #include "TimerManager.h"
 #include "UI/CatFishingViewBridge.h"
+#include "UI/CatLocalPlayerUISubsystem.h"
+#include "Engine/LocalPlayer.h"
 
 namespace
 {
@@ -75,6 +84,7 @@ bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InContro
 	BoundAbilitySystem = AbilitySystem;
 	BoundCondition = InCharacter->GetConditionComponent();
 	BoundGrowth = InCharacter->GetGrowthComponent();
+	BoundEquipment = InCharacter->GetEquipmentComponent();
 	if (ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(InController))
 	{
 		BoundFishingCommand = CatController->GetFishingCommandComponent();
@@ -94,6 +104,10 @@ bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InContro
 	if (UCatGrowthComponent* Growth = BoundGrowth.Get())
 	{
 		GrowthChangedHandle = Growth->OnSnapshotChanged.AddUObject(this, &ThisClass::HandleGrowthChanged);
+	}
+	if (UCatEquipmentComponent* Equipment = BoundEquipment.Get())
+	{
+		EquipmentSnapshotChangedHandle = Equipment->OnSnapshotChanged.AddUObject(this, &ThisClass::HandleEquipmentSnapshotChanged);
 	}
 	if (UCatFishingCommandComponent* FishingCommand = BoundFishingCommand.Get())
 	{
@@ -130,6 +144,10 @@ void UCatHUDModel::Unbind()
 	{
 		Growth->OnSnapshotChanged.Remove(GrowthChangedHandle);
 	}
+	if (UCatEquipmentComponent* Equipment = BoundEquipment.Get())
+	{
+		Equipment->OnSnapshotChanged.Remove(EquipmentSnapshotChangedHandle);
+	}
 	if (UCatFishingCommandComponent* FishingCommand = BoundFishingCommand.Get())
 	{
 		FishingCommand->OnResultReceived.RemoveDynamic(this, &ThisClass::HandleFishingCommandResult);
@@ -145,12 +163,15 @@ void UCatHUDModel::Unbind()
 	MaxFightStaminaChangedHandle.Reset();
 	ConditionChangedHandle.Reset();
 	GrowthChangedHandle.Reset();
+	EquipmentSnapshotChangedHandle.Reset();
 	FishingViewChangedHandle.Reset();
 	BoundLocalPlayer.Reset();
 	BoundPlayerController.Reset();
 	BoundAbilitySystem.Reset();
 	BoundCondition.Reset();
 	BoundGrowth.Reset();
+	BoundEquipment.Reset();
+	CachedTankInfo.Reset();
 	BoundFishingCommand.Reset();
 	FishingViewBridge = nullptr;
 	LastFishingCommandResult = FCatFishingCommandResult();
@@ -193,14 +214,66 @@ void UCatHUDModel::Refresh()
 		: (World ? World->GetTimeSeconds() : 0.0);
 	if (const ACatfishingGameState* RunGameState = BoundRunGameState.Get())
 	{
-		NewState.DayIndex = FMath::Max(1, RunGameState->GetRunPublicState().Phase.DayIndex);
+		const FCatRunPublicState& Run = RunGameState->GetRunPublicState();
+		NewState.DayIndex = FMath::Max(1, Run.Phase.DayIndex);
 		// 公款只有 GameState 上这一份，且已经复制给每个客户端；HUD 常驻位读它，不另存第二份余额。
 		const FCatShopPublicEconomySnapshot& Economy = RunGameState->GetShopEconomySnapshot();
 		NewState.bHasTeamWallet = true;
 		NewState.TeamWalletBalance = Economy.Balance;
 		NewState.TeamWalletRevision = Economy.WalletRevision;
+		// 时段两个来源：白天段读 Environment 的时段轴，夜晚不在那条轴上（环境册 §3.1.1），由 Phase 直接给。
+		const bool bRunReady = Run.Phase.RunId.IsValid() && Run.Phase.Phase != ECatRunPhase::NotStarted;
+		const bool bDaytime = Run.Phase.Phase == ECatRunPhase::DayActive;
+		const bool bNight = Run.Phase.Phase == ECatRunPhase::NormalNight
+			|| Run.Phase.Phase == ECatRunPhase::FailureSettlementNight
+			|| Run.Phase.Phase == ECatRunPhase::SuccessSettlementNight;
+		if (bRunReady && bDaytime)
+		{
+			switch (Run.Environment.TimeOfDay)
+			{
+			case ECatEnvironmentTimeOfDay::Morning:
+				NewState.TimeOfDayText = FText::FromString(TEXT("清晨"));
+				NewState.bShowTimeOfDay = true;
+				break;
+			case ECatEnvironmentTimeOfDay::Day:
+				NewState.TimeOfDayText = FText::FromString(TEXT("白天"));
+				NewState.bShowTimeOfDay = true;
+				break;
+			case ECatEnvironmentTimeOfDay::Dusk:
+				NewState.TimeOfDayText = FText::FromString(TEXT("黄昏"));
+				NewState.bShowTimeOfDay = true;
+				break;
+			default:
+				// 时段轴还没算出来（配置未就绪或刚进入白天）：宁可不显示，也不写「未知」占住那一格。
+				break;
+			}
+		}
+		else if (bRunReady && bNight)
+		{
+			NewState.TimeOfDayText = FText::FromString(TEXT("夜晚"));
+			NewState.bShowTimeOfDay = true;
+		}
+		// 三个量的前两个：当日任务点数与缸内可献点数按 ui 表第 18 行白天常驻。
+		NewState.bHasDailyOfferingTarget = bRunReady && Run.DailyOfferingTarget > 0;
+		NewState.DailyOfferingTarget = NewState.bHasDailyOfferingTarget ? Run.DailyOfferingTarget : 0;
+		NewState.bShowOfferingCounters = bRunReady && bDaytime;
+		// 第三个量：世界进度平时隐藏，靠近神像（祭坛信息牌）或打开界面（这里）时才查看。
+		NewState.bHasWorldProgress = bRunReady;
+		NewState.WorldProgress = bRunReady ? Run.WorldProgress : 0;
+		NewState.NormalizedWorldProgress = bRunReady ? FMath::Clamp(Run.WorldProgress / 100.0f, 0.0f, 1.0f) : 0.0f;
+		NewState.bShowWorldProgress = IsAnyInterfacePageOpen();
 	}
 	NewState.DayText = FText::FromString(FString::Printf(TEXT("第 %d 天"), NewState.DayIndex));
+	RefreshTankOfferingProjection(NewState);
+	NewState.DailyOfferingTargetText = NewState.bHasDailyOfferingTarget
+		? FText::FromString(FString::Printf(TEXT("今日任务 %d 点"), NewState.DailyOfferingTarget))
+		: FText::FromString(TEXT("今日任务 未同步"));
+	NewState.TankOfferableText = NewState.bHasTankOfferablePoints
+		? FText::FromString(FString::Printf(TEXT("缸内可献 %d 点"), NewState.TankOfferablePoints))
+		: FText::FromString(TEXT("缸内可献 未同步"));
+	NewState.WorldProgressText = NewState.bHasWorldProgress
+		? FText::FromString(FString::Printf(TEXT("世界进度 %d%%"), NewState.WorldProgress))
+		: FText::FromString(TEXT("世界进度 未同步"));
 	NewState.TeamWalletText = NewState.bHasTeamWallet
 		? FText::FromString(FString::Printf(TEXT("团队公款 %d"), NewState.TeamWalletBalance))
 		: FText::FromString(TEXT("团队公款 未同步"));
@@ -274,6 +347,43 @@ void UCatHUDModel::Refresh()
 			: FText::FromString(FString::Printf(TEXT("玩家体力 %.0f"), NewState.FightStamina));
 	NewState.bShowPersonalStamina = NewState.FightStaminaMaximum > 0
 		&& NewState.FightStamina < NewState.FightStaminaMaximum;
+	// 濒死强提示（ui 表第 23 行）：只看本人体力比例，不看是不是主钓手——体力是跨竿资源，
+	// 抓、推、爬与搏斗花同一条（2026-09-11 裁决④），所以提示条件也不绑钓鱼会话。
+	NewState.bNearDeath = NewState.FightStaminaMaximum > 0.0f
+		&& NewState.NormalizedFightStamina <= CatHUDFightStaminaLimits::NearDeathStaminaFraction;
+	NewState.NearDeathText = FText::FromString(TEXT("体力见底了！"));
+	// 竿耐久（ui 表第 17 行）：值来自 Equipment 复制的钓鱼选择读模型，上限来自鱼竿定义片段。
+	if (const UCatEquipmentComponent* Equipment = BoundEquipment.Get())
+	{
+		const FCatEquipmentLoadoutSnapshot& Loadout = Equipment->GetSnapshot();
+		const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+		const UCatInventoryItemDefinition* RodDefinition = (InventorySettings && !Loadout.RodDefinitionId.IsNone())
+			? InventorySettings->FindRuntimeDefinition(Loadout.RodDefinitionId) : nullptr;
+		const UCatEquipmentFragment_Rod* RodFragment = RodDefinition
+			? RodDefinition->FindFragment<UCatEquipmentFragment_Rod>() : nullptr;
+		const double MaximumDurability = RodFragment ? RodFragment->MaximumRodDurability : 0.0;
+		NewState.bRodBroken = Loadout.bRodBroken;
+		NewState.RodDurability = static_cast<float>(Loadout.RodDurability);
+		NewState.RodDurabilityMaximum = static_cast<float>(MaximumDurability);
+		NewState.bHasRodDurability = !Loadout.RodDefinitionId.IsNone()
+			&& FMath::IsFinite(Loadout.RodDurability) && MaximumDurability > 0.0;
+		if (NewState.bHasRodDurability)
+		{
+			NewState.NormalizedRodDurability = FMath::Clamp(
+				NewState.RodDurability / NewState.RodDurabilityMaximum, 0.0f, 1.0f);
+		}
+	}
+	// 「手持鱼竿时」两条都算：正在用爪子握着这根竿，或者竿已经抛出去、这一竿仍是本人的会话。
+	const bool bHoldingRod = UCatFishingCameraComponent::FindHeldRodOperatedBy(Controller) != nullptr;
+	NewState.bShowRodDurability = NewState.bHasRodDurability && (bHoldingRod || NewState.bHasFishingSession);
+	// FString::Printf 的格式串必须是编译期字面量（UE 5.8 的 TCheckedFormatString 是 consteval），
+	// 所以断裂与否在外层分支，不能用三元运算符选格式串。
+	NewState.RodDurabilityText = NewState.bHasRodDurability
+		? FText::FromString(NewState.bRodBroken
+			? FString::Printf(TEXT("竿耐久 %.0f / %.0f（已断裂）"), NewState.RodDurability, NewState.RodDurabilityMaximum)
+			: FString::Printf(TEXT("竿耐久 %.0f / %.0f"), NewState.RodDurability, NewState.RodDurabilityMaximum))
+		: FText::FromString(TEXT("竿耐久 未同步"));
+	RefreshTeammateProjection(NewState);
 	NewState.FishStaminaText = FText::FromString(FString::Printf(
 		TEXT("鱼体力 %.0f%%"), NewState.NormalizedFishStamina * 100.0f));
 	if (NewState.HookCountdownText.IsEmpty())
@@ -371,6 +481,140 @@ void UCatHUDModel::Refresh()
 	}
 	ViewState = MoveTemp(NewState);
 	OnViewStateChanged.Broadcast();
+}
+
+// 缸内可献点数投影流程：营地宿主 → 显式关联的共享鱼缸 → 鱼缸自己复制的只读摘要组件。
+// 这是祭坛信息牌用的同一条链（CatAltarWorldInfoComponent），HUD 不重算鱼的档位、不扫描世界配对鱼缸。
+// 弱引用缓存只为省掉每次投影的 Actor 遍历；缓存失效（旅行、鱼缸销毁）后按同一条链重解析一次。
+void UCatHUDModel::RefreshTankOfferingProjection(FCatHUDViewState& NewState)
+{
+	UWorld* World = BoundPlayerController.IsValid() ? BoundPlayerController->GetWorld() : nullptr;
+	if (!World)
+	{
+		CachedTankInfo.Reset();
+		return;
+	}
+	if (!CachedTankInfo.IsValid())
+	{
+		for (TActorIterator<ACatCampHubActor> CampIterator(World); CampIterator; ++CampIterator)
+		{
+			const ACatFishTankActor* SharedTank = CampIterator->ResolveSharedFishTank();
+			if (UCatFishTankWorldInfoComponent* TankInfo = SharedTank
+				? SharedTank->FindComponentByClass<UCatFishTankWorldInfoComponent>() : nullptr)
+			{
+				CachedTankInfo = TankInfo;
+				break;
+			}
+		}
+	}
+	const UCatFishTankWorldInfoComponent* TankInfo = CachedTankInfo.Get();
+	int32 Points = 0;
+	int32 Count = 0;
+	int32 Capacity = 0;
+	NewState.bHasTankOfferablePoints = TankInfo && TankInfo->TryGetOfferingSummary(Points, Count, Capacity);
+	NewState.TankOfferablePoints = NewState.bHasTankOfferablePoints ? Points : 0;
+}
+
+// 队友投影流程：遍历 GameState 的 PlayerArray，只读每名玩家已经复制到本机的事实。
+// 方向取那只猫自己的移动意图（CharacterMovement 的加速度，对模拟代理也复制），投影到它自己的朝向上——
+// 不读别人的控制旋转（模拟代理没有），也不把本机相机的前方当成别人的前方。
+// 移动状态只给客观的三件事；2026-09-11 裁决①把 ρ 三档与六个群体动作整套作废后，
+// 「齐步走／被拖行／原地打转／顶牛中」不再有事实来源，这里不造。
+void UCatHUDModel::RefreshTeammateProjection(FCatHUDViewState& NewState)
+{
+	NewState.Teammates.Reset();
+	NewState.bShowTeammates = false;
+	const APlayerController* Controller = BoundPlayerController.Get();
+	const UWorld* World = Controller ? Controller->GetWorld() : nullptr;
+	const AGameStateBase* TeamGameState = World ? World->GetGameState() : nullptr;
+	if (!TeamGameState)
+	{
+		return;
+	}
+	const APlayerState* LocalPlayerState = Controller->PlayerState;
+	for (APlayerState* PlayerState : TeamGameState->PlayerArray)
+	{
+		if (!PlayerState || PlayerState->IsOnlyASpectator())
+		{
+			continue;
+		}
+		FCatHUDTeammateState& Teammate = NewState.Teammates.AddDefaulted_GetRef();
+		Teammate.PlayerId = PlayerState->GetPlayerId();
+		Teammate.bIsLocalPlayer = PlayerState == LocalPlayerState;
+		Teammate.DisplayNameText = FText::FromString(PlayerState->GetPlayerName());
+		const ACatCharacter* TeammateCharacter = Cast<ACatCharacter>(PlayerState->GetPawn());
+		if (!TeammateCharacter)
+		{
+			// 还没出生或本机尚未收到 Pawn：保留这一行（人确实在局里），但不编造方向和体力。
+			Teammate.MovementStatusText = FText::FromString(TEXT("未同步"));
+			continue;
+		}
+		if (const UCharacterMovementComponent* Movement = TeammateCharacter->GetCharacterMovement())
+		{
+			const FVector Acceleration = Movement->GetCurrentAcceleration();
+			if (!Acceleration.IsNearlyZero())
+			{
+				const FVector PlanarIntent = FVector(Acceleration.X, Acceleration.Y, 0.0).GetSafeNormal();
+				const FVector Forward = FVector::VectorPlaneProject(
+					TeammateCharacter->GetActorForwardVector(), FVector::UpVector).GetSafeNormal();
+				const FVector Right = FVector::CrossProduct(FVector::UpVector, Forward);
+				const double ForwardDot = FVector::DotProduct(PlanarIntent, Forward);
+				const double RightDot = FVector::DotProduct(PlanarIntent, Right);
+				if (!PlanarIntent.IsNearlyZero() && !Forward.IsNearlyZero())
+				{
+					Teammate.MoveDirection = FMath::Abs(ForwardDot) >= FMath::Abs(RightDot)
+						? (ForwardDot >= 0.0 ? ECatHUDMoveDirection::Forward : ECatHUDMoveDirection::Backward)
+						: (RightDot >= 0.0 ? ECatHUDMoveDirection::Right : ECatHUDMoveDirection::Left);
+				}
+			}
+		}
+		if (const UAbilitySystemComponent* TeammateAbilitySystem = TeammateCharacter->GetAbilitySystemComponent())
+		{
+			const float TeammateStamina = TeammateAbilitySystem->GetNumericAttribute(
+				UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+			const float TeammateMaximum = TeammateAbilitySystem->GetNumericAttribute(
+				UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+			Teammate.bHasStamina = FMath::IsFinite(TeammateMaximum) && TeammateMaximum > 0.0f
+				&& FMath::IsFinite(TeammateStamina);
+			if (Teammate.bHasStamina)
+			{
+				Teammate.NormalizedStamina = FMath::Clamp(TeammateStamina / TeammateMaximum, 0.0f, 1.0f);
+				Teammate.bExhausted = TeammateStamina <= 0.0f;
+				Teammate.bNearDeath = Teammate.NormalizedStamina <= CatHUDFightStaminaLimits::NearDeathStaminaFraction;
+			}
+		}
+		if (const UCatConditionComponent* TeammateCondition = TeammateCharacter->GetConditionComponent())
+		{
+			Teammate.bDowned = TeammateCondition->GetSnapshot().bDowned;
+		}
+		Teammate.MovementStatusText = Teammate.bDowned ? FText::FromString(TEXT("倒地"))
+			: Teammate.bExhausted ? FText::FromString(TEXT("力竭"))
+			: Teammate.MoveDirection != ECatHUDMoveDirection::None ? FText::FromString(TEXT("移动中"))
+			: FText::FromString(TEXT("静止"));
+	}
+	NewState.Teammates.Sort([](const FCatHUDTeammateState& Left, const FCatHUDTeammateState& Right)
+	{
+		return Left.PlayerId < Right.PlayerId;
+	});
+	// 单人局不占屏幕：只有确实存在别的玩家时顶部队友条才露面。
+	NewState.bShowTeammates = NewState.Teammates.ContainsByPredicate(
+		[](const FCatHUDTeammateState& Teammate) { return !Teammate.bIsLocalPlayer; });
+}
+
+// 界面开合读取流程：只问 LocalPlayer UI 协调层「现在有没有开着页」，不在 HUD 里存第二份开合状态。
+// 三个页共用一层模态输入锁，所以任一开着都算「打开了界面」。
+bool UCatHUDModel::IsAnyInterfacePageOpen() const
+{
+	const ULocalPlayer* LocalPlayer = BoundLocalPlayer.Get();
+	const UCatLocalPlayerUISubsystem* PlayerUI = LocalPlayer
+		? LocalPlayer->GetSubsystem<UCatLocalPlayerUISubsystem>() : nullptr;
+	return PlayerUI && PlayerUI->IsAnyPlayerPageOpen();
+}
+
+// Equipment 变化流程：换竿、磨损写回与断竿都只是事实变更，Model 统一重读完整投影。
+void UCatHUDModel::HandleEquipmentSnapshotChanged()
+{
+	Refresh();
 }
 
 // ViewState 读取流程：返回最近 HUD 投影；调用方不能通过它访问 ASC 或会话对象。

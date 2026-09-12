@@ -20,6 +20,7 @@
 #include "AbilitySystem/Input/CatAbilityInputBindingComponent.h"
 #include "Logging/CatLog.h"
 #include "Online/CatOnlineSubsystem.h"
+#include "Social/CatRoomOwnerService.h"
 #include "Condition/CatConditionComponent.h"
 #include "Growth/CatGrowthComponent.h"
 #include "Collection/CatRunImprintService.h"
@@ -1337,6 +1338,21 @@ void ACatfishingPlayerController::NativeInputTagCanceled(const FGameplayTag Inpu
 {
 	if (InputTag.MatchesTagExact(CatInteractionTags::Input_Interact) && InteractionTargetingComponent)
 		InteractionTargetingComponent->EndInteractionInput(true);
+}
+
+// 踢人 RPC 路由流程：只把目标 PlayerState 与 RequestId 交给 authority 的 RoomOwnerService；
+// 本 RPC 不判断谁是房主、不碰会话、不碰存档——那三件分别在 RoomOwnerService、Online 与 Profile 手里。
+void ACatfishingPlayerController::ServerKickPlayer_Implementation(APlayerState* TargetPlayerState,
+	const FGuid RequestId)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	Result.Error = ECatDomainCommandError::DependencyUnavailable;
+	if (UCatRoomOwnerService* RoomOwner = GetWorld() ? GetWorld()->GetSubsystem<UCatRoomOwnerService>() : nullptr)
+	{
+		Result = RoomOwner->RequestKickPlayer(this, TargetPlayerState, RequestId);
+	}
+	DeliverCampCommandResultToOwningClient(Result);
 }
 
 // 主动离局 RPC 流程：只把当前 Controller 交给 authority GameMode；标记不销毁 Session、不旅行，并由随后 Logout 精确消费。

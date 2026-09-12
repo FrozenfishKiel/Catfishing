@@ -87,6 +87,12 @@ public:
 	bool TryGetHeldFightInputStateFromAuthority(bool& OutPrimaryHeld, bool& OutSlackHeld,
 		int64& OutInputSequence) const;
 	FCatFishingInputEdge SubmitRodInteract();
+	/**
+	 * 换人握手输入（多人钓鱼附篇 §2.4）。同一个键在两种身份下含义不同，服务器按当时身份分派：
+	 * 主钓手按＝发起或取消换人请求；岸上替补按＝接手最近一根挂着请求的竿（要过体力门槛）。
+	 * 键位随装备栏重构另定，现按 E 设计；本入口不关心是哪个键，只负责把意图发出去。
+	 */
+	FCatFishingInputEdge SubmitFishingHandoff();
 	FCatFishingInputEdge SubmitPrimaryPressed();
 	FCatFishingInputEdge SubmitPrimaryReleased();
 	FCatFishingInputEdge SubmitSlackPressed();

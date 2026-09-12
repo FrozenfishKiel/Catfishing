@@ -22,6 +22,7 @@
 #include "Camp/CatCampSettings.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Condition/CatConditionComponent.h"
+#include "Data/CatFishCatalogSettings.h"
 #include "Collection/CatRunImprintService.h"
 #include "Components/StateTreeComponent.h"
 #include "Environment/CatConfiguredEnvironmentProvider.h"
@@ -188,6 +189,9 @@ void ACatfishingGameModeBase::StartPlay()
 		FailRunStartup(TEXT("RunWorldProgressASCUnavailable"));
 		return;
 	}
+
+	// 臭鱼折扣的 ID 绑定一错就是静默失效（结算照跑、折扣永不触发），所以开局就把绑定结果落进日志。
+	LogStinkyOfferingFishBindingDiagnostics();
 
 	UStateTree* RunFlowAsset = Settings->RunFlowStateTree.LoadSynchronous();
 	if (!RunFlowAsset)
@@ -1014,6 +1018,9 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 		return Result;
 	}
 	int32 ExpectedDayDailyOfferingTarget = 0;
+	// 清晨人数快照与按它缩放后的基础目标；两者都只在进入 DayActive 的这一次算，随后当天不再重算。
+	int32 DayStartMorningPlayerCount = 0;
+	int32 DayStartScaledBaseTarget = 0;
 	int32 DayStartAttributeTarget = 0;
 	int32 DayStartAttributeProgress = 0;
 	float DayStartOldTarget = 0.0f;
@@ -1035,13 +1042,25 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 		DayStartOldTarget = DayStartRunASC->GetNumericAttribute(UCatRunAttributeSet::GetDailyOfferingTargetAttribute());
 		DayStartDailyOfferingTargetMultiplier = DayStartRunASC->GetNumericAttribute(UCatRunModifierAttributeSet::GetDailyOfferingTargetMultiplierAttribute());
 		DayStartDailyPressure = DayStartRunASC->GetNumericAttribute(UCatRunModifierAttributeSet::GetDailyPressureAttribute());
-		if (!UCatRunStartDayExecutionCalculation::TryCalculateDailyOfferingTarget(static_cast<float>(DayTuning.DailyOfferingTarget),
+		// 清晨人数快照：进入这一天的唯一入口在这里，所以人数也只在这里数一次。
+		// 数不出人时按 1 人算并记 Warning——这是迁移兜底，不是「没人在场」，绝不让 RunFlow 因为人数缺席停住。
+		DayStartMorningPlayerCount = CountMorningPlayersFromAuthority();
+		if (DayStartMorningPlayerCount <= 0)
+		{
+			UE_LOG(LogCatRun, Warning,
+				TEXT("Event=RunMorningPlayerCountUnavailable World=%s Day=%d Result=FallbackToSinglePlayerTarget"),
+				GetWorld() ? *GetWorld()->GetName() : TEXT("None"), EnteringDayIndex);
+		}
+		DayStartScaledBaseTarget = GetDefault<UCatRunSettings>()->ScaleDailyOfferingTargetForMorningPlayerCount(
+			DayTuning.DailyOfferingTarget, DayStartMorningPlayerCount);
+		if (!UCatRunStartDayExecutionCalculation::TryCalculateDailyOfferingTarget(static_cast<float>(DayStartScaledBaseTarget),
 			DayStartDailyOfferingTargetMultiplier, DayStartDailyPressure, ExpectedDayDailyOfferingTarget))
 		{
 			Result.Error = ECatRunCommandError::DependencyUnavailable;
 			LastRunFlowResult = Result;
-			UE_LOG(LogCatRun, Error, TEXT("Event=RunStartDayGEFailed Reason=InvalidCalculatedTarget World=%s BaseDailyOfferingTarget=%d Multiplier=%.3f DailyPressure=%.3f"),
+			UE_LOG(LogCatRun, Error, TEXT("Event=RunStartDayGEFailed Reason=InvalidCalculatedTarget World=%s BaseDailyOfferingTarget=%d MorningPlayers=%d ScaledBaseTarget=%d Multiplier=%.3f DailyPressure=%.3f"),
 				GetWorld() ? *GetWorld()->GetName() : TEXT("None"), DayTuning.DailyOfferingTarget,
+				DayStartMorningPlayerCount, DayStartScaledBaseTarget,
 				DayStartDailyOfferingTargetMultiplier, DayStartDailyPressure);
 			return Result;
 		}
@@ -1056,7 +1075,7 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 			return Result;
 		}
 		StartDaySpec.Data->SetSetByCallerMagnitude(CatFishingAbilityTags::Data_Run_BaseDailyOfferingTarget,
-			static_cast<float>(DayTuning.DailyOfferingTarget));
+			static_cast<float>(DayStartScaledBaseTarget));
 		if (!DayStartRunASC->ApplyGameplayEffectSpecToSelf(*StartDaySpec.Data.Get()).WasSuccessfullyApplied())
 		{
 			Result.Error = ECatRunCommandError::DependencyUnavailable;
@@ -1113,6 +1132,8 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 	case ECatRunPhase::DayActive:
 	{
 		++RunPublicState.Phase.DayIndex;
+		// 人数快照与当天目标一起发布：UI 和诊断读同一份事实，不各自再数一次人。
+		RunPublicState.Phase.MorningPlayerCount = DayStartMorningPlayerCount;
 		if (UCatShopEconomyService* Shop = GetWorld()->GetSubsystem<UCatShopEconomyService>())
 		{
 			if (Shop->AdvanceShopDay(RunPublicState.Phase.DayIndex))
@@ -1124,9 +1145,11 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 		RunPublicState.LastOfferingPoints = DayStartAttributeProgress;
 		RunPublicState.LastWorldProgressDelta = DayStartAttributeWorldProgressDelta;
 		RunPublicState.bLastOfferingMetTarget = false;
-		UE_LOG(LogCatRun, Display, TEXT("Event=RunStartDayGEApplied World=%s NetMode=%d Authority=%s Day=%d BaseDailyOfferingTarget=%d Multiplier=%.3f DailyPressure=%.3f OldTarget=%.0f NewTarget=%d Revision=%lld"),
+		UE_LOG(LogCatRun, Display, TEXT("Event=RunStartDayGEApplied World=%s NetMode=%d Authority=%s Day=%d ScheduleDailyOfferingTarget=%d PerPlayerPolicy=%s MorningPlayers=%d ScaledBaseTarget=%d Multiplier=%.3f DailyPressure=%.3f OldTarget=%.0f NewTarget=%d Revision=%lld"),
 			GetWorld() ? *GetWorld()->GetName() : TEXT("None"), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1,
 			HasAuthority() ? TEXT("true") : TEXT("false"), RunPublicState.Phase.DayIndex, DayTuning.DailyOfferingTarget,
+			GetDefault<UCatRunSettings>()->IsPerPlayerDailyOfferingTarget() ? TEXT("true") : TEXT("false"),
+			DayStartMorningPlayerCount, DayStartScaledBaseTarget,
 			DayStartDailyOfferingTargetMultiplier, DayStartDailyPressure, DayStartOldTarget,
 			RunPublicState.DailyOfferingTarget, RunPublicState.Revision);
 		RunPublicState.EndReason = ECatRunEndReason::None;
@@ -1585,6 +1608,64 @@ void ACatfishingGameModeBase::ClearDayDeadline()
 	ClearDayTimers();
 	RunPublicState.Phase.bHasDeadline = false;
 	RunPublicState.Phase.DeadlineServerTimeSeconds = 0.0;
+}
+
+// 清晨人数快照流程：只数「这一刻还在局里、且有稳定身份」的玩家。
+// 数的是 PlayerState 而不是 Character——倒地、还没出生或正在重生的猫都还在局里，任务不因此变轻
+// （局与进程 §3.1.2:58「当天内不变，中途有人加入或退出都不重算」，祭坛到场判定另有自己的口径）。
+// 数不出人时返回 0，交调用方按 1 人兜底：清晨快照是迁移进来的新事实，不能因为它缺席就让整天算不出目标。
+int32 ACatfishingGameModeBase::CountMorningPlayersFromAuthority() const
+{
+	const AGameStateBase* CountingGameState = GetWorld() ? GetWorld()->GetGameState() : nullptr;
+	if (!HasAuthority() || !CountingGameState)
+	{
+		return 0;
+	}
+	int32 MorningPlayerCount = 0;
+	for (const APlayerState* PlayerState : CountingGameState->PlayerArray)
+	{
+		if (PlayerState && !PlayerState->IsOnlyASpectator() && PlayerState->GetUniqueId().IsValid())
+		{
+			++MorningPlayerCount;
+		}
+	}
+	return MorningPlayerCount;
+}
+
+// 臭鱼绑定诊断流程：把配置里的臭鱼 ID 逐个拿去正式鱼目录里找。
+// 这条折扣是「配了也可能永远不触发」的典型——ID 写错时结算照跑、数值照算，只是那 25% 永远减不掉，
+// 没有任何现象能让人发现。所以开局落一条可查日志，而不是 fail-closed：折扣配错不比不配危险。
+void ACatfishingGameModeBase::LogStinkyOfferingFishBindingDiagnostics() const
+{
+	const UCatRunSettings* RunSettings = GetDefault<UCatRunSettings>();
+	const UCatFishCatalogSettings* Catalog = GetDefault<UCatFishCatalogSettings>();
+	if (!RunSettings || !Catalog)
+	{
+		return;
+	}
+	if (RunSettings->StinkyOfferingFishDefinitionIds.IsEmpty())
+	{
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=RunStinkyOfferingBindingUnconfigured World=%s Result=StinkyDiscountNeverApplies"),
+			GetWorld() ? *GetWorld()->GetName() : TEXT("None"));
+		return;
+	}
+	int32 ResolvedStinkyFishCount = 0;
+	for (const FName StinkyFishDefinitionId : RunSettings->StinkyOfferingFishDefinitionIds)
+	{
+		const bool bResolved = Catalog->FindRuntimeDefinition(StinkyFishDefinitionId) != nullptr;
+		ResolvedStinkyFishCount += bResolved ? 1 : 0;
+		UE_LOG(LogCatRun, Log, TEXT("Event=RunStinkyOfferingBinding World=%s FishDefinitionId=%s ResolvedInCatalog=%s"),
+			GetWorld() ? *GetWorld()->GetName() : TEXT("None"), *StinkyFishDefinitionId.ToString(),
+			bResolved ? TEXT("true") : TEXT("false"));
+	}
+	if (ResolvedStinkyFishCount == 0)
+	{
+		// 一条都对不上＝这局的臭鱼折扣永远不会触发，而且不会有任何现象暴露它。
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=RunStinkyOfferingBindingUnresolved World=%s ConfiguredIds=%d Result=StinkyDiscountNeverApplies"),
+			GetWorld() ? *GetWorld()->GetName() : TEXT("None"), RunSettings->StinkyOfferingFishDefinitionIds.Num());
+	}
 }
 
 // 白天刷新安排流程：读取 Environment 配置换算 Morning/Day/Dusk 分界，再把未来分界安排成本 GameMode 的 one-shot；分界到达只会重发公开快照。

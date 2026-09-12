@@ -5,13 +5,37 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
+#include "Environment/CatWaterQuerySubsystem.h"
+#include "Environment/CatWaterTypes.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Inventory/CatInventoryAccessRules.h"
 #include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatInventoryItemInstance.h"
 #include "Inventory/CatInventorySettings.h"
 #include "Interaction/CatInteractable.h"
+#include "Items/CatItem.h"
+#include "Items/Fish/CatFishPickupActor.h"
 #include "Logging/CatLog.h"
+
+namespace
+{
+	// 落点水域禁止（道具册 §4：物品丢不进湖里）。
+	// 判据只问一次水域查询：落点在任一水域轮廓内（含边界）就拒绝，玩家换个方向再扔。
+	// 查不到水域（关卡里没有 CatWaterRegion、或查询子系统缺席）时**放行**——这条规则是给湖加的门，
+	// 不是给「没有湖的关卡不许扔东西」加的门；查询失败就退回本条规则落地前的行为。
+	bool IsWorldReleasePointOverWater(const UWorld* World, const FVector& WorldPoint)
+	{
+		const UCatWaterQuerySubsystem* WaterQuery = World
+			? World->GetSubsystem<UCatWaterQuerySubsystem>() : nullptr;
+		if (WaterQuery == nullptr)
+		{
+			return false;
+		}
+		const FCatWaterSpatialResult Result = WaterQuery->QueryNearestShoreForPreview(WorldPoint);
+		return Result.bSucceeded && Result.Containment != ECatWaterContainment::Outside;
+	}
+}
 
 // 落点求解流程：只用物理根的局部包围盒检查占用，不把准星交互球算作实体；放置依次搜索正前方与左右各30度内的地面。
 // 丢弃从视点、角色半径和物理盒尺寸求前方释放中心，沿途扫盒并检查终点占用，阻挡即拒绝；成功把盒中心换算为Actor变换。
@@ -43,6 +67,7 @@ bool UCatInventoryStatics::FindWorldReleaseTransform(ACatCharacter* Character, A
 		FHitResult Hit;
 		if (World->SweepSingleByChannel(Hit, Eye, Center, Rotation, ECC_WorldDynamic, Shape, Query)
 			|| World->OverlapBlockingTestByChannel(Center, Rotation, ECC_WorldDynamic, Shape, Query)) return false;
+		if (IsWorldReleasePointOverWater(World, Center)) return false;
 		OutTransform = FTransform(Rotation, Center - Rotation.RotateVector(CenterOffset), Scale);
 		return true;
 	}
@@ -79,7 +104,7 @@ bool UCatInventoryStatics::FindWorldReleaseTransform(ACatCharacter* Character, A
 					break;
 				}
 			}
-			if (bSupported)
+			if (bSupported && !IsWorldReleasePointOverWater(World, Ground.ImpactPoint))
 			{
 				OutTransform = FTransform(Rotation, Center - Rotation.RotateVector(CenterOffset), Scale);
 				return true;
@@ -163,6 +188,48 @@ void UCatInventoryStatics::CollectInventoryComponentsFromActor(const AActor* Tar
 	{
 		return Left.GetUnifiedInventoryIntakePriority() > Right.GetUnifiedInventoryIntakePriority();
 	});
+}
+
+// 翻天清理流程：
+// 1. 只在服务器跑；先收齐要销毁的对象再统一 Destroy，避免在 TActorIterator 迭代期间改动世界 Actor 列表。
+// 2. 落地物只清「还在等人捡」的那些（ACatItem::IsAwaitingPickup）——被捡走的载体是隐藏保管态，清了等于删背包。
+// 3. 地上的鱼只清 Available 且没被隐藏的那些；嘴里叼着的是 Carried，进了鱼护/鱼缸的是隐藏保管态，两者都不清。
+int32 UCatInventoryStatics::PurgeUnclaimedWorldDropsFromAuthority(UWorld* World)
+{
+	if (World == nullptr || World->GetNetMode() == NM_Client)
+	{
+		return 0;
+	}
+	TArray<AActor*> PendingDestroy;
+	for (TActorIterator<ACatItem> It(World); It; ++It)
+	{
+		ACatItem* WorldItem = *It;
+		if (IsValid(WorldItem) && WorldItem->HasAuthority() && WorldItem->IsAwaitingPickup())
+		{
+			PendingDestroy.Add(WorldItem);
+		}
+	}
+	for (TActorIterator<ACatFishPickupActor> It(World); It; ++It)
+	{
+		ACatFishPickupActor* WorldFish = *It;
+		if (IsValid(WorldFish) && WorldFish->HasAuthority() && !WorldFish->IsHidden()
+			&& WorldFish->GetPresentationState().State == ECatFishPickupState::Available)
+		{
+			PendingDestroy.Add(WorldFish);
+		}
+	}
+	int32 DestroyedCount = 0;
+	for (AActor* Doomed : PendingDestroy)
+	{
+		if (IsValid(Doomed) && Doomed->Destroy())
+		{
+			++DestroyedCount;
+		}
+	}
+	UE_LOG(LogCatfishing, Log,
+		TEXT("Event=world_drops_purged_for_day_transition World=%s Candidates=%d Destroyed=%d"),
+		*GetNameSafe(World), PendingDestroy.Num(), DestroyedCount);
+	return DestroyedCount;
 }
 
 // 外部收集流程：向调用方追加当前 Actor 拥有的正式库存组件，不清空调用方已有列表。

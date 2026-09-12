@@ -2,6 +2,8 @@
 #include "Inventory/CatInventorySettings.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Bait.h"
+#include "Equipment/Fragments/CatEquipmentFragment_Float.h"
+#include "Equipment/CatEquipmentDefinition.h"
 #include "Fishing/Simulation/CatFishingBiteTimingModel.h"
 
 #include "Character/CatCharacter.h"
@@ -47,6 +49,7 @@
 #include "FishContainers/CatFishGuardActor.h"
 #include "FishContainers/World/CatWorldSurfaceResolver.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
+#include "Social/CatSocialService.h"
 #include "Net/UnrealNetwork.h"
 #include "StateTree.h"
 #include "TimerManager.h"
@@ -336,6 +339,9 @@ bool ACatFishingSession::ResumePrimaryControlFromAuthority(AController* NewFishe
 	if (bFightStaminaInitialized) StaminaOwner = NewCharacter;
 	FisherCharacter = NewCharacter;
 	Snapshot.FisherPlayerState = NewFisherController->PlayerState;
+	// 主控一换，上一块「谁来接一下」的牌子就作废：那是上一任主钓手挂的，新主控没表过态。
+	// 这里直接清字段而不调 ClearHandoffRequestFromAuthority，是因为下面统一发布一次快照，不重复发两遍。
+	Snapshot.HandoffRequestedByPlayerState = nullptr;
 
 	RefreshFightSummary();
 	PublishSnapshot(ECatFishingSnapshotMutation::Discrete);
@@ -354,6 +360,41 @@ bool ACatFishingSession::ResumePrimaryControlFromAuthority(AController* NewFishe
 		*OldFisherLogValue, NewStrength, NewStamina,
 		*CatLogContext::BuildControllerFields(NewFisherController));
 	return true;
+}
+
+// 换人请求流程（多人钓鱼附篇 §2.4）：只有当前主控能挂牌，再按一次就摘牌。
+// 请求无时限挂起、没有超时出口，也不给这一竿附加任何状态：体力照扣、归零照走持竿者落水。
+// 谁能接、接的时候查什么（体力 50% 门槛），归 Service 的接手入口，本函数不预判替补。
+bool ACatFishingSession::ToggleHandoffRequestFromAuthority(AController* PrimaryController)
+{
+	const FString RequesterId = ResolveStableNetId(PrimaryController);
+	if (!HasAuthority() || IsTerminal() || RequesterId.IsEmpty() || RequesterId != FisherStableNetId
+		|| !PrimaryController->PlayerState)
+	{
+		return false;
+	}
+	const bool bAlreadyRequested = Snapshot.HandoffRequestedByPlayerState != nullptr;
+	Snapshot.HandoffRequestedByPlayerState = bAlreadyRequested ? nullptr : PrimaryController->PlayerState;
+	PublishSnapshot(ECatFishingSnapshotMutation::Discrete);
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_handoff_request_%s SessionId=%s Phase=%s %s"),
+		bAlreadyRequested ? TEXT("cancelled") : TEXT("raised"),
+		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+		*UEnum::GetValueAsString(Snapshot.Phase), *CatLogContext::BuildControllerFields(PrimaryController));
+	return true;
+}
+
+// 换人请求清理流程：幂等。会话终止、本竿结束、主控换人都走到这里；没挂牌时什么也不做，不空发快照。
+void ACatFishingSession::ClearHandoffRequestFromAuthority(const TCHAR* Reason)
+{
+	if (!HasAuthority() || Snapshot.HandoffRequestedByPlayerState == nullptr)
+	{
+		return;
+	}
+	Snapshot.HandoffRequestedByPlayerState = nullptr;
+	PublishSnapshot(ECatFishingSnapshotMutation::Discrete);
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_handoff_request_cleared SessionId=%s Reason=%s"),
+		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), Reason);
 }
 
 // 抄网流程：服务器重建抄手身份和装备事实，鱼上钩后不再读取鱼体力；只要抄手、岸边站位、视线与
@@ -756,6 +797,7 @@ bool ACatFishingSession::ScheduleWaitingProbeFromStateTree()
 	Snapshot.FishMotionIntent = ECatFishMotionIntent::None;
 	Snapshot.FishLineAlignment = 0.0f;
 	Snapshot.NormalizedLineLoad = 0.0f;
+	Snapshot.BiteSignalStability = 0.0f; // 回到等待期就不再有咬钩信号，下一次真咬重新发布。
 	Snapshot.bStrongConfrontation = false;
 	// 夜间抛竿/漏过真咬都正常进入 Waiting，但不创建新的咬钩机会或消费随机数。
 	const ACatfishingGameModeBase* Mode = GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>();
@@ -1050,6 +1092,7 @@ bool ACatFishingSession::OpenTrueBiteWindowFromAuthority()
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_bait_refund_boundary SessionId=%s World=%s NetMode=%d Authority=1 LocalRole=%d Result=TrueBiteEstablished"),
 		*Snapshot.FishingSessionId.ToString(), *GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()));
+	PublishBiteSignalFromAuthority();
 	// WindowEnds 必须在 EnterPhase 发布快照前写好，客户端第一次看到 TrueBiteWindow 时截止时间就是完整的。
 	const double PreviousWindowEnd = Snapshot.WindowEndsServerTime;
 	Snapshot.WindowEndsServerTime = World->GetTimeSeconds() + Settings->TrueBiteWindowSeconds;
@@ -1517,6 +1560,18 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		StaminaOwner.Reset();
 		bFightStaminaInitialized = false;
 		return false;
+	}
+	// 巨物全体提示（多人钓鱼附篇 §3.3、交互册「求助与震动」）：求助一律手动喊人，**只有巨物**由系统发全场提示。
+	// 接线点选在这里，不选抽中鱼种那一刻：巨影在试探期就已经有鱼影在水里了，但那时玩家还没提竿，
+	// 竿强不够会在下面的检查序里当场瞬断、这一竿根本不成立——那时候把全队喊过来，来了也没有可合力的对象。
+	// 搏斗真的开起来了才喊，喊来的人能做的事（合力拉竿、拽尾救援、抢抄）此刻全部成立。
+	if (Snapshot.bGiant)
+	{
+		if (UCatSocialService* Social = GetWorld() ? GetWorld()->GetSubsystem<UCatSocialService>() : nullptr)
+		{
+			Social->BroadcastGiantFishingPrompt(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr,
+				Snapshot.FishingSessionId);
+		}
 	}
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_fight_started SessionId=%s FightBalanceId=%s FishDefinition=%s RodDefinition=%s PerfectHook=%s PrimaryStrength=%.2f OperatorBodyMassKg=%.2f FishMassKg=%.2f MassMode=IndependentCatBodyMass FishStrengthBase=%.2f FishStrengthEffective=%.2f StrengthPerKg=%.2f ForcePerStrengthN=%.2f ExhaustedReelForceN=%.2f CatStamina=%.2f FishStamina=%.2f RodDurability=%.2f RodPhysicsLengthCm=%.2f InitialLineLengthCm=%.2f MaximumLineLengthCm=%.2f RodPose=%s CatLinearWorkCost=%.5f FishStaminaPerUnfulfilledMeter=%.5f FishFullEffortSpeedCmPerSec=%.2f FixedStepSeconds=%.3f MinimumLeverage=%.3f MaximumEndpointCorrectionSpeed=%.2f StrengthResolution=CommonLineForce StrongConfrontationRole=PresentationOnly RodFailure=DurabilityDepleted World=%s NetMode=%d Authority=%s LocalRole=%d RodActor=%s"),
@@ -2040,6 +2095,53 @@ bool ACatFishingSession::TryResolvePrimaryCombinedStrength(double& OutCombinedSt
 	}
 	OutCombinedStrength = Strength;
 	return true;
+}
+
+// 咬钩信号发布流程：
+// 1. 按本竿冻结的鱼漂定义读 BiteSignalStability，写进公开快照——这是这个字段第一个运行消费者。
+// 2. 稳定度达到全场门槛的那一款（铃铛漂）另走一次 GameState 全场广播：GameState 对所有客户端恒相关，
+//    湖对岸的猫也一定收得到，这就是「不受距离衰减」在网络这一层的含义；音效自己的衰减配置归表现层。
+// 3. 无论过不过门槛都记一行诊断，带上鱼漂、稳定度和门槛——一局游戏就能核出铃铛漂资产的落值对不对得上。
+void ACatFishingSession::PublishBiteSignalFromAuthority()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+	const UCatEquipmentDefinition* FloatDefinition = GetDefault<UCatInventorySettings>()
+		->FindRuntimeDefinition<UCatEquipmentDefinition>(AttemptSnapshot.FloatDefinitionId);
+	const UCatEquipmentFragment_Float* FloatFragment = FloatDefinition
+		? FloatDefinition->FindFragment<UCatEquipmentFragment_Float>() : nullptr;
+	if (FloatFragment == nullptr || !FloatFragment->IsRuntimeReady())
+	{
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_bite_signal SessionId=%s Float=%s Result=FloatFragmentUnavailable"),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			*AttemptSnapshot.FloatDefinitionId.ToString());
+		return;
+	}
+	const double Stability = FMath::Clamp(FloatFragment->BiteSignalStability, 0.0, 1.0);
+	Snapshot.BiteSignalStability = static_cast<float>(Stability);
+
+	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
+	const double Threshold = Settings ? Settings->WorldwideBiteSignalStabilityThreshold : 0.0;
+	const bool bWorldwide = Settings != nullptr && FMath::IsFinite(Threshold) && Threshold <= 1.0
+		&& Stability >= Threshold;
+	if (bWorldwide)
+	{
+		if (ACatfishingGameState* GameState = GetWorld() ? GetWorld()->GetGameState<ACatfishingGameState>() : nullptr)
+		{
+			const FVector SignalLocation = Snapshot.HookActor
+				? Snapshot.HookActor->GetActorLocation() : GetActorLocation();
+			GameState->Multicast_PlayWorldwideFishingSignal(
+				CatFishingAbilityTags::Cosmetic_Fishing_BiteBell, SignalLocation);
+		}
+	}
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_bite_signal SessionId=%s Float=%s Stability=%.3f Threshold=%.3f Worldwide=%s"),
+		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+		*AttemptSnapshot.FloatDefinitionId.ToString(), Stability, Threshold,
+		bWorldwide ? TEXT("true") : TEXT("false"));
 }
 
 // 竿强度读取流程：静态配置，三档 25／60／210（钓鱼规则 §4.1:162）。0 或读不到都表示"未裁"，
@@ -2617,9 +2719,13 @@ void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, cons
 	const FString HookValue = GetNameSafe(Snapshot.HookActor);
 	Snapshot.Phase = FinalPhase;
 	Snapshot.Outcome = FinalOutcome;
+	// 本竿结束，挂着的换人请求随之失效（多人钓鱼附篇 §2.4：本竿结束自然失效，没有超时出口）。
+	// 这里直接清字段而不调 ClearHandoffRequestFromAuthority：终态下面统一发布一次快照。
+	Snapshot.HandoffRequestedByPlayerState = nullptr;
 	Snapshot.PhaseStartedServerTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
 	Snapshot.FishLineAlignment = 0.0f;
 	Snapshot.NormalizedLineLoad = 0.0f;
+	Snapshot.BiteSignalStability = 0.0f;
 	Snapshot.bStrongConfrontation = false;
 	Snapshot.RodLeverageMultiplier = 1.0f;
 	Snapshot.CarrierMovementAlpha = 0.0f;
@@ -2655,6 +2761,34 @@ void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, cons
 	// 释放原始抛竿者装备上属于本 Session 的钓具预留；其他鱼竿的并行预留保持不变。
 	if (UCatEquipmentComponent* Equipment = CastEquipment.Get())
 	{
+		// 道具册「鱼竿断裂后直接消失」：耐久归零与竿强瞬断共用同一结局，断掉的那根不回背包、不占格。
+		// 位置定在 ReleaseFishingUse 之前：使用记录此时还在，报废入口靠它才找得到这一竿绑定的是哪根实例。
+		// 判据只问「绑定实例现在是不是断的」，不问是哪条路断的——两条路本来就是同一个结局（2026-09-12 拍）。
+		double RemainingRodDurability = 0.0;
+		bool bBoundRodBroken = false;
+		if (Equipment->GetFishingRodDurability(Snapshot.FishingSessionId, RemainingRodDurability, bBoundRodBroken)
+			&& bBoundRodBroken)
+		{
+			const bool bRetired = Equipment->RetireBrokenFishingRodFromAuthority(Snapshot.FishingSessionId);
+			// 库存实例和世界里那根竿是两件东西，同一次断竿要两边都收：实例报废掉，场上那根半截竿也不留。
+			ACatFishingRodActor* BrokenRod = Snapshot.RodActor;
+			bool bRodActorDestroyed = false;
+			if (bRetired && BrokenRod)
+			{
+				if (UCatFishingService* RodService = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
+				{
+					RodService->RetireDeployedRodActorFromAuthority(BrokenRod);
+					bRodActorDestroyed = true;
+					// 终态快照在本函数开头就已经发布过了；这里把引用清空只是不让复制结构继续指着一个已销毁的 Actor。
+					Snapshot.RodActor = nullptr;
+				}
+			}
+			UE_LOG(LogCatFishing, Warning,
+				TEXT("Event=fishing_broken_rod_discarded SessionId=%s RodItemInstanceId=%s ItemRetired=%s RodActorDestroyed=%s"),
+				*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+				*AttemptSnapshot.RodItemInstanceId.ToString(), bRetired ? TEXT("true") : TEXT("false"),
+				bRodActorDestroyed ? TEXT("true") : TEXT("false"));
+		}
 		Equipment->ReleaseFishingUse(Snapshot.FishingSessionId,
 			FinalPhase == ECatFishingPhase::Resolved
 			&& (FinalOutcome == ECatFishingOutcome::Caught || FinalOutcome == ECatFishingOutcome::Landed));

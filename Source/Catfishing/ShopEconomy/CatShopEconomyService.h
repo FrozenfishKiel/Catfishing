@@ -142,8 +142,18 @@ public:
 	 * 所以配置缺失时收摊后返回的是 PolicyUndecided。两者都是拒绝，判断"商店关没关"不要只认 CommandsClosed。
 	 * 它同时是最后一个夜晚"买卖冻结、只剩吃鱼与篝火"的表达和 World teardown 的收口；调用点是 Run 进入两种
 	 * 结算夜时的 GameMode 相位切换和 World teardown 的 Deinitialize，两者重复调用不产生第二次副作用。
+	 * 收摊那一下还会把剩余公款换成小鱼干（见 ConvertSettlementLeftoversToDriedFish），换完再关门。
 	 */
 	void CloseCommands();
+
+	/**
+	 * 声明：收摊时把剩余公款换成小鱼干放进营地公库，给猫猫们在篝火旁娱乐（商店册 §3.1.2）。返回实际兑出的条数。
+	 * 实现：按 Settings 的兑换率整除余额，扣掉对应公款，再把小鱼干发进营地公共仓库（有公库角色时进公库）。
+	 * 边界：小鱼干道具还没有资产、或兑换率没裁时**跳过并记一行 Log**——这条玩法此刻没有载体，
+	 *       不是配置错误，所以不能 fail-closed 把收摊本身挡住。资产一挂上、两个值一填就能跑。
+	 *       一局只兑一次：CloseCommands 的幂等由 bCommandsOpen 守，已经关门的重复调用不会再兑。
+	 */
+	int32 ConvertSettlementLeftoversToDriedFish();
 
 #if !UE_BUILD_SHIPPING
 	/** 开发期救援入口：只在人工 ForceNextDay 需要从失败结算夜回到白天前重新打开商店写口；它不清公款、账本、货架或幂等缓存，后续日进货仍由 AdvanceShopDay 按正式天数处理。 */
@@ -238,6 +248,12 @@ private:
 
 	/** Ending 或 World teardown 后关闭新交易；缓存重放仍允许读首次终态。 */
 	bool bCommandsOpen = true;
+
+	/**
+	 * World 正在拆除；CloseCommands 里那些会写世界状态的收尾（把剩余公款换成小鱼干）在这种情况下一律不做。
+	 * 它区分的是两种「关门」：结算夜收摊是玩法事件，要兑换；World teardown 只是释放资源，不该再往营地发货。
+	 */
+	bool bTearingDown = false;
 
 	/** 当前是否处于经济提交的同步调用栈；购买与售鱼用作用域守卫写入，预检和嵌套写口读取，防止回调在终态缓存落定前重复交易。 */
 	bool bTransactionInProgress = false;

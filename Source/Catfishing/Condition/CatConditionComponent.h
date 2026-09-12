@@ -67,13 +67,29 @@ public:
 	 */
 	bool ApplySevereToxicityFromAuthority();
 
+	/**
+	 * 当前是否正周身臭气（臭臭鱼的「请勿靠近」）。社交权限谓词与搬运救援都读它。
+	 * 它只挡「被恶作剧选中」和「被搬运」两件事；扑倒反制不读它（扑倒不算恶作剧，2026-08-21 裁定）。
+	 */
+	bool IsStench() const { return Snapshot.bStench; }
+
+	/**
+	 * 吃下发臭的鱼之后开启 90 秒臭气（时长与名册都在 CatConditionSettings）。
+	 * 重复吃只把结束时间整体后移，不叠层——设计只写了一个持续时长，没有强度或层数。
+	 */
+	bool ApplyStenchFromAuthority(double DurationSeconds);
+
 	/** 单人可用的野外休息入口；不要求其他玩家在场，成功即解除倒地。 */
 	FCatDomainCommandResult RequestFieldSelfRecovery(AController* RequestingController, FGuid RequestId);
 
 	/** 固定营地休息入口；只允许 Camp actor 传入已到达事实，成功即解除倒地。 */
 	FCatDomainCommandResult RequestCampRest(AController* RequestingController, FGuid RequestId, bool bAtCamp);
 
-	/** 搬运完成入口；要求真实救援者、目标仍倒地且服务器已把 Character 放到固定营地救援点。到点即解除倒地。 */
+	/**
+	 * 搬运完成入口；要求真实救援者、目标仍倒地且服务器已把 Character 放到固定营地救援点。到点即解除倒地。
+	 * 正臭着的猫搬不动：搬运算「帮助」，被臭气屏蔽（2026-08-21 裁定，段子本身是有意保留的）——
+	 * 他只能自己爬、等自愈，或者等翻天自动救起。
+	 */
 	FCatDomainCommandResult CompleteCarryToCamp(AController* HelpingController, FGuid RequestId, bool bAtCampRescuePoint);
 
 	/**
@@ -99,6 +115,9 @@ private:
 	/** 自愈计时到点回调；倒地满配置时长后自己站起来（猫册 §3.1.5）。 */
 	void HandleDownedSelfRecoveryElapsed();
 
+	/** 臭气计时到点回调；到点解除「请勿靠近」，不影响倒地与恢复方式。 */
+	void HandleStenchElapsed();
+
 	/** 定位 Owner Character 的项目 ASC 供属性提交；Owner 类型不匹配时返回空，避免创建平行身体属性源。 */
 	UCatAbilitySystemComponent* ResolveAbilitySystem() const;
 
@@ -120,4 +139,7 @@ private:
 
 	/** 倒地自愈的一次性计时器；只在 authority 侧存在，起身或组件结束时清掉。 */
 	FTimerHandle DownedSelfRecoveryTimer;
+
+	/** 臭气的一次性计时器；只在 authority 侧存在，到点或组件结束时清掉。重复吃臭鱼只重设它。 */
+	FTimerHandle StenchTimer;
 };

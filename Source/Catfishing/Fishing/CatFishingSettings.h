@@ -72,6 +72,19 @@ public:
 	/** 真咬响应窗口秒数；0 表示 Unset，资产 Task 不应启动计时。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (ClampMin = "0"))
 	double TrueBiteWindowSeconds = 0.0;
+
+	/**
+	 * 咬钩信号「全场可闻」的门槛：本竿鱼漂的 BiteSignalStability 达到它，真咬那一刻就走一次不受距离衰减的全场广播。
+	 *
+	 * 为什么用阈值而不是给鱼漂加一个新 bool：鱼漂表里只有铃铛漂带「咬钩铃响、全场可闻」这条特效，
+	 * 而三款漂已有的差异字段就是信号稳定度。新加一个必填 bool 而资产没人配过，这条玩法会静默死掉——
+	 * 本分支已经为同样的错踩过四次。用阈值则不需要动任何资产，铃铛漂只要是稳定度最高的那一款就自然成立。
+	 *
+	 * > 1.0 表示这条玩法关闭（稳定度本身被夹在 0~1）。真咬时无论过不过门槛都会记一行
+	 * fishing_bite_signal 日志，带上本竿鱼漂、稳定度和阈值，一局就能核出铃铛漂的落值对不对得上。
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (ClampMin = "0.0"))
+	double WorldwideBiteSignalStabilityThreshold = 1.0;
 	/**
 	 * 试探期停留时长的区间，逐场随机取值。钓鱼规则 §3.4(:141)「试探期 2～4 秒随机，
 	 * 占位，快照，参数页为准」——设计把这个数归参数页而不是逐鱼资产，所以事实源在这里。
@@ -151,6 +164,14 @@ public:
 	/** 服务器权威近岸目标允许抢抄的最大距离，单位厘米；0 表示 Unset，不从客户端命中位置推导。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (ClampMin = "0"))
 	double ScoopReachCentimeters = 0.0;
+	/**
+	 * 换人接手的体力门槛，取体力上限的比例（多人钓鱼附篇 §2.4「体力恢复到 50% 以上的替补才能接手」，
+	 * 快照以参数页为准）。它只挡「从别人手里接过一根有人的竿」，不挡拾起无人值守的竿、也不挡帮忙抓竿出力。
+	 * 0 表示门槛未配置：接手放行并记一次 Warning——少一道闸好过因为没配一个数把换人整条链判死。
+	 */
+	UPROPERTY(Config, EditAnywhere, Category="Tuning", meta=(ClampMin="0.0", ClampMax="1.0"))
+	double HandoffMinimumStaminaFraction = 0.0;
+
 	/** 每次真实挥网尝试的冷却秒数；GAS 做预测表现，服务器命令层用同一个值做最终限流。 */
 	UPROPERTY(Config, EditAnywhere, Category="Scoop", meta=(ClampMin="0", Units="s"))
 	double ScoopCooldownSeconds = 3.0;

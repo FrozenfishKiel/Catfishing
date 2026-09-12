@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "AbilitySystemInterface.h"
 #include "Framework/Core/CatRunContracts.h"
+#include "GameplayTagContainer.h"
 #include "GameFramework/GameStateBase.h"
 #include "ShopEconomy/Trading/CatShopTradingTypes.h"
 #include "Social/CatSocialTypes.h"
@@ -22,6 +23,39 @@ DECLARE_MULTICAST_DELEGATE(FCatHelpSignalChanged);
 
 /** GameState 团队经济快照变化通知；表现层收到后重读整份复制事实。 */
 DECLARE_MULTICAST_DELEGATE(FCatShopEconomySnapshotChanged);
+
+/** 全场可闻的钓鱼信号到达本机；参数是信号标签与发生位置，表现层据此播一次不随距离衰减的提示。 */
+DECLARE_MULTICAST_DELEGATE_TwoParams(FCatWorldwideFishingSignal, FGameplayTag, FVector);
+
+/** GameState 最近一条「有人解锁了新鱼种」广播变化通知；本机 UI 必须重新读取 GetLastFishSpeciesDiscovery。 */
+DECLARE_MULTICAST_DELEGATE(FCatFishSpeciesDiscoveryChanged);
+
+/**
+ * 一次「某只猫第一次记录到某个鱼种」的全场广播（主界面.md「当玩家解锁新鱼，他人视角」）。
+ * 它只是展示事实：图鉴记录本身是每个人自己的 durable Profile，服务器不代替任何人写图鉴，
+ * 客户端也不能据它推断自己解锁了什么。解锁者本人的鱼种特写走本机 Profile 那条路，不读这条广播。
+ */
+USTRUCT(BlueprintType)
+struct FCatFishSpeciesDiscoveryAnnouncement
+{
+	GENERATED_BODY()
+
+	/** 本次广播的唯一标识；客户端用它去重，复制重发同一条不重复刷提示。无效表示本局还没有过广播。 */
+	UPROPERTY(BlueprintReadOnly)
+	FGuid AnnouncementId;
+
+	/** 首次记录到这个鱼种的玩家公开显示名；离局或名字尚未解析时为空，由 UI 决定占位写法。 */
+	UPROPERTY(BlueprintReadOnly)
+	FString DiscovererDisplayName;
+
+	/** 首次记录者的局内公开 PlayerId；本机据它判断「这条是不是我自己」，而不是比较显示名。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 DiscovererPlayerId = 0;
+
+	/** 被首次记录的鱼种稳定 ID；UI 按它取展示名，不复制鱼定义本身。 */
+	UPROPERTY(BlueprintReadOnly)
+	FName FishDefinitionId = NAME_None;
+};
 
 /** Lake 共享比赛状态；复制由服务器 GameMode 组合的 Run/Environment、Social 求助与 Shop 公开经济事实。 */
 UCLASS()
@@ -66,6 +100,24 @@ public:
 	FCatHelpSignalChanged OnHelpSignalChanged;
 	/** 本机商店公开经济快照变化通知；只提示 UI 重读，不授权客户端确认交付或改余额。 */
 	FCatShopEconomySnapshotChanged OnShopEconomySnapshotChanged;
+	/** 仅 authority 发布一条新鱼种解锁广播；它不写任何人的图鉴，只把「谁第一次记录到什么」告诉全场。 */
+	void PublishFishSpeciesDiscoveryFromAuthority(const FCatFishSpeciesDiscoveryAnnouncement& Announcement);
+	/** 提供服务器最终值或客户端最近复制值；UI 只展示，不据此推进自己的图鉴记录。 */
+	const FCatFishSpeciesDiscoveryAnnouncement& GetLastFishSpeciesDiscovery() const;
+	/** 本机新鱼种广播变化通知；只提示 UI 重读，不授权任何图鉴写入。 */
+	FCatFishSpeciesDiscoveryChanged OnFishSpeciesDiscoveryChanged;
+
+	/**
+	 * 声明：把一次「全场都该听见」的钓鱼信号发给每一个客户端（铃铛漂咬钩铃响）。
+	 * 为什么挂在 GameState 上：角色的 NetMulticast 只发给该角色网络相关的客户端，湖对岸的猫收不到；
+	 *      GameState 对所有客户端恒相关，是这条「不受距离衰减」的唯一可靠载体。
+	 * 边界：它只投递「在哪里、响了什么」，具体播什么声音、衰减怎么配全在表现层；服务器不据此推进任何玩法。
+	 */
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_PlayWorldwideFishingSignal(FGameplayTag SignalTag, FVector WorldLocation);
+
+	/** 本机收到全场钓鱼信号；表现层订阅它播放不随距离衰减的提示音，收到即播，不做去重以外的判断。 */
+	FCatWorldwideFishingSignal OnWorldwideFishingSignal;
 protected:
 	/** 组件完成注册后按 Lyra 口径初始化 Run ASC 的 Owner/Avatar；这里不计算供品目标、不推进 StateTree。 */
 	virtual void PostInitializeComponents() override;
@@ -80,6 +132,9 @@ protected:
 	/** 客户端收到商店公开快照后只记录诊断并通知只读 UI，不在本地确认购买或改库存。 */
 	UFUNCTION()
 	void OnRep_ShopEconomySnapshot();
+	/** 客户端收到新鱼种广播后只通知只读 UI；它不改本机图鉴，也不触发任何服务器命令。 */
+	UFUNCTION()
+	void OnRep_LastFishSpeciesDiscovery();
 
 private:
 	/** 全队共享 Run 数值的唯一 GAS 组件，构造期创建并复制；GameMode 只通过它应用正式 GE。 */
@@ -113,4 +168,8 @@ private:
 	/** 商店公开经济快照；只复制团队公款、货架库存和公开交易记录，购买结果仍由服务器命令返回。 */
 	UPROPERTY(ReplicatedUsing = OnRep_ShopEconomySnapshot)
 	FCatShopPublicEconomySnapshot ShopEconomySnapshot;
+
+	/** 最近一条新鱼种解锁广播；服务器在确认首次记录时写入，客户端只用它刷一条不打断操作的提示。 */
+	UPROPERTY(ReplicatedUsing = OnRep_LastFishSpeciesDiscovery)
+	FCatFishSpeciesDiscoveryAnnouncement LastFishSpeciesDiscovery;
 };

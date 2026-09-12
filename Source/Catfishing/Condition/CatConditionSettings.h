@@ -24,6 +24,10 @@ public:
 	bool HasWaterExposureThresholds() const;
 	/** 倒地自愈时长是否已配；未配时倒地不会自己结束，只能靠救援或休息。 */
 	bool HasDownedSelfRecovery() const;
+	/** 臭气时长是否已配；未配时吃臭臭鱼不会产生「请勿靠近」，其余食用后果照常。 */
+	bool HasStench() const;
+	/** 这条鱼吃下去会不会发臭；名册为空时恒为 false，并由调用方记一次 Warning，不猜鱼种。 */
+	bool IsStenchFish(FName FishDefinitionId) const;
 
 	/** Character 状态运行总 gate；默认关闭。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Runtime")
@@ -55,4 +59,22 @@ public:
 	double DangerousWaterExitDepthCentimeters = 25.0;
 	UPROPERTY(Config, EditAnywhere, Category = "Water", meta = (ClampMin = "0.0", Units = "s"))
 	double DangerousWaterConfirmationSeconds = 0.2;
+
+	/**
+	 * 吃下发臭的鱼之后「请勿靠近」持续多久（联机社交 §3.1.4 与吃鱼效果页都写 90 秒）。
+	 * 0 表示未配：那就没有臭气，吃鱼的其他后果照常，不会把进食链判死。
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Stench", meta = (ClampMin = "0.0", Units = "s"))
+	double StenchSeconds = 0.0;
+
+	/**
+	 * 哪些鱼吃下去会发臭，填鱼资产上的 FishDefinitionId（不是鱼表格的 fish_id 列，两者当前不是同一套写法：
+	 * 表里是 Fish_Stinky，资产里是 StinkyFish）。
+	 *
+	 * 为什么口径落在 ini 而不是鱼资产上：逐鱼「吃鱼效果」整张表（满嘴泥巴、麻痹、请勿靠近…）还没有承载字段，
+	 * 现在往 UCatFishDefinition 上加一个必填项，等于加一个没有任何资产配过的字段——本分支已经为这种写法
+	 * 交过四次学费。等吃鱼效果表整体落地时，这一行连同名册一起搬到鱼资产上去。
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Stench")
+	TArray<FName> StenchFishDefinitionIds;
 };

@@ -25,6 +25,7 @@
 #include "FishContainers/CatFishContainerService.h"
 #include "Kismet/GameplayStatics.h"
 #include "Logging/CatLog.h"
+#include "Run/CatRunSettings.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 
@@ -91,6 +92,7 @@ namespace
 		Summary.WorldProgress = SaveGame.WorldProgress;
 		Summary.LastWorldProgressDelta = SaveGame.LastWorldProgressDelta;
 		Summary.bRunCompleted = SaveGame.bRunCompleted;
+		Summary.TankOfferingPoints = SaveGame.TankOfferingPoints;
 		return Summary;
 	}
 
@@ -1059,6 +1061,42 @@ bool UCatSaveSubsystem::BuildActiveRunSaveGame(UCatRunSaveGame& OutSaveGame, FTe
 	OutSaveGame.DailyOfferingTarget = RunPublicState.DailyOfferingTarget;
 	OutSaveGame.WorldProgress = RunPublicState.WorldProgress;
 	OutSaveGame.LastWorldProgressDelta = RunPublicState.LastWorldProgressDelta;
+	// 加载页要给的第三个量：缸内可献点数。就地按已经导出的容器快照折算，不另开一条读鱼缸的路。
+	// 档位换算未裁（RunSettings 还是 Undecided）时保持 INDEX_NONE——宁可写「未记录」，也不写一个算错的 0。
+	OutSaveGame.TankOfferingPoints = INDEX_NONE;
+	if (const UCatRunSettings* RunSettings = GetDefault<UCatRunSettings>())
+	{
+		int32 TankOfferingPoints = 0;
+		bool bTankPointsResolvable = false;
+		for (const FCatPersistentContainerSnapshot& Container : OutSaveGame.WorldFishContainers)
+		{
+			if (Container.Kind != ECatContainerKind::SharedFishTank)
+			{
+				continue;
+			}
+			bTankPointsResolvable = true;
+			for (const FCatFishInstance& Fish : Container.Fish)
+			{
+				ECatOfferingWeightClass WeightClass = ECatOfferingWeightClass::Small;
+				int32 OfferingPoints = 0;
+				if (RunSettings->TryClassifyOfferingWeight(Fish.WeightKilograms, WeightClass, OfferingPoints))
+				{
+					TankOfferingPoints += OfferingPoints;
+				}
+				else
+				{
+					// 有一条鱼折算不出来就整份作废：半份点数比没有点数更容易骗人。
+					bTankPointsResolvable = false;
+					break;
+				}
+			}
+			if (!bTankPointsResolvable)
+			{
+				break;
+			}
+		}
+		OutSaveGame.TankOfferingPoints = bTankPointsResolvable ? TankOfferingPoints : INDEX_NONE;
+	}
 	// 终局只认两个原因：进度归零＝团灭、Success＝毕业。房主退出（HostExit）是可续的局中断点，不是终局；
 	// StartupFailed 与 None 同理。标记只增不减，终局那一夜之后的任何一次写盘都不会把槽变回「可继续」。
 	const bool bTerminalRun = RunPublicState.EndReason == ECatRunEndReason::WorldProgressDepleted

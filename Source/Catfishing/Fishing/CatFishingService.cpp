@@ -699,11 +699,21 @@ FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller,
 	}
 	if (Rod->IsUsingPhysicalRod())
 	{
-		if (Rod->GetPresentationState().OperatorPlayerState && !Rod->IsPrimaryOperator(PlayerState))
+		// 换人接手是「竿上已有主控」这道拒绝的**唯一**例外（多人钓鱼附篇 §2.4）：
+		// 主钓手得先挂出换人请求，接手者还得过体力门槛，两条都成立才让他接过一根有人的竿。
+		// 没有请求就抢不走——这不是「谁先按谁得」的抢竿，是一次双方同意的交接。
+		ECatFishingCommandError HandoffError = ECatFishingCommandError::HandoffNotRequested;
+		const bool bHandoffTakeover = Rod->GetPresentationState().OperatorPlayerState
+			&& !Rod->IsPrimaryOperator(PlayerState)
+			&& CanAcceptHandoffTakeover(FindActiveSessionByRod(Rod), Rod, Controller, HandoffError);
+		if (Rod->GetPresentationState().OperatorPlayerState && !Rod->IsPrimaryOperator(PlayerState)
+			&& !bHandoffTakeover)
 		{
-			Result.Error = ECatFishingCommandError::RodOccupied;
-			UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_rod_operate_rejected RequestId=%s RodActorId=%s Reason=AlreadyControlled World=%s %s"),
-				*Command.Context.RequestId.ToString(), *Command.Context.RodActorId.ToString(), *GetNameSafe(World),
+			Result.Error = HandoffError == ECatFishingCommandError::HandoffStaminaTooLow
+				? HandoffError : ECatFishingCommandError::RodOccupied;
+			UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_rod_operate_rejected RequestId=%s RodActorId=%s Reason=AlreadyControlled Handoff=%s World=%s %s"),
+				*Command.Context.RequestId.ToString(), *Command.Context.RodActorId.ToString(),
+				*UEnum::GetValueAsString(HandoffError), *GetNameSafe(World),
 				*CatLogContext::BuildControllerFields(Controller));
 			return Result;
 		}
@@ -732,6 +742,21 @@ FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller,
 			return Result;
 		}
 		const FTransform PreviousParkedPose = Rod->GetPhysicalRodComponent()->GetBody()->GetComponentTransform();
+		if (bHandoffTakeover)
+		{
+			// 交接瞬间完成：先把上一任从主控位和主持上摘下来，下面那套「取得主控」的链条才走得通
+			// （SetPrimaryOperatorFromAuthority 不允许在已有主控时直接改写成另一个人）。
+			// 被换下者按搏斗外速率恢复，他仍可以用左右手物理抓着这根竿当帮手——那不是主控位。
+			// 中途失败的兜底是下面那条既有回滚：这根竿会退回无人值守（线随鱼放、没人扣体力），
+			// 而不是回到上一任手里——无人值守是设计里已经定义过的状态，不是新造的半成品。
+			APlayerState* PreviousPrimary = Rod->GetPresentationState().OperatorPlayerState;
+			Rod->ReleasePhysicalPrimaryHoldFromAuthority(PreviousPrimary, TEXT("FishingHandoff"));
+			Rod->SetPrimaryOperatorFromAuthority(nullptr, Rod->GetPresentationState().RodActorRevision);
+			if (ACatFishingSession* HandoffSession = FindActiveSessionByRod(Rod))
+			{
+				HandoffSession->RefreshPrimaryControlFromAuthority();
+			}
+		}
 		if (!Command.Context.RequestId.IsValid()
 			|| !Rod->BeginPhysicalHoldFromAuthority(PlayerState, true))
 		{
@@ -1195,7 +1220,13 @@ bool UCatFishingService::RemoveOperatorAndReconcileSession(ACatFishingRodActor* 
 	if (!Rod->SetPrimaryOperatorFromAuthority(nullptr, ExpectedRevision)) return false;
 	// Explicit release removes this operator's hands from this shaft only. Other cats keep their grips.
 	Rod->ReleasePhysicalPrimaryHoldFromAuthority(PlayerState, FName(Reason));
-	if (ACatFishingSession* Session = FindActiveSessionByRod(Rod)) Session->SuspendOperatorFromAuthority();
+	if (ACatFishingSession* Session = FindActiveSessionByRod(Rod))
+	{
+		Session->SuspendOperatorFromAuthority();
+		// 主位空了，挂着的换人请求随之失效：那是上一任主钓手挂的牌子，而这根竿现在是无人值守——
+		// 谁想接直接按 R 拾起就行（钓鱼规则 §6.3 无人值守放线），不需要也不应该再走「接手」那条门槛。
+		Session->ClearHandoffRequestFromAuthority(TEXT("PrimaryReleased"));
+	}
 	if (auto* PC = Cast<ACatfishingPlayerController>(FindControllerForPlayerState(GetWorld(), PlayerState)))
 		if (auto* Commands = PC->GetFishingCommandComponent()) Commands->ClearHeldFightInputForControlTransferFromAuthority();
 	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_primary_released RodActorId=%s PlayerId=%d Reason=%s World=%s NetMode=%d Authority=1 LocalRole=%d Result=Unattended"),
@@ -1361,6 +1392,157 @@ ACatFishingRodActor* UCatFishingService::FindNearestPackableRod(const APlayerSta
 	return Best;
 }
 
+// 接手对象查找流程：只认「挂着换人请求」的竿，按 grip 距离取最近；不接受客户端指定目标。
+// 与 FindNearestOperableRod 的区别正是这一条：那边要求竿上没人，这边要求竿上有人且那个人已经喊过「谁来接一下」。
+ACatFishingRodActor* UCatFishingService::FindNearestRodAwaitingHandoff(const FVector& WorldLocation,
+	const double MaxDistanceCentimeters)
+{
+	CompactDeployedRods();
+	if (WorldLocation.ContainsNaN() || !FMath::IsFinite(MaxDistanceCentimeters) || MaxDistanceCentimeters < 0.0)
+	{
+		return nullptr;
+	}
+	ACatFishingRodActor* Best = nullptr;
+	double BestDistanceSquared = FMath::Square(MaxDistanceCentimeters);
+	for (const auto& Pair : DeployedRodsByPlayerState)
+	{
+		ACatFishingRodActor* Rod = Pair.Value.Get();
+		const ACatFishingSession* Session = Rod ? FindActiveSessionByRod(Rod) : nullptr;
+		if (!Rod || !Rod->GetPresentationState().bDeployed || Rod->GetPresentationState().bBroken
+			|| !Session || !Session->IsHandoffRequested())
+		{
+			continue;
+		}
+		const double DistanceSquared = FVector::DistSquared(WorldLocation, Rod->GetGripWorldTransform().GetLocation());
+		if (DistanceSquared <= BestDistanceSquared)
+		{
+			BestDistanceSquared = DistanceSquared;
+			Best = Rod;
+		}
+	}
+	return Best;
+}
+
+// 接手资格流程：先要求这根竿上真的挂着请求、请求人仍是当前主控（他中途被换掉或自己取消了，牌子就不算数），
+// 再查替补的体力门槛。门槛读 CatFishingSettings，设计值 50%（多人钓鱼附篇 §2.4，快照以参数页为准）。
+bool UCatFishingService::CanAcceptHandoffTakeover(const ACatFishingSession* Session, const ACatFishingRodActor* Rod,
+	const AController* Controller, ECatFishingCommandError& OutError) const
+{
+	OutError = ECatFishingCommandError::HandoffNotRequested;
+	APlayerState* Requester = Session ? Session->GetHandoffRequesterPlayerState() : nullptr;
+	if (!Session || !Rod || !Requester || Requester != Rod->GetPresentationState().OperatorPlayerState)
+	{
+		return false;
+	}
+	const ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
+	const UAbilitySystemComponent* ASC = Character ? Character->GetAbilitySystemComponent() : nullptr;
+	if (!ASC)
+	{
+		OutError = ECatFishingCommandError::DependencyUnavailable;
+		return false;
+	}
+	const double Fraction = GetDefault<UCatFishingSettings>()->HandoffMinimumStaminaFraction;
+	if (!FMath::IsFinite(Fraction) || Fraction <= 0.0)
+	{
+		// 门槛未配置：放行并记一次 Warning。这条链的价值在「能换人」，不在「有门槛」——
+		// 少一个数就把整条换人判死，是本分支已经交过四次学费的写法。
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_handoff_stamina_gate_unconfigured SessionId=%s Reason=HandoffMinimumStaminaFractionUnset Result=Allowed"),
+			*Session->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens));
+		OutError = ECatFishingCommandError::None;
+		return true;
+	}
+	const double Stamina = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+	const double StaminaMaximum = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+	if (!FMath::IsFinite(Stamina) || !FMath::IsFinite(StaminaMaximum) || StaminaMaximum <= 0.0
+		|| Stamina < StaminaMaximum * Fraction)
+	{
+		OutError = ECatFishingCommandError::HandoffStaminaTooLow;
+		return false;
+	}
+	OutError = ECatFishingCommandError::None;
+	return true;
+}
+
+// 换人握手流程：按发起者当时的身份分派，主钓手挂牌/摘牌，替补接手。
+// 接手本身复用 OperateRod 那条已经写好的接管链（物理持竿 → 主控位 → 会话接管 → 提交持竿），
+// 不另写一套并行的转让代码；OperateRod 里唯一为换人放开的是「竿上已有主控」那道拒绝。
+FCatFishingCommandResult UCatFishingService::SubmitFishingHandoff(AController* Controller,
+	const FCatRodCommandContext& Context)
+{
+	FCatFishingCommandResult Result;
+	Result.CommandType = ECatFishingCommandType::RequestHandoff;
+	Result.RequestId = Context.RequestId;
+	APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
+	const ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
+	UWorld* World = GetWorld();
+	const ACatfishingGameModeBase* GameMode = World ? World->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
+	if (!bCommandsOpen || !GameMode || !GameMode->CanAcceptFishingCommand(Controller)
+		|| !CanControllerStartFishingAction(Controller) || !PlayerState || !Character)
+	{
+		Result.Error = ECatFishingCommandError::CommandsClosed;
+		return Result;
+	}
+	// 分支一：自己就是主钓手 → 挂出或撤回换人请求。目标竿以服务器登记的主控竿为准，不读客户端给的 RodActorId。
+	if (ACatFishingRodActor* OperatedRod = FindRodOperatedBy(PlayerState))
+	{
+		ACatFishingSession* Session = FindActiveSessionByRod(OperatedRod);
+		Result.RodActorId = OperatedRod->GetPresentationState().RodActorId;
+		Result.RodActorRevision = OperatedRod->GetPresentationState().RodActorRevision;
+		if (!Session)
+		{
+			// 手里有竿但没有活动会话（还没抛、或这一竿已经结了）：没有可交接的对象。
+			Result.Error = ECatFishingCommandError::SessionNotFound;
+			return Result;
+		}
+		Result.FishingSessionId = Session->GetSnapshot().FishingSessionId;
+		Result.bCommitted = Session->ToggleHandoffRequestFromAuthority(Controller);
+		Result.Error = Result.bCommitted ? ECatFishingCommandError::None : ECatFishingCommandError::NotFisher;
+		Result.Revision = Session->GetSnapshot().Revision;
+		Result.SnapshotSequence = Session->GetSnapshot().SnapshotSequence;
+		Result.PhaseEpoch = Session->GetSnapshot().PhaseEpoch;
+		Result.CastAttemptId = Session->GetSnapshot().CastAttemptId;
+		return Result;
+	}
+	// 分支二：岸上替补 → 接手最近一根挂着请求的竿。范围与 R 接管同一口径（grip 250cm）。
+	ACatFishingRodActor* TargetRod = FindNearestRodAwaitingHandoff(Character->GetActorLocation(), 250.0);
+	const ACatFishingSession* TargetSession = TargetRod ? FindActiveSessionByRod(TargetRod) : nullptr;
+	if (!TargetRod || !TargetSession)
+	{
+		Result.Error = ECatFishingCommandError::HandoffNotRequested;
+		return Result;
+	}
+	Result.RodActorId = TargetRod->GetPresentationState().RodActorId;
+	Result.RodActorRevision = TargetRod->GetPresentationState().RodActorRevision;
+	Result.FishingSessionId = TargetSession->GetSnapshot().FishingSessionId;
+	ECatFishingCommandError TakeoverError = ECatFishingCommandError::HandoffNotRequested;
+	if (!CanAcceptHandoffTakeover(TargetSession, TargetRod, Controller, TakeoverError))
+	{
+		Result.Error = TakeoverError;
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_handoff_accept_rejected SessionId=%s Reason=%s %s"),
+			*Result.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			*UEnum::GetValueAsString(TakeoverError), *CatLogContext::BuildControllerFields(Controller));
+		return Result;
+	}
+	const FGuid TakeoverSessionId = Result.FishingSessionId;
+	FCatOperateRodCommand TakeoverCommand;
+	TakeoverCommand.Context.RequestId = Context.RequestId;
+	TakeoverCommand.Context.RodActorId = TargetRod->GetPresentationState().RodActorId;
+	TakeoverCommand.Context.ExpectedRodActorRevision = TargetRod->GetPresentationState().RodActorRevision;
+	Result = OperateRod(Controller, TakeoverCommand);
+	// OperateRod 回的是「接管鱼竿」的结果，这里把它改标成换人，并补回会话身份——
+	// 玩家按的是换人键，回执上的命令类型和会话必须是他按的那件事。
+	Result.CommandType = ECatFishingCommandType::RequestHandoff;
+	Result.FishingSessionId = TakeoverSessionId;
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_handoff_accepted SessionId=%s Committed=%s Error=%s %s"),
+		*Result.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+		Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error),
+		*CatLogContext::BuildControllerFields(Controller));
+	return Result;
+}
+
 ACatFishingRodActor* UCatFishingService::FindNearestOperableRod(const APlayerState* PlayerState,
 	const FVector& WorldLocation, const double MaxDistanceCentimeters)
 {
@@ -1522,6 +1704,28 @@ bool UCatFishingService::RegisterDeployedRod(APlayerState* PlayerState, ACatFish
 			Equipment->FishingResourceOwnerStableId = PlayerState->GetUniqueId()->ToString();
 	}
 	return true;
+}
+
+// 报废鱼竿撤场流程：先松开所有仍抓着它的爪子，再从服务索引里摘掉，最后销毁 Actor。
+// 顺序不能反：先销毁会让后两步拿不到有效指针，操作位和索引就会留下悬空记录。
+void UCatFishingService::RetireDeployedRodActorFromAuthority(ACatFishingRodActor* RodActor)
+{
+	if (!IsValid(RodActor))
+	{
+		return;
+	}
+	ReleaseRodOperators(RodActor);
+	const FGuid RodActorId = RodActor->GetPresentationState().RodActorId;
+	UnregisterDeployedRod(RodActor->GetPresentationState().OwnerPlayerState, RodActor);
+	PreservedRodEquipment.Remove(RodActorId);
+	const bool bDestroyed = RodActor->Destroy();
+	// 控制权交接过的竿，OwnerPlayerState 可能已经不是当初登记的那个键，上面那次注销就会落空。
+	// 销毁之后再补一次压缩：弱引用此刻已失效，残留的索引项在这里一并清掉，不留悬空记录。
+	UnregisterDeployedRod(nullptr, nullptr);
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_broken_rod_actor_retired RodActorId=%s Destroyed=%s World=%s"),
+		*RodActorId.ToString(EGuidFormats::DigitsWithHyphens), bDestroyed ? TEXT("true") : TEXT("false"),
+		*GetNameSafe(GetWorld()));
 }
 
 // 鱼竿注销流程：ExpectedRodActor 必须与当前存活值精确匹配；missing/null/mismatch 都保持无副作用。

@@ -34,6 +34,7 @@ void UCatConditionComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	if (const UWorld* World = GetWorld())
 	{
 		World->GetTimerManager().ClearTimer(DownedSelfRecoveryTimer);
+		World->GetTimerManager().ClearTimer(StenchTimer);
 	}
 	Super::EndPlay(EndPlayReason);
 }
@@ -218,6 +219,29 @@ FCatDomainCommandResult UCatConditionComponent::ConsumeCommittedFish(const FGuid
 			{
 				ApplySevereToxicityFromAuthority();
 			}
+			// 臭臭鱼的「请勿靠近」：吃下即起 90 秒臭气（联机社交 §3.1.4、吃鱼效果页）。
+			// 名册与时长都在 CatConditionSettings；哪一项没配都只是这个副作用不发生，进食本身照常成立。
+			const UCatConditionSettings* ConditionSettings = GetDefault<UCatConditionSettings>();
+			if (ConditionSettings->IsStenchFish(FishDefinition->FishDefinitionId))
+			{
+				if (ConditionSettings->HasStench())
+				{
+					ApplyStenchFromAuthority(ConditionSettings->StenchSeconds);
+				}
+				else
+				{
+					UE_LOG(LogCatCharacter, Warning,
+						TEXT("Event=character_stench_unconfigured Character=%s Fish=%s Reason=StenchSecondsUnset"),
+						*GetNameSafe(GetOwner()), *FishDefinition->FishDefinitionId.ToString());
+				}
+			}
+			else if (ConditionSettings->StenchFishDefinitionIds.IsEmpty())
+			{
+				// 名册整张空：这不是「这条鱼不臭」，是没人填过名册。记一次，免得「请勿靠近」静默消失。
+				UE_LOG(LogCatCharacter, Warning,
+					TEXT("Event=character_stench_roster_empty Character=%s Fish=%s Reason=StenchFishDefinitionIdsEmpty"),
+					*GetNameSafe(GetOwner()), *FishDefinition->FishDefinitionId.ToString());
+			}
 			Result.bCommitted = true;
 			Result.Error = ECatDomainCommandError::None;
 			Result.Revision = Snapshot.Revision;
@@ -237,6 +261,43 @@ bool UCatConditionComponent::ApplySevereToxicityFromAuthority()
 	}
 	SetDownedFromAuthority(true, ECatRecoveryMode::None);
 	return Snapshot.bDowned;
+}
+
+// 臭气写入流程：只在 authority 侧提交，重复吃只把结束时间整体后移（没有层数或强度这一说）。
+// 它不碰倒地、不碰恢复方式、不碰任何 Attribute——「请勿靠近」是一层社交屏蔽，不是身体损伤。
+bool UCatConditionComponent::ApplyStenchFromAuthority(const double DurationSeconds)
+{
+	UWorld* World = GetWorld();
+	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !World || !Settings || !Settings->IsRuntimeReady()
+		|| !FMath::IsFinite(DurationSeconds) || DurationSeconds <= 0.0)
+	{
+		return false;
+	}
+	Snapshot.bStench = true;
+	Snapshot.StenchEndsServerTimeSeconds = World->GetTimeSeconds() + DurationSeconds;
+	++Snapshot.Revision;
+	PublishSnapshot();
+	World->GetTimerManager().SetTimer(StenchTimer, this, &ThisClass::HandleStenchElapsed, DurationSeconds, false);
+	UE_LOG(LogCatCharacter, Log,
+		TEXT("Event=character_stench_started Character=%s DurationSeconds=%.2f EndsAt=%.2f Revision=%lld"),
+		*GetOwner()->GetName(), DurationSeconds, Snapshot.StenchEndsServerTimeSeconds, Snapshot.Revision);
+	return true;
+}
+
+// 臭气到点流程：只清这一层状态；此刻猫可能仍倒地、仍湿着，那些各走各的入口。
+void UCatConditionComponent::HandleStenchElapsed()
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !Snapshot.bStench)
+	{
+		return;
+	}
+	Snapshot.bStench = false;
+	Snapshot.StenchEndsServerTimeSeconds = 0.0;
+	++Snapshot.Revision;
+	PublishSnapshot();
+	UE_LOG(LogCatCharacter, Log, TEXT("Event=character_stench_ended Character=%s Revision=%lld"),
+		*GetOwner()->GetName(), Snapshot.Revision);
 }
 
 // 野外自救流程：要求请求者正拥有本 Character；单人局也走得通，不要求其他玩家在场。
@@ -296,6 +357,18 @@ FCatDomainCommandResult UCatConditionComponent::CompleteCarryToCamp(AController*
 	{
 		Result.Error = ECatDomainCommandError::InvalidPhase;
 		TerminalCache.Add(Key, Result);
+		return Result;
+	}
+	// 臭着的猫搬不动（2026-08-21 裁定：搬运算「帮助」，被臭气屏蔽）。这是设计有意留的段子——
+	// 「太臭了没法救」，他只能自己爬回营、等自愈计时，或者等翻天自动救起。
+	// 注意屏蔽的只有「别人来搬」：自救、营地休息、自愈到点、翻天救起四条路都不读臭气。
+	if (Snapshot.bStench)
+	{
+		Result.Error = ECatDomainCommandError::PermissionDenied;
+		TerminalCache.Add(Key, Result);
+		UE_LOG(LogCatCharacter, Log,
+			TEXT("Event=character_rescue_rejected Character=%s Reason=Stench RequestId=%s"),
+			*GetNameSafe(GetOwner()), *RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 		return Result;
 	}
 	SetDownedFromAuthority(false, ECatRecoveryMode::CarriedToCamp);

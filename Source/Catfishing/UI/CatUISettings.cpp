@@ -4,6 +4,7 @@
 #include "InputAction.h"
 #include "InputMappingContext.h"
 #include "UI/Collection/CatCollectionWidget.h"
+#include "UI/Collection/CatFishRevealWidget.h"
 #include "UI/HUD/CatHUDWidget.h"
 #include "UI/Run/CatDayTransitionWidget.h"
 #include "UI/Frontend/CatFrontendRootWidget.h"
@@ -35,6 +36,8 @@ UCatUISettings::UCatUISettings()
 		FSoftClassPath(TEXT("/Game/UI/Save/WBP_CatLakeMainMenu.WBP_CatLakeMainMenu_C")));
 	CollectionWidgetClass = TSoftClassPtr<UCatCollectionWidget>(
 		FSoftClassPath(TEXT("/Game/UI/Collection/WBP_CatCollection.WBP_CatCollection_C")));
+	FishRevealWidgetClass = TSoftClassPtr<UCatFishRevealWidget>(
+		FSoftClassPath(TEXT("/Game/UI/Collection/WBP_CatFishReveal.WBP_CatFishReveal_C")));
 	MainMenuToggleAction = TSoftObjectPtr<UInputAction>(
 		FSoftObjectPath(TEXT("/Game/Input/InputAction/IA_LakeMenu.IA_LakeMenu")));
 	InventoryToggleAction = TSoftObjectPtr<UInputAction>(
@@ -139,6 +142,18 @@ TSubclassOf<UCatCollectionWidget> UCatUISettings::LoadCollectionWidgetClass() co
 {
 	UClass* LoadedClass = CollectionWidgetClass.LoadSynchronous();
 	if (!LoadedClass || !LoadedClass->IsChildOf(UCatCollectionWidget::StaticClass()))
+	{
+		return nullptr;
+	}
+	return LoadedClass;
+}
+
+// 首解锁特写 WBP 类加载流程：同步解析配置软类并验证继承特写基类；失败返回空。
+// 这一层缺席只意味着这次不弹特写，图鉴记录仍然已经写进 Profile——所以这里绝不能把它做成阻断写入的闸门。
+TSubclassOf<UCatFishRevealWidget> UCatUISettings::LoadFishRevealWidgetClass() const
+{
+	UClass* LoadedClass = FishRevealWidgetClass.LoadSynchronous();
+	if (!LoadedClass || !LoadedClass->IsChildOf(UCatFishRevealWidget::StaticClass()))
 	{
 		return nullptr;
 	}

@@ -3,6 +3,7 @@
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Framework/Game/CatfishingPlayerState.h"
 #include "Engine/World.h"
+#include "GameFramework/Controller.h"
 #include "GameFramework/PlayerState.h"
 
 namespace
@@ -59,6 +60,8 @@ FGuid UCatRunImprintService::RecordCommittedCapture(const FCatCaptureCommittedRe
 	Grant.CaptureCondition = Condition;
 	Grant.RecipientStableNetId = RecipientStableNetId;
 	const FName GrantedFishDefinitionId = Grant.FishDefinitionId;
+	// 首钓判定必须在写进本局事实之前问；下面那行 Add 自己就会让同一问题从此返回 false。
+	const bool bFirstRecordOfThisSpecies = IsFirstFishRecordForRecipient(RecipientStableNetId, GrantedFishDefinitionId);
 	const FGuid GrantId = EnqueueGrant(MoveTemp(Grant));
 	if (GrantId.IsValid())
 	{
@@ -66,8 +69,35 @@ FGuid UCatRunImprintService::RecordCommittedCapture(const FCatCaptureCommittedRe
 		// 本局的「这个人已经收集过这种鱼」事实：首钓判定先读它，不必等客户端落盘再经 PlayerState 绕回来。
 		FishRecordGrantByRecipientAndFish.Add(
 			MakeRecipientFishKey(RecipientStableNetId, GrantedFishDefinitionId), GrantId);
+		if (bFirstRecordOfThisSpecies)
+		{
+			AnnounceFishSpeciesDiscovery(RecipientStableNetId, GrantedFishDefinitionId, GrantId);
+		}
 	}
 	return GrantId;
+}
+
+// 新鱼种广播流程：把「谁第一次记录到什么」发到 GameState 的公开位上，让同房其他玩家收到一条不打断操作的提示
+// （主界面.md「当玩家解锁新鱼，他人视角」）。解锁者本人的鱼种特写不走这条——那条由本机 Profile 落盘后自己弹，
+// 因为「我的图鉴记上了」这件事的唯一事实源是本机 durable Profile，服务器不替任何人写图鉴。
+// AnnouncementId 复用 FishRecorded 的 GrantId：同一次首记天然只有一条广播，客户端据它去重。
+void UCatRunImprintService::AnnounceFishSpeciesDiscovery(const FString& RecipientStableNetId,
+	const FName FishDefinitionId, const FGuid AnnouncementId) const
+{
+	ACatfishingGameState* GameState = GetWorld() ? GetWorld()->GetGameState<ACatfishingGameState>() : nullptr;
+	if (!GameState || !AnnouncementId.IsValid() || FishDefinitionId.IsNone())
+	{
+		return;
+	}
+	const AController* Controller = FindControllerByStableNetId(RecipientStableNetId);
+	const APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
+	FCatFishSpeciesDiscoveryAnnouncement Announcement;
+	Announcement.AnnouncementId = AnnouncementId;
+	Announcement.FishDefinitionId = FishDefinitionId;
+	// 解锁者已经离局时仍然播报：鱼种确实是第一次被记录到，只是没有名字可显示，由 UI 决定占位写法。
+	Announcement.DiscovererDisplayName = PlayerState ? PlayerState->GetPlayerName() : FString();
+	Announcement.DiscovererPlayerId = PlayerState ? PlayerState->GetPlayerId() : 0;
+	GameState->PublishFishSpeciesDiscoveryFromAuthority(Announcement);
 }
 
 // 剪影归档流程：按接收者+咬钩机会重放既有 Grant，再验证命令门与稳定字段；首次建立不可撤销的 FishSilhouette Grant。

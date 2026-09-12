@@ -94,6 +94,35 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Catfishing|FishContainers")
 	FCatFishTankOccupantsChanged OnTankOccupantsChanged;
 
+	/**
+	 * 本局这口缸已经买到第几档容量；0 是初始档，每买一档 +1。
+	 * 它只活在本局 World 里、不进存档——「随局清空」讲的就是这件事。
+	 */
+	UFUNCTION(BlueprintPure, Category = "Catfishing|FishContainers")
+	int32 GetCapacityTier() const;
+
+	/**
+	 * 声明：只回答「这一档升级现在能不能买」，不改任何状态；商店在扣钱之前问它。
+	 * 边界：档位必须严格等于当前档 +1（不能跳档、不能重复买），且该档在配置里解析得出正容量。
+	 *      同一个 RequestId 已经提交过时直接返回 true —— 那是可靠 RPC 重放，不是第二次购买。
+	 */
+	bool CanApplyCapacityUpgradeFromAuthority(int32 TargetTier, const FGuid& RequestId) const;
+
+	/**
+	 * 声明：一次问一整串档位能不能连着买下来（一车里同时买两档时用）。
+	 * 实现：把档位排序后按「当前档 + 1、+ 2 …」逐个核，不去改任何状态。
+	 * 边界：跳档、重复档、越过配置档数都判否；同号重放直接放行，理由同单档入口。
+	 */
+	bool CanApplyCapacityUpgradeSequenceFromAuthority(const TArray<int32>& TargetTiers, const FGuid& RequestId) const;
+
+	/**
+	 * 声明：把鱼缸推进到指定容量档，并按新档位扩容正式鱼库存；成功后返回 true。
+	 * 实现：复用 CanApplyCapacityUpgradeFromAuthority 的同一套前置，再写档位与槽位数，最后刷新只读摘要。
+	 * 边界：只缩不扩的方向不做——容量只升不降；档位不连续或配置缺失时整笔拒绝，不部分生效。
+	 *      幂等键是购物车 RequestId：同一个号重复提交只在第一次真的升档，之后直接返回成功。
+	 */
+	bool ApplyCapacityUpgradeFromAuthority(int32 TargetTier, const FGuid& RequestId);
+
 protected:
 	/** authority 入场时按编辑器容量补齐正式库存，再显式发布只读摘要；客户端等待库存与摘要各自复制。 */
 	virtual void BeginPlay() override;
@@ -111,6 +140,16 @@ private:
 	/** 服务器入场时分配的一局鱼缸容器 ID；只读复制给客户端，不是库存写口，也不参与持久化映射。 */
 	UPROPERTY(Replicated)
 	FGuid TankContainerId;
+
+	/** 本局已购容量档；0＝初始档。服务器唯一写口是 ApplyCapacityUpgradeFromAuthority，客户端只读它做 UI 展示。 */
+	UPROPERTY(Replicated)
+	int32 CapacityTier = 0;
+
+	/** 按当前档位解析鱼缸应有的槽位容量；配置未给出正容量时回退到编辑器上的 FishInventorySlotCapacity。 */
+	int32 ResolveSlotCapacityForCurrentTier() const;
+
+	/** 已经提交过的升级请求号；服务器本地保存，只用于挡住可靠 RPC 重放再升一档，不复制也不进存档。 */
+	TSet<FGuid> CommittedUpgradeRequestIds;
 
 	/** 共享鱼缸的固定场景根；关卡用它摆放位置，运行时不把该坐标当成库存真相。 */
 	UPROPERTY(VisibleAnywhere)
@@ -136,7 +175,10 @@ private:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Catfishing|Interaction", meta = (AllowPrivateAccess = "true"))
 	bool bInteractionEnabled = true;
 
-	/** 共享鱼缸默认槽位容量；BeginPlay 在服务器写入正式库存组件，运行时不会走鱼容器设置表。 */
+	/**
+	 * 共享鱼缸的兜底槽位容量；只有 CatFishContainerSettings 没给出正的初始容量时才用它，并会记一条 Warning。
+	 * 正式容量来自设置里的初始档 + 已购升级档（商店册 §3.1.2：初始 10，两档 20／30）。
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Catfishing|FishContainers", meta = (AllowPrivateAccess = "true", ClampMin = "0"))
 	int32 FishInventorySlotCapacity = 20;
 

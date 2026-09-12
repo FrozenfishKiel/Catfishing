@@ -106,6 +106,9 @@ public:
 	/** 请求选择控制设置分类；当前只进入正式空分类说明，不发明控制字段或输入映射。 */
 	void RequestSelectControlsSettings();
 
+	/** 选择辅助功能分类（主界面.md:91 的第四个页签）；只切分类，不代 Model 写任何草稿。 */
+	void RequestSelectAccessibilitySettings();
+
 	/** 返回当前已被玩家选中且仍在 SaveModel 中有效的槽位标识；None 表示尚未选择或选择已失效。 */
 	FName GetSelectedSlotId() const;
 

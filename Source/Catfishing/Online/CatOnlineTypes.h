@@ -153,7 +153,7 @@ enum class ECatOnlineError : uint8
 	TravelFailed,
 	/** 引擎报告当前 GameInstance 的 NetworkFailure。 */
 	NetworkFailure,
-	/** 房主离局前 Run 无法完成权威收口；Session 保持原状且退出链停止。 */
+	/** 承载世界的 listen server 进程退出前 Run 无法完成权威收口；Session 保持原状且退出链停止。（与房主移交无关，见 RequestLeave 注释。） */
 	RunTeardownFailed,
 	/** 到达的包不符合两地图或当前操作的预期目标。 */
 	UnexpectedMap,

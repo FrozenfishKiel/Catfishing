@@ -14,6 +14,13 @@ DECLARE_MULTICAST_DELEGATE_OneParam(FCatCapturePlanReceived, const FCatCapturePl
 /** 本地图鉴 durable 内容已经变化的只读通知；订阅者收到信号后重新读取公开快照，不读取 Journal 或写入档案。 */
 DECLARE_MULTICAST_DELEGATE(FCatFishCollectionChanged);
 
+/**
+ * 某个鱼种的收集层刚刚第一次在本机档案里落盘（FName 鱼种 ID，double 本次重量千克）。
+ * 「首次解锁新鱼种」这件事的唯一事实源就是这里：收集层解锁位从 false 翻成 true 的那一次，
+ * 而且必须已经第二次落盘成功——否则特写弹了、档案没写上，玩家下次进来会发现图鉴里没有它。
+ */
+DECLARE_MULTICAST_DELEGATE_TwoParams(FCatFishSpeciesFirstRecorded, FName, double);
+
 /** 每个 LocalPlayer 的永久档案深模块；它拥有 SaveGame Journal 和内容合并，不接触服务器实物容器。 */
 UCLASS()
 class CATFISHING_API UCatProfileSubsystem : public ULocalPlayerSubsystem
@@ -61,12 +68,16 @@ public:
 	/** 鱼图鉴公开快照变化的订阅入口；只在 FishRecorded/FishSilhouette/FishKnowledge 完成第二次 durable 保存后触发。 */
 	FCatFishCollectionChanged OnFishCollectionChanged;
 
+	/** 首次解锁新鱼种的订阅入口；只在收集层解锁位第一次翻成 true 且已 durable 之后触发一次，同种鱼的第二条不再触发。 */
+	FCatFishSpeciesFirstRecorded OnFishSpeciesFirstRecorded;
+
 private:
 	/** 校验 Grant 内容是否足以进入 Journal；拒绝发生在任何 SaveGame 写入之前。 */
 	static ECatDomainCommandError ValidateGrant(const FCatProfileGrant& Grant);
 
-	/** 把一份已落 Pending 的 Grant 幂等合并到内存档案；不自行保存或发 ACK。 */
-	bool MergeGrantIntoProfile(const FCatProfileGrant& Grant);
+	/** 把一份已落 Pending 的 Grant 幂等合并到内存档案；不自行保存或发 ACK。
+	 *  bOutFirstRecordedUnlock 报告本次是否把收集层解锁位第一次翻成 true，供落盘成功后决定要不要弹首解锁特写。 */
+	bool MergeGrantIntoProfile(const FCatProfileGrant& Grant, bool& bOutFirstRecordedUnlock);
 
 	/** 完成一个已存在的 Pending Journal：合并、标 Complete、保存；失败时重新加载磁盘 Pending 事实。 */
 	FCatProfileApplyResult CompletePendingGrant(FGuid GrantId);

@@ -400,6 +400,9 @@ void UCatFrontendPageController::RequestSelectAudioSettings() { if (UCatFrontend
 // 控制分类流程：取得有效 SettingsModel 后选择当前受限分类；只由 Model 通知刷新，不生成尚未接线的配置。
 void UCatFrontendPageController::RequestSelectControlsSettings() { if (UCatFrontendSettingsModel* Settings = SettingsModel.Get()) { Settings->SelectControls(); } }
 
+// 辅助功能分类流程：取得有效 SettingsModel 后切换分类；页签本身是正式入口，具体项的可用性由 Model 各自回答。
+void UCatFrontendPageController::RequestSelectAccessibilitySettings() { if (UCatFrontendSettingsModel* Settings = SettingsModel.Get()) { Settings->SelectAccessibility(); } }
+
 // 槽位读取流程：返回当前已验证选择；无有效选择时返回 None 的责任由 SaveModel 变化处理承担。
 FName UCatFrontendPageController::GetSelectedSlotId() const { return SelectedSlotId; }
 

@@ -3,7 +3,9 @@
 #include "EnhancedInputComponent.h"
 #include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"
+#include "Framework/Game/CatfishingPlayerController.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/PlayerState.h"
 #include "InputAction.h"
 #include "InputMappingContext.h"
 #include "InputCoreTypes.h"
@@ -113,6 +115,7 @@ bool UCatLakeMainMenuController::Bind(ULocalPlayer* InLocalPlayer, APlayerContro
 		InView->InitializeLakeMenuSettings(SettingsModel);
 	}
 	InView->OnActionRequested.AddUObject(this, &ThisClass::HandleMenuActionRequested);
+	InView->OnKickRequested.AddUObject(this, &ThisClass::RequestKickPlayerFromWidget);
 	if (UCatSaveSubsystem* Save = GetSaveSubsystem())
 	{
 		SaveChangedHandle = Save->OnChanged.AddUObject(this, &ThisClass::HandleSaveChanged);
@@ -141,6 +144,7 @@ void UCatLakeMainMenuController::Unbind()
 	{
 		View->ResetLakeMenuSettings();
 		View->OnActionRequested.RemoveAll(this);
+		View->OnKickRequested.RemoveAll(this);
 		View->RemoveFromParent();
 	}
 	if (UCatSaveSubsystem* Save = GetSaveSubsystem(); Save && SaveChangedHandle.IsValid())
@@ -525,6 +529,19 @@ void UCatLakeMainMenuController::ApplyMenuInputMode(const bool bOpen)
 		return;
 	}
 	CatUIModalInputMode::Close(Controller, ModalInputModeState);
+}
+
+// 踢人转交流程：只把「谁、哪一次请求」交给服务器，其余全部由 authority 的房主服务裁决。
+// 本地刻意不预判房主资格——预判会让「按钮灰着但其实能踢」和「按钮亮着但服务器拒绝」两种错都出现；
+// 露不露这颗按钮由 WBP 读 ACatfishingPlayerState::IsRoomOwner() 决定，能不能踢成永远以服务器为准。
+void UCatLakeMainMenuController::RequestKickPlayerFromWidget(APlayerState* TargetPlayerState)
+{
+	ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(BoundPlayerController.Get());
+	if (!CatController || !TargetPlayerState)
+	{
+		return;
+	}
+	CatController->ServerKickPlayer(TargetPlayerState, FGuid::NewGuid());
 }
 
 // 图鉴请求流程：先关闭本菜单释放模态输入，再把意图交给 LocalPlayer UI；图鉴页面与记录都不由局内菜单持有。

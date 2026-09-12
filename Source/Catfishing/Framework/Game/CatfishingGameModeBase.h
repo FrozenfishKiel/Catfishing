@@ -229,6 +229,14 @@ private:
 	void ClearDayDeadline();
 	/** 按当前白天截止窗口安排 Morning/Day/Dusk 语义刷新；无效配置只记录诊断，不创建第二套昼夜状态。 */
 	void ScheduleDayEnvironmentRefreshes();
+	/**
+	 * 数「进入这一天那一刻还在局里的玩家」，作为当天任务的清晨人数快照
+	 * （局与进程 §3.1.2:58「清晨按在场人数确定，当天加入或退出都不重算」）。
+	 * 只在进入 DayActive 时调用一次；数不出人（登录尚未完成）时返回 0，由调用方按 1 人兜底并记 Warning。
+	 */
+	int32 CountMorningPlayersFromAuthority() const;
+	/** 开局一次性核对臭鱼供品 ID 是否真的指向正式鱼目录里的鱼；对不上只记 Warning，不阻止启动——它是折扣配置，不是准入。 */
+	void LogStinkyOfferingFishBindingDiagnostics() const;
 	/** 白天时段分界到达时重新发布同一 RunPublicState；只有服务器仍处于有效 DayActive 才递增 Revision。 */
 	void HandleDayEnvironmentRefreshElapsed();
 	/** 白天自然到点和调试提前结束共用的截止入口；撤销原计时器后只关闭新咬钩并发送 DayEnded，保留已有搏斗和操作，旧截止不会跨天触发，夜晚不建立倒计时。 */

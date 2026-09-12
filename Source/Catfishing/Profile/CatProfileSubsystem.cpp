@@ -263,8 +263,9 @@ ECatDomainCommandError UCatProfileSubsystem::ValidateGrant(const FCatProfileGran
 }
 
 // 内容合并流程：按 Grant 类型只推进对应 SSOT；鱼图鉴按字段级解锁位单向升级并保留首次条件，印记按 ID 去重，封面只接受明确 cover 标记，解锁只追加一次。
-bool UCatProfileSubsystem::MergeGrantIntoProfile(const FCatProfileGrant& Grant)
+bool UCatProfileSubsystem::MergeGrantIntoProfile(const FCatProfileGrant& Grant, bool& bOutFirstRecordedUnlock)
 {
+	bOutFirstRecordedUnlock = false;
 	if (!CurrentProfile)
 	{
 		return false;
@@ -285,6 +286,9 @@ bool UCatProfileSubsystem::MergeGrantIntoProfile(const FCatProfileGrant& Grant)
 		if (Grant.Kind == ECatProfileGrantKind::FishRecorded)
 		{
 			++Record->EncounterCount;
+			// 「首次解锁新鱼种」就是收集层这一位第一次翻成 true 的那一刻，不是「第一次钓到鱼」，
+			// 也不是整页层级从 Silhouette 跳到 Recorded——吃过没钓到的鱼页层级还停在剪影，但收集层照样是首次。
+			bOutFirstRecordedUnlock = !Record->bRecordedUnlocked;
 			if (!Record->bRecordedUnlocked)
 			{
 				// 首次条件只在第一次收集时冻结；此后破纪录只刷新最佳重量，不覆盖首次条件（图鉴 §3.1.4:126）。
@@ -354,7 +358,10 @@ FCatProfileApplyResult UCatProfileSubsystem::CompletePendingGrant(const FGuid Gr
 		return Result;
 	}
 	const ECatProfileGrantKind CompletedKind = Entry->Grant.Kind;
-	if (!MergeGrantIntoProfile(Entry->Grant))
+	const FName CompletedFishDefinitionId = Entry->Grant.FishDefinitionId;
+	const double CompletedWeightKilograms = Entry->Grant.WeightKilograms;
+	bool bFirstRecordedUnlock = false;
+	if (!MergeGrantIntoProfile(Entry->Grant, bFirstRecordedUnlock))
 	{
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Result;
@@ -376,6 +383,11 @@ FCatProfileApplyResult UCatProfileSubsystem::CompletePendingGrant(const FGuid Gr
 		|| CompletedKind == ECatProfileGrantKind::FishKnowledge)
 	{
 		OnFishCollectionChanged.Broadcast();
+	}
+	// 首解锁特写只在档案确实写上之后才弹：上面那次 SaveCurrentProfile 失败会提前 return，不会走到这里。
+	if (bFirstRecordedUnlock && !CompletedFishDefinitionId.IsNone())
+	{
+		OnFishSpeciesFirstRecorded.Broadcast(CompletedFishDefinitionId, CompletedWeightKilograms);
 	}
 	return Result;
 }

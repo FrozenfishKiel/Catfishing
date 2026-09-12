@@ -457,6 +457,18 @@ FCatFishingInputEdge UCatFishingCommandComponent::SubmitRodInteract()
 	return Edge;
 }
 
+FCatFishingInputEdge UCatFishingCommandComponent::SubmitFishingHandoff()
+{
+	// 换人握手：本地只发意图，挂牌还是接手由服务器按当时身份判（客户端的身份认知可能已经过期）。
+	FCatFishingInputEdge Edge = MakeDiscreteEdge();
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_handoff_requested RequestId=%s InputSequence=%lld %s"),
+		*Edge.RequestId.ToString(), Edge.InputSequence,
+		*BuildRodAimControllerFields(Cast<APlayerController>(GetOwner())));
+	DispatchAbilityCommand(ECatFishingCommandType::RequestHandoff, Edge);
+	return Edge;
+}
+
 FCatFishingInputEdge UCatFishingCommandComponent::SubmitPrimaryPressed()
 {
 	// 左键按下：先在本地生成一个“本次按住”的关联 ID，之后松开时把同一个 ID 带回去，
@@ -972,6 +984,14 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 	}
 	if (Fishing)
 	{
+		// 换人握手：服务器按发起者当时的身份分派（主钓手挂牌/摘牌，替补接手），目标竿一律由服务器解析。
+		if (CommandType == ECatFishingCommandType::RequestHandoff)
+		{
+			FCatRodCommandContext HandoffContext;
+			HandoffContext.RequestId = Edge.RequestId;
+			DeliverResultFromAuthority(Fishing->SubmitFishingHandoff(Controller, HandoffContext));
+			return;
+		}
 		// R 架住当前主控竿；空手优先接管附近空闲竿，否则部署本人库存实体竿。
 		if (CommandType == ECatFishingCommandType::OperateRod)
 		{

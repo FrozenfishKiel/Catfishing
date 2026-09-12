@@ -17,6 +17,28 @@ class UCatInventoryModel;
 class FOutBunch;
 struct FReplicationFlags;
 struct FCatInventoryItemUseContext;
+enum class ECatInventoryCarryCategory : uint8;
+
+/**
+ * 这份库存在团队装备库里扮演的角色。
+ *
+ * 商店册 §3.1.2：「购买物进入团队装备库：竿和漂放入公共架，其他备装自取，消耗品从公库领取」——
+ * 也就是团队装备库有两个去处，不是一个。这个枚举就是那两个去处的运行标识，挂在库存组件上而不是
+ * 营地 Actor 上，好让关卡里摆两个营地容器时各自声明自己是哪一个。
+ *
+ * Unspecified 是默认值，语义是「这份库存没声明角色」。关卡里一个角色都没声明时，商店交付回退到
+ * 「全部进同一个公共仓库」的旧行为并记一条 Warning —— 不是把购买判死。
+ */
+UENUM(BlueprintType)
+enum class ECatTeamStorageRole : uint8
+{
+	/** 未声明角色；参与旧的单一公共仓库回退路径。 */
+	Unspecified = 0,
+	/** 公共架：竿、漂这类非消耗功能装备的去处。 */
+	EquipmentRack = 1,
+	/** 公库：饵、窝料这类本局消耗品的去处。 */
+	SupplyStore = 2
+};
 
 /** 一个库存格的复制条目；格子只记录实例指针和堆叠数量，不持有 GAS、Fishing 或 UI 的下游状态。 */
 USTRUCT(BlueprintType)
@@ -413,6 +435,22 @@ public:
 	/** 槽位接收规则默认保持通用背包语义；装备栏子类可按标签收窄，避免库存核心硬编码装备类别。 */
 	virtual bool CanAcceptInventoryEntryAtSlot(const FCatInventoryEntry& IncomingEntry, int32 TargetSlotIndex) const;
 
+	/**
+	 * 声明：这份库存还能再收几份这类物品，才不突破随身携带总量上限（道具册：普通饵 8 份、窝料 5 份）。
+	 * 实现：只有 EnforcesCarryLimits() 为真的库存才真的算；其余一律返回 MAX_int32。
+	 * 边界：它和格数、单格堆叠上限是三件不同的事，三道都要过；未配置上限时等价于不设限。
+	 */
+	int32 GetRemainingCarryAllowanceForDefinition(const UCatInventoryItemDefinition& ItemDefinition) const;
+
+	/**
+	 * 这份库存是否受「随身携带总量」约束。
+	 * 只有猫身上的背包受约束——「携带上限」讲的是一只猫身上能带多少，营地公库、鱼护和商店货架不在其内。
+	 */
+	virtual bool EnforcesCarryLimits() const { return false; }
+
+	/** 读取这份库存在团队装备库里声明的角色；商店交付按它把竿漂与消耗品分到两个去处。 */
+	ECatTeamStorageRole GetTeamStorageRole() const { return TeamStorageRole; }
+
 protected:
 	friend class ACatFishPickupActor;
 	friend class ACatFishGuardActor;
@@ -474,6 +512,9 @@ protected:
 	/** 读取某个定义的有效堆叠上限；集中处理非法配置，确保预演和正式入库口径一致。 */
 	int32 GetMaxStackCountForDefinition(const UCatInventoryItemDefinition& ItemDefinition) const;
 
+	/** 统计本库存可见格里属于同一携带分类的总份数；只服务随身总量上限，不参与格数或堆叠裁决。 */
+	int32 CountVisibleQuantityForCarryCategory(ECatInventoryCarryCategory Category) const;
+
 	/** 实例复制登记只有在最后一个槽位放手后才能解除；避免同实例多格引用时客户端丢对象。 */
 	bool IsItemInstanceReferencedByOtherSlots(const UCatInventoryItemInstance* ItemInstance,
 		int32 IgnoredSlotIndex) const;
@@ -512,6 +553,13 @@ protected:
 	/** Actor 级统一收货优先级；数值越大越先尝试完整接收整批物品。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "InventoryConfig")
 	int32 UnifiedInventoryIntakePriority = 0;
+
+	/**
+	 * 这份库存在团队装备库里的角色；关卡里放公共架和公库两个容器时，各自在实例上选一个。
+	 * 默认 Unspecified 保持现状：没人声明角色时商店仍旧把整车交给同一个公共仓库。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "InventoryConfig")
+	ECatTeamStorageRole TeamStorageRole = ECatTeamStorageRole::Unspecified;
 
 	/** 当前从本库存借出但尚未归还或退役的不可堆叠单实例；键是实例身份，值是唯一的完整 entry，部署与收回都只操作这份所有权记录。 */
 	UPROPERTY(Transient)
