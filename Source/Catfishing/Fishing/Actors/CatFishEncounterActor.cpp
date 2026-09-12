@@ -149,6 +149,21 @@ FVector ACatFishEncounterActor::GetVisualWorldLocation() const
 		: VisualRoot ? VisualRoot->GetComponentLocation() : GetActorLocation();
 }
 
+// 鱼种解析流程：只从已复制的表现状态取稳定 ID 再问目录，服务器与客户端同源；身份未初始化时返回空。
+UCatFishDefinition* ACatFishEncounterActor::GetFishDefinition() const
+{
+	const UCatFishCatalogSettings* Catalog = GetDefault<UCatFishCatalogSettings>();
+	return Catalog && !PresentationState.FishDefinitionId.IsNone()
+		? Catalog->FindRuntimeDefinition(PresentationState.FishDefinitionId) : nullptr;
+}
+
+// 表现定义解析流程：沿鱼定义唯一的表现引用取资产；漂讯与水面三个逐鱼槽位由表现层从返回值上读。
+UCatFishPresentationDefinition* ACatFishEncounterActor::GetFishPresentationDefinition() const
+{
+	const UCatFishDefinition* Fish = GetFishDefinition();
+	return Fish ? Fish->LoadRuntimePresentationDefinition() : nullptr;
+}
+
 namespace CatFishEncounterPresentationPrivate
 {
 	static const TCHAR* NetModeValue(const ENetMode NetMode)

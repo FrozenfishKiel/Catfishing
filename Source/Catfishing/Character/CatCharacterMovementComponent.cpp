@@ -110,7 +110,7 @@ void UCatCharacterMovementComponent::PerformMovement(float DeltaSeconds)
 	ActiveDrive.bLocomotion = Body->IsLocomotionEnabled();
 	if (const auto* Controller = Cast<ACatfishingPlayerController>(Cat->GetController()); Controller && Controller->IsDayTransitionInputBlocked())
 		ActiveDrive.MoveIntent = FVector::ZeroVector;
-	if (!ActiveDrive.bFishing) ActiveDrive.MaxSpeed = Body->MaxMovementSpeedCmS;
+	if (!ActiveDrive.bFishing) ActiveDrive.MaxSpeed = Body->GetEffectiveMaxMovementSpeedCmS();
 	const auto EffortDrive = ActiveDrive;
 	const FVector StartPosition = Cat->GetActorLocation();
 	const FVector StartCorrection = TotalMotionCorrection;
@@ -127,7 +127,7 @@ void UCatCharacterMovementComponent::PerformMovement(float DeltaSeconds)
 		IntendedDisplacement = Reaction.GetSafeNormal() * Effort
 			* GetDefault<UCatPhysicalEffortSettings>()->SupportReferenceSpeedCmS * DeltaSeconds;
 	}
-	MaxWalkSpeed = Body->MaxMovementSpeedCmS;
+	MaxWalkSpeed = Body->GetEffectiveMaxMovementSpeedCmS();
 	JumpZVelocity = Body->JumpSpeedCmS;
 	GravityScale = Body->GravityScale;
 	Acceleration = ActiveDrive.MoveIntent * GetMaxAcceleration();

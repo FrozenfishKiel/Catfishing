@@ -1,8 +1,18 @@
 #include "Collection/CatRunImprintService.h"
 
 #include "Framework/Game/CatGameplayTypes.h"
+#include "Framework/Game/CatfishingPlayerState.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerState.h"
+
+namespace
+{
+	/** 「接收者|鱼种」复合键；首钓判定与知识层去重共用同一个拼法，避免两处各拼一份走形。 */
+	FString MakeRecipientFishKey(const FString& RecipientStableNetId, const FName FishDefinitionId)
+	{
+		return FString::Printf(TEXT("%s|%s"), *RecipientStableNetId, *FishDefinitionId.ToString());
+	}
+}
 
 // 创建条件流程：只允许 Game/PIE 的 authority World 持有一局投递记录；客户端只运行自己的 LocalPlayer Profile。
 bool UCatRunImprintService::ShouldCreateSubsystem(UObject* Outer) const
@@ -20,6 +30,9 @@ void UCatRunImprintService::Deinitialize()
 	CapturePlanByRecipient.Reset();
 	GrantDeliveries.Reset();
 	CaptureGrantByRequest.Reset();
+	FishRecordGrantByRecipientAndFish.Reset();
+	KnowledgeGrantByRecipientAndFish.Reset();
+	SilhouetteGrantByRecipientAndEncounter.Reset();
 	UnlockGrantByRecipientAndUnlockId.Reset();
 	AlbumByRun.Reset();
 	Super::Deinitialize();
@@ -45,12 +58,99 @@ FGuid UCatRunImprintService::RecordCommittedCapture(const FCatCaptureCommittedRe
 	Grant.WeightKilograms = Capture.FishInstance.WeightKilograms;
 	Grant.CaptureCondition = Condition;
 	Grant.RecipientStableNetId = RecipientStableNetId;
+	const FName GrantedFishDefinitionId = Grant.FishDefinitionId;
 	const FGuid GrantId = EnqueueGrant(MoveTemp(Grant));
 	if (GrantId.IsValid())
 	{
 		CaptureGrantByRequest.Add(Capture.CaptureRequestId, GrantId);
+		// 本局的「这个人已经收集过这种鱼」事实：首钓判定先读它，不必等客户端落盘再经 PlayerState 绕回来。
+		FishRecordGrantByRecipientAndFish.Add(
+			MakeRecipientFishKey(RecipientStableNetId, GrantedFishDefinitionId), GrantId);
 	}
 	return GrantId;
+}
+
+// 剪影归档流程：按接收者+咬钩机会重放既有 Grant，再验证命令门与稳定字段；首次建立不可撤销的 FishSilhouette Grant。
+// 这一层只记「你碰到过这条鱼」，因此不带重量、不带首次条件，也不因为后续跑鱼/断竿/放弃而回滚。
+FGuid UCatRunImprintService::RecordFishEncounterSilhouette(const FName FishDefinitionId,
+	const FString& RecipientStableNetId, const FGuid EncounterKey)
+{
+	const FString EncounterGrantKey = FString::Printf(TEXT("%s|%s"), *RecipientStableNetId,
+		*EncounterKey.ToString(EGuidFormats::Digits));
+	if (const FGuid* Existing = SilhouetteGrantByRecipientAndEncounter.Find(EncounterGrantKey))
+	{
+		return *Existing;
+	}
+	if (!bCommandsOpen || FishDefinitionId.IsNone() || RecipientStableNetId.IsEmpty() || !EncounterKey.IsValid())
+	{
+		return FGuid();
+	}
+	FCatProfileGrant Grant;
+	Grant.Kind = ECatProfileGrantKind::FishSilhouette;
+	Grant.FishDefinitionId = FishDefinitionId;
+	Grant.RecipientStableNetId = RecipientStableNetId;
+	const FGuid GrantId = EnqueueGrant(MoveTemp(Grant));
+	if (GrantId.IsValid())
+	{
+		SilhouetteGrantByRecipientAndEncounter.Add(EncounterGrantKey, GrantId);
+	}
+	return GrantId;
+}
+
+// 知识层归档流程：按接收者+鱼种重放既有 Grant，再验证命令门与稳定字段；吃第二条同种鱼不再生成新的待 ACK Grant。
+// 归属就是吃的人——别人钓的鱼被自己吃掉，效果记进自己的图鉴（图鉴 §3.1.4:124）。
+FGuid UCatRunImprintService::RecordFishKnowledge(const FName FishDefinitionId, const FString& RecipientStableNetId)
+{
+	const FString KnowledgeKey = MakeRecipientFishKey(RecipientStableNetId, FishDefinitionId);
+	if (const FGuid* Existing = KnowledgeGrantByRecipientAndFish.Find(KnowledgeKey))
+	{
+		return *Existing;
+	}
+	if (!bCommandsOpen || FishDefinitionId.IsNone() || RecipientStableNetId.IsEmpty())
+	{
+		return FGuid();
+	}
+	FCatProfileGrant Grant;
+	Grant.Kind = ECatProfileGrantKind::FishKnowledge;
+	Grant.FishDefinitionId = FishDefinitionId;
+	Grant.RecipientStableNetId = RecipientStableNetId;
+	const FGuid GrantId = EnqueueGrant(MoveTemp(Grant));
+	if (GrantId.IsValid())
+	{
+		KnowledgeGrantByRecipientAndFish.Add(KnowledgeKey, GrantId);
+	}
+	return GrantId;
+}
+
+// 首钓判定流程：先读本局已发出的 FishRecorded 集合，再读该玩家 PlayerState 上的跨局公开图鉴摘要。
+// 摘要读不到（玩家已断线、或本机 Profile 持久化关闭导致摘要为空）时只能回答 false——宁可不抛印记，
+// 也不能把每一条鱼都当成首钓；「印记宁缺毋滥」是印记册的既定口径。
+bool UCatRunImprintService::IsFirstFishRecordForRecipient(const FString& RecipientStableNetId,
+	const FName FishDefinitionId) const
+{
+	if (RecipientStableNetId.IsEmpty() || FishDefinitionId.IsNone())
+	{
+		return false;
+	}
+	if (FishRecordGrantByRecipientAndFish.Contains(MakeRecipientFishKey(RecipientStableNetId, FishDefinitionId)))
+	{
+		return false;
+	}
+	const AController* Controller = FindControllerByStableNetId(RecipientStableNetId);
+	const ACatfishingPlayerState* PlayerState = Controller
+		? Cast<ACatfishingPlayerState>(Controller->PlayerState) : nullptr;
+	if (!PlayerState)
+	{
+		return false;
+	}
+	for (const FCatFishCollectionRecord& Record : PlayerState->GetPublicFishCollection())
+	{
+		if (Record.FishDefinitionId == FishDefinitionId && Record.bRecordedUnlocked)
+		{
+			return false;
+		}
+	}
+	return true;
 }
 
 // 捕获归档预检流程：只读取本局命令门，不创建 Grant；它隔离必需 FishRecorded 与可选 CapturePlan，使上游不会因未配置成像事件而拒绝实物鱼。

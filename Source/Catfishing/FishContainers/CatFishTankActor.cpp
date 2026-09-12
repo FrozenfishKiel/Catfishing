@@ -5,6 +5,8 @@
 #include "FishContainers/CatFishTankInteractionComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "Interaction/CatInteractionSettings.h"
+#include "Net/UnrealNetwork.h"
+#include "Inventory/CatFishInventoryItemInstance.h"
 #include "Inventory/CatFishOnlyInventoryComponent.h"
 #include "Inventory/CatInventoryItemInstance.h"
 #include "UI/WorldInfo/CatFishTankWorldInfoComponent.h"
@@ -38,6 +40,11 @@ void ACatFishTankActor::BeginPlay()
 	{
 		InteractionCollision->SetCollisionResponseToChannel(Settings->TargetingTraceChannel, ECR_Block);
 	}
+	if (HasAuthority())
+	{
+		// 一局稳定的鱼缸身份；缸随局清空、不跨局延续，所以每次入场新发一个就够。
+		TankContainerId = FGuid::NewGuid();
+	}
 	if (HasAuthority() && FishInventory != nullptr)
 	{
 		FishInventory->SetInventorySlotCountFromAuthority(FishInventorySlotCapacity);
@@ -47,11 +54,29 @@ void ACatFishTankActor::BeginPlay()
 	{
 		WorldInfo->RefreshSummary();
 	}
+	// 缸内游动表现要在鱼进出缸时增删；服务器与客户端都订阅，客户端由复制回调驱动同一条通知。
+	if (FishInventory)
+	{
+		FishInventoryChangedHandle = FishInventory->OnInventoryObservedChanged.AddUObject(
+			this, &ACatFishTankActor::HandleFishInventoryChanged);
+	}
+}
+
+// 复制登记流程：只登记一局鱼缸容器 ID；鱼数组由 FishInventory 组件自己的 FastArray 复制，不在此重复一份。
+void ACatFishTankActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(ThisClass, TankContainerId);
 }
 
 // 鱼缸销毁流程：服务器只回收当前库存条目所保留的一对一隐藏世界鱼，先断开实例引用再销毁 Actor，防止容器拆除后留下不可见可复制的鱼载体。
 void ACatFishTankActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (FishInventory && FishInventoryChangedHandle.IsValid())
+	{
+		FishInventory->OnInventoryObservedChanged.Remove(FishInventoryChangedHandle);
+		FishInventoryChangedHandle.Reset();
+	}
 	if (HasAuthority() && FishInventory)
 	{
 		for (const FCatInventoryEntry& Entry : FishInventory->GetInventoryEntries())
@@ -107,4 +132,48 @@ UCatFishOnlyInventoryComponent* ACatFishTankActor::GetFishInventoryComponent() c
 UCatFishTankInteractionComponent* ACatFishTankActor::GetTankInteraction() const
 {
 	return TankInteraction;
+}
+
+// 缸内清单读取流程：按槽位顺序遍历正式库存，只取数量为一的鱼实例并投影三个公开字段。
+// 空槽、非鱼实例、鱼种 ID 缺失或重量非法的条目一律跳过——表现层宁可少生成一条鱼，也不要拿伪造值去缩放。
+TArray<FCatFishTankOccupant> ACatFishTankActor::GetTankOccupants() const
+{
+	TArray<FCatFishTankOccupant> Occupants;
+	if (!FishInventory)
+	{
+		return Occupants;
+	}
+	for (const FCatInventoryEntry& Entry : FishInventory->GetInventoryEntries())
+	{
+		const UCatFishInventoryItemInstance* Fish = Entry.StackCount == 1
+			? Cast<UCatFishInventoryItemInstance>(Entry.Instance) : nullptr;
+		if (!IsValid(Fish))
+		{
+			continue;
+		}
+		const FName FishDefinitionId = Fish->GetItemDefinitionId();
+		const double WeightKilograms = Fish->GetFishWeightKilograms();
+		if (FishDefinitionId.IsNone() || !FMath::IsFinite(WeightKilograms) || WeightKilograms <= 0.0)
+		{
+			continue;
+		}
+		FCatFishTankOccupant& Occupant = Occupants.AddDefaulted_GetRef();
+		Occupant.FishInstanceId = Fish->GetItemInstanceId();
+		Occupant.FishDefinitionId = FishDefinitionId;
+		Occupant.WeightKilograms = WeightKilograms;
+	}
+	return Occupants;
+}
+
+// 容器身份读取流程：鱼缸目前不经鱼容器服务注册，返回服务器入场时分配并复制下来的一局 ID；
+// 服务器与客户端同源、跨帧稳定，足够表现层区分「这条游动的鱼属于哪口缸」。
+FGuid ACatFishTankActor::GetTankContainerId() const
+{
+	return TankContainerId;
+}
+
+// 变化转发流程：库存已经把一次完整变化写进自己的快照，这里只把通知转成蓝图形式，不做差异计算。
+void ACatFishTankActor::HandleFishInventoryChanged()
+{
+	OnTankOccupantsChanged.Broadcast();
 }

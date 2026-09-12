@@ -37,6 +37,9 @@ public:
 	/** 处理页面关闭意图；已经关闭时不重新打开。 */
 	void RequestCloseCollectionFromWidget();
 
+	/** 把页面上的「一键隐藏这张印记」转交给 Model 的 Profile 写口；页面自己不持有 Profile 引用。 */
+	bool RequestSetImprintHiddenFromWidget(FGuid ImprintId, bool bHidden);
+
 private:
 	/** 成对加入/移出视口并申请/释放模态输入；打开时先用当前 Model 投影重绘一次，避免显示上一次的过期记录。 */
 	void SetCollectionOpen(bool bOpen);

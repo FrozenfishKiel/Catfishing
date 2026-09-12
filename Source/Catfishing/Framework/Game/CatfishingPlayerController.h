@@ -5,6 +5,7 @@
 #include "Fishing/CatFishingTypes.h"
 #include "Framework/Core/CatProfileContracts.h"
 #include "Framework/Core/CatRunContracts.h"
+#include "Growth/CatGrowthTypes.h"
 #include "GameFramework/PlayerController.h"
 #include "GameplayTagContainer.h"
 #include "Inventory/CatInventoryStatics.h"
@@ -182,10 +183,18 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerDropCarriedItem();
 
-	/** 消费本人指定草药实例的一份数量后恢复目标 Character；Condition 恢复链按当前宿主事实校验请求，库存提交成功前不会修改身体。 */
-	UFUNCTION(Server, Reliable)
-	void ServerUseHerbOnCharacter(ACatCharacter* TargetCharacter, FGuid RequestId,
-		FGuid HerbItemInstanceId);
+	// ServerUseHerbOnCharacter 于 2026-09-12 删除。草药机制 2026-08-13 已由设计删掉（猫册 v1.3），
+	// 09-09「代码超前项逐个过」明确裁「删代码一条——草药恢复链」，本次连同 Fragment、枚举项与 ini 两行一并清掉。
+	// 倒地解除现在只有救援与休息：搬运走 ServerRequestRescueCharacterToCamp，休息走 ServerRequestCampRest
+	// 与下面的 ServerRequestFieldSelfRecovery。
+
+	/** 野外原地休息自救；单人局也走得通，服务器按当前 Character 事实裁决，不要求其他玩家在场。 */
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Condition")
+	void ServerRequestFieldSelfRecovery(FGuid RequestId);
+
+	/** 从当前这组三选一里选中一项；OfferSerial 用来拒绝过期面板，服务器只认自己发出的那一组。 */
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Growth")
+	void ServerChooseGrowthOption(FGuid RequestId, ECatGrowthOptionId OptionId, int32 OfferSerial);
 
 	// ServerBeginTheft／ClientReceiveTheftResult／GetLastTheftResult／ServerCatchTheft 四条偷鱼 RPC 于 2026-09-11 整条删除。
 	// 偷是玩家玩的时候才有的主观意识，不写进规格；机制层只有客观的拿鱼，走上面的 ServerMoveInventoryItemBetweenHosts。

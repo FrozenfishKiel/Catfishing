@@ -124,9 +124,9 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	FText PurchaseBroadcastText;
 
-	/** 当前猫中毒值；来源是 Character ASC，HUD 只展示，不据此裁决倒地。 */
+	/** 当前黄色体力护盾存量；来源是 Character ASC，体力条把它画在绿段末端，HUD 不据此裁决任何事。 */
 	UPROPERTY(BlueprintReadOnly)
-	float Poison = 0.0f;
+	float YellowFightStamina = 0.0f;
 
 	/** 当前钓鱼力量；来源是 Character ASC，HUD 只展示，不作为 Fishing 命令参数。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -194,9 +194,12 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bCanOpenCollection = true;
 
-	/** 猫状态调试摘要是否显示在主界面上；默认关闭以避免正式 HUD 出现研发态属性文本，只由临时排查显式开启。 */
+	/**
+	 * 当前是否有一组等着玩家挑的三选一。
+	 * 它取代了原来那行常驻猫状态调试文本：成长信息只在需要它的时刻露面，而「该选了」正是那个时刻。
+	 */
 	UPROPERTY(BlueprintReadOnly)
-	bool bShowCatStatusDebugText = false;
+	bool bHasPendingGrowthChoice = false;
 
 	/** 钓鱼调试反馈是否显示在主界面上；默认关闭以避免空闲状态出现流程诊断文案，只由临时排查显式开启。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -250,9 +253,10 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bHasFishingCommandResult = false;
 
-	/** 给调试 TextBlock 直接绑定的猫状态中文摘要；正式主界面默认不显示它。 */
-	UPROPERTY(BlueprintReadOnly)
-	FText CatStatusText;
+	/*
+	 * 墓碑（2026-09-12）：原有 CatStatusText 是一行常驻拼接的研发态属性摘要，
+	 * 与「无常驻状态条」相反，随 bShowCatStatusDebugText、BlueprintCatStatusText 与 CatStatusTextBlock 一并删除。
+	 */
 
 	/** 给调试 TextBlock 直接绑定的钓鱼反馈中文摘要；正式主界面默认不显示它。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -330,7 +334,7 @@ protected:
 	/** 每帧只刷新本地倒计时表现；提竿窗口裁决仍以服务器 FishingSession 命令结果为准。 */
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
-	/** WBP 可选渲染扩展点；Designer 可在特殊调试布局里读取 BlueprintCatStatusText 和 BlueprintFishingFeedbackText。 */
+	/** WBP 可选渲染扩展点；Designer 可在特殊调试布局里读取 BlueprintFishingFeedbackText。 */
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category = "Catfishing|HUD")
 	void BP_RenderHUD(const FCatHUDViewState& ViewState);
 
@@ -383,17 +387,9 @@ private:
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|HUD", meta = (AllowPrivateAccess = "true"))
 	FCatHUDViewState LastHUDViewState;
 
-	/** 给 WBP 调试 TextBlock 直接绑定的猫状态文本；默认主界面不会把它显示出来。 */
-	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|HUD", meta = (AllowPrivateAccess = "true"))
-	FText BlueprintCatStatusText;
-
 	/** 给 WBP 调试 TextBlock 直接绑定的钓鱼反馈文本；默认主界面不会把它显示出来。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|HUD", meta = (AllowPrivateAccess = "true"))
 	FText BlueprintFishingFeedbackText;
-
-	/** WBP Designer 中的猫状态调试文本控件；存在时 RenderHUD 会写入摘要，并按调试显隐标记决定是否露出。 */
-	UPROPERTY(Transient, meta = (BindWidgetOptional))
-	TObjectPtr<UTextBlock> CatStatusTextBlock;
 
 	/** WBP Designer 中的钓鱼反馈调试文本控件；存在时 RenderHUD 会写入反馈，并按调试显隐标记决定是否露出。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))

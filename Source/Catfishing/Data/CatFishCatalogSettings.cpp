@@ -233,11 +233,15 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 		}
 		const double BaseFishStrength = WeightKilograms * StrengthPerKilogram;
 		// 挑战度是第一道实际玩法门：超出安全上限的个体不会再进入任何生态条件或权重计算。
+		// 鱼体力同样是逐鱼系数 × 实际重量（2026-09-08 改口径）；挑战度必须拿同一个量纲去比，
+		// 否则「体力系数」会被当成体力点直接和猫的体力总量比较，轻重鱼一律错档。
+		const double FishFightStamina = Definition->ResolveInitialFightStamina(WeightKilograms);
 		const double ChallengeRatio = CatFishCatalogSettingsPrivate::CalculateChallengeRatio(
-			BaseFishStrength, Definition->FishFightStamina,
+			BaseFishStrength, FishFightStamina,
 			Context.CombinedFishingStrength, Context.CombinedFightStamina);
 		if (!FMath::IsFinite(WeightKilograms) || WeightKilograms <= 0.0
 			|| !FMath::IsFinite(BaseFishStrength) || BaseFishStrength <= 0.0
+			|| !FMath::IsFinite(FishFightStamina) || FishFightStamina <= 0.0
 			|| !FMath::IsFinite(ChallengeRatio) || ChallengeRatio <= 0.0
 			|| ChallengeRatio > MaximumChallengeRatio)
 		{
@@ -278,7 +282,9 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 	}
 	if (Candidates.IsEmpty())
 	{
-		return Result;
+		// 候选为空＝落基础池（2026-09-08 李前臻裁「候选为空或总权重为零落基础池」）。
+		// 空窝、条件门全筛掉、名册没填都走这一条，绝不静默空钩。
+		return SelectFromBasePool(Context, TEXT("NoEligibleCandidate"));
 	}
 	Result.EligibleCandidateCount = Candidates.Num();
 	FRandomStream Random(Context.RandomSeed);
@@ -354,7 +360,8 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 	}
 	if (!FMath::IsFinite(TotalCandidateWeight) || TotalCandidateWeight <= 0.0)
 	{
-		return Result;
+		// 总权重为零＝落基础池（同一条裁决的另一半）：有合法候选但窝料/鱼饵/挑战度把它们全乘成 0。
+		return SelectFromBasePool(Context, TEXT("ZeroTotalWeight"));
 	}
 	double Cursor = Random.FRandRange(0.0f, static_cast<float>(TotalCandidateWeight));
 	const FCandidate* Selected = nullptr;
@@ -382,5 +389,104 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 	Result.BaseFishStrength = Selected->BaseFishStrength;
 	Result.SelectedFinalWeight = Selected->FinalWeight;
 	Result.SelectedNormalizedProbability = Selected->FinalWeight / TotalCandidateWeight;
+	return Result;
+}
+
+// 食性档位取值流程：只在配置落在 (0,1) 开区间时才认；0 与越界都返回 0，代表「这一档未裁」，
+// 由行为侧退回测试期性格模板——不能把 0 当成合法的「永不向外」。
+double UCatFishCatalogSettings::ResolveDietOutwardSegmentProbability(const ECatFishDiet Diet) const
+{
+	const double Configured = Diet == ECatFishDiet::Carnivore ? CarnivoreOutwardSegmentProbability
+		: Diet == ECatFishDiet::Omnivore ? OmnivoreOutwardSegmentProbability
+		: Diet == ECatFishDiet::Herbivore ? HerbivoreOutwardSegmentProbability : 0.0;
+	return FMath::IsFinite(Configured) && Configured > 0.0 && Configured < 1.0 ? Configured : 0.0;
+}
+
+// 基础池抽取流程：只按名册自己的固定概率抽，不读窝料、鱼饵、挑战度与稀有度——它是兜底名册不是第二套生态。
+// 仍然保留三道客观门：鱼定义必须就绪、必须属于本水域、必须满足在场协作人数（单人局不会兜出需要多人的鱼）。
+// 时段/天气两门跟随各自开关，与主链一致。名册没填或全被门挡掉时返回未选中，并记一条 Warning 指出是哪一种。
+FCatFishSelectionResult UCatFishCatalogSettings::SelectFromBasePool(const FCatFishSelectionContext& Context,
+	const TCHAR* FallbackReason) const
+{
+	FCatFishSelectionResult Result;
+	Result.bFromBasePool = true;
+	struct FBasePoolCandidate
+	{
+		UCatFishDefinition* Definition = nullptr;
+		double Probability = 0.0;
+		double WeightKilograms = 0.0;
+		double BaseFishStrength = 0.0;
+	};
+	TArray<FBasePoolCandidate> Candidates;
+	double TotalProbability = 0.0;
+	for (const FCatFishBasePoolEntry& Entry : BasePool)
+	{
+		if (Entry.FishDefinitionId.IsNone() || !FMath::IsFinite(Entry.Probability) || Entry.Probability <= 0.0)
+		{
+			continue;
+		}
+		UCatFishDefinition* Definition = FindRuntimeDefinition(Entry.FishDefinitionId);
+		if (!Definition
+			|| !CatFishCatalogSettingsPrivate::PassesWaterRegionGate(*Definition, Context.WaterRegion.RegionId)
+			|| !FCatFishEligibilityPolicy::PassesActivePlayerCount(*Definition, Context.ActivePlayerCount)
+			|| !FCatFishEligibilityPolicy::PassesTimeOfDay(*Definition, Context.TimeOfDay,
+				bEnableTimeOfDayEligibilityFilter)
+			|| !FCatFishEligibilityPolicy::PassesWeather(*Definition, Context.Weather,
+				bEnableWeatherEligibilityFilter))
+		{
+			continue;
+		}
+		const double WeightKilograms = CatFishCatalogSettingsPrivate::SampleIndividualWeight(*Definition, Context);
+		const double StrengthPerKilogram = Definition->FishStrengthPerKilogram;
+		if (!FMath::IsFinite(WeightKilograms) || WeightKilograms <= 0.0
+			|| !FMath::IsFinite(StrengthPerKilogram) || StrengthPerKilogram <= 0.0)
+		{
+			continue;
+		}
+		FBasePoolCandidate& Candidate = Candidates.AddDefaulted_GetRef();
+		Candidate.Definition = Definition;
+		Candidate.Probability = Entry.Probability;
+		Candidate.WeightKilograms = WeightKilograms;
+		Candidate.BaseFishStrength = WeightKilograms * StrengthPerKilogram;
+		TotalProbability += Entry.Probability;
+	}
+	if (Candidates.IsEmpty() || !FMath::IsFinite(TotalProbability) || TotalProbability <= 0.0)
+	{
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fish_selection_base_pool_unavailable Region=%s Reason=%s ConfiguredEntries=%d ")
+			TEXT("UsableEntries=%d Note=BasePoolRosterIsStillADesignTodo"),
+			*Context.WaterRegion.RegionId.ToString(), FallbackReason, BasePool.Num(), Candidates.Num());
+		return Result;
+	}
+	// 名册顺序不参与随机：按 ID 排序后再抽，保证同一种子在增删无关名额时抽到同一条。
+	Candidates.Sort([](const FBasePoolCandidate& Left, const FBasePoolCandidate& Right)
+	{
+		return Left.Definition->FishDefinitionId.LexicalLess(Right.Definition->FishDefinitionId);
+	});
+	FRandomStream Random(Context.RandomSeed);
+	double Cursor = Random.FRandRange(0.0f, static_cast<float>(TotalProbability));
+	const FBasePoolCandidate* Selected = &Candidates.Last(); // 浮点游标落在尾端时的确定性回退。
+	for (const FBasePoolCandidate& Candidate : Candidates)
+	{
+		Cursor -= Candidate.Probability;
+		if (Cursor <= 0.0)
+		{
+			Selected = &Candidate;
+			break;
+		}
+	}
+	Result.bSelected = true;
+	Result.FishDefinitionId = Selected->Definition->FishDefinitionId;
+	Result.WeightKilograms = Selected->WeightKilograms;
+	Result.BaseFishStrength = Selected->BaseFishStrength;
+	Result.SelectedFinalWeight = Selected->Probability;
+	Result.SelectedNormalizedProbability = Selected->Probability / TotalProbability;
+	Result.EligibleCandidateCount = Candidates.Num();
+	Result.SelectedBandCandidateCount = Candidates.Num();
+	UE_LOG(LogCatFishing, Display,
+		TEXT("Event=fish_selection_base_pool_used Region=%s Reason=%s Fish=%s WeightKg=%.3f Probability=%.4f ")
+		TEXT("PoolCandidates=%d"),
+		*Context.WaterRegion.RegionId.ToString(), FallbackReason, *Result.FishDefinitionId.ToString(),
+		Result.WeightKilograms, Result.SelectedNormalizedProbability, Candidates.Num());
 	return Result;
 }

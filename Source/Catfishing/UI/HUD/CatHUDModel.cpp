@@ -79,8 +79,8 @@ bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InContro
 	{
 		BoundFishingCommand = CatController->GetFishingCommandComponent();
 	}
-	PoisonChangedHandle = AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetPoisonAttribute())
-		.AddUObject(this, &ThisClass::HandleAttributeChanged);
+	YellowFightStaminaChangedHandle = AbilitySystem->GetGameplayAttributeValueChangeDelegate(
+		UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute()).AddUObject(this, &ThisClass::HandleAttributeChanged);
 	FishingStrengthChangedHandle = AbilitySystem->GetGameplayAttributeValueChangeDelegate(
 		UCatSurvivalAttributeSet::GetFishingStrengthAttribute()).AddUObject(this, &ThisClass::HandleAttributeChanged);
 	FightStaminaChangedHandle = AbilitySystem->GetGameplayAttributeValueChangeDelegate(
@@ -117,7 +117,7 @@ void UCatHUDModel::Unbind()
 	ClearRunGameStateBinding();
 	if (UAbilitySystemComponent* AbilitySystem = BoundAbilitySystem.Get())
 	{
-		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetPoisonAttribute()).Remove(PoisonChangedHandle);
+		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute()).Remove(YellowFightStaminaChangedHandle);
 		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetFishingStrengthAttribute()).Remove(FishingStrengthChangedHandle);
 		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetFightStaminaAttribute()).Remove(FightStaminaChangedHandle);
 		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute()).Remove(MaxFightStaminaChangedHandle);
@@ -139,7 +139,7 @@ void UCatHUDModel::Unbind()
 		FishingViewBridge->OnViewStateChanged.Remove(FishingViewChangedHandle);
 		FishingViewBridge->UnbindSession();
 	}
-	PoisonChangedHandle.Reset();
+	YellowFightStaminaChangedHandle.Reset();
 	FishingStrengthChangedHandle.Reset();
 	FightStaminaChangedHandle.Reset();
 	MaxFightStaminaChangedHandle.Reset();
@@ -215,7 +215,8 @@ void UCatHUDModel::Refresh()
 	}
 	if (const UAbilitySystemComponent* AbilitySystem = BoundAbilitySystem.Get())
 	{
-		NewState.Poison = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute());
+		NewState.YellowFightStamina = AbilitySystem->GetNumericAttribute(
+			UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute());
 		NewState.FishingStrength = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
 		NewState.FightStamina = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
 		NewState.FightStaminaMaximum = AbilitySystem->GetNumericAttribute(
@@ -349,13 +350,14 @@ void UCatHUDModel::Refresh()
 			: FText::FromString(TEXT("鱼状态：未进入遛鱼"));
 		break;
 	}
-	NewState.CatStatusText = FText::FromString(FString::Printf(TEXT("猫状态：中毒 %.0f | 钓鱼力量 %.0f | 搏斗体力 %.0f | 成长总经验 %d，当前槽 %d，待选 %d"),
-		NewState.Poison,
-		NewState.FishingStrength,
-		NewState.FightStamina,
-		NewState.Growth.TotalExperience,
-		NewState.Growth.ExperienceInCurrentSlot,
-		NewState.Growth.PendingChoiceCount));
+	// 墓碑（2026-09-12）：这里原本每次投影都拼一行常驻「猫状态：中毒 x｜钓鱼力量 x｜搏斗体力 x｜成长总经验 x…」
+	// 的开发期调试文本，与「无常驻状态条、成长信息只在需要的时刻显示」的口径相反（猫册 §7、数值成长页 §6），
+	// 随它一起删掉的还有 bShowCatStatusDebugText 与 WBP 上的 CatStatusTextBlock 绑定。
+	// 成长事实本身仍在投影里（Growth／Condition 快照、黄色体力、力量与体力），
+	// 供按需出现的三条通道读取：吃鱼瞬时浮层、三选一卡面、主动查看面板。
+	// 这里只给出「现在需要露面」的那一个判断：有待选的三选一。
+	NewState.bHasPendingGrowthChoice = NewState.Growth.PendingChoiceCount > 0
+		&& NewState.Growth.CurrentOffer.Num() > 0;
 	NewState.FishingFeedbackText = NewState.bHasFishingSession
 		? FText::FromString(TEXT("钓鱼反馈：正在钓鱼，等待会话更新"))
 		: FText::FromString(TEXT("钓鱼反馈：当前没有进行中的钓鱼会话"));

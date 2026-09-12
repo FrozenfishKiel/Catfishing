@@ -237,6 +237,16 @@ private:
 	bool RefreshEnvironmentAndPublish();
 	/** 当前环境事件首次出现时把显式自然输入提交给唯一 WaterRegion；成功键按 Run+Day+Event+Anchor 去重，失败保留重试机会。 */
 	void SubmitNaturalChumFieldIfConfigured();
+	/**
+	 * 每次发布环境快照后把天气淋湿驱动到每只猫身上（猫册 §3.1.6「雨天渐湿」）。
+	 * 雨天置湿；非雨天只把已经离水的猫擦干，不会把正泡在水里的猫判成干的。
+	 */
+	void ApplyWeatherWetnessToCharacters();
+	/**
+	 * 进入新一天时的身体收口：仍在倒地的自动救起并送回营地醒来（猫册 §3.1.5），
+	 * 黄色体力整段清零（数值成长页 §4「过夜清空」）。
+	 */
+	void ApplyDayBreakBodyResetToCharacters();
 	/** 只向正在运行的 StateTree 发送稳定 GameplayTag；本方法不包含 Phase 转移表。 */
 	bool SendRunStateTreeEvent(FGameplayTag EventTag, ECatRunTransitionReason Reason);
 	/** 在玩法 World 已完成存档恢复后按显式设置启动定期检查点；未加载世界槽或配置无效时保持不调度。 */

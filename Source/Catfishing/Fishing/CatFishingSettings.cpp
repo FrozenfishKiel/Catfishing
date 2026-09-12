@@ -1,7 +1,9 @@
 #include "Fishing/CatFishingSettings.h"
 
+#include "Data/CatFishDefinition.h"
 #include "Data/CatFishPersonalityDefinition.h"
 #include "Fishing/Config/CatFishingFightBalanceDefinition.h"
+#include "Fishing/Simulation/CatFishBehaviorProfile.h"
 #include "Fishing/Simulation/CatFishingBiteTimingModel.h"
 
 // 运行 gate 流程：要求产品显式开启总开关、提供 StateTree 软引用、有限正响应窗/终态复制窗与近岸验证；任一为 Unset 都阻止会话创建。
@@ -41,6 +43,15 @@ const UCatBitePersonalityDefinition* UCatFishingSettings::FindBitePersonality(co
 		}
 	}
 	return Match;
+}
+
+// 逐鱼行为参数解析流程：先取这条鱼的测试期模板（可能为空），再交给 Resolver 用鱼表四列逐列覆盖。
+// 这里不做任何数值判断，只保证「鱼表优先、模板兜底」这条口径只有一个实现。
+bool UCatFishingSettings::TryResolveFishBehavior(const UCatFishDefinition& FishDefinition,
+	FCatFishResolvedBehavior& OutBehavior) const
+{
+	const UCatFightPersonalityDefinition* TestingTemplate = FindFightPersonality(FishDefinition.FightPersonalityId);
+	return FCatFishBehaviorProfileResolver::Resolve(FishDefinition, TestingTemplate, OutBehavior);
 }
 
 const UCatFightPersonalityDefinition* UCatFishingSettings::FindFightPersonality(const FName PersonalityId) const

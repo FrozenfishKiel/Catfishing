@@ -79,7 +79,6 @@ void UCatHUDWidget::RenderHUD(const FCatHUDViewState& ViewState)
 		bHasLoggedCrosshairVisibility = true;
 	}
 	LastHUDViewState = ViewState;
-	BlueprintCatStatusText = ViewState.CatStatusText;
 	BlueprintFishingFeedbackText = ViewState.FishingFeedbackText;
 	if (DayTextBlock)
 	{
@@ -103,12 +102,6 @@ void UCatHUDWidget::RenderHUD(const FCatHUDViewState& ViewState)
 	{
 		PurchaseBroadcastTextBlock->SetText(ViewState.PurchaseBroadcastText);
 		PurchaseBroadcastTextBlock->SetVisibility(ViewState.bShowPurchaseBroadcast
-			? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
-	}
-	if (CatStatusTextBlock)
-	{
-		CatStatusTextBlock->SetText(BlueprintCatStatusText);
-		CatStatusTextBlock->SetVisibility(ViewState.bShowCatStatusDebugText
 			? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 	}
 	if (FishingFeedbackTextBlock)

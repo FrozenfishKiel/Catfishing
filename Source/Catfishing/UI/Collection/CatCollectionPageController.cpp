@@ -84,6 +84,13 @@ void UCatCollectionPageController::RequestCloseCollectionFromWidget()
 	SetCollectionOpen(false);
 }
 
+// 印记隐藏流程：只转交给 Model（它持有本页面唯一的 Profile 引用）；Model 写盘成功会自己重发投影，
+// 页面不缓存第二份隐藏状态。Model 不在时返回 false，调用方据此不显示成功反馈。
+bool UCatCollectionPageController::RequestSetImprintHiddenFromWidget(const FGuid ImprintId, const bool bHidden)
+{
+	return CollectionModel && CollectionModel->SetImprintHidden(ImprintId, bHidden);
+}
+
 // 打开先重绘再入视口并申请输入锁；关闭先恢复输入再移出页面，两侧都只处理本页面自己申请的那一层。
 void UCatCollectionPageController::SetCollectionOpen(const bool bOpen)
 {

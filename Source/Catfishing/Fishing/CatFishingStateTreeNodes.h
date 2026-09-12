@@ -105,10 +105,10 @@ struct CATFISHING_API FCatFishingScheduleWaitingProbeTask : public FStateTreeTas
 };
 
 /**
- * 旧 ST_FishingSession 资产的序列化兼容节点。内部行为已改为只打开真咬窗口；
- * 新资产使用 FCatFishingOpenTrueBiteWindowTask，待所有分支资产升级后可移除。
+ * 旧 ST_FishingSession 资产的序列化兼容节点。内部行为与 FCatFishingOpenTrueBiteWindowTask 完全一致：
+ * 进 Probe 即抽鱼、生成鱼影并起试探期计时；待所有分支资产升级后可移除。
  */
-USTRUCT(meta=(DisplayName="Cat Fishing Open True Bite Window (Legacy Node)", Category="Catfishing|Fishing"))
+USTRUCT(meta=(DisplayName="Cat Fishing Begin Probe (Legacy Node)", Category="Catfishing|Fishing"))
 struct CATFISHING_API FCatFishingResolveTrueBiteSelectionTask : public FStateTreeTaskCommonBase
 {
 	GENERATED_BODY()
@@ -118,8 +118,12 @@ struct CATFISHING_API FCatFishingResolveTrueBiteSelectionTask : public FStateTre
 	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;
 };
 
-/** Probe 进入后只把浮漂切到猛沉并打开响应计时器；不会在玩家左键前创建鱼。 */
-USTRUCT(meta=(DisplayName="Cat Fishing Open True Bite Window", Category="Catfishing|Fishing"))
+/**
+ * Probe 进入后抽鱼、按真鱼体型生成水里的鱼影、揭图鉴剪影，并起试探期停留计时；
+ * 停留到点由会话自己把浮漂转猛沉并打开真咬响应窗，资产不需要再加一条边。
+ * 结构名保持 FCatFishingOpenTrueBiteWindowTask 不变——它被 ST_FishingSession 资产序列化引用，改名会丢节点。
+ */
+USTRUCT(meta=(DisplayName="Cat Fishing Begin Probe", Category="Catfishing|Fishing"))
 struct CATFISHING_API FCatFishingOpenTrueBiteWindowTask : public FStateTreeTaskCommonBase
 {
 	GENERATED_BODY()

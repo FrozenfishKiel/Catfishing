@@ -158,25 +158,39 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("生产计时器消费冻结落点的新模型并加飞行时间"), BiteRemaining, ExpectedWait + FlightSeconds, 1.e-4);
 		TestEqual(TEXT("计时器保证完整1.5秒预警"), BiteRemaining - WarningRemaining, 1.5, 1.e-4);
 		TestTrue(TEXT("本次机会已派到种子"), Session->CurrentBiteRandomSeed != 0);
+		// 2026-09-12 演出时序（钓鱼规则 §3.4:141）：抽中瞬间鱼影出现 → 浮漂轻点进入试探期 → 漂猛沉即真咬。
+		// 所以这一段现在观察三个时刻：快速抖动预警、进入试探期（选鱼＋鱼影成立）、真咬窗打开。
+		// 预警期间不再碰 CommitFishingBaitDeferred——退饵边界已经移到真咬成立那一刻，
+		// 在这里调用会真的把饵扣掉，把「试探期提竿不损饵」测成反的。
 		double ObservedWarningTime = -1.0;
+		double ObservedProbeTime = -1.0;
 		for (int32 Frame = 0; Frame < 5000 && Session->GetSnapshot().Phase != ECatFishingPhase::TrueBiteWindow; ++Frame)
 		{
 			Wrapper.TickTestWorld(0.01f);
 			if (ObservedWarningTime < 0.0 && Hook->GetPresentationState().BobberMode == ECatFishingBobberPresentationMode::BiteWarning)
 			{
 				ObservedWarningTime = World->GetTimeSeconds();
-				TestEqual(TEXT("visible fast warning already closes the refund boundary"),
-					BaitEquipment->CommitFishingBaitDeferred(Session->Snapshot.FishingSessionId).Error, ECatDomainCommandError::AlreadyResolved);
+				TestEqual(TEXT("快速抖动预警期间公开阶段仍是等待"), Session->GetSnapshot().Phase, ECatFishingPhase::Waiting);
+			}
+			if (ObservedProbeTime < 0.0 && Session->GetSnapshot().Phase == ECatFishingPhase::Probe)
+			{
+				ObservedProbeTime = World->GetTimeSeconds();
+				TestFalse(TEXT("抽中瞬间就已经选出鱼种"), Session->GetSnapshot().FishDefinitionId.IsNone());
+				TestNotNull(TEXT("抽中瞬间水里已经有鱼影"), Session->GetSnapshot().FishEncounterActor.Get());
 			}
 		}
 		TestTrue(TEXT("运行时观察到预警模式"), ObservedWarningTime >= 0.0);
+		TestTrue(TEXT("运行时观察到试探期"), ObservedProbeTime >= 0.0);
 		TestEqual(TEXT("正式 StateTree 真正打开咬钩窗口"), Session->GetSnapshot().Phase, ECatFishingPhase::TrueBiteWindow);
-		TestEqual(TEXT("快速抖动开始已经确认鱼饵消耗"), BaitEquipment->CommitFishingBaitDeferred(Session->Snapshot.FishingSessionId).Error,
+		TestEqual(TEXT("真咬成立才确认鱼饵消耗"), BaitEquipment->CommitFishingBaitDeferred(Session->Snapshot.FishingSessionId).Error,
 			ECatDomainCommandError::AlreadyResolved);
 		TestEqual(TEXT("浮漂真咬时下沉"), Hook->GetPresentationState().BobberMode, ECatFishingBobberPresentationMode::Sunk);
-		TestEqual(TEXT("实际预警持续完整时段（帧量化容差）"), World->GetTimeSeconds() - ObservedWarningTime, 1.5, 0.04);
-		TestNull(TEXT("未提竿不提前创建鱼"), Session->GetSnapshot().FishEncounterActor.Get());
-		TestTrue(TEXT("未提竿不提前选鱼"), Session->GetSnapshot().FishDefinitionId.IsNone());
+		TestEqual(TEXT("实际预警持续完整时段（帧量化容差）"), ObservedProbeTime - ObservedWarningTime, 1.5, 0.04);
+		double ExpectedProbeSeconds = 0.0;
+		TestTrue(TEXT("本场鱼配了试探期停留时长"), Session->TryResolveProbeDurationSeconds(ExpectedProbeSeconds));
+		TestEqual(TEXT("试探期按鱼种 ProbeDurationSeconds 停留（帧量化容差）"),
+			World->GetTimeSeconds() - ObservedProbeTime, ExpectedProbeSeconds, 0.04);
+		TestNotNull(TEXT("提竿前鱼影一直在水里"), Session->GetSnapshot().FishEncounterActor.Get());
 		// 正式 Morning/Day/Dusk timer 在等待期间会刷新鱼情，必须捕获实际真咬时的环境。
 		const FCatEnvironmentSnapshot BiteEnvironment = World->GetGameState<ACatfishingGameState>()->GetRunPublicState().Environment;
 		TestTrue(TEXT("真咬发生于正式可用的白天鱼情"), BiteEnvironment.TimeOfDay != ECatEnvironmentTimeOfDay::Unknown);
@@ -197,7 +211,7 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 			Wrapper.TickTestWorld(0.01f);
 		TestTrue(TEXT("错过窗口即结场，不再回等待"), Session->IsSessionTerminal());
 		TestNotEqual(TEXT("结场后不停在等待相"), Session->GetSnapshot().Phase, ECatFishingPhase::Waiting);
-		TestEqual(TEXT("漏过快速抖动不会恢复免费退饵资格"), BaitEquipment->CommitFishingBaitDeferred(Session->Snapshot.FishingSessionId).Error,
+		TestEqual(TEXT("进了真咬就不会恢复免费退饵资格"), BaitEquipment->CommitFishingBaitDeferred(Session->Snapshot.FishingSessionId).Error,
 			ECatDomainCommandError::AlreadyResolved);
 		TestEqual(TEXT("夜里漏按不生成下一机会"), Session->BiteOpportunitySequence, 1u);
 		TestFalse(TEXT("夜里漏按不再调度咬钩"), World->GetTimerManager().IsTimerActive(Session->ProbeTimerHandle));

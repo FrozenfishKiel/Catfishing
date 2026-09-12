@@ -8,7 +8,9 @@ class UStateTree;
 class UCatBitePersonalityDefinition;
 class UCatFishingFightBalanceDefinition;
 class UCatFightPersonalityDefinition;
+class UCatFishDefinition;
 struct FCatFishingBiteTimingParameters;
+struct FCatFishResolvedBehavior;
 
 /** Fishing 长流程与未裁数值的 fail-closed 配置；默认不启动会话且不制造响应窗口或公式。 */
 UCLASS(Config = Game, DefaultConfig, meta = (DisplayName = "Catfishing Fishing"))
@@ -36,6 +38,18 @@ public:
 	const UCatBitePersonalityDefinition* FindBitePersonality(FName PersonalityId) const;
 	const UCatFightPersonalityDefinition* FindFightPersonality(FName PersonalityId) const;
 
+	/**
+	 * 解析一条鱼进搏斗时真正生效的行为参数（食性／发力段长／休息段长／游速系数）。
+	 *
+	 * 正式来源是鱼表格那四列（2026-09-09 晚裁「四套性格模板是测试用，正式口径逐鱼配」）；
+	 * 某列还没填时退回该鱼 FightPersonalityId 指向的测试模板。搏斗启动侧只该调这一个入口，
+	 * 不要再直接读 UCatFightPersonalityDefinition::AdaptiveSteeringConfig 或
+	 * FullEffortMovementSpeedCentimetersPerSecond —— 那样会绕过鱼表、让四列白填。
+	 * 返回 false 表示连模板都不足以凑出一份可用参数，调用方按依赖缺失 fail-closed。
+	 */
+	bool TryResolveFishBehavior(const UCatFishDefinition& FishDefinition,
+		FCatFishResolvedBehavior& OutBehavior) const;
+
 	/** 钓鱼正式运行总 gate；默认关闭，由产品配置显式开启，Shipping 不做隐式改写。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Runtime")
 	bool bEnableFishingRuntime = false;
@@ -58,6 +72,15 @@ public:
 	/** 真咬响应窗口秒数；0 表示 Unset，资产 Task 不应启动计时。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (ClampMin = "0"))
 	double TrueBiteWindowSeconds = 0.0;
+	/**
+	 * 试探期停留时长的区间，逐场随机取值。钓鱼规则 §3.4(:141)「试探期 2～4 秒随机，
+	 * 占位，快照，参数页为准」——设计把这个数归参数页而不是逐鱼资产，所以事实源在这里。
+	 * 逐鱼 Bite 资产上的 ProbeDurationSeconds 若配了正值则优先（留给将来做逐鱼差异），
+	 * 没配就用本区间；两者都不可用才 fail-closed。
+	 * 09-09 晚裁的「正式口径逐鱼配」指的是食性／发力段长／休息段长／游速系数四列，不含本项。
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (Units = "s"))
+	FVector2D ProbeDurationRangeSeconds = FVector2D(2.0, 4.0);
 	/** 无窝时落水到真咬的目标平均秒数；替代旧的每秒频率调参，计入等待上限。 */
 	UPROPERTY(Config, EditAnywhere, Category="Bite|Chum", meta=(ClampMin="0", Units="s"))
 	double NoChumMeanBiteDelaySeconds = 0.0;

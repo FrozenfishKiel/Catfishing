@@ -21,6 +21,7 @@
 #include "Animation/AnimMontage.h"
 #include "Character/Animation/CatForceReactionComponent.h"
 #include "Condition/CatConditionComponent.h"
+#include "Condition/CatConditionSettings.h"
 #include "Condition/CatConditionPresentationComponent.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentSettings.h"
@@ -461,19 +462,44 @@ void ACatCharacter::ConfigureCharacterMovementAuthority()
 	GetMesh()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	GetMesh()->SetGenerateOverlapEvents(false);
 }
-// 身体条件刷新流程：服务器先按最新 Downed 快照更新物理移动；进入倒地时只读取角色当前单嘴引用，分别调用鱼或鱼护的落地释放，随后由各 Actor 清理同一 expected-actor 引用。
+// 身体条件刷新流程：服务器按最新 Downed 快照更新物理移动；进入倒地时只读取角色当前单嘴引用，分别调用鱼或鱼护的落地释放，随后由各 Actor 清理同一 expected-actor 引用。
 // 非服务器只接收复制结果，不在客户端改移动或世界物归属。
+//
+// 倒地 ≠ 不能动（猫册 §3.1.5「倒地者可缓慢爬行」）。
+// 墓碑（2026-09-12）：这里原本是 SetLocomotionEnabledFromAuthority(!bDowned)——倒地即关掉移动意图与地面支撑，
+// 身体只剩被推被拖，和设计写的「可缓慢爬行」正好相反，单人玩家因此没有任何自救位移。
+// 现在移动始终开着，倒地只把速度压到爬行倍率并禁止跳跃。
 void ACatCharacter::RefreshPhysicalCondition()
 {
 	if (HasAuthority())
 	{
-		PhysicalBodyComponent->SetLocomotionEnabledFromAuthority(!ConditionComponent->GetSnapshot().bDowned,TEXT("ConditionChanged"));
+		PhysicalBodyComponent->SetLocomotionEnabledFromAuthority(true, TEXT("ConditionChanged"));
+		RefreshLocomotionSpeedScale();
 		if (ConditionComponent->GetSnapshot().bDowned)
 		{
 			if (ACatFishPickupActor* Fish = Cast<ACatFishPickupActor>(MouthCarriedActor)) Fish->ReleaseMouthCarryFromAuthority(GetActorLocation());
 			else if (ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(MouthCarriedActor)) Guard->ReleaseMouthCarryFromAuthority(GetActorLocation());
 		}
 	}
+}
+
+// 速度缩放合成流程：爬行倍率（倒地）与三选一「移动速度 +10%」（加算、上限 +30%）在这里相乘后一次写进物理身体。
+// 只有服务器合成；客户端读复制值，不自己算加成。
+void ACatCharacter::RefreshLocomotionSpeedScale()
+{
+	if (!HasAuthority() || !PhysicalBodyComponent || !ConditionComponent)
+	{
+		return;
+	}
+	const bool bDowned = ConditionComponent->GetSnapshot().bDowned;
+	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
+	const double CrawlScale = bDowned && Settings && FMath::IsFinite(Settings->DownedCrawlSpeedScale)
+		? FMath::Max(0.0, Settings->DownedCrawlSpeedScale) : 1.0;
+	const double GrowthBonus = GrowthComponent
+		? GrowthComponent->GetTotalMagnitude(ECatGrowthOptionId::MoveSpeed) : 0.0;
+	const double GrowthScale = FMath::IsFinite(GrowthBonus) ? FMath::Max(0.0, 1.0 + GrowthBonus) : 1.0;
+	PhysicalBodyComponent->SetLocomotionSpeedScaleFromAuthority(CrawlScale * GrowthScale, bDowned,
+		bDowned ? TEXT("DownedCrawl") : TEXT("ConditionOrGrowthChanged"));
 }
 void ACatCharacter::Tick(float DeltaSeconds)
 {

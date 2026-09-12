@@ -4,6 +4,7 @@
 #include "GameFramework/Actor.h"
 #include "Interaction/CatInteractable.h"
 #include "FishContainers/CatFishContainerTypes.h"
+#include "Framework/Core/CatProfileContracts.h"
 #include "Inventory/CatInventoryWorldItem.h"
 #include "CatFishPickupActor.generated.h"
 
@@ -76,9 +77,15 @@ public:
 	bool ConsumeFromAuthority(AController* RequestingController, FGuid RequestId,
 		TFunction<bool()> CommitBeforeConsumption = {});
 
-	/** 按服务器冻结的鱼身份、重量和表现参数初始化一次；库存鱼允许省略新捕获地域，参数无效时不公开半份实物。 */
+	/**
+	 * 按服务器冻结的鱼身份、重量和表现参数初始化一次；库存鱼允许省略新捕获地域，参数无效时不公开半份实物。
+	 * InCaptureCondition 是抛钩会话在真咬那一刻冻结的图鉴条件（地域＋时段＋天气），只在首次收集时写进图鉴；
+	 * InHookerStableNetId 是这一竿的上钩者，收集层归他一人（钓鱼规则 §5.6:285「归上钩者：实物被队友抢走不取消登记」），
+	 * 与 InFishingParticipantStableNetIds（只喂演出贡献名单）是两件事，不能互相顶替。
+	 */
 	bool InitializeFromAuthority(FGuid InFishingSessionId, FGuid InFishInstanceId,
-		UCatFishDefinition* InFishDefinition, double InWeightKilograms, double InVisualScale, FName InRegionId,
+		UCatFishDefinition* InFishDefinition, double InWeightKilograms, double InVisualScale,
+		const FCatCaptureConditionSnapshot& InCaptureCondition, const FString& InHookerStableNetId,
 		const TArray<FString>& InFishingParticipantStableNetIds, FVector GroundNormal = FVector::UpVector);
 
 	const FCatFishPickupPresentationState& GetPresentationState() const { return PresentationState; }
@@ -158,7 +165,11 @@ private:
 	void ApplyVisualScale();
 	/** 把实物鱼实例记的服务器私有捕获者身份现场解析成可复制 PlayerState 并发布归属；只写表现状态，不改实例归属，也不把 StableNetId 送出网。 */
 	void PublishOwnerPresentationFromAuthority(const FString& InOwnerStableNetId);
-	/** 首次消费或入护后归档捕获并提交图鉴候选；已归档的库存鱼再次落地不重复生成奖励。 */
+	/**
+	 * 首次消费或入护后归档捕获并提交图鉴候选；已归档的库存鱼再次落地不重复生成奖励。
+	 * PickerStableNetId 只是「谁把这条鱼收进来的」，用于实物归属与演出贡献名单；
+	 * 图鉴收集层的收件人是 HookerStableNetId，两者在「A 上钩、B 跑过去叼走」时不是同一个人。
+	 */
 	void ArchiveCommittedCapture(const FCatCaptureCommittedResult& Committed, const FString& PickerStableNetId);
 
 	/** 与冻结鱼体姿态匹配的盒形物理根；姿态刷新计算尺寸，库存落地求解与 Chaos 共用，不包含交互探测范围。 */
@@ -184,7 +195,10 @@ private:
 	FTransform LandedMeshBaseTransform = FTransform::Identity;
 	FTransform CarriedMeshBaseTransform = FTransform::Identity;
 	FName AppliedPresentationFishDefinitionId = NAME_None;
-	FName RegionId = NAME_None;
+	/** 抛钩会话冻结的图鉴首次条件（地域＋时段＋天气）；库存落地的鱼没有新捕获条件，保持全 None。 */
+	FCatCaptureConditionSnapshot CaptureCondition;
+	/** 这一竿的上钩者；图鉴收集层的唯一收件人，实物被别人叼走也不改。库存落地的鱼为空（早已归档）。 */
+	FString HookerStableNetId;
 	TArray<FString> FishingParticipantStableNetIds;
 	TWeakObjectPtr<ACatCharacter> AuthorityCarrier;
 	bool bIdentityInitialized = false;

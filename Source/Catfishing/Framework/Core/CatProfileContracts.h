@@ -10,15 +10,25 @@ enum class ECatProfileGrantKind : uint8
 {
 	/** 捕获已提交后记录鱼种、真实重量与首次条件。 */
 	FishRecorded,
-	/** 合格逃鱼候选归约为剪影；除“重试耗尽”外的资格仍由外部裁决。 */
+	/**
+	 * 图鉴剪影层：咬钩成立那一刻揭给这一竿的钓手（图鉴 §3.1.3:98、钓鱼规则 §5.6:285）。
+	 * 2026-09-10 删掉的重试预算方案曾经是它唯一的生产者（RecordRetryExhaustedSilhouette），
+	 * 删完之后这个 Kind 有消费者没有生产者；现在的生产者是 UCatRunImprintService::RecordFishEncounterSilhouette。
+	 */
 	FishSilhouette,
+	/** 图鉴知识层：自己吃过这条鱼才解锁食用效果（图鉴 §3.1.3:92、§3.1.4:124）。谁吃谁记，被拿走吃掉记进吃的人。 */
+	FishKnowledge,
 	/** CapturePlan 本地成像成功后授予一张印记索引。 */
 	Imprint,
 	/** 已提交里程碑归约出的解锁；具体内容和收益由产品定义。 */
 	Unlock
 };
 
-/** 鱼图鉴页的三态；状态只能 Unknown→Silhouette→Recorded 单向推进。 */
+/**
+ * 鱼图鉴页的整页层级；只单向推进，Unknown→Silhouette→Recorded→Knowledge（图鉴 §3.1.5:130-133）。
+ * Knowledge 表示「这一页再没有待解锁」，因此要求已收集且已吃过；只吃过没钓到的鱼页仍停在 Silhouette/Unknown，
+ * 由 FCatFishCollectionRecord::bKnowledgeUnlocked 单独记住那一层，不靠整页层级冒充收集层。
+ */
 UENUM(BlueprintType)
 enum class ECatFishCollectionState : uint8
 {
@@ -27,7 +37,9 @@ enum class ECatFishCollectionState : uint8
 	/** 合格交手后未捕获。 */
 	Silhouette,
 	/** 至少一次捕获事务已经提交。 */
-	Recorded
+	Recorded,
+	/** 已收集且本人吃过：吃鱼效果补齐，整页再无「待解锁」。 */
+	Knowledge
 };
 
 /** 捕获时冻结的图鉴条件；轴的枚举/内容由 Environment/Data 所有，本合同只保存稳定名称。 */
@@ -63,7 +75,7 @@ struct FCatProfileGrant
 	UPROPERTY(BlueprintReadOnly, SaveGame)
 	ECatProfileGrantKind Kind = ECatProfileGrantKind::FishRecorded;
 
-	/** 鱼图鉴授予对应的 FishDefinition ID；印记/解锁可为 None。 */
+	/** 鱼图鉴授予对应的 FishDefinition ID；印记/解锁可为 None。FishKnowledge 与 FishSilhouette 只用这一个字段。 */
 	UPROPERTY(BlueprintReadOnly, SaveGame)
 	FName FishDefinitionId = NAME_None;
 
@@ -168,6 +180,21 @@ struct FCatFishCollectionRecord
 	/** 合格剪影候选累计次数；Recorded 后继续保留累计值。 */
 	UPROPERTY(SaveGame)
 	int32 EncounterCount = 0;
+
+	/**
+	 * 字段级解锁位·线索层：偏好与出现条件已经可读（图鉴 §3.1.5:131）。
+	 * 与 State 分开保存，是因为「吃过但没钓到」这类跨层组合无法用单调的整页层级表达。
+	 */
+	UPROPERTY(SaveGame)
+	bool bSilhouetteUnlocked = false;
+
+	/** 字段级解锁位·收集层：名字、彩页、出没区域、个人最佳重量与首次条件已经可读。 */
+	UPROPERTY(SaveGame)
+	bool bRecordedUnlocked = false;
+
+	/** 字段级解锁位·知识层：本人吃过这条鱼，吃鱼效果已经可读（图鉴 §3.1.4:124「知识层不共享，谁吃谁记」）。 */
+	UPROPERTY(SaveGame)
+	bool bKnowledgeUnlocked = false;
 };
 
 /** 本地相册索引中的一条印记记录；它只保存稳定 ID，不保存图片字节、编码格式或磁盘路径。 */

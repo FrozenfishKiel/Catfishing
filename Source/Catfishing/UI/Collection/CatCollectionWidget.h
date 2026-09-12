@@ -9,7 +9,7 @@ class UButton;
 class UCatCollectionPageController;
 class UTextBlock;
 
-/** 图鉴 UI 的单行展示投影；它来自 Profile durable 快照，不引用任何实物鱼容器。 */
+/** 图鉴 UI 的单行展示投影；它来自鱼目录骨架 ＋ Profile durable 快照，不引用任何实物鱼容器。 */
 USTRUCT(BlueprintType)
 struct FCatCollectionEntryView
 {
@@ -19,13 +19,48 @@ struct FCatCollectionEntryView
 	UPROPERTY(BlueprintReadOnly)
 	FName FishDefinitionId = NAME_None;
 
-	/** 本地 Profile 记录的公开三态；UI 不通过它补 Grant。 */
+	/** 鱼名；未解锁收集层时留空——纯黑影不给名字（图鉴 §3.1.5:130）。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText DisplayName;
+
+	/** 本地 Profile 记录的整页层级；UI 不通过它补 Grant。 */
 	UPROPERTY(BlueprintReadOnly)
 	ECatFishCollectionState State = ECatFishCollectionState::Unknown;
 
-	/** 本地记录中的最佳重量，单位千克；不是鱼护中当前鱼的重量。 */
+	/** 线索层已解锁：轮廓清晰，给窝料与鱼饵偏好、出现条件。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bSilhouetteUnlocked = false;
+
+	/** 收集层已解锁：名字、彩页、出没区域、个人最佳重量、首次遇上的条件回显。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bRecordedUnlocked = false;
+
+	/** 知识层已解锁：吃鱼效果补齐。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bKnowledgeUnlocked = false;
+
+	/**
+	 * 这条鱼有没有知识层。不可食用的咸鱼与湖心巨影没有（图鉴 §3.1.4:122）——
+	 * 没有的信息在页面上不存在，连「待解锁」都不留一行。
+	 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bHasKnowledgeLayer = false;
+
+	/** 本地记录中的最佳重量，单位千克；只在收集层解锁后有意义。 */
 	UPROPERTY(BlueprintReadOnly)
 	double BestWeightKilograms = 0.0;
+
+	/** 个人最佳重量的成文；收集层未解锁时是「待解锁」，不给灰掉的 0.00kg。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText BestWeightText;
+
+	/** 首次遇上的条件回显（水域／时段／天气）；收集层未解锁时是「待解锁」。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText FirstConditionText;
+
+	/** 吃鱼效果一栏的成文；没有知识层的鱼这一栏是空的（整栏不存在），未解锁时才是「待解锁」。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText KnowledgeText;
 
 	/** 合格交手累计次数；只用于展示进度。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -34,6 +69,29 @@ struct FCatCollectionEntryView
 	/** 给 TextBlock 直接绑定的中文行文本。 */
 	UPROPERTY(BlueprintReadOnly)
 	FText DisplayText;
+};
+
+/** 相册里一张印记的只读投影；只带稳定 ID 与本人隐藏位，不带图片路径，也不含别人的相册。 */
+USTRUCT(BlueprintType)
+struct FCatImprintAlbumEntryView
+{
+	GENERATED_BODY()
+
+	/** 稳定印记 ID；隐藏开关按它提交。 */
+	UPROPERTY(BlueprintReadOnly)
+	FGuid ImprintId;
+
+	/** 该印记所属的一局相册 ID。 */
+	UPROPERTY(BlueprintReadOnly)
+	FGuid RunAlbumId;
+
+	/** 是否是那一局的篝火封面。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bRunAlbumCover = false;
+
+	/** 本人是否已在自己的相册里隐藏它。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bHidden = false;
 };
 
 /** 图鉴/相册界面的完整只读投影；它和地面鱼护等实物容器完全分开。 */
@@ -46,9 +104,17 @@ struct FCatCollectionViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bAvailable = false;
 
-	/** 图鉴条目展示副本；数组只读，不包含 Journal、相册隐藏写口或实物鱼引用。 */
+	/**
+	 * 图鉴条目展示副本，以鱼目录为骨架：每一种正式鱼都有一行，没解锁的那些就是纯黑影
+	 * （图鉴 §3.1.5:130「开局满图都是影，你知道湖里有多少种」）。
+	 * 数组只读，不包含 Journal、相册隐藏写口或实物鱼引用。
+	 */
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatCollectionEntryView> Entries;
+
+	/** 本人相册索引；一键隐藏的列表来源，不含别人的印记。 */
+	UPROPERTY(BlueprintReadOnly)
+	TArray<FCatImprintAlbumEntryView> Imprints;
 
 	/** 给 WBP 顶部文本直接绑定的摘要。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -73,6 +139,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Collection")
 	void RequestCloseCollection();
 
+	/**
+	 * 本人一键隐藏／取消隐藏相册里的任意一张印记（印记册：本人可隐藏任意一张，只影响自己这份索引）。
+	 * 它只转交意图，真正的 durable 写口在 UCatProfileSubsystem::SetImprintHidden；
+	 * 不发服务器 RPC，不删图片，也不撤下其他参与者手里的同一张印记。
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|Collection")
+	bool RequestSetImprintHidden(FGuid ImprintId, bool bHidden);
+
 protected:
 	/** Slate 构造完成后对可选关闭按钮去重绑定；没有该按钮的 WBP 仍可用图鉴键或 Escape 关闭。 */
 	virtual void NativeConstruct() override;
@@ -91,7 +165,7 @@ protected:
 	void BP_RenderCollection(const FCatCollectionViewState& ViewState);
 
 private:
-	/** 只为页面关闭解析 owning LocalPlayer 的图鉴页面控制器；图鉴数据仍由 Model 单向推送。 */
+	/** 只为页面关闭与印记隐藏解析 owning LocalPlayer 的图鉴页面控制器；图鉴数据仍由 Model 单向推送。 */
 	UCatCollectionPageController* ResolveCollectionPageController() const;
 
 	/** 关闭条件读取页面控制器的唯一打开状态；接受 Escape 与配置解析出的图鉴键。 */

@@ -27,7 +27,13 @@ enum class ECatFishingCommandError : uint8
 	RevisionConflict, CastAttemptConflict, InputSequenceStale, InputSequenceGapTooLarge, InvalidPhase,
 	WindowClosed, AlreadyResolved, NotNearShore, StaleScoopTarget, ScoopGeometryFailed, CooldownActive,
 	GuardCapacityExceeded, CaptureAlreadyCommitted,
-	RodDeploymentLimitReached
+	RodDeploymentLimitReached,
+	/**
+	 * 抢抄拒绝的六个细分原因（钓鱼规则 §5.5:273）。ScoopGeometryFailed 保留为「原因不明的几何失败」兜底，
+	 * 新代码应给出下面这六个之一，玩家提示由 CatFishingCommandFeedback::GetPlayerFacingText 统一映射。
+	 */
+	ScoopOutOfReach, ScoopLineOfSightBlocked, ScoopGroundTooSteep, ScoopVerticalDeltaTooLarge,
+	ScoopMouthOccupied, ScoopNotOnShore
 };
 
 USTRUCT(BlueprintType)
@@ -172,3 +178,16 @@ struct FCatBeginCastResult
 };
 
 ECatFishingCommandError MapDomainCommandError(ECatDomainCommandError Error);
+
+/** 把抢抄拒绝原因映射成对应的命令错误码；None 表示这次拒绝不是可抄几何，调用方保留原错误。 */
+ECatFishingCommandError MapScoopRejectReason(ECatScoopRejectReason Reason);
+
+namespace CatFishingCommandFeedback
+{
+	/**
+	 * 钓鱼命令错误的玩家可见提示（ui 表「提示文案」）。
+	 * 抢抄的四种几何原因（够不着／有遮挡／脚下太陡／高差太大）统一回「没够着」，
+	 * 嘴里有鱼与不在岸上各自有话说；没有玩家话术的错误返回空文本，调用方据此不弹提示。
+	 */
+	CATFISHING_API FText GetPlayerFacingText(ECatFishingCommandError Error);
+}

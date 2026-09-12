@@ -69,11 +69,27 @@ public:
 	 */
 	bool SeedFightStaminaToMaximumFromAuthority();
 
-	/** authority 通过正式 GameplayEffect 修改 Poison；负向恢复会夹到 0，避免调用方直接写属性基值。 */
-	bool ApplyPoisonDelta(float Delta);
+	/** authority 通过正式 GameplayEffect 给力量加一次三选一增量；调用方只提交增量，不直接写属性基值。 */
+	bool ApplyFishingStrengthDelta(float Delta);
 
-	/** 读取 Poison 是否达到给定阈值；Condition 用它裁决 Downed，但不直接知道 AttributeSet 字段。 */
-	bool IsPoisonAtLeast(float Threshold) const;
+	/** authority 提高（或降低）搏斗体力上限；提升时当场按同样的差值补当前体力，见升级效果页 §2。 */
+	bool ApplyMaxFightStaminaDelta(float Delta);
+
+	/** authority 增减黄色体力护盾段；负向扣盾夹到 0，正向无上限（数值成长页 §4）。 */
+	bool ApplyYellowFightStaminaDelta(float Delta);
+
+	/** 翻天时把黄色体力整段清零；过夜清空是这段护盾的唯一自然终点。 */
+	bool ClearYellowFightStaminaFromAuthority();
+
+	/** 读取当前黄色体力存量；主动查看面板与体力条黄段渲染都读这一份。 */
+	float GetYellowFightStamina() const;
+
+	/*
+	 * 墓碑（2026-09-12）：这里原有 ApplyPoisonDelta / IsPoisonAtLeast 两个写读口，
+	 * 服务的是「跨鱼累加 Poison、到阈值倒地、休息/草药按点数清毒」的渐进中毒模型。
+	 * 09-12 裁决把中毒改成按鱼各配、无渐进升级（最重一档＝吃下即倒地），倒地与解除都变成布尔事实，
+	 * 由 CatConditionComponent 直接裁决，这两个口连同 Poison 属性一起删除。
+	 */
 
 	/** 清理 ActorInfo 前先清输入状态；防止无占有期间失效输入句柄继续激活 Ability。 */
 	virtual void ClearActorInfo() override;

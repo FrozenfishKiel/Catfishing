@@ -89,12 +89,13 @@ FCatFishingResolveTrueBiteSelectionTask::FCatFishingResolveTrueBiteSelectionTask
 	bShouldCopyBoundPropertiesOnExitState = false;
 }
 
+// 旧节点与新节点行为一致：都进试探期。2026-09-12 之前两者调用的是 OpenTrueBiteWindowFromStateTree。
 EStateTreeRunStatus FCatFishingResolveTrueBiteSelectionTask::EnterState(FStateTreeExecutionContext& Context,
 	const FStateTreeTransitionResult& Transition) const
 {
 	(void)Transition;
 	ACatFishingSession* Session = Cast<ACatFishingSession>(Context.GetOwner());
-	return Session && Session->OpenTrueBiteWindowFromStateTree()
+	return Session && Session->BeginProbeFromStateTree()
 		? EStateTreeRunStatus::Succeeded : EStateTreeRunStatus::Failed;
 }
 
@@ -105,12 +106,13 @@ FCatFishingOpenTrueBiteWindowTask::FCatFishingOpenTrueBiteWindowTask()
 	bShouldCopyBoundPropertiesOnExitState = false;
 }
 
+// 进 Probe 即抽鱼并生成鱼影；真咬窗由会话内部的试探期计时器打开，本节点不再直接开窗。
 EStateTreeRunStatus FCatFishingOpenTrueBiteWindowTask::EnterState(FStateTreeExecutionContext& Context,
 	const FStateTreeTransitionResult& Transition) const
 {
 	(void)Transition;
 	ACatFishingSession* Session = Cast<ACatFishingSession>(Context.GetOwner());
-	return Session && Session->OpenTrueBiteWindowFromStateTree()
+	return Session && Session->BeginProbeFromStateTree()
 		? EStateTreeRunStatus::Succeeded : EStateTreeRunStatus::Failed;
 }
 

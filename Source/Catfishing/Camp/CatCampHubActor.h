@@ -30,8 +30,14 @@ public:
 	/** 本人位于营地范围时请求快速休息；Character ConditionComponent 拥有最终身体写入。 */
 	FCatDomainCommandResult RequestRest(AController* RequestingController, FGuid RequestId);
 
-	/** 伙伴把倒地目标送到固定 RescuePoint；Teleport 成功后才提交 CarriedToCamp 事实。 */
+	/** 伙伴把倒地目标送到固定 RescuePoint；Teleport 成功后才提交 CarriedToCamp 事实，到点即解除倒地。 */
 	FCatDomainCommandResult RescueToCamp(AController* HelpingController, ACatCharacter* TargetCharacter, FGuid RequestId);
+
+	/**
+	 * 读取固定救援落点的世界 Transform；翻天自动救起要把仍在倒地的猫放回营地醒来，
+	 * 用的是和队友搬运同一个落点，不另建「清晨出生点」。落点未配置时返回 false。
+	 */
+	bool TryGetRescuePointTransform(FTransform& OutTransform) const;
 
 	/** 判断传入鱼缸是否就是本营地显式关联的共享鱼缸；交互组件只用它解析 Camp 上下文，不取得写权限。 */
 	bool IsSharedFishTank(const ACatFishTankActor* Candidate) const;

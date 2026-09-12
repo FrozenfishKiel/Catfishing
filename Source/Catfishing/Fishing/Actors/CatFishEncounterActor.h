@@ -11,6 +11,8 @@ class USkeletalMeshComponent;
 class UStateTree;
 class UStateTreeComponent;
 class UCatFishingFightRunner;
+class UCatFishDefinition;
+class UCatFishPresentationDefinition;
 
 UCLASS(Blueprintable, meta=(ChildCannotTick))
 class CATFISHING_API ACatFishEncounterActor : public AActor
@@ -52,6 +54,20 @@ public:
 	/** Mesh 组件的世界位置；调试球和鱼线用它对齐实际可见资源。 */
 	UFUNCTION(BlueprintPure, Category="Fishing|Fish")
 	FVector GetVisualWorldLocation() const;
+
+	/**
+	 * 本场这条鱼的鱼种定义；表现层（浮漂、水面特效、HUD）按它取逐鱼数据，不再自己按 ID 查目录。
+	 * 身份尚未初始化或鱼表里查不到时返回空。
+	 */
+	UFUNCTION(BlueprintPure, Category="Fishing|Fish")
+	UCatFishDefinition* GetFishDefinition() const;
+
+	/**
+	 * 本场这条鱼的表现定义；漂讯与水面三个逐鱼槽位（BiteBobberCue／BiteWaterSurfaceCue／FightWaterSurfaceCue）
+	 * 就挂在它上面。这是表现层拿到那三列的唯一接线点。
+	 */
+	UFUNCTION(BlueprintPure, Category="Fishing|Fish")
+	UCatFishPresentationDefinition* GetFishPresentationDefinition() const;
 
 protected:
 	virtual void BeginPlay() override;

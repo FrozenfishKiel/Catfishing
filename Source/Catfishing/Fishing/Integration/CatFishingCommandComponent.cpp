@@ -946,6 +946,13 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 			TargetSnapshot.FishingSessionId, Controller, ScoopCommand);
 		Result.bCommitted = ScoopResult.Command.bCommitted;
 		Result.Error = MapDomainCommandError(ScoopResult.Command.Error);
+		// 拒绝原因是可抄几何时改用细分错误码，玩家才看得到「没够着」而不是一串内部策略名
+		// （钓鱼规则 §5.5:273）。非几何拒绝（阶段错、版本冲突、依赖缺失）保留上一行的原错误。
+		if (const ECatFishingCommandError ScoopError = MapScoopRejectReason(ScoopResult.RejectReason);
+			ScoopError != ECatFishingCommandError::None)
+		{
+			Result.Error = ScoopError;
+		}
 		// 成功抄到不吃硬直：撤掉上面就地武装的那 3 秒。没够着、被抢先、对不可抄的对象出手都是挥空，照罚。
 		if (Result.bCommitted)
 		{
@@ -1521,6 +1528,12 @@ void UCatFishingCommandComponent::ForwardLegacyScoop(const FGuid FishingSessionI
 		const FCatScoopResult ScoopResult = Fishing->RequestScoop(FishingSessionId, Controller, Command);
 		Result.bCommitted = ScoopResult.Command.bCommitted;
 		Result.Error = MapDomainCommandError(ScoopResult.Command.Error);
+		// 与新入口同一条口径：几何拒绝改用细分错误码，玩家看到「没够着」（钓鱼规则 §5.5:273）。
+		if (const ECatFishingCommandError ScoopError = MapScoopRejectReason(ScoopResult.RejectReason);
+			ScoopError != ECatFishingCommandError::None)
+		{
+			Result.Error = ScoopError;
+		}
 		Result.Revision = ScoopResult.Command.Revision;
 		// 与新入口同一条口径：成功抄到撤掉刚武装的硬直，挥空才罚（钓鱼规则 §5.2）。
 		if (Result.bCommitted)

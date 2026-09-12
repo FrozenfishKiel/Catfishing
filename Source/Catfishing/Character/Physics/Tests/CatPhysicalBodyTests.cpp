@@ -257,7 +257,8 @@ bool FCatPhysicalJumpAndDisabledBodyTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("formal 420 cm/s launch reaches about 90 cm without isolated body mass loss"),MaximumZ-StartZ>75 && MaximumZ-StartZ<100);
 	TestTrue(TEXT("normal support returns after landing"),Body->IsGrounded());
-	Body->SetLocomotionEnabledFromAuthority(false,TEXT("TestDowned"));
+	// 2026-09-12：改名自 TestDowned——倒地不再关移动（倒地者可缓慢爬行），这里测的是通用移动开关。
+	Body->SetLocomotionEnabledFromAuthority(false,TEXT("TestLocomotionDisabled"));
 	Body->SetMoveIntent(FVector(1,0,0));
 	AddExpectedMessage(TEXT("Event=physics_body_jump_rejected"), ELogVerbosity::Warning);
 	Body->RequestJump();

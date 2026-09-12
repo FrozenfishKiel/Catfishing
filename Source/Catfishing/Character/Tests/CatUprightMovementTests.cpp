@@ -47,13 +47,15 @@ bool FCatUprightCMCWorldTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("unqualified prop force cannot lift or overturn the capsule"),Cat->GetActorUpVector().Z>.99999 && FMath::Abs(Cat->GetActorLocation().Z-StartZ)<.5);
 		Body->ClearExternalForce(Scene.Floor);
 		Scene.Step(Rate,Rate);
-		Body->SetLocomotionEnabledFromAuthority(false,TEXT("CMCDownedContract"));
-		const double DownedZ=Cat->GetActorLocation().Z;
+		// 2026-09-12：这段测的是「移动被显式关掉」这个通用开关本身，不再叫 Downed——
+		// 倒地已经不关移动了（倒地者可缓慢爬行），关移动的是搬运、被抓等外力接管场景。
+		Body->SetLocomotionEnabledFromAuthority(false,TEXT("CMCLocomotionDisabledContract"));
+		const double DisabledZ=Cat->GetActorLocation().Z;
 		Body->SetMoveIntent(FVector::ForwardVector);
 		Scene.Step(Rate,Rate);
-		TestTrue(TEXT("downed state retains floor support and upright collision"),Body->IsGrounded() && FMath::Abs(Cat->GetActorLocation().Z-DownedZ)<.5 && Cat->GetActorUpVector().Z>.99999);
-		TestTrue(TEXT("downed state rejects voluntary movement"),Body->GetMoveIntent().IsNearlyZero());
-		Body->SetLocomotionEnabledFromAuthority(true,TEXT("CMCRecoveredContract"));
+		TestTrue(TEXT("disabled locomotion retains floor support and upright collision"),Body->IsGrounded() && FMath::Abs(Cat->GetActorLocation().Z-DisabledZ)<.5 && Cat->GetActorUpVector().Z>.99999);
+		TestTrue(TEXT("disabled locomotion rejects voluntary movement"),Body->GetMoveIntent().IsNearlyZero());
+		Body->SetLocomotionEnabledFromAuthority(true,TEXT("CMCLocomotionRestoredContract"));
 		Body->SetMoveIntent(FVector::RightVector);
 		Scene.Step(Rate,Rate);
 		TestTrue(TEXT("recovered character walks in the requested direction"),Body->GetVelocity().Y>95 && Cat->GetActorForwardVector().Y>.98);
@@ -123,18 +125,22 @@ bool FCatUprightCMCConditionPoseTest::RunTest(const FString& Parameters)
 	if (!Visual || !Visual->GetVisualMesh() || !Presentation) return false;
 	const double StandingHead=Visual->GetVisualMesh()->GetBoneLocationByName(TEXT("RigHead"),EBoneSpaces::WorldSpace).Z;
 	const double CapsuleHeight=Cat->GetActorLocation().Z;
-	Cat->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(),115);
 	AddExpectedMessage(TEXT("Event=character_downed"),ELogVerbosity::Warning);
-	TestTrue(TEXT("real Condition command evaluates the poison threshold"),CatIsAcceptedDomainCommandResult(Cat->GetConditionComponent()->RequestFieldSelfRecovery(Controller,FGuid::NewGuid())));
+	// 2026-09-12：倒地不再由「Poison 累加到阈值」推出，而是单条重毒鱼的结论直接裁决，所以这里走唯一的倒地入口。
+	TestTrue(TEXT("severe toxicity downs the cat through the only downed entry"),Cat->GetConditionComponent()->ApplySevereToxicityFromAuthority());
 	Scene.Step(600);
 	TestTrue(TEXT("authoritative condition remains downed"),Cat->GetConditionComponent()->GetSnapshot().bDowned);
+	TestTrue(TEXT("a downed cat can still crawl: locomotion stays on, only slowed and jump-locked"),
+		Cat->GetPhysicalBodyComponent()->IsLocomotionEnabled() && Cat->GetPhysicalBodyComponent()->IsCrawlOnly()
+		&& Cat->GetPhysicalBodyComponent()->GetEffectiveMaxMovementSpeedCmS()<Cat->GetPhysicalBodyComponent()->MaxMovementSpeedCmS);
 	TestEqual(TEXT("authored transition reaches its lying pose"),Presentation->GetObservedPosePhase(),FName(TEXT("DownedPose")));
 	const double LyingHead=Visual->GetVisualMesh()->GetBoneLocationByName(TEXT("RigHead"),EBoneSpaces::WorldSpace).Z;
 	TestTrue(TEXT("actual formal mesh lies down while the collision stays supported"),LyingHead<StandingHead-3 && FMath::Abs(Cat->GetActorLocation().Z-CapsuleHeight)<.5);
 	TestTrue(TEXT("real recovery command clears downed state"),CatIsAcceptedDomainCommandResult(Cat->GetConditionComponent()->RequestFieldSelfRecovery(Controller,FGuid::NewGuid())));
 	Scene.Step(600);
 	TestEqual(TEXT("authored get-up returns to locomotion"),Presentation->GetObservedPosePhase(),FName(TEXT("Locomotion")));
-	TestTrue(TEXT("recovery restores walking without a physical flip"),Cat->GetPhysicalBodyComponent()->IsLocomotionEnabled() && Cat->GetActorUpVector().Z>.99999);
+	TestTrue(TEXT("recovery restores full-speed walking without a physical flip"),Cat->GetPhysicalBodyComponent()->IsLocomotionEnabled()
+		&& !Cat->GetPhysicalBodyComponent()->IsCrawlOnly() && Cat->GetActorUpVector().Z>.99999);
 	AddInfo(FString::Printf(TEXT("Event=cmc_condition_pose_verified StandingHeadZ=%.3f LyingHeadZ=%.3f CapsuleZ=%.3f"),StandingHead,LyingHead,Cat->GetActorLocation().Z));
 	return !HasAnyErrors();
 }

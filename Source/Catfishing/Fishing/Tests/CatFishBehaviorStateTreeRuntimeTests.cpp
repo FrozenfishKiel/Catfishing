@@ -342,16 +342,16 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		Fish->SetActorLocation(InitialFishPosition);
 		Fish->bIdentityInitialized = true;
 		UCatFishDefinition* FishDefinition = NewObject<UCatFishDefinition>(Session);
-		FishDefinition->FishFightStamina = 100.0;
+		FishDefinition->FishFightStaminaPerKilogram = 100.0;
 		Session->FishDefinition = FishDefinition;
 		Session->Snapshot.FishingSessionId = SessionId;
 		Session->Snapshot.Phase = ECatFishingPhase::HookedFight;
 		Session->Snapshot.RodActor = Rod;
 		Session->Snapshot.FishEncounterActor = Fish;
-		Session->Snapshot.FishFightStaminaRemaining = FishDefinition->FishFightStamina;
+		Session->Snapshot.FishFightStaminaRemaining = FishDefinition->FishFightStaminaPerKilogram;
 		// 归一化分母 2026-09-11 起是本场冻结的初值（鱼体力＝体力系数×实际重量），不再是鱼种定额。
 		// 这个夹具直接写 Snapshot 绕过了选鱼事务，所以要手工补上初值，否则分母为 0。
-		Session->FishFightStaminaInitial = FishDefinition->FishFightStamina;
+		Session->FishFightStaminaInitial = FishDefinition->FishFightStaminaPerKilogram;
 		Session->AttemptSnapshot.RodItemInstanceId = RodItemId;
 		Session->CastEquipment = Equipment;
 		Session->FisherCharacter = Character;
@@ -380,7 +380,7 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		Init.Config.RodDurability = CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->MaximumRodDurability;
 		Init.Config.ReelSpeedCentimetersPerSecond = 80.0;
 		Init.InitialState.CatStamina = CatStaminaMaximum;
-		Init.InitialState.FishStamina = FishDefinition->FishFightStamina;
+		Init.InitialState.FishStamina = FishDefinition->FishFightStaminaPerKilogram;
 		Init.InitialState.FishWorldPosition = InitialFishPosition;
 		Init.InitialState.LineLengthCentimeters = FVector::Distance(Rod->GetRodTipWorldTransform().GetLocation(), InitialFishPosition);
 		Init.SteeringConfig.OutwardEffortRange = FVector2D(0.8, 0.8);
@@ -406,7 +406,7 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		const double ActualProgress = FVector::DotProduct(Fish->GetActorLocation() - InitialFishPosition,
 			Runner->PreviousFishEffortDirection);
 		const double MissingDistance = FMath::Max(0.0, IntendedDistance - ActualProgress);
-		const double FishDrain = FishDefinition->FishFightStamina - Runner->State.FishStamina;
+		const double FishDrain = FishDefinition->FishFightStaminaPerKilogram - Runner->State.FishStamina;
 		const double CatDrain = CatStaminaMaximum - ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
 		TestTrue(TEXT("生产运动确实产生未完成意图和猫端工作"), MissingDistance > 0.0 && CatDrain > 0.0);
 		TestEqual(TEXT("最终实际位移按冻结米价只付一次鱼费用"), FishDrain, MissingDistance / 100.0 * Price, 1e-8);
@@ -414,7 +414,7 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Runner猫余额与ASC付款结果一致"), Runner->State.CatStamina,
 			static_cast<double>(ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute())), 1e-4);
 		TestEqual(TEXT("Session鱼体力比例由实际余额更新"), Session->GetSnapshot().NormalizedFishStamina,
-			Runner->State.FishStamina / FishDefinition->FishFightStamina, 1e-8);
+			Runner->State.FishStamina / FishDefinition->FishFightStaminaPerKilogram, 1e-8);
 		if (Price == 0.0)
 		{
 			ReferenceCatDrain = CatDrain;

@@ -45,13 +45,20 @@ public:
 	/** 复制本地 durable 装备解锁摘要；只给 owning Controller 上报本 PlayerState 的运行期授权投影。 */
 	bool GetEquipmentUnlockSnapshot(TArray<FName>& OutUnlockIds) const;
 
-	/** 只在本地相册切换本人隐藏状态并 durable 保存；不产生服务器全局撤下或修改其他玩家副本。 */
+	/** 复制本人相册索引（含 bHidden）；只给本地图鉴/相册页做「一键隐藏」的列表来源，不出网、不给别的玩家。 */
+	bool GetLocalImprintSnapshot(TArray<FCatLocalImprintRecord>& OutRecords) const;
+
+	/**
+	 * 只在本地相册切换本人隐藏状态并 durable 保存；不产生服务器全局撤下或修改其他玩家副本。
+	 * 印记册「本人可一键隐藏任意一张」的唯一写口，图鉴/相册页与蓝图都从这里调用。
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|Collection")
 	FCatDomainCommandResult SetImprintHidden(FGuid RequestId, FGuid ImprintId, bool bHidden);
 
 	/** 外部本地成像桥订阅入口；订阅者负责自己的图片格式、原子文件写与容量策略。 */
 	FCatCapturePlanReceived OnCapturePlanReceived;
 
-	/** 鱼图鉴公开快照变化的订阅入口；只在 FishRecorded/FishSilhouette 完成第二次 durable 保存后触发。 */
+	/** 鱼图鉴公开快照变化的订阅入口；只在 FishRecorded/FishSilhouette/FishKnowledge 完成第二次 durable 保存后触发。 */
 	FCatFishCollectionChanged OnFishCollectionChanged;
 
 private:

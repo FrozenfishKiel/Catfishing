@@ -82,7 +82,8 @@ columns:
     owner: Framework
     type: text
     publish: excluded
-    gap: 代码用 FoodSafety（Safe/Toxic/Unset）+ PoisonIncrease + EatingExperience 表达，全靠人从这列翻译；不可食用（咸鱼、巨影）在代码里没有档，见 09-09 对表「鱼」报告
+    gap: 代码用 FoodSafety（Unset/Safe/Toxic/Inedible）+ PoisonIncrease + EatingExperiencePerKilogram 表达，全靠人从这列翻译；
+      不可食用档 2026-09-12 已加（咸鱼、巨影走 Inedible，经验系数与 Poison 都必须为 0）；本列里的投掷规格另落 ThrowEffect，两者是两件事
   - name: 出现地点
     classification: declarative
     type: enum
@@ -103,8 +104,9 @@ columns:
   - name: 体力系数
     classification: declarative
     type: number
-    publish: FishFightStamina
-    transform: "初始体力 = 体力系数 × 实际重量（钓鱼规则 v1.5 §4.1）；当前代码字段是每鱼种定额，需改成系数"
+    publish: FishFightStaminaPerKilogram
+    transform: "初始体力 = 体力系数 × 实际重量（钓鱼规则 v1.5 §4.1）；代码口径已改为系数（字段 2026-09-12 由 FishFightStamina 改名）"
+    gap: Fish_*.uasset 上仍是旧定额，过渡期由 CatFishCatalogSettings.bFishAssetsStillHoldLegacyFlatFightStamina 按「原定额÷重量中点」现场折算；资产按终版表重生成后把该开关改 False
     note: 2026-09-08 改口径，16 行为占位（原定额÷重量中点），正式值走模拟
   - name: 可捞圈半径
     classification: declarative
@@ -154,8 +156,9 @@ columns:
   - name: 经验系数
     classification: declarative
     type: number
-    publish: EatingExperience
-    transform: "经验 = 经验系数 × 实际重量（2026-09-07 拍）；当前代码字段是定额，需改成系数"
+    publish: EatingExperiencePerKilogram
+    transform: "经验 = 经验系数 × 实际重量（2026-09-07 拍）；代码口径已改为系数（字段 2026-09-12 由 EatingExperience 改名）"
+    gap: Fish_*.uasset 上仍是旧定额，本列正式值随终版表重生成资产；经验取整口径（floor/round/保留小数）未裁
   - name: 偏好饵
     classification: declarative
     type: enum
@@ -172,38 +175,40 @@ columns:
   - name: 食性
     classification: declarative
     type: enum
-    values: {食肉: carnivore, 杂食: omnivore, 素食: herbivore}
-    publish: excluded
-    gap: 代码无对应字段；鱼的行为页用它算 P_base，但该页已标「实现不读本页」
+    values: {食肉: Carnivore, 杂食: Omnivore, 素食: Herbivore}
+    publish: Diet
+    gap: 字段已加（ECatFishDiet），但食性→P_base 的三个档值仍未裁——「鱼的行为」页标了「实现不读本页」、也没进账本；
+      代码留了 CatFishCatalogSettings 的三个概率配置位，未填时行为退回测试期性格模板
   - name: 发力段长
     classification: declarative
     type: range
     unit: 秒
-    publish: excluded
-    gap: 代码读 Fight_* 性格模板，无逐鱼字段
+    publish: OutwardSegmentDurationRangeSeconds
+    transform: "区间 X=下限、Y=上限；未填（X<=0 或 Y<X）时该列退回 Fight_* 测试模板的 OutwardDurationRangeSeconds"
   - name: 休息段长
     classification: declarative
     type: range
     unit: 秒
-    publish: excluded
-    gap: 同上
+    publish: RestSegmentDurationRangeSeconds
+    transform: "同上，对应模板的 EaseOffDurationRangeSeconds；横切段（LateralArc）不在设计的两段模型里，段长仍读模板"
   - name: 游速系数
     classification: declarative
     type: number
-    publish: excluded
-    gap: 代码无对应字段（四套性格模板 09-09 退为测试用，逐鱼字段待加）
+    publish: SwimSpeedCoefficient
+    transform: "本鱼满力游速 = Fight_* 模板的 FullEffortMovementSpeedCentimetersPerSecond × 本系数；0=未填，等价于系数 1"
     note: 2026-09-10 李前臻定按鱼种、本列为准，表头同改；参数页与鱼的行为页的「按体重档 0.8/1.0/1.2/1.5」作废，原一致性矛盾 10 关闭
   - name: 鱼刚咬饵时，鱼漂的变化
     classification: interpretive
     owner: Interface
     type: text
     publish: excluded
-    note: 演出文案，进 PresentationDefinition 由人配
+    note: 演出文案，进 PresentationDefinition.BiteBobberCue 由人配（槽位 2026-09-12 已开，VFX 资产未做）
   - name: 鱼刚咬饵时，水面的变化
     classification: interpretive
     owner: Interface
     type: text
     publish: excluded
+    note: 同上，落 PresentationDefinition.BiteWaterSurfaceCue
   - name: 与猫搏斗时，鱼的动作变化
     classification: interpretive
     owner: Interface
@@ -214,11 +219,13 @@ columns:
     owner: Interface
     type: text
     publish: excluded
+    note: 落 PresentationDefinition.FightWaterSurfaceCue（槽位 2026-09-12 已开，VFX 资产未做）
 
 # 代码有、表里没有的字段：谁定值、要不要在表里加列
 code_only_fields:
   FishStrength: 已 Deprecated；输入包仍列为必填字段，说明输入包晚于 D-20/D-21 的改动，重生成时要去掉
-  FoodSafety: Safe/Toxic/Unset 三档，由 吃鱼效果 文案人工翻译；不可食用（咸鱼、巨影）没有档，对表「鱼」报告已列
+  FoodSafety: Unset/Safe/Toxic/Inedible 四档，由 吃鱼效果 文案人工翻译；不可食用档 2026-09-12 已加
+  ThrowEffect: 逐鱼投掷效果（Kind/半径/时长），由 吃鱼效果 列里写成投掷规格的那两行人工翻译（咸鱼击退炸毛、臭臭鱼驱散）；半径与时长两个数未裁
   BodyClass: 由 名字 是否为湖心巨影推出（Standard/Giant）；可不加列
   SacrificeContribution: 设计按实际体重档取（参数页供奉值行），不该是定额字段；对表已列为待办
   CaptureImprintEventId: 印记触发清单归印记册，不进鱼表

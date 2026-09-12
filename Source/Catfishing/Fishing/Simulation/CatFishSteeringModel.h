@@ -59,6 +59,13 @@ struct CATFISHING_API FCatFishSteeringConfig
 	double BlockedConfirmationSeconds = 0.35;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Feedback", meta=(ClampMin="0", Units="s"))
 	double LoadSmoothingSeconds = 0.15;
+	/**
+	 * 段末「下一段向外」的基础概率 P_base，由鱼表「食性」列经目录设置换算而来（逐鱼，不挂性格模板）。
+	 * 0 表示未裁：不抽这个随机数，ECatFishBehaviorCondition::OutwardSegmentRoll 恒 false，
+	 * 行为拓扑完全按 StateTree 资产现有的边走。取值范围只认开区间 (0,1)。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Direction", meta=(ClampMin="0", ClampMax="1"))
+	double OutwardSegmentProbability = 0.0;
 
 	bool IsValid() const;
 };
@@ -93,6 +100,8 @@ struct CATFISHING_API FCatFishSteeringState
 	double LateralSign = 1.0;
 	double DirectionOffsetDegrees = 0.0;
 	bool bInitialized = false;
+	/** 本段开始时冻结的「下一段是否向外」；段内不重抽，保证段内不换向。P_base 未裁时恒 false。 */
+	bool bNextSegmentOutward = false;
 	FVector BoundaryWaterwardDirection = FVector::ZeroVector;
 	double BoundaryAvoidanceSecondsRemaining = 0.0;
 };

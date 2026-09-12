@@ -132,3 +132,15 @@ void FCatReplicatedFishList::PostReplicatedReceive(
 		Owner->ScheduleSnapshotNotificationFromReplication();
 	}
 }
+
+// 蓝图只读出口：按值复制同一份服务器事实。UFUNCTION 不能返回 const 引用，所以这里是拷贝而不是第二份状态。
+FCatContainerSnapshot UCatContainerReplicationComponent::GetReplicatedContainerSnapshot() const
+{
+	return Snapshot;
+}
+
+// 容器身份的蓝图只读出口；直接取快照里的 ID，不额外暴露复制字段本身。
+FGuid UCatContainerReplicationComponent::GetReplicatedContainerId() const
+{
+	return Snapshot.ContainerId;
+}

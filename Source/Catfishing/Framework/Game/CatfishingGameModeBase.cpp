@@ -20,6 +20,7 @@
 #include "Online/CatOnlineSubsystem.h"
 #include "Camp/CatCampHubActor.h"
 #include "Camp/CatCampSettings.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Condition/CatConditionComponent.h"
 #include "Collection/CatRunImprintService.h"
 #include "Components/StateTreeComponent.h"
@@ -1131,6 +1132,9 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 		RunPublicState.EndReason = ECatRunEndReason::None;
 		RunPublicState.Phase.bNewFishingBitesAllowed = true;
 		RunPublicState.Phase.bOfferingOpen = false;
+		// 翻天身体收口：倒地者自动救起回营地醒来，黄色体力过夜清空。放在这里是因为「新一天开始」
+		// 只有这一个入口，祭坛过场与首日启动都会经过它。
+		ApplyDayBreakBodyResetToCharacters();
 		if (RunPublicState.DayTransition.bActive)
 		{
 			const FCatRunDayTransition& Transition = RunPublicState.DayTransition;
@@ -1690,7 +1694,82 @@ bool ACatfishingGameModeBase::RefreshEnvironmentAndPublish()
 	{
 		CatGameState->SetRunPublicStateFromAuthority(RunPublicState);
 	}
+	ApplyWeatherWetnessToCharacters();
 	return bEnvironmentSucceeded && CatGameState != nullptr;
+}
+
+// 雨天淋湿驱动流程（猫册 §3.1.6）：环境快照每次发布后遍历世界里的猫，把 Weather==Rain 直接写成湿毛。
+// 这是 SetWetFromAuthority 的第一个产品调用方——09-11 对表记的「该函数全项目零调用者、
+// Environment 与 Condition 之间没有任何接缝」就是缺这一条。
+// 非雨天不强行擦干还泡在水里的猫：Wet 的另一个来源是浸没，两个来源在这里按「或」合并。
+// 未做：设计写的是「渐湿」，但参数页没有变湿速率，这里先按天气切换即时置位，速率待策划拍。
+void ACatfishingGameModeBase::ApplyWeatherWetnessToCharacters()
+{
+	UWorld* World = GetWorld();
+	if (!HasAuthority() || !World)
+	{
+		return;
+	}
+	const bool bRaining = RunPublicState.Environment.Weather == ECatEnvironmentWeather::Rain;
+	for (TActorIterator<ACatCharacter> It(World); It; ++It)
+	{
+		UCatConditionComponent* Conditions = It->GetConditionComponent();
+		if (!Conditions)
+		{
+			continue;
+		}
+		const bool bInWater = Conditions->GetSnapshot().WaterExposure != ECatWaterExposureState::Dry;
+		Conditions->SetWetFromAuthority(bRaining || bInWater);
+	}
+}
+
+// 翻天身体收口流程（进入新一天时调用一次）：
+// 1. 仍在倒地的猫自动救起——先传送回营地固定救援落点，再解除倒地，让它「清晨在营地醒来」。
+// 2. 每只猫的黄色体力整段清零：它是当天的储备，今天吃了今天用，攒不过夜。
+// 没有营地落点时不假造坐标：原地救起仍比留在倒地强，但会留一条诊断。
+void ACatfishingGameModeBase::ApplyDayBreakBodyResetToCharacters()
+{
+	UWorld* World = GetWorld();
+	if (!HasAuthority() || !World)
+	{
+		return;
+	}
+	FTransform RescueTransform;
+	bool bHasRescuePoint = false;
+	for (TActorIterator<ACatCampHubActor> CampIt(World); CampIt; ++CampIt)
+	{
+		if (CampIt->TryGetRescuePointTransform(RescueTransform))
+		{
+			bHasRescuePoint = true;
+			break;
+		}
+	}
+	for (TActorIterator<ACatCharacter> It(World); It; ++It)
+	{
+		ACatCharacter* Character = *It;
+		if (UCatAbilitySystemComponent* ASC = Character->GetCatAbilitySystemComponent())
+		{
+			ASC->ClearYellowFightStaminaFromAuthority();
+		}
+		UCatConditionComponent* Conditions = Character->GetConditionComponent();
+		if (!Conditions || !Conditions->GetSnapshot().bDowned)
+		{
+			continue;
+		}
+		if (bHasRescuePoint)
+		{
+			Character->TeleportTo(RescueTransform.GetLocation(), RescueTransform.Rotator(), false, false);
+		}
+		else
+		{
+			UE_LOG(LogCatRun, Warning,
+				TEXT("Event=day_break_rescue_without_camp Character=%s Day=%d Result=RecoveredInPlace"),
+				*Character->GetName(), RunPublicState.Phase.DayIndex);
+		}
+		Conditions->CompleteDayBreakRescueFromAuthority();
+		UE_LOG(LogCatRun, Log, TEXT("Event=day_break_auto_rescue Character=%s Day=%d Teleported=%d"),
+			*Character->GetName(), RunPublicState.Phase.DayIndex, bHasRescuePoint);
+	}
 }
 
 // 自然聚鱼流程：读取 Environment 显式事件与锚点后按 Run+Day+Event+Anchor 去重，扫描唯一同 ID WaterRegion；构造系统身份命令并提交同一聚鱼写口，只有 committed 才记录去重键。

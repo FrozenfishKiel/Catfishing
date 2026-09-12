@@ -11,6 +11,7 @@ class UCatFishDefinition;
 /**
  * 鱼种候选的可扩展条件门。测试期可让未验收条件保持旁路；正式启用时只切换配置，
  * 不改变挑战档、窝料/鱼饵权重和最终归一化流程。
+ * 时段与天气两门的空数组读作「不受该轴约束」，见 .cpp 的流程注释。
  */
 struct CATFISHING_API FCatFishEligibilityPolicy
 {
@@ -69,4 +70,9 @@ struct FCatFishSelectionResult
 	double SelectedNormalizedProbability = 0.0;
 	int32 EligibleCandidateCount = 0;
 	int32 SelectedBandCandidateCount = 0;
+	/**
+	 * 本次是否走的无窝料基础池兜底（候选为空或总权重为零）。
+	 * 走兜底时窝料/鱼饵/挑战度三项都没参与，日志与调试面板需要能区分这两条路。
+	 */
+	bool bFromBasePool = false;
 };

@@ -2593,7 +2593,7 @@ bool UCatInventoryComponent::CanUseItemAtSlot(const int32 SlotIndex, APawn* User
 // 结构化使用提交流程：
 // 1. 先确认当前组件仍是服务器正式库存，并且 RequestId、来源组件和槽位参数有效。
 // 2. 再按服务器当前槽位重读 entry、实例和定义；空格或坏实例按正式库存错误返回。
-// 3. 通过后把当前 entry 交给物品实例提交具体领域效果；库存组件不认识装备、GAS、草药或窝料的内部规则。
+// 3. 通过后把当前 entry 交给物品实例提交具体领域效果；库存组件不认识装备、GAS 或窝料的内部规则。
 // 4. 下游结果决定提交状态和错误；库存只在 RequestId 缺失时补回本次请求 ID，便于日志串联。
 // 5. 最后记录当前读取到的定义、实例和数量，供失败或成功回包诊断。
 FCatDomainCommandResult UCatInventoryComponent::UseItemAtSlotFromAuthority(

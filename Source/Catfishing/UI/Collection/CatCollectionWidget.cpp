@@ -47,6 +47,14 @@ void UCatCollectionWidget::RequestCloseCollection()
 	}
 }
 
+// 印记隐藏流程：把意图交给页面控制器，由它转给 Model 的 Profile 写口；Widget 不持有 Profile 引用，
+// 也不自己维护隐藏状态——成功后 Model 会重发投影，本页面照常整份重绘。
+bool UCatCollectionWidget::RequestSetImprintHidden(const FGuid ImprintId, const bool bHidden)
+{
+	UCatCollectionPageController* Controller = ResolveCollectionPageController();
+	return Controller && Controller->RequestSetImprintHiddenFromWidget(ImprintId, bHidden);
+}
+
 // 构造流程：让父类完成 Slate 构建后，对可选关闭按钮执行 Remove/Add 配对，保证重建时不会重复提交。
 void UCatCollectionWidget::NativeConstruct()
 {

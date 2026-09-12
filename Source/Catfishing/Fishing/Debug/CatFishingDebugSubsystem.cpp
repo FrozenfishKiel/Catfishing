@@ -166,8 +166,11 @@ namespace CatFishingDebugCommands
 		const TArray<FString> Participants{ StableNetId };
 		const double VisualScale = FishPresentation
 			? FishPresentation->ComputeUniformVisualScale(WeightKilograms) : 1.0;
+		// 调试给鱼把请求者当成上钩者：这条鱼的图鉴收集层就记给他，与正式路径同一条归属规则。
+		FCatCaptureConditionSnapshot DebugCondition;
+		DebugCondition.RegionId = TEXT("DebugSpawn");
 		if (!Pickup || !Pickup->InitializeFromAuthority(FGuid::NewGuid(), FGuid::NewGuid(), Definition,
-			WeightKilograms, VisualScale, TEXT("DebugSpawn"), Participants))
+			WeightKilograms, VisualScale, DebugCondition, StableNetId, Participants))
 		{
 			if (Pickup)
 			{
@@ -312,7 +315,9 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 					StaminaScale = Bite->PerfectFishStaminaMultiplier;
 				}
 			}
-			const double MaximumStamina = FishDefinition->FishFightStamina * StaminaScale;
+			// 体力系数 × 实际重量才是本场体力上限；调试面板与会话必须同源，不能拿系数当体力点显示。
+			const double MaximumStamina = FishDefinition->ResolveInitialFightStamina(
+				SessionSnapshot->FishWeightKilograms) * StaminaScale;
 			const double StaminaPercent = MaximumStamina > 0.0
 				? FMath::Clamp(SessionSnapshot->FishFightStaminaRemaining / MaximumStamina * 100.0, 0.0, 100.0) : 0.0;
 			FishLine = FString::Printf(TEXT("FISH  Stamina %.1f / %.1f (%.1f%%)  Strength %.1f"),

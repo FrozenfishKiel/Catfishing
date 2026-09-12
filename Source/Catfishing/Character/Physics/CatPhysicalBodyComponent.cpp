@@ -425,7 +425,7 @@ FCatBodyDriveSample UCatPhysicalBodyComponent::CaptureDriveSample()
     if (!Sample.bConnected)
         for (const auto& Entry : ExternalForces)
             if (Entry.Key.IsValid()) { Sample.bConnected = true; break; }
-    Sample.MaxSpeed = Sample.bFishing ? FishingMotorMaxSpeed : MaxMovementSpeedCmS;
+    Sample.MaxSpeed = Sample.bFishing ? FishingMotorMaxSpeed : GetEffectiveMaxMovementSpeedCmS();
     Sample.MaxForce = FishingMotorMaxForce;
     if (!Sample.bFishing && Sample.bConnected && CharacterMovement)
         if (const auto* Effort = GetOwner()->FindComponentByClass<UCatPhysicalEffortComponent>())
@@ -572,6 +572,8 @@ void UCatPhysicalBodyComponent::GetLifetimeReplicatedProps(TArray<FLifetimePrope
 	DOREPLIFETIME(UCatPhysicalBodyComponent, BodyId);
 	DOREPLIFETIME(UCatPhysicalBodyComponent, ControlEpoch);
 	DOREPLIFETIME(UCatPhysicalBodyComponent, bLocomotionEnabled);
+	DOREPLIFETIME(UCatPhysicalBodyComponent, LocomotionSpeedScale);
+	DOREPLIFETIME(UCatPhysicalBodyComponent, bCrawlOnly);
 }
 FVector UCatPhysicalBodyComponent::GetVelocity() const { return CharacterMovement ? CharacterMovement->Velocity : (HasAuthority() && Body ? Body->GetPhysicsLinearVelocity() : Snapshot.Velocity); }
 FVector UCatPhysicalBodyComponent::GetMoveIntent() const
@@ -666,6 +668,12 @@ void UCatPhysicalBodyComponent::ServerSetInput_Implementation(FVector Move, FRot
 }
 void UCatPhysicalBodyComponent::RequestJump()
 {
+	// 爬行中不许跳：倒地的猫能慢慢挪，但不能原地起跳。正式角色走 CMC 分支，所以这道门要挡在最前面。
+	if (bCrawlOnly)
+	{
+		LogState(TEXT("physics_body_jump_rejected"), TEXT("CrawlOnly"));
+		return;
+	}
 	if (CharacterMovement)
 	{
 		// Host/test authority opens grip traction before this frame's force solve, as before.
@@ -675,9 +683,10 @@ void UCatPhysicalBodyComponent::RequestJump()
 		return;
 	}
 	if (!HasAuthority()) { if (IsLocallyControlled()) ServerRequestJump(ControlEpoch); return; }
-	if (!Body || !bLocomotionEnabled || !bGrounded || bJumpSeparating || GetWorld()->GetTimeSeconds() < SupportDisabledUntilSeconds)
+	if (!Body || !bLocomotionEnabled || bCrawlOnly || !bGrounded || bJumpSeparating
+		|| GetWorld()->GetTimeSeconds() < SupportDisabledUntilSeconds)
 	{
-		LogState(TEXT("physics_body_jump_rejected"), TEXT("NoGroundSupport"));
+		LogState(TEXT("physics_body_jump_rejected"), bCrawlOnly ? TEXT("CrawlOnly") : TEXT("NoGroundSupport"));
 		return;
 	}
 	const double DeltaSpeed = FMath::Max(0.0, JumpSpeedCmS - Body->GetPhysicsLinearVelocity().Z);
@@ -750,6 +759,25 @@ void UCatPhysicalBodyComponent::SetLocomotionEnabledFromAuthority(bool bEnabled,
 	if (!bEnabled) { ClearControlIntent(Reason); FishingMotorSource.Reset(); bFishingHoldActive=false; }
 	GetOwner()->ForceNetUpdate();
 	LogState(TEXT("physics_body_locomotion_changed"), Reason);
+}
+// 速度缩放写入流程：只接受 authority 的有限非负缩放；进入爬行时收掉钓鱼马达，
+// 但**不**清移动意图——倒地的猫还要能继续按方向键慢慢爬。
+void UCatPhysicalBodyComponent::SetLocomotionSpeedScaleFromAuthority(double NewScale, bool bNewCrawlOnly, FName Reason)
+{
+	if (!HasAuthority() || !FMath::IsFinite(NewScale) || NewScale < 0.0) return;
+	if (FMath::IsNearlyEqual(LocomotionSpeedScale, NewScale) && bCrawlOnly == bNewCrawlOnly) return;
+	LocomotionSpeedScale = NewScale;
+	const bool bEnteringCrawl = bNewCrawlOnly && !bCrawlOnly;
+	bCrawlOnly = bNewCrawlOnly;
+	if (bEnteringCrawl) { FishingMotorSource.Reset(); bFishingHoldActive = false; }
+	GetOwner()->ForceNetUpdate();
+	LogState(TEXT("physics_body_locomotion_scale_changed"), Reason);
+}
+// 生效速度流程：基础走速乘以缩放；非法缩放退回基础走速，避免一次坏配置把猫钉死在原地。
+double UCatPhysicalBodyComponent::GetEffectiveMaxMovementSpeedCmS() const
+{
+	return FMath::IsFinite(LocomotionSpeedScale) && LocomotionSpeedScale >= 0.0
+		? MaxMovementSpeedCmS * LocomotionSpeedScale : MaxMovementSpeedCmS;
 }
 void UCatPhysicalBodyComponent::SetExternalForceFromAuthority(const UObject* Source, FVector ForceKgCmS2, bool bVerticalGripTraction, bool bBodyContact, bool bCharacterInteraction)
 {

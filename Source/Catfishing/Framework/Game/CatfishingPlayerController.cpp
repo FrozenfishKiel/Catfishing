@@ -21,6 +21,7 @@
 #include "Logging/CatLog.h"
 #include "Online/CatOnlineSubsystem.h"
 #include "Condition/CatConditionComponent.h"
+#include "Growth/CatGrowthComponent.h"
 #include "Collection/CatRunImprintService.h"
 #include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"
@@ -691,8 +692,11 @@ void ACatfishingPlayerController::ClientReceiveProfileGrant_Implementation(const
 		{
 			PublishProfileEquipmentUnlocksIfAvailable();
 		}
-		if (Grant.Kind == ECatProfileGrantKind::FishRecorded || Grant.Kind == ECatProfileGrantKind::FishSilhouette)
+		if (Grant.Kind == ECatProfileGrantKind::FishRecorded || Grant.Kind == ECatProfileGrantKind::FishSilhouette
+			|| Grant.Kind == ECatProfileGrantKind::FishKnowledge)
 		{
+			// 服务端「这条鱼是不是首钓」只能读 PlayerState 上这份公开摘要，所以三类图鉴 Grant 落盘后都要回传，
+			// 否则首钓判定会在本局内一直看到入局那一刻的旧事实（图鉴 §3.1.8:149 首钓新鱼种才抛印记）。
 			TArray<FCatFishCollectionRecord> Records;
 			if (Profile->GetFishCollectionSnapshot(Records))
 			{
@@ -1190,21 +1194,50 @@ void ACatfishingPlayerController::ServerPickUpFishGuard_Implementation(ACatFishG
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 草药 RPC 路由流程：Controller 只定位目标 Character 的 ConditionComponent 并转交请求；正式扣草药、刷新装备读模型和恢复身体都由 ConditionComponent 按服务器事实提交。
-void ACatfishingPlayerController::ServerUseHerbOnCharacter_Implementation(ACatCharacter* TargetCharacter,
-	const FGuid RequestId, const FGuid HerbItemInstanceId)
+// 野外自救 RPC 路由流程：Controller 只把请求投给本人 Character 的 ConditionComponent；
+// 距离、归属与运行 gate 由组件按服务器事实复核。09-11 对表记的「RequestFieldSelfRecovery 只有测试调用点、
+// 没有产品链路」就是缺这一条：单人玩家倒地此前无路可走。
+void ACatfishingPlayerController::ServerRequestFieldSelfRecovery_Implementation(const FGuid RequestId)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
-	UCatConditionComponent* TargetConditions = TargetCharacter && TargetCharacter->GetWorld() == GetWorld()
-		? TargetCharacter->GetConditionComponent() : nullptr;
-	if (TargetConditions)
+	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
+	UCatConditionComponent* Conditions = ControlledCharacter ? ControlledCharacter->GetConditionComponent() : nullptr;
+	if (!CanForwardGameplayCommand())
 	{
-		Result = TargetConditions->UseHerbOnCharacterFromAuthority(this, RequestId, HerbItemInstanceId);
+		Result.Error = ECatDomainCommandError::CommandsClosed;
+	}
+	else if (!Conditions)
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 	}
 	else
 	{
+		Result = Conditions->RequestFieldSelfRecovery(this, RequestId);
+	}
+	DeliverCampCommandResultToOwningClient(Result);
+}
+
+// 三选一 RPC 路由流程：Controller 只转交选择意图；池、出现次序、上限与叠加全部由 Growth 组件按服务器配表裁决。
+// 面板不冻结世界、个人选择不阻挡他人，所以这里不设任何全局门，只走普通玩法命令窗口。
+void ACatfishingPlayerController::ServerChooseGrowthOption_Implementation(const FGuid RequestId,
+	const ECatGrowthOptionId OptionId, const int32 OfferSerial)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
+	UCatGrowthComponent* Growth = ControlledCharacter ? ControlledCharacter->GetGrowthComponent() : nullptr;
+	if (!CanForwardGameplayCommand())
+	{
+		Result.Error = ECatDomainCommandError::CommandsClosed;
+	}
+	else if (!Growth)
+	{
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+	}
+	else
+	{
+		Result = Growth->ChooseOfferedOptionFromAuthority(this, RequestId, OptionId, OfferSerial);
 	}
 	DeliverCampCommandResultToOwningClient(Result);
 }

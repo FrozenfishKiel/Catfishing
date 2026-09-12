@@ -2,6 +2,8 @@
 
 #include "Camp/CatCampSettings.h"
 #include "Character/CatCharacter.h"
+#include "Collection/CatFishCollectionLayers.h"
+#include "Collection/CatRunImprintService.h"
 #include "Condition/CatConditionComponent.h"
 #include "Data/CatFishCatalogSettings.h"
 #include "Data/CatFishDefinition.h"
@@ -409,14 +411,26 @@ FCatFishConsumeResult UCatFishContainerService::ConsumeReachableFish(AController
 		return Result;
 	}
 	Command.Context.StableNetId = CurrentPlayerState->GetUniqueId()->ToString();
-	const auto SubmitBodyFromDefinition = [&](UCatFishDefinition* Definition)
+	// 吃鱼经验 ＝ 经验系数 × 实际重量：重量是这条鱼实例上的冻结值，必须由容器一路带到成长槽，
+	// 不能让下游按鱼种去猜一个代表重量。
+	const auto SubmitBodyFromDefinition = [&](UCatFishDefinition* Definition, const double WeightKilograms)
 	{
 		if (!Definition)
 		{
 			Result.Body.Error = ECatDomainCommandError::PolicyUndecided;
 			return;
 		}
-		Result.Body = Conditions->ConsumeCommittedFish(Command.Context.RequestId, Definition);
+		Result.Body = Conditions->ConsumeCommittedFish(Command.Context.RequestId, Definition, WeightKilograms);
+		if (CatIsAcceptedDomainCommandResult(Result.Body) && Definition
+			&& CatFishCollectionLayers::HasKnowledgeLayer(Definition))
+		{
+			// 知识层：自己吃过才解锁食用效果，谁吃谁记（图鉴 §3.1.4:124）。收件人是这次真的吃下去的人，
+			// Command.Context.StableNetId 上面刚从 RequestingController 的 PlayerState 重建过，不是客户端载荷。
+			if (UCatRunImprintService* Imprint = GetWorld() ? GetWorld()->GetSubsystem<UCatRunImprintService>() : nullptr)
+			{
+				Imprint->RecordFishKnowledge(Definition->FishDefinitionId, Command.Context.StableNetId);
+			}
+		}
 		if (!CatIsAcceptedDomainCommandResult(Result.Body))
 		{
 			UE_LOG(LogCatFishContainers, Error,
@@ -439,7 +453,8 @@ FCatFishConsumeResult UCatFishContainerService::ConsumeReachableFish(AController
 		{
 			UCatFishDefinition* ReplayDefinition =
 				GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(Result.Fish.FishDefinitionId);
-			SubmitBodyFromDefinition(ReplayDefinition);
+			// 重放走的是已经记下来的那条鱼实例，重量取终态里的冻结值，与首次提交同源。
+			SubmitBodyFromDefinition(ReplayDefinition, Result.Fish.WeightKilograms);
 		}
 		return Result;
 	}
@@ -498,7 +513,16 @@ FCatFishConsumeResult UCatFishContainerService::ConsumeReachableFish(AController
 		Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
 		return Result;
 	}
-	Result.Command.Error = Conditions->ValidateFishConsumption(Definition);
+	// 不可食用的鱼在移除之前就拒绝：理由要说得出口是「这条鱼不能吃」，
+	// 而不是等下游因为经验系数为 0 而失败——后者会让日志指向成长链，排查时找错地方。
+	if (!Definition->IsEdible())
+	{
+		Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
+		return Result;
+	}
+	const double EatenWeightKilograms = Fish->WeightKilograms;
+	// 预检也要带重量：经验＝系数×重量，重量非法时这条鱼吃不出经验，要在移除实物之前就拒绝。
+	Result.Command.Error = Conditions->ValidateFishConsumption(Definition, EatenWeightKilograms);
 	if (Result.Command.Error != ECatDomainCommandError::None)
 	{
 		return Result;
@@ -507,7 +531,7 @@ FCatFishConsumeResult UCatFishContainerService::ConsumeReachableFish(AController
 	Result.Body.RequestId = Command.Context.RequestId;
 	if (CatIsAcceptedDomainCommandResult(Result.Command))
 	{
-		SubmitBodyFromDefinition(Definition);
+		SubmitBodyFromDefinition(Definition, EatenWeightKilograms);
 	}
 	return Result;
 }

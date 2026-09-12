@@ -14,6 +14,9 @@ namespace CatFishPresentationDefinitionPrivate
 	}
 }
 
+// 就绪校验流程：只核 Mesh/动画/缩放/Transform 这些「没有就没法生成鱼」的合同。
+// 三个漂讯与水面槽位刻意不在其中——本轮只开槽位、VFX 资产还没做，若把它们列进合同，
+// 现有 16 份 Fish_*.uasset 会全部变成未就绪，整份鱼表当场消失。
 bool UCatFishPresentationDefinition::IsRuntimeDefinitionReady() const
 {
 	return !SkeletalMesh.IsNull() && !AnimInstanceClass.IsNull()

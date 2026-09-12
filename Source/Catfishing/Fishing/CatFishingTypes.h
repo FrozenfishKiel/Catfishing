@@ -11,9 +11,12 @@ enum class ECatFishingPhase : uint8
 {
 	/** 会话对象已建立但 StateTree 尚未进入试探期。 */
 	Created = 0,
-	/** 鱼只给试探信号；此阶段提竿不能直接形成捕获。 */
+	/**
+	 * 试探期：鱼种已抽定、按真鱼体型的鱼影已在水里，浮漂只给轻点信号（钓鱼规则 §3.4:141 演出时序）。
+	 * 此阶段提竿必空竿、不损饵，剪影层已经揭开。停留时长按鱼种 ProbeDurationSeconds。
+	 */
 	Probe = 1,
-	/** 真咬响应窗口；此时只存在浮漂信号，鱼种与鱼 Actor 要等合法左键到达服务器后才创建。 */
+	/** 真咬响应窗口：浮漂猛沉，鱼种与鱼 Actor 在上一阶段就已经存在，这里只等提竿。 */
 	TrueBiteWindow = 2,
 	/** Hooked 后唯一允许多人协作的搏斗阶段。 */
 	HookedFight = 3,
@@ -321,6 +324,30 @@ struct FCatScoopCommand
 	FCatDomainCommandContext Context;
 };
 
+/**
+ * 抢抄被拒的具体原因（钓鱼规则 §5.5:273）。
+ * 前四项是几何类，玩家侧统一提示「没够着」；后两项是姿态/站位类，各自有自己的提示。
+ * 拆开的理由：此前六种拒绝全部收敛成 PolicyUndecided，玩家只看到挥空、排查只能翻服务器日志。
+ */
+UENUM(BlueprintType)
+enum class ECatScoopRejectReason : uint8
+{
+	/** 没有被拒绝，或拒绝原因不属于可抄几何（阶段错、版本冲突、依赖缺失等）。 */
+	None,
+	/** 朝向射线没碰到鱼身上的可捞圆：没对准或超出抄网射程。 */
+	OutOfReach,
+	/** 抄手与鱼之间有遮挡。 */
+	LineOfSightBlocked,
+	/** 抄手脚下坡度超过上限（现值 45 度）。 */
+	GroundTooSteep,
+	/** 抄手与鱼的高差超过上限（现值 2.5 米）。 */
+	VerticalDeltaTooLarge,
+	/** 嘴里已经叼着鱼。 */
+	MouthOccupied,
+	/** 抄手没站在岸上。 */
+	NotOnShore
+};
+
 /** 抄网事务终态；成功表示鱼已成为抄手嘴上的世界鱼，尚未写入任何容器。 */
 USTRUCT(BlueprintType)
 struct FCatScoopResult
@@ -330,4 +357,8 @@ struct FCatScoopResult
 	/** 公共命令终态；Revision 对应 FishingSession。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatDomainCommandResult Command;
+
+	/** 被拒的具体原因；Command.Error 仍是 PolicyUndecided，这里只回答「哪一条没满足」。 */
+	UPROPERTY(BlueprintReadOnly)
+	ECatScoopRejectReason RejectReason = ECatScoopRejectReason::None;
 };

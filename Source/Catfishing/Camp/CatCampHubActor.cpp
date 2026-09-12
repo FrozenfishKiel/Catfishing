@@ -226,6 +226,17 @@ FCatDomainCommandResult ACatCampHubActor::RescueToCamp(AController* HelpingContr
 	return Result;
 }
 
+// 救援落点读取流程：只回答关卡显式配置的 RescuePoint；没有配置时返回 false，调用方保持 fail-closed 而不是就地猜一个坐标。
+bool ACatCampHubActor::TryGetRescuePointTransform(FTransform& OutTransform) const
+{
+	if (!RescuePoint)
+	{
+		return false;
+	}
+	OutTransform = FTransform(RescuePoint->GetComponentRotation(), RescuePoint->GetComponentLocation());
+	return true;
+}
+
 // 鱼缸归属判断流程：只比较关卡显式引用，不按位置或标签猜测；鱼缸交互因此不会误投到另一座营地。
 bool ACatCampHubActor::IsSharedFishTank(const ACatFishTankActor* Candidate) const
 {

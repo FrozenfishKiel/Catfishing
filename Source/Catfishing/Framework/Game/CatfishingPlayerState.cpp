@@ -25,7 +25,9 @@ void ACatfishingPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty
 	DOREPLIFETIME(ThisClass, AuthorizedEquipmentUnlockIds);
 }
 
-// 公开图鉴写入流程：仅 authority 接受有限数量、唯一非空鱼种、合法状态和有限非负数值；验证全部通过后整体替换并强制网络更新。
+// 公开图鉴写入流程：仅 authority 接受有限数量、唯一非空鱼种、至少一层已解锁和有限非负数值；验证全部通过后整体替换并强制网络更新。
+// 「至少一层已解锁」取代了原来的 State != Unknown：吃过但没钓到的鱼整页层级仍是 Unknown，
+// 它是合法事实（图鉴 §3.1.4:124 知识层不要求先收集），不能让它把整份摘要判废。
 bool ACatfishingPlayerState::SetPublicFishCollectionFromAuthority(const TArray<FCatFishCollectionRecord>& Records)
 {
 	if (!HasAuthority() || Records.Num() > 512)
@@ -35,7 +37,8 @@ bool ACatfishingPlayerState::SetPublicFishCollectionFromAuthority(const TArray<F
 	TSet<FName> UniqueFishIds;
 	for (const FCatFishCollectionRecord& Record : Records)
 	{
-		if (Record.FishDefinitionId.IsNone() || Record.State == ECatFishCollectionState::Unknown
+		const bool bAnyLayerUnlocked = Record.bSilhouetteUnlocked || Record.bRecordedUnlocked || Record.bKnowledgeUnlocked;
+		if (Record.FishDefinitionId.IsNone() || !bAnyLayerUnlocked
 			|| !FMath::IsFinite(Record.BestWeightKilograms) || Record.BestWeightKilograms < 0.0
 			|| Record.EncounterCount < 0 || UniqueFishIds.Contains(Record.FishDefinitionId))
 		{

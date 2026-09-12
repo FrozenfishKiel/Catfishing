@@ -137,16 +137,17 @@ void ACatFishPickupActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& 
 	DOREPLIFETIME(ThisClass, PresentationState);
 }
 
-// 世界鱼初始化流程：先校验冻结身份、重量和表现尺度，再写入复制状态与捕获上下文，最后刷新网格；已归档库存鱼没有新捕获地域，不伪造 RegionId。
+// 世界鱼初始化流程：先校验冻结身份、重量和表现尺度，再写入复制状态与捕获上下文，最后刷新网格；已归档库存鱼没有新捕获条件，不伪造地域/时段/天气。
 bool ACatFishPickupActor::InitializeFromAuthority(const FGuid InFishingSessionId, const FGuid InFishInstanceId,
-	UCatFishDefinition* InFishDefinition, const double InWeightKilograms, const double InVisualScale, const FName InRegionId,
+	UCatFishDefinition* InFishDefinition, const double InWeightKilograms, const double InVisualScale,
+	const FCatCaptureConditionSnapshot& InCaptureCondition, const FString& InHookerStableNetId,
 	const TArray<FString>& InFishingParticipantStableNetIds, const FVector GroundNormal)
 {
 	if (!HasAuthority() || bIdentityInitialized || !InFishingSessionId.IsValid() || !InFishInstanceId.IsValid()
 		|| InFishingSessionId == InFishInstanceId || !InFishDefinition || !InFishDefinition->IsRuntimeDefinitionReady()
 		|| !FMath::IsFinite(InWeightKilograms) || InWeightKilograms <= 0.0
 		|| !FMath::IsFinite(InVisualScale) || InVisualScale <= 0.0
-		|| (!bCaptureRecorded && InRegionId.IsNone()) || GroundNormal.ContainsNaN())
+		|| (!bCaptureRecorded && InCaptureCondition.RegionId.IsNone()) || GroundNormal.ContainsNaN())
 	{
 		return false;
 	}
@@ -159,7 +160,8 @@ bool ACatFishPickupActor::InitializeFromAuthority(const FGuid InFishingSessionId
 	PresentationState.State = ECatFishPickupState::Available;
 	FishDefinition = InFishDefinition;
 	FishPresentationDefinition = InFishDefinition->LoadRuntimePresentationDefinition();
-	RegionId = InRegionId;
+	CaptureCondition = InCaptureCondition;
+	HookerStableNetId = InHookerStableNetId;
 	FishingParticipantStableNetIds = InFishingParticipantStableNetIds;
 	FishingParticipantStableNetIds.RemoveAll([](const FString& Entry) { return Entry.IsEmpty(); });
 	FishingParticipantStableNetIds.Sort();
@@ -850,9 +852,10 @@ bool ACatFishPickupActor::InitializeFromInventoryFromAuthority(UCatInventoryItem
 		return FishItem->GetItemInstanceId() == PresentationState.FishInstanceId;
 	}
 	bCaptureRecorded = true;
+	// 库存落地的鱼早已归档：没有新的捕获条件，也不再需要上钩者身份，两者都留空而不是猜一份。
 	if (!InitializeFromAuthority(FishItem->GetSourceFishingSessionId(), FishItem->GetItemInstanceId(), Definition,
 		FishItem->GetFishWeightKilograms(), Presentation->ComputeUniformVisualScale(FishItem->GetFishWeightKilograms()),
-		NAME_None, {}))
+		FCatCaptureConditionSnapshot{}, FString(), {}))
 	{
 		bCaptureRecorded = false;
 		return false;
@@ -872,8 +875,10 @@ bool ACatFishPickupActor::InitializeFromInventoryForCarryFromAuthority(UCatFishI
 		? Item->GetFishDefinition()->LoadRuntimePresentationDefinition() : nullptr;
 	if (!HasAuthority() || Quantity != 1 || !Item || !Presentation || bIdentityInitialized) return false;
 	bCaptureRecorded = true;
+	// 同上：Carry 载体承的是同一条已归档的库存鱼，不带新捕获条件与上钩者。
 	if (!InitializeFromAuthority(Item->GetSourceFishingSessionId(), Item->GetItemInstanceId(), Item->GetFishDefinition(),
-		Item->GetFishWeightKilograms(), Presentation->ComputeUniformVisualScale(Item->GetFishWeightKilograms()), NAME_None, {}))
+		Item->GetFishWeightKilograms(), Presentation->ComputeUniformVisualScale(Item->GetFishWeightKilograms()),
+		FCatCaptureConditionSnapshot{}, FString(), {}))
 	{
 		bCaptureRecorded = false;
 		return false;
@@ -992,10 +997,12 @@ FText ACatFishPickupActor::GetInteractionPrompt_Implementation() const
 		FText::AsNumber(PresentationState.WeightKilograms));
 }
 
+// 可拾距离：落岸鱼直接读全游戏统一交互半径 1.5 米（钓鱼规则 §5.5:273「落岸鱼的可拾距离是 1.5 米，
+// 全游戏统一交互半径，与抄网射程是两个参数」）。本 Actor 不再维护第二个距离，也不复用抄网射程。
 double ACatFishPickupActor::GetInteractionRadius_Implementation() const
 {
 	const UCatInteractionSettings* Settings = GetDefault<UCatInteractionSettings>();
-	return Settings ? Settings->MaximumServerInteractionDistanceCentimeters : 0.0;
+	return Settings ? Settings->GetInteractionRadiusCentimeters() : 0.0;
 }
 
 bool ACatFishPickupActor::IsAuthorityRequestSpatiallyValid(const AController* RequestingController) const
@@ -1003,9 +1010,10 @@ bool ACatFishPickupActor::IsAuthorityRequestSpatiallyValid(const AController* Re
 	const APawn* Pawn = RequestingController ? RequestingController->GetPawn() : nullptr;
 	const UCatInteractionSettings* Settings = GetDefault<UCatInteractionSettings>();
 	UWorld* World = GetWorld();
-	if (!HasAuthority() || !Pawn || !Settings || !World
-		|| FVector::Dist(Pawn->GetPawnViewLocation(), GetActorLocation())
-			> Settings->MaximumServerInteractionDistanceCentimeters)
+	// 服务器复核＝统一半径＋技术余量；半径未配置时返回 0 并在这里 fail-closed，不退回旧的 350 厘米。
+	const double ServerDistance = Settings ? Settings->GetServerInteractionDistanceCentimeters() : 0.0;
+	if (!HasAuthority() || !Pawn || !Settings || !World || ServerDistance <= 0.0
+		|| FVector::Dist(Pawn->GetPawnViewLocation(), GetActorLocation()) > ServerDistance)
 	{
 		return false;
 	}
@@ -1112,6 +1120,8 @@ void ACatFishPickupActor::PublishOwnerPresentationFromAuthority(const FString& I
 }
 
 // 捕获归档流程：已入库的鱼直接跳过；新捕获先写 FishRecorded，再按现有配置提交可选印记候选与成像计划。
+// 两条归属分开：图鉴收集层写给上钩者（钓鱼规则 §5.6:285、图鉴 §3.1.4:111「收集层归上钩者」），
+// 演出贡献名单与实物归属仍认这次把鱼收进来的人。上钩者缺失（库存鱼、旧存档）时才退回收件人＝拾取者。
 void ACatFishPickupActor::ArchiveCommittedCapture(const FCatCaptureCommittedResult& Committed,
 	const FString& PickerStableNetId)
 {
@@ -1120,11 +1130,26 @@ void ACatFishPickupActor::ArchiveCommittedCapture(const FCatCaptureCommittedResu
 	{
 		return;
 	}
-	FCatCaptureConditionSnapshot Condition;
-	Condition.RegionId = RegionId;
-	const FGuid FishRecordedGrantId = Imprint->RecordCommittedCapture(Committed, PickerStableNetId, Condition);
+	const FString CollectionRecipientStableNetId = HookerStableNetId.IsEmpty()
+		? PickerStableNetId : HookerStableNetId;
+	// 首钓判定必须在写 FishRecorded 之前问：这一份 Grant 自己就会把该鱼种记进本局事实。
+	const bool bFirstRecordOfThisSpecies = Imprint->IsFirstFishRecordForRecipient(
+		CollectionRecipientStableNetId, Committed.FishInstance.FishDefinitionId);
+	const FGuid FishRecordedGrantId = Imprint->RecordCommittedCapture(Committed,
+		CollectionRecipientStableNetId, CaptureCondition);
 	bCaptureRecorded = FishRecordedGrantId.IsValid();
-	if (FishDefinition->CaptureImprintEventId.IsNone())
+	UE_LOG(LogCatFishContainers, Log,
+		TEXT("Event=fish_capture_archived FishInstanceId=%s Definition=%s RecipientResolved=%s RecipientIsHooker=%s "
+			"FirstRecord=%s Region=%s TimeOfDay=%s Weather=%s Granted=%s"),
+		*Committed.FishInstance.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		*Committed.FishInstance.FishDefinitionId.ToString(),
+		CollectionRecipientStableNetId.IsEmpty() ? TEXT("false") : TEXT("true"),
+		HookerStableNetId.IsEmpty() ? TEXT("false") : TEXT("true"),
+		bFirstRecordOfThisSpecies ? TEXT("true") : TEXT("false"),
+		*CaptureCondition.RegionId.ToString(), *CaptureCondition.TimeOfDayId.ToString(),
+		*CaptureCondition.WeatherId.ToString(), FishRecordedGrantId.IsValid() ? TEXT("true") : TEXT("false"));
+	// 印记只给首钓新鱼种（图鉴 §3.1.8:149）；同一种鱼的第二条起不再成像，印记册「宁缺毋滥」。
+	if (FishDefinition->CaptureImprintEventId.IsNone() || !bFirstRecordOfThisSpecies)
 	{
 		return;
 	}

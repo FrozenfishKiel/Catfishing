@@ -6,6 +6,7 @@
 #include "Fishing/CatFishingTypes.h"
 #include "Fishing/CatFishingUseResults.h"
 #include "Data/CatFishSelectionTypes.h"
+#include "Framework/Core/CatProfileContracts.h"
 #include "Fishing/Integration/CatFishingCommandTypes.h"
 #include "CatFishingSession.generated.h"
 
@@ -51,8 +52,13 @@ public:
 	bool ScheduleWaitingProbeFromStateTree();
 	/** 仅刷新尚未真咬的计时；次日重新采样，已有真咬和搏斗不受影响。 */
 	void RefreshBiteAvailabilityFromAuthority();
-	/** Probe 状态只打开响应窗口，不选鱼、不生成鱼、不扣饵；鱼只在合法 RequestHook 到达后创建。 */
-	bool OpenTrueBiteWindowFromStateTree();
+	/**
+	 * 进入试探期（钓鱼规则 §3.4:141 演出时序）：抽中瞬间就选鱼并生成按真鱼体型的鱼影，浮漂轻点，
+	 * 停留 ProbeDurationSeconds 之后浮漂猛沉、才打开真咬响应窗。
+	 * 2026-09-12 前是「Probe 只打开响应窗、鱼在合法左键之后才创建」，那样提竿前水里根本没有影子；
+	 * 而 09-12 裁「竿强瞬断报废鱼竿」的前提正是玩家看得见那团黑影才谈得上知情的赌博（钓鱼规则 §4.2:176）。
+	 */
+	bool BeginProbeFromStateTree();
 	FCatFishingCommandResult RequestHookFromAuthority(FGuid RequestId);
 	FCatFishingCommandResult CancelFromAuthority(FGuid RequestId);
 	/** 上钩后的主动止损写口；只接受当前钓手和精确 Revision，提交后鱼/饵丢失，不追加或退还鱼竿磨损。 */
@@ -198,6 +204,9 @@ private:
 	bool SpawnLandedFishPickupFromAuthority(const FVector& SurfaceLocation, const FVector& GroundNormal,
 		const TCHAR* DiagnosticReason);
 
+	/** 冻结本竿的图鉴首次条件（水域＋时段＋天气）；三轴都来自咬钩成立那一刻，交给实物鱼随捕获一起归档。 */
+	FCatCaptureConditionSnapshot BuildFrozenCaptureCondition() const;
+
 	/**
 	 * 把本次搏斗摸过这根竿的猫并入演出贡献名单（图鉴 §4:113,118-119，09-08 已裁）。
 	 * 只喂贡献名单这一路：合力拉竿与抄网命中都不登记收集、不刷新个人最佳重量，
@@ -228,9 +237,16 @@ private:
 	/** 渔获收口：确认消耗本场鱼饵，并按钓鱼规则 §4.4（:203）给鱼竿另扣 1 点基础磨损。 */
 	bool CommitCatchEquipmentFromAuthority();
 	void HandleBiteWarningTimer();
+	/** 咬钩等待计时到点：只把「试探触发」送进 StateTree，选鱼与鱼影在 BeginProbeFromStateTree 里发生。 */
 	void HandleProbeTimer();
+	/** 试探期停留到点：浮漂由轻点转猛沉，打开真咬响应窗。 */
+	void HandleProbeStayTimer();
+	/** 真咬窗口的唯一打开口；试探期停留结束后由计时器调用，写 TrueBiteWindow 阶段并起响应计时。 */
+	bool OpenTrueBiteWindowFromAuthority();
+	/** 读本场鱼的试探期停留时长（鱼种 Bite 性格资产 ProbeDurationSeconds）；未配置返回 false，调用方 fail-closed。 */
+	bool TryResolveProbeDurationSeconds(double& OutProbeSeconds) const;
 	void HandleTrueBiteWindowExpired();
-	/** 真咬窗口内收到合法左键后，冻结选择上下文、选鱼、生成 Encounter 并提交饵料。 */
+	/** 咬钩计时到点那一刻冻结选择上下文、选鱼、生成鱼影 Encounter；饵的数量在真咬成立时才扣。 */
 	FCatFishSelectionCommitResult ResolveHookSelectionFromAuthority();
 	bool TryReadNearShoreFishSpatial(FCatWaterSpatialResult& OutSpatial) const;
 
@@ -336,8 +352,13 @@ private:
 	/** 当前真咬成立时的鱼情；仅用于这次窗口跨夜后的选鱼，不是另一份世界昼夜状态。 */
 	ECatEnvironmentTimeOfDay BiteTimeOfDay = ECatEnvironmentTimeOfDay::Unknown;
 	ECatEnvironmentWeather BiteWeather = ECatEnvironmentWeather::Unknown;
+	/** 咬钩等待计时；到点即抽鱼并进入试探期，不是试探期本身的长度。 */
 	FTimerHandle ProbeTimerHandle;
+	/** 试探期停留计时；到点浮漂猛沉、打开真咬响应窗。 */
+	FTimerHandle ProbeStayTimerHandle;
 	FTimerHandle TrueBiteTimerHandle;
+	/** 本次咬钩机会的稳定键；剪影 Grant 用它去重，入夜收回后重新抛竿会换一个新的。 */
+	FGuid CurrentBiteEncounterId;
 	/** 翻肚鱼苏醒时限计时；进入 ExhaustedReel 起算，拖动中照走，鱼真正上岸或会话收口后清除。 */
 	FTimerHandle ExhaustedRevivalTimerHandle;
 	TMap<FGuid, FCatFishingCommandResult> HookTerminalByRequest;

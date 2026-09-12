@@ -136,8 +136,8 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UCatFishingViewBridge> FishingViewBridge;
 
-	/** Poison 属性变化解绑句柄。 */
-	FDelegateHandle PoisonChangedHandle;
+	/** 黄色体力属性变化解绑句柄。 */
+	FDelegateHandle YellowFightStaminaChangedHandle;
 
 	/** FishingStrength 属性变化解绑句柄。 */
 	FDelegateHandle FishingStrengthChangedHandle;

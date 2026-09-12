@@ -30,7 +30,12 @@ public:
 	/** 宿主离开时按精确组件解除登记，包含正在销毁的组件；恢复中非预期注销会封锁提交，已有终态不会自动改挂到其他容器。 */
 	void UnregisterContainer(UCatContainerReplicationComponent* ReplicationComponent);
 
-	/** 复制指定容器已提交的公开事实供上层读取；不存在时整体失败。 */
+	/**
+	 * 复制指定容器已提交的公开事实供上层读取；不存在时整体失败。
+	 * 开成 BlueprintCallable 只是为了让服务器侧表现与验收蓝图能读到这份事实；它没有写口，
+	 * 而且本服务只在 authority World 创建，客户端调用只会拿到 false。
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|FishContainers")
 	bool TryGetContainerSnapshot(FGuid ContainerId, FCatContainerSnapshot& OutSnapshot) const;
 
 	/** 返回容器的服务器种类与真实 Actor 宿主；供空间权限校验使用，授权身份仍从鱼实例或调用方上下文读取。 */
