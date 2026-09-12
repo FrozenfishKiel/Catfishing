@@ -64,7 +64,11 @@ struct FCatImprintCandidate
 	UPROPERTY(BlueprintReadOnly)
 	bool bAllActivePlayersPresent = false;
 
-	/** 服务器私有参与者 StableNetId；无 UPROPERTY，不进入公共 DTO。 */
+	/** 服务器私有参与者 StableNetId；无 UPROPERTY，不进入公共 DTO。
+	 *  这是「演出贡献名单」，不是收集归属：收集层归上钩者一人，合力拉竿与抄网命中只进这份名单，
+	 *  不登记图鉴也不刷新个人最佳重量（2026-09-07 N8、2026-09-08 整册过稿）。
+	 *  合力那部分的唯一来源是物理抓握侧的「本次搏斗摸过竿的人」，见
+	 *  UCatPhysicsGrabComponent::CollectGripContributorStableNetIds；本服务只消费名单，不自己判定谁出过力。 */
 	TArray<FString> ParticipantStableNetIds;
 };
 
