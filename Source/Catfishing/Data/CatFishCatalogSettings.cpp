@@ -2,6 +2,7 @@
 
 #include "Data/CatFishDefinition.h"
 #include "Curves/CurveFloat.h"
+#include "Logging/CatLog.h"
 
 namespace CatFishCatalogSettingsPrivate
 {
@@ -110,6 +111,12 @@ namespace CatFishCatalogSettingsPrivate
 		}
 	}
 
+	// 完美削减只允许落在 (0,1]：未配置、非有限或越界一律退回 1.0，保证配置缺失时只是"不削减"，不会放大鱼或把值清零。
+	static double SanitizePerfectMultiplier(const double Multiplier)
+	{
+		return FMath::IsFinite(Multiplier) && Multiplier > 0.0 && Multiplier <= 1.0 ? Multiplier : 1.0;
+	}
+
 	static bool IsSaturationReady(const UCurveFloat* Curve, const double HalfSaturation,
 		const double MaximumModifier)
 	{
@@ -158,6 +165,22 @@ UCatFishDefinition* UCatFishCatalogSettings::FindRuntimeDefinition(const FName F
 	return Match;
 }
 
+// 完美削减取值流程：只按本鱼稀有度在"稀有"与"普通"两套系数之间二选一；线长系数不分档，三项都不接受越界配置。
+FCatPerfectHookReduction UCatFishCatalogSettings::ResolvePerfectHookReduction(
+	const UCatFishDefinition& Definition) const
+{
+	const bool bRareTier = !Definition.RarityTierId.IsNone()
+		&& RarePerfectHookRarityTierIds.Contains(Definition.RarityTierId);
+	FCatPerfectHookReduction Reduction;
+	Reduction.FishStrengthMultiplier = CatFishCatalogSettingsPrivate::SanitizePerfectMultiplier(
+		bRareTier ? RarePerfectFishStrengthMultiplier : CommonPerfectFishStrengthMultiplier);
+	Reduction.FishStaminaMultiplier = CatFishCatalogSettingsPrivate::SanitizePerfectMultiplier(
+		bRareTier ? RarePerfectFishStaminaMultiplier : CommonPerfectFishStaminaMultiplier);
+	Reduction.InitialLineLengthMultiplier = CatFishCatalogSettingsPrivate::SanitizePerfectMultiplier(
+		PerfectInitialLineLengthMultiplier);
+	return Reduction;
+}
+
 FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 	const FCatFishSelectionContext& Context) const
 {
@@ -166,8 +189,7 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 		|| !(Context.ChumSample.WaterRegion == Context.WaterRegion)
 		|| Context.ActivePlayerCount < 1 || Context.ActivePlayerCount > 8
 		|| !FMath::IsFinite(Context.CombinedFishingStrength) || Context.CombinedFishingStrength <= 0.0
-		|| !FMath::IsFinite(Context.CombinedFightStamina) || Context.CombinedFightStamina <= 0.0
-		|| !FMath::IsFinite(Context.StrengthPerKilogram) || Context.StrengthPerKilogram <= 0.0)
+		|| !FMath::IsFinite(Context.CombinedFightStamina) || Context.CombinedFightStamina <= 0.0)
 	{
 		return Result;
 	}
@@ -188,6 +210,8 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 			CatFishCatalogSettingsPrivate::EChallengeBand::Comfort;
 	};
 	TArray<FCandidate> Candidates;
+	// 只统计"力量系数K 尚未落到资产"这一种跳过原因：它是内容缺口而不是生态条件不合，必须能被单独看见。
+	int32 UnsetStrengthCoefficientCount = 0;
 	for (const TSoftObjectPtr<UCatFishDefinition>& DefinitionRef : Definitions)
 	{
 		UCatFishDefinition* Definition = DefinitionRef.LoadSynchronous();
@@ -199,7 +223,15 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 		// 先确定本鱼种在本次咬钩机会里的个体重量，再用同一重量推导力量和挑战度；选中后复用该重量。
 		const double WeightKilograms = CatFishCatalogSettingsPrivate::SampleIndividualWeight(
 			*Definition, Context);
-		const double BaseFishStrength = WeightKilograms * Context.StrengthPerKilogram;
+		// 鱼力量按逐鱼「力量系数K」换算（钓鱼规则 §4.1）：没有全局换算常数可回退，K 未配置的鱼直接 fail-closed 跳过，
+		// 不能让它带着 0 力量混进抽取池（0 力量会被挑战度判成"最轻松"的候选）。
+		const double StrengthPerKilogram = Definition->FishStrengthPerKilogram;
+		if (!FMath::IsFinite(StrengthPerKilogram) || StrengthPerKilogram <= 0.0)
+		{
+			++UnsetStrengthCoefficientCount;
+			continue;
+		}
+		const double BaseFishStrength = WeightKilograms * StrengthPerKilogram;
 		// 挑战度是第一道实际玩法门：超出安全上限的个体不会再进入任何生态条件或权重计算。
 		const double ChallengeRatio = CatFishCatalogSettingsPrivate::CalculateChallengeRatio(
 			BaseFishStrength, Definition->FishFightStamina,
@@ -227,6 +259,13 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 		Candidate.ChallengeRatio = ChallengeRatio;
 		Candidate.ChallengeBand = CatFishCatalogSettingsPrivate::ResolveChallengeBand(
 			ChallengeRatio, *this);
+	}
+	if (UnsetStrengthCoefficientCount > 0)
+	{
+		// 鱼表「力量系数K」列还没落到 Fish_*.uasset；这条鱼不会出现，直到数据侧补值。
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fish_selection_strength_coefficient_unset Region=%s SkippedCandidates=%d"),
+			*Context.WaterRegion.RegionId.ToString(), UnsetStrengthCoefficientCount);
 	}
 	Candidates.Sort([](const FCandidate& Left, const FCandidate& Right)
 	{

@@ -46,7 +46,11 @@ struct FCatFishSelectionContext
 	int32 ActivePlayerCount = 0;
 	double CombinedFishingStrength = 0.0;
 	double CombinedFightStamina = 0.0;
-	/** 本场统一的体重到力量换算：鱼的个体力量 = 实际重量 × 本系数。 */
+	/**
+	 * 已退出鱼力量主链：鱼的个体力量改按 UCatFishDefinition::FishStrengthPerKilogram 逐鱼换算
+	 *（2026-09-09 八问④撤回工程自补的全局 K）。本字段只剩搏斗侧做功计价的同源校验用途，
+	 * 选鱼链不再读它；等 Fishing 侧改用自己的平衡资产字段后可整条删除。
+	 */
 	double StrengthPerKilogram = 0.0;
 	int32 RandomSeed = 0;
 };
@@ -59,7 +63,7 @@ struct FCatFishSelectionResult
 	bool bSelected = false;
 	FName FishDefinitionId = NAME_None;
 	double WeightKilograms = 0.0;
-	/** 与 WeightKilograms 同一次确定性抽样对应的鱼力量，进入搏斗后只再叠加完美中鱼倍率。 */
+	/** 与 WeightKilograms 同一次确定性抽样对应的鱼力量（＝重量 × 该鱼力量系数K），进入搏斗后只再叠加完美中鱼倍率。 */
 	double BaseFishStrength = 0.0;
 	double SelectedFinalWeight = 0.0;
 	double SelectedNormalizedProbability = 0.0;

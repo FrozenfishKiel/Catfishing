@@ -6,6 +6,8 @@ bool UCatBitePersonalityDefinition::IsRuntimeDefinitionReady() const
 		&& FMath::IsFinite(TrueBiteWindowSeconds) && TrueBiteWindowSeconds > 0.0
 		&& FMath::IsFinite(PerfectHookWindowSeconds) && PerfectHookWindowSeconds > 0.0
 		&& PerfectHookWindowSeconds <= TrueBiteWindowSeconds
+		// 三项完美倍率已退为过渡字段（正式取值见 UCatFishCatalogSettings::ResolvePerfectHookReduction）；
+		// 这里继续要求合法值，只为让仍在读旧字段的钓鱼会话不会拿到 0 而把鱼力量清零，调用方改读后整组删除。
 		&& FMath::IsFinite(PerfectFishStrengthMultiplier) && PerfectFishStrengthMultiplier > 0.0 && PerfectFishStrengthMultiplier <= 1.0
 		&& FMath::IsFinite(PerfectFishStaminaMultiplier) && PerfectFishStaminaMultiplier > 0.0 && PerfectFishStaminaMultiplier <= 1.0
 		&& FMath::IsFinite(PerfectInitialLineLengthMultiplier) && PerfectInitialLineLengthMultiplier > 0.0

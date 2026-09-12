@@ -106,7 +106,11 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Imprint")
 	FName CaptureImprintEventId = NAME_None;
 
-	/** 稀有度轴的稳定内容 ID；它只控制出现/收集权重，与 BodyClass 协作轴完全独立。 */
+	/**
+	 * 稀有度轴的稳定内容 ID（鱼表格「稀有度」列，五档 普通／少见／稀有／珍稀／事件），与 BodyClass 协作轴完全独立。
+	 * 它是价值判断，不进抽鱼概率（分布由 SpawnWeight、窝料轴与鱼饵偏好表达，鱼册 §2）；
+	 * 玩法上唯一消费它的是完美提竿削减分档，见 UCatFishCatalogSettings::ResolvePerfectHookReduction。
+	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Distribution")
 	FName RarityTierId = NAME_None;
 
@@ -146,6 +150,14 @@ public:
 	/** 刷新该鱼需要的在场协作能力人数；单人局过滤任何大于 1 的定义。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing", meta = (ClampMin = "1", ClampMax = "8"))
 	int32 MinimumFightParticipants = 0;
+
+	/**
+	 * 力量系数 K：鱼表格「力量系数K」列，本条鱼的实例力量 ＝ 实际重量 × K（钓鱼规则 §4.1「鱼力量 F_fish」行）。
+	 * 逐鱼配，不走全局常数（2026-09-09 八问④撤回工程自补的全局 StrengthPerKilogram）；湖心巨影 K＝5，与竿强 210 配对。
+	 * 0 表示未配置：选鱼链按 fail-closed 跳过该候选，不回退任何全局系数。
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing", meta = (ClampMin = "0.0", DisplayName = "力量系数K"))
+	double FishStrengthPerKilogram = 0.0;
 
 	/** 搏斗中的鱼短周期体力；与日常属性/稀有度独立，0 表示未裁。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing", meta = (ClampMin = "0.0"))

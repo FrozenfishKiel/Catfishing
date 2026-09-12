@@ -15,9 +15,14 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0")) double ProbeDurationSeconds = 0.0;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0")) double TrueBiteWindowSeconds = 0.0;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0")) double PerfectHookWindowSeconds = 0.0;
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0", ClampMax="1")) double PerfectFishStrengthMultiplier = 0.0;
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0", ClampMax="1")) double PerfectFishStaminaMultiplier = 0.0;
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0", ClampMax="1")) double PerfectInitialLineLengthMultiplier = 0.0;
+	/**
+	 * 以下三项完美削减倍率已退为过渡字段：正式口径按鱼册稀有度档取，
+	 * 见 UCatFishCatalogSettings::ResolvePerfectHookReduction（2026-09-09 晚裁「四套性格模板是测试用」）。
+	 * 暂不删除是因为钓鱼会话仍在读旧字段；调用方改读目录设置后，这三条连同下面的就绪校验一起删。
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(DeprecatedProperty, ClampMin="0", ClampMax="1")) double PerfectFishStrengthMultiplier = 0.0;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(DeprecatedProperty, ClampMin="0", ClampMax="1")) double PerfectFishStaminaMultiplier = 0.0;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(DeprecatedProperty, ClampMin="0", ClampMax="1")) double PerfectInitialLineLengthMultiplier = 0.0;
 };
 
 UCLASS(BlueprintType)
