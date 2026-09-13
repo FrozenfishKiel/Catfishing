@@ -24,7 +24,9 @@ import io
 import json
 from pathlib import Path
 
-DESIGN_ROOT = Path("Knowledge/Design")
+# 工程根由脚本自己按自身位置推导，不依赖调用时的工作目录（AGENTS.md「路径写法（协作项目）」）。
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DESIGN_ROOT = PROJECT_ROOT / "Knowledge" / "Design"
 MANIFEST = DESIGN_ROOT / "_manifest.json"
 HASH_CHARS = 12
 
