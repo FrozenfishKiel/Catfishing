@@ -1,4 +1,5 @@
 #include "Fishing/CatFishingSession.h"
+#include "Collection/CatRunFishCollectionComponent.h"
 #include "Inventory/CatInventorySettings.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Bait.h"
@@ -1157,14 +1158,14 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 	// 按冻结上下文从鱼类图鉴中选出本次的鱼种（含权重/稀有度/条件判定，具体算法在 Catalog 内部）。
 	FrozenSelectionResult = Catalog->SelectRuntimeDefinition(FrozenSelectionContext);
 	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=fishing_fish_selection_resolved SessionId=%s Selected=%s FishId=%s FightBalanceId=%s WeightKg=%.3f BaseFishStrength=%.3f StrengthPerKg=%.3f EligibleCandidates=%d SelectedBandCandidates=%d NormalizedProbability=%.6f TimeFilter=%s WeatherFilter=%s TimeOfDay=%s Weather=%s ActivePlayers=%d ChumFields=%d"),
+		TEXT("Event=fishing_fish_selection_resolved SessionId=%s Selected=%s FishId=%s FightBalanceId=%s WeightKg=%.3f BaseFishStrength=%.3f StrengthPerKg=%.3f EligibleCandidates=%d PositiveWeightCandidates=%d NormalizedProbability=%.6f TimeFilter=%s WeatherFilter=%s TimeOfDay=%s Weather=%s ActivePlayers=%d ChumFields=%d"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphensLower),
 		FrozenSelectionResult.bSelected ? TEXT("true") : TEXT("false"),
 		*FrozenSelectionResult.FishDefinitionId.ToString(),
 		FightBalance ? *FightBalance->BalanceDefinitionId.ToString() : TEXT("None"),
 		FrozenSelectionResult.WeightKilograms, FrozenSelectionResult.BaseFishStrength,
 		FrozenSelectionContext.StrengthPerKilogram, FrozenSelectionResult.EligibleCandidateCount,
-		FrozenSelectionResult.SelectedBandCandidateCount,
+		FrozenSelectionResult.PositiveWeightCandidateCount,
 		FrozenSelectionResult.SelectedNormalizedProbability,
 		Catalog->bEnableTimeOfDayEligibilityFilter ? TEXT("Enabled") : TEXT("Bypassed"),
 		Catalog->bEnableWeatherEligibilityFilter ? TEXT("Enabled") : TEXT("Bypassed"),
@@ -2051,6 +2052,7 @@ bool ACatFishingSession::SpawnLandedFishPickupFromAuthority(const FVector& Surfa
 		DiagnosticReason ? DiagnosticReason : TEXT("None"),
 		static_cast<int32>(World->GetNetMode()),
 		*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
+	RecordRunCollectionCaptureFromAuthority(*Pickup);
 	FinalizeSession(ECatFishingPhase::Resolved, ECatFishingOutcome::Landed, DiagnosticReason);
 	return true;
 }
@@ -2435,6 +2437,7 @@ bool ACatFishingSession::SpawnScoopedFishPickupFromAuthority(ACatCharacter* Scoo
 	}
 
 	bCaptureResolved = true;
+	RecordRunCollectionCaptureFromAuthority(*Pickup);
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=scooped_fish_mouth_carried SessionId=%s Pickup=%s ScooperPlayerState=%s "
 			"ScooperStableNetId=%s ScooperPawn=%s ScooperLocation=%s FishStamina=%.3f"),
@@ -2447,6 +2450,21 @@ bool ACatFishingSession::SpawnScoopedFishPickupFromAuthority(ACatCharacter* Scoo
 	return IsTerminal() && Snapshot.Phase == ECatFishingPhase::Resolved
 		&& Snapshot.Outcome == ECatFishingOutcome::Caught
 		&& ACatFishPickupActor::FindCarriedFish(ScoopingCharacter) == Pickup;
+}
+
+// 收鱼成功后立即上公共板子，既不等待个人 Profile ACK，也不等待把鱼送进鱼护；账号缺失时只报错，不猜拾取者。
+void ACatFishingSession::RecordRunCollectionCaptureFromAuthority(const ACatFishPickupActor& Pickup) const
+{
+	const auto& Fish = Pickup.GetPresentationState();
+	const ACatfishingGameState* GameState = GetWorld() ? GetWorld()->GetGameState<ACatfishingGameState>() : nullptr;
+	UCatRunFishCollectionComponent* Collection = GameState ? GameState->GetRunFishCollection() : nullptr;
+	if (!Collection || !Collection->RecordCaptureFromAuthority(Fish.FishInstanceId, Fish.FishDefinitionId, CatchFisherStableNetId))
+	{
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=run_collection_capture_delivery_failed World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s SessionId=%s FishInstanceId=%s HasCollection=%d HasHooker=%d"),
+			*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetNameSafe(this),
+			*Snapshot.FishingSessionId.ToString(), *Fish.FishInstanceId.ToString(), Collection != nullptr, !CatchFisherStableNetId.IsEmpty());
+	}
 }
 
 void ACatFishingSession::HandleFightRunnerFailureFromAuthority(const FName FailureStage)

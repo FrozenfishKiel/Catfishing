@@ -24,7 +24,7 @@ public:
 	virtual bool CanInteract_Implementation(AController* RequestingController) const override;
 	/** 返回当前摊位提示文本；不可交互或页面已打开时返回空文本，避免 UI 继续显示失效提示。 */
 	virtual FText GetInteractionPrompt_Implementation() const override;
-	/** 返回摊位距离证明使用的交互半径；非法或负数配置会收口为 0，服务端下单校验复用同一口径。 */
+	/** 返回准星提示与交互检测使用的半径；非法或负数配置会收口为 0。 */
 	virtual double GetInteractionRadius_Implementation() const override;
 	/** 执行本地确认交互；RequestId 和交互 gate 都有效时只打开商店页面，不触发购买或仓库解析。 */
 	virtual bool Interact_Implementation(AController* RequestingController, FGuid RequestId) override;
@@ -37,8 +37,7 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Shop")
 	UCatShopInventoryComponent* GetShopInventory() const;
 
-	/** 服务端下单前验证请求确实来自这个摊位旁边的玩家；它只管摊位距离，营地仓库由交易服务解析。 */
-	bool CanServeOrderFromAuthority(AController* RequestingController) const;
+	// 墓碑（2026-09-13）：下单距离二次证明已按裁决删除，保留交互接口。
 
 protected:
 	/** 按项目交互设置对准星 Trace Channel 启用摊位查询碰撞。 */
@@ -61,11 +60,11 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Shop", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatShopInventoryComponent> ShopInventory;
 
-	/** 摊位交互开关，表示当前摆放物是否允许打开商店；蓝图写入后会同时影响提示、打开页面和服务端下单距离证明。 */
+	/** 摊位交互开关，表示当前摆放物是否允许打开商店；蓝图写入后会同时影响提示和打开页面。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Catfishing|Interaction", meta = (AllowPrivateAccess = "true"))
 	bool bInteractionEnabled = true;
 
-	/** 摊位交互半径，表示玩家必须离摊位多近才算仍在旁边；本地交互提示和服务端订单来源校验都读取它。 */
+	/** 摊位交互半径，表示玩家必须离摊位多近才算仍在旁边；本地准星提示和交互检测读取它。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Catfishing|Interaction", meta = (AllowPrivateAccess = "true", ClampMin = "0.0", Units = "cm"))
 	double InteractionRadiusCentimeters = 300.0;
 

@@ -14,6 +14,7 @@ class UCatChumFieldReplicationComponent;
 class UCatEconomyAttributeSet;
 class UCatRunAttributeSet;
 class UCatRunModifierAttributeSet;
+class UCatRunFishCollectionComponent;
 
 /** GameState Run/Environment 完整公开快照变化通知；本机 UI 必须重新读取 GetRunPublicState。 */
 DECLARE_MULTICAST_DELEGATE(FCatRunPublicStateChanged);
@@ -65,6 +66,9 @@ class CATFISHING_API ACatfishingGameState : public AGameStateBase, public IAbili
 public:
 	/** 构造 GameState 的公开复制组件和唯一 Run ASC/稳定属性集；Owner/Avatar 在组件初始化后绑定为本 GameState。 */
 	ACatfishingGameState();
+	/** 本局公共板子的唯一容器；默认子对象，不要求 Blueprint 额外配字段。 */
+	UFUNCTION(BlueprintPure, Category = "Catfishing|Collection|Run")
+	UCatRunFishCollectionComponent* GetRunFishCollection() const { return RunFishCollection; }
 	/** 返回 GameState 持有的唯一 Run ASC；GAS 查询只读到这一份全队公共数值宿主。 */
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
 	/** 返回本局 Run 专用 ASC，供 GameMode 创建 GE Spec；调用方不得直接 SetNumericAttributeBase 写供品目标或世界进度。 */
@@ -137,6 +141,10 @@ protected:
 	void OnRep_LastFishSpeciesDiscovery();
 
 private:
+	/** 局内容器自动复制给全队；个人公开 Profile 走 PlayerState 的独立链。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Collection|Run", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UCatRunFishCollectionComponent> RunFishCollection;
+
 	/** 全队共享 Run 数值的唯一 GAS 组件，构造期创建并复制；GameMode 只通过它应用正式 GE。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Run", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UAbilitySystemComponent> RunAbilitySystemComponent;

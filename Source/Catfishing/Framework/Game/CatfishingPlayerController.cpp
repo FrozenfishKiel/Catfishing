@@ -11,6 +11,7 @@
 #include "Camp/CatCampHubActor.h"
 #include "FishContainers/CatFishGuardActor.h"
 #include "ShopEconomy/CatFishBuyerActor.h"
+#include "ShopEconomy/CatShopKioskActor.h"
 #include "Character/CatCharacter.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "AbilitySystem/Config/CatAbilityInputConfig.h"
@@ -1065,21 +1066,31 @@ void ACatfishingPlayerController::ServerRequestInteraction_Implementation(AActor
 
 // 摊位购物车支付 RPC 流程：服务器只接受来源摊位引用和 EntryId/次数意图，不接受客户端提交的价格、库存或收货仓库。
 void ACatfishingPlayerController::ServerSubmitShopCartAtKiosk_Implementation(ACatShopKioskActor* ShopKiosk,
-	const TArray<FCatShopCartLineCommand>& Lines, const FGuid RequestId, const int64 ExpectedWalletRevision)
+	const TArray<FCatShopCartLineCommand>& Lines, const FGuid RequestId)
 {
+	UE_LOG(LogCatfishing, Log,
+		TEXT("Event=shop_cart_requested RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Shop=%s Lines=%d"),
+		*RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(),
+		*GetName(), *GetNameSafe(ShopKiosk), Lines.Num());
 	FCatDomainCommandResult DeliveryResult;
 	DeliveryResult.RequestId = RequestId;
 	if (UCatShopTradeController* Controller = GetWorld()
 		? GetWorld()->GetSubsystem<UCatShopTradeController>() : nullptr)
 	{
-		DeliveryResult = Controller->SubmitCartFromKiosk(this, ShopKiosk, Lines, RequestId,
-			ExpectedWalletRevision).Delivery;
+		DeliveryResult = Controller->SubmitCartFromKiosk(this, ShopKiosk, Lines, RequestId).Delivery;
 	}
 	else
 	{
 		DeliveryResult.Error = ECatDomainCommandError::DependencyUnavailable;
 	}
 	DeliveryResult.RequestId = RequestId;
+	const FString CartEvent = FString::Printf(
+		TEXT("Event=shop_cart_result RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Shop=%s Committed=%d Replay=%d Error=%s"),
+		*RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(),
+		*GetName(), *GetNameSafe(ShopKiosk), DeliveryResult.bCommitted, DeliveryResult.bTerminalReplay,
+		*UEnum::GetValueAsString(DeliveryResult.Error));
+	if (CatIsAcceptedDomainCommandResult(DeliveryResult)) { UE_LOG(LogCatfishing, Log, TEXT("%s"), *CartEvent); }
+	else { UE_LOG(LogCatfishing, Warning, TEXT("%s"), *CartEvent); }
 	DeliverCampCommandResultToOwningClient(DeliveryResult);
 }
 

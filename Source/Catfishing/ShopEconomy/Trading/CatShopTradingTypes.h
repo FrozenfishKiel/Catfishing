@@ -232,15 +232,29 @@ namespace CatShopCartLimits
 	inline constexpr int32 MaxCartCountPerEntry = 999;
 }
 
-/** 玩家一次支付整个购物车的经济命令；ExpectedRevision 对应团队公款版本。 */
+/** 购物车只提交请求身份；钱包版本是服务器输出，不能成为客户端下单前提。 */
+USTRUCT(BlueprintType)
+struct FCatShopCartCommandContext
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadWrite)
+	FGuid RequestId;
+
+	/** 服务器从当前 PlayerState 重建，保持与其他领域命令相同的身份口径。 */
+	FString StableNetId;
+};
+
+// 墓碑（2026-09-13）：购物车退出带 ExpectedRevision 的公共上下文；其他领域的版本契约不变。
+/** 玩家一次支付整个购物车的经济命令；按服务器当前余额、库存和价格整车结算。 */
 USTRUCT(BlueprintType)
 struct FCatShopCartCommand
 {
 	GENERATED_BODY()
 
-	/** RequestId、ExpectedRevision 与服务器身份；客户端不能提交总价或仓库发货结果。 */
+	/** RequestId 与服务器身份；客户端不能提交总价或仓库发货结果。 */
 	UPROPERTY(BlueprintReadWrite)
-	FCatDomainCommandContext Context;
+	FCatShopCartCommandContext Context;
 
 	/** 服务器确认的来源商店库存；购物车里所有 EntryId 都只在这个摊位范围内解释。 */
 	UPROPERTY(BlueprintReadWrite)

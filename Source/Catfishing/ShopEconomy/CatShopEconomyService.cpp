@@ -227,11 +227,7 @@ bool UCatShopEconomyService::ResolveCatalogCartForAuthority(const FCatShopCartCo
 		OutError = ECatDomainCommandError::DependencyUnavailable;
 		return false;
 	}
-	if (Command.Context.ExpectedRevision != WalletRevision)
-	{
-		OutError = ECatDomainCommandError::RevisionConflict;
-		return false;
-	}
+	// 墓碑（2026-09-13，09-09 裁决）：删除公款乐观并发门；按本次读到的余额判断能否整车付款。
 	OutResolved.Command = Command;
 	OutResolved.Command.Lines = NormalizedLines;
 	OutResolved.Lines.Reserve(NormalizedLines.Num());
@@ -1063,8 +1059,7 @@ FString UCatShopEconomyService::MakeCartPayloadSignature(const FCatShopCartComma
 			LineParts.Add(FString::Printf(TEXT("%d:%s:%d"), LineIndex, *Line.EntryId.ToString(), Line.CartCount));
 		}
 	}
-	return FString::Printf(TEXT("Expected=%lld|Shop=%s|Normalized=%s|Lines=%s"),
-		Command.Context.ExpectedRevision,
+	return FString::Printf(TEXT("Shop=%s|Normalized=%s|Lines=%s"),
 		*Command.ShopInventoryId.ToString(EGuidFormats::DigitsWithHyphens),
 		bNormalized ? TEXT("true") : TEXT("false"),
 		*FString::Join(LineParts, TEXT(",")));

@@ -4,6 +4,7 @@
 #include "AbilitySystem/Attributes/CatRunAttributeSet.h"
 #include "AbilitySystem/Attributes/CatRunModifierAttributeSet.h"
 #include "AbilitySystemComponent.h"
+#include "Collection/CatRunFishCollectionComponent.h"
 #include "Engine/World.h"
 #include "Environment/CatChumFieldReplicationComponent.h"
 #include "Logging/CatLog.h"
@@ -14,6 +15,7 @@
 // ASC 开启复制并采用 Lyra 口径的 Mixed 模式；两套Run属性和独立经济属性共用此ASC，商店不再持有另一份可写余额。
 ACatfishingGameState::ACatfishingGameState()
 {
+	RunFishCollection = CreateDefaultSubobject<UCatRunFishCollectionComponent>(TEXT("RunFishCollection"));
 	ChumFieldReplication = CreateDefaultSubobject<UCatChumFieldReplicationComponent>(TEXT("ChumFieldReplication"));
 	RunAbilitySystemComponent = CreateDefaultSubobject<UAbilitySystemComponent>(TEXT("RunAbilitySystemComponent"));
 	RunAbilitySystemComponent->SetIsReplicated(true);
@@ -105,6 +107,7 @@ void ACatfishingGameState::SetRunPublicStateFromAuthority(const FCatRunPublicSta
 		return;
 	}
 	RunPublicState = NewState;
+	RunFishCollection->SynchronizeRunFromAuthority(NewState);
 	ForceNetUpdate();
 	OnRunPublicStateChanged.Broadcast();
 }

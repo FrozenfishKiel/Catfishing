@@ -1,4 +1,6 @@
 #include "Save/CatSaveSubsystem.h"
+#include "Collection/CatRunFishCollectionComponent.h"
+#include "Framework/Game/CatfishingGameState.h"
 
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 
@@ -764,6 +766,14 @@ bool UCatSaveSubsystem::RestoreWorldAfterHostsReady(ACatfishingGameModeBase& Gam
 		RejectPendingRestore(FText::FromString(TEXT("世界鱼容器提交失败，已尝试回滚并阻止继续进入玩法。")));
 		return false;
 	}
+	// 公共板子跟世界槽恢复；启动前一次提交，已预检的旧档空数组也可接受，绝不读取个人图鉴补页。
+	const ACatfishingGameState* CollectionGameState = World->GetGameState<ACatfishingGameState>();
+	UCatRunFishCollectionComponent* RunCollection = CollectionGameState ? CollectionGameState->GetRunFishCollection() : nullptr;
+	if (!RunCollection || !RunCollection->RestoreCapturesFromAuthority(PendingRestoreSaveGame->RunFishCollectionCaptures))
+	{
+		RejectPendingRestore(FText::FromString(TEXT("局内公共图鉴恢复失败，已阻止继续进入玩法。")));
+		return false;
+	}
 	bWorldRestoreApplied = true;
 	bLoadedRunForTravel = false;
 	ActiveRunBasePlayedDurationSeconds = PendingRestoreSaveGame->PlayedDurationSeconds;
@@ -987,6 +997,14 @@ bool UCatSaveSubsystem::BuildActiveRunSaveGame(UCatRunSaveGame& OutSaveGame, FTe
 	OutSaveGame.CampInventory = FCatSavedCampInventory();
 	OutSaveGame.FormatVersion = OutSaveGame.GetLatestDataVersion();
 	OutSaveGame.bHasWorldSnapshot = true;
+	const ACatfishingGameState* CollectionGameState = World->GetGameState<ACatfishingGameState>();
+	const UCatRunFishCollectionComponent* RunCollection = CollectionGameState ? CollectionGameState->GetRunFishCollection() : nullptr;
+	if (!RunCollection)
+	{
+		OutFailure = FText::FromString(TEXT("局内公共图鉴宿主未就绪，不能保存不完整的世界断点。"));
+		return false;
+	}
+	OutSaveGame.RunFishCollectionCaptures = RunCollection->GetCapturesForWorldSave();
 	OutSaveGame.SlotId = ActiveSlotId;
 	if (const FCatSaveSlotSummary* Summary = SlotSummaries.FindByPredicate(
 		[this](const FCatSaveSlotSummary& Entry) { return Entry.SlotId == ActiveSlotId; }))
@@ -1135,7 +1153,7 @@ bool UCatSaveSubsystem::ValidateLoadedRunSaveGame(const UCatRunSaveGame& SaveGam
 		return false;
 	}
 	if (!SaveGame.bHasWorldSnapshot && (SaveGame.bHasPlayerSnapshot || !SaveGame.WorldFishContainers.IsEmpty()
-		|| !SaveGame.CampInventory.InventorySlots.IsEmpty() || SaveGame.bRunCompleted))
+		|| !SaveGame.CampInventory.InventorySlots.IsEmpty() || !SaveGame.RunFishCollectionCaptures.IsEmpty() || SaveGame.bRunCompleted))
 	{
 		OutFailure = FText::FromString(TEXT("未开始的新槽夹带已有世界库存或终局标记，不能按新局进入。"));
 		return false;
@@ -1143,6 +1161,11 @@ bool UCatSaveSubsystem::ValidateLoadedRunSaveGame(const UCatRunSaveGame& SaveGam
 	if (SaveGame.bHasWorldSnapshot && !SaveGame.bHasPlayerSnapshot)
 	{
 		OutFailure = FText::FromString(TEXT("世界存档缺少本机玩家快照。"));
+		return false;
+	}
+	if (!UCatRunFishCollectionComponent::ValidateCaptures(SaveGame.RunFishCollectionCaptures))
+	{
+		OutFailure = FText::FromString(TEXT("局内公共图鉴的捕获身份或爪印记录无效。"));
 		return false;
 	}
 	TSet<FGuid> SeenItemInstanceIds;

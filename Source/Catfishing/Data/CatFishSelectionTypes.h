@@ -69,7 +69,8 @@ struct FCatFishSelectionResult
 	double SelectedFinalWeight = 0.0;
 	double SelectedNormalizedProbability = 0.0;
 	int32 EligibleCandidateCount = 0;
-	int32 SelectedBandCandidateCount = 0;
+	// 墓碑（2026-09-13，D-29）：不再统计选中带；此值为参与最终归一化的正权重候选数。
+	int32 PositiveWeightCandidateCount = 0;
 	/**
 	 * 本次是否走的无窝料基础池兜底（候选为空或总权重为零）。
 	 * 走兜底时窝料/鱼饵/挑战度三项都没参与，日志与调试面板需要能区分这两条路。

@@ -205,12 +205,11 @@ bool UCatShopTradeController::ShouldCreateSubsystem(UObject* Outer) const
 }
 
 FCatShopOrderResult UCatShopTradeController::SubmitCartFromKiosk(AController* RequestingController,
-	ACatShopKioskActor* ShopKiosk, const TArray<FCatShopCartLineCommand>& Lines, const FGuid RequestId,
-	const int64 ExpectedWalletRevision)
+	ACatShopKioskActor* ShopKiosk, const TArray<FCatShopCartLineCommand>& Lines, const FGuid RequestId)
 {
 	// 摊位购物车提交流程：
 	// 1. 先重读服务器玩法 gate 和原始 RPC 载荷大小，拒绝无效局状态或异常购物车。
-	// 2. 再从请求 Controller 重建稳定玩家身份，并要求摊位在当前 World 内证明玩家仍在服务半径。
+	// 2. 再从请求 Controller 重建稳定玩家身份，并确认来源摊位属于当前 World。
 	// 3. 摊位只给来源货架库存，营地收货仓库由 ShopEconomy 在 World 中解析，Controller 只保留交易意图。
 	// 4. 所有前提成立后才构造购物车命令并进入订单链；任一前置失败都会带 Delivery 结果回到 UI。
 	FCatShopOrderResult Result;
@@ -237,8 +236,8 @@ FCatShopOrderResult UCatShopTradeController::SubmitCartFromKiosk(AController* Re
 
 	const APlayerState* CurrentPlayerState = RequestingController ? RequestingController->PlayerState : nullptr;
 	UCatShopInventoryComponent* ShopInventory = nullptr;
-	if (World && ShopKiosk && ShopKiosk->GetWorld() == World
-		&& ShopKiosk->CanServeOrderFromAuthority(RequestingController))
+	// 墓碑（2026-09-13）：下单不再二次检查摊位距离，货架仍从本 World 的来源摊位解析。
+	if (World && ShopKiosk && ShopKiosk->GetWorld() == World)
 	{
 		ShopInventory = ShopKiosk->GetShopInventory();
 	}
@@ -257,7 +256,6 @@ FCatShopOrderResult UCatShopTradeController::SubmitCartFromKiosk(AController* Re
 
 	FCatShopCartCommand Command;
 	Command.Context.RequestId = RequestId;
-	Command.Context.ExpectedRevision = ExpectedWalletRevision;
 	Command.Context.StableNetId = CurrentPlayerState->GetUniqueId()->ToString();
 	Command.ShopInventoryId = ShopInventory->GetShopInventoryId();
 	Command.Lines = Lines;

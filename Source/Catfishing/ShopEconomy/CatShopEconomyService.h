@@ -52,7 +52,7 @@ public:
 	/**
 	 * 取回某个目录项在指定摊位当前货架里的配置原文，主要是"这笔订单最后要交给哪个领域、交哪个定义"这两件事。
 	 * 商店交易入口用它在下单之前定位交付去向，好把交付侧的前提问在扣钱之前；未上架或目录不可用时返回 false 并清空输出。
-	 * 返回 true 不代表这一项现在买得成——价格、库存、公款版本和命令门仍然只由购买写口判定。
+	 * 返回 true 不代表这一项现在买得成——价格、库存、当前余额和命令门仍然只由购买写口判定。
 	 */
 	bool TryGetCatalogEntry(const UCatShopInventoryComponent* ShopInventory, FName EntryId,
 		FCatShopCatalogEntry& OutEntry) const;
@@ -76,7 +76,7 @@ public:
 
 	/**
 	 * 声明：只读解析一整车商品，计算服务器总价、每行交付数量和库存前提，给商店交易入口做扣款前的公共仓库预检。
-	 * 实现：合并重复 EntryId，重新读取来源摊位当前目录和库存，再按团队公款版本、库存数量、价格和溢出边界整体验证。
+	 * 实现：合并重复 EntryId，重新读取来源摊位当前目录和库存，再按当前余额、库存数量、价格和溢出边界整体验证。
 	 * 边界：它不写幂等缓存、不扣钱、不扣库存；同一购物车真正提交时 PurchaseCatalogCart 会再走同一套判据。
 	 */
 	bool ResolveCatalogCartForAuthority(const FCatShopCartCommand& Command,

@@ -2,6 +2,9 @@
 
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
+#include "AbilitySystemComponent.h"
+#include "AbilitySystem/Attributes/CatEconomyAttributeSet.h"
+#include "Framework/Game/CatfishingGameState.h"
 #include "Camp/CatCampInventoryActor.h"
 #include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatInventorySettings.h"
@@ -20,7 +23,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatShopInventoryDeliveryReplayTest,
 // 3. 账本一写下就是成交态（2026-09-09 裁「购买即入库」，没有待交付中间态），并检查金额和实物数量；
 //    不依赖库存版本号作为提交证据。
 // 4. 分别重放购买和发货，验证同一请求不会再次扣钱、发货或生成账本。
-// 此用例覆盖服务边界；Controller 距离校验、UI 操作和网络传输由各自运行验证覆盖。
+// 此用例覆盖服务边界；Controller 来源校验、UI 操作和网络传输由各自运行验证覆盖。
 bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 {
 	FTestWorldWrapper WorldWrapper;
@@ -47,9 +50,9 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 	for (const FCatShopCatalogEntry& Entry : Entries)
 	{
 		FCatShopStockSnapshot Stock;
-		if (Entry.UnitPrice > 0 && Entry.UnitPrice <= WalletBefore.Balance
+		if (Entry.UnitPrice > 0 && Entry.UnitPrice <= WalletBefore.Balance / 2
 			&& Shelf->TryGetStockSnapshot(Entry.EntryId, Stock)
-			&& (Stock.bUnlimitedStock || Stock.RemainingStock > 0))
+			&& Stock.bUnlimitedStock)
 		{
 			Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(Entry.DefinitionId);
 			if (Definition)
@@ -64,9 +67,12 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 	FCatShopCartCommand Command;
 	Command.Context.RequestId = FGuid::NewGuid();
 	Command.Context.StableNetId = TEXT("InventoryDeliveryRegression");
-	Command.Context.ExpectedRevision = WalletBefore.Revision;
 	Command.ShopInventoryId = Shelf->GetShopInventoryId();
 	Command.Lines.AddDefaulted_GetRef().EntryId = Selected.EntryId;
+	// 两人基于同一份旧公款快照先准备好请求，随后服务器顺序处理；第二笔不能因为第一笔改变版本而拒绝。
+	FCatShopCartCommand SecondCommand = Command;
+	SecondCommand.Context.RequestId = FGuid::NewGuid();
+	SecondCommand.Context.StableNetId = TEXT("SecondBuyer");
 	FCatInventoryReceiveBatch Batch;
 	FCatInventoryDefinitionEntry& DeliveryEntry = Batch.DefinitionEntries.AddDefaulted_GetRef();
 	DeliveryEntry.ItemDefinition = Definition;
@@ -97,6 +103,21 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("重放不再次发货"), Inventory->CountVisibleInventoryQuantityByDefinitionId(Selected.DefinitionId),
 		QuantityBefore + Selected.PurchaseQuantity);
 	TestEqual(TEXT("重放不增加交易记录"), Shop->GetTransactionLedgerSnapshot().Num(), 1);
+	const auto SecondPurchase = Shop->PurchaseCatalogCart(SecondCommand, Shelf);
+	TestTrue(TEXT("另一笔旧视图请求按当前余额成交"), SecondPurchase.Command.bCommitted);
+	TestEqual(TEXT("两笔按实际商品价格顺序扣款"), Shop->GetWalletSnapshot().Balance, WalletBefore.Balance - Selected.UnitPrice * 2);
+	TestEqual(TEXT("钱包版本仍对齐回执供 HUD 与日志读取"), SecondPurchase.Command.Revision, Shop->GetWalletSnapshot().Revision);
+	// 余额不足分支使用正式 GAS 属性作为夹具输入，不能靠 revision 拦截间接测通过。
+	auto* State = World->GetGameState<ACatfishingGameState>();
+	if (!TestNotNull(TEXT("正式余额属性宿主"), State)) return false;
+	State->GetRunAbilitySystemComponentFromAuthority()->SetNumericAttributeBase(UCatEconomyAttributeSet::GetTeamWalletBalanceAttribute(), 0.0f);
+	SecondCommand.Context.RequestId = FGuid::NewGuid();
+	const int32 LedgerCount = Shop->GetTransactionLedgerSnapshot().Num();
+	const auto Insufficient = Shop->PurchaseCatalogCart(SecondCommand, Shelf);
+	TestFalse(TEXT("余额不足不能成交"), Insufficient.Command.bCommitted);
+	TestEqual(TEXT("货架不限量时明确按余额不足拒绝"), Insufficient.Command.Error, ECatDomainCommandError::CapacityExceeded);
+	TestEqual(TEXT("拒绝后公款保持零"), Shop->GetWalletSnapshot().Balance, 0);
+	TestEqual(TEXT("拒绝不增加交易记录"), Shop->GetTransactionLedgerSnapshot().Num(), LedgerCount);
 	return !HasAnyErrors();
 }
 

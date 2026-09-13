@@ -153,6 +153,7 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	friend class FCatRunFishCollectionHandoffTest;
 	friend class FCatFishingPhysicalGripGraphTest;
 	friend class FCatFishingPhysicalCouplingTest;
 	friend class FCatFishingCMCStabilityTest;
@@ -227,6 +228,8 @@ private:
 	/** 岸上世界鱼的唯一生成口；力竭拖岸与碾压甩岸共用，负责收口装备事务、隐藏水中 Encounter 并写 Landed 终态。 */
 	bool SpawnLandedFishPickupFromAuthority(const FVector& SurfaceLocation, const FVector& GroundNormal,
 		const TCHAR* DiagnosticReason);
+	/** 两个成功收鱼出口共用；公共板子归上钩者，实物交接失败时绝不调用。 */
+	void RecordRunCollectionCaptureFromAuthority(const class ACatFishPickupActor& Pickup) const;
 
 	/** 冻结本竿的图鉴首次条件（水域＋时段＋天气）；三轴都来自咬钩成立那一刻，交给实物鱼随捕获一起归档。 */
 	FCatCaptureConditionSnapshot BuildFrozenCaptureCondition() const;

@@ -55,7 +55,7 @@ public:
 
 	/** 玩家在指定摊位提交购物车；本控制器重建玩家身份、摊位库存和营地收货仓库，PlayerController 不参与订单业务。 */
 	FCatShopOrderResult SubmitCartFromKiosk(AController* RequestingController, ACatShopKioskActor* ShopKiosk,
-		const TArray<FCatShopCartLineCommand>& Lines, FGuid RequestId, int64 ExpectedWalletRevision);
+		const TArray<FCatShopCartLineCommand>& Lines, FGuid RequestId);
 
 	/** 向明确买家出售当前鱼护内指定鱼实例；Guard为空时只售嘴叼鱼，整单复核后统一处理实物与GAS入账。 */
 	FCatShopOrderResult SubmitFishSaleFromPlayer(AController* RequestingController, ACatFishBuyerActor* Buyer,

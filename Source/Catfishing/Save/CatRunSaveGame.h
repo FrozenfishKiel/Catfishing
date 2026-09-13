@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "CoreMinimal.h"
+#include "Collection/CatRunFishCollectionTypes.h"
 #include "FishContainers/CatFishContainerTypes.h"
 #include "GameFramework/SaveGame.h"
 #include "CatRunSaveGame.generated.h"
@@ -238,6 +239,10 @@ public:
 	/** 是否已采集过正式世界；新建空槽为 false，首次采样后为 true，区分新局和缺失世界载荷。 */
 	UPROPERTY(SaveGame)
 	bool bHasWorldSnapshot = false;
+
+	/** 本局公共板子的领域记录，随世界断点恢复；纯新增字段，旧 v6 档默认空数组，不进个人 Profile。 */
+	UPROPERTY(SaveGame)
+	TArray<FCatRunFishCollectionCapture> RunFishCollectionCaptures;
 
 	/** 该载荷归属的槽标识；读取时必须与请求槽一致，防止文件串档。 */
 	UPROPERTY(SaveGame)

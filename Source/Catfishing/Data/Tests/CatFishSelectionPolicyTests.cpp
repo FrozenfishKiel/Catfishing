@@ -145,14 +145,7 @@ bool FCatFishSelectionBasePoolFallbackTest::RunTest(const FString& Parameters)
 	Settings->ChumSaturationCurve = SaturationCurve;
 	Settings->ChumAffinityHalfSaturation = 10.0;
 	Settings->MaximumChumModifier = 3.0;
-	Settings->ComfortChallengeMaximumRatio = 0.65;
-	Settings->MatchedChallengeMaximumRatio = 1.05;
 	Settings->MaximumChallengeRatio = 1.35;
-	Settings->TargetChallengeRatio = 0.9;
-	Settings->ComfortChallengeBandWeight = 1.0;
-	Settings->MatchedChallengeBandWeight = 0.0;
-	Settings->RiskyChallengeBandWeight = 0.0;
-	Settings->MinimumChallengeWeightMultiplier = 0.25;
 
 	FCatFishSelectionContext Context;
 	Context.WaterRegion.RegionId = TEXT("TestLake");
@@ -219,14 +212,7 @@ bool FCatFishSelectionPostFilterNormalizationTest::RunTest(const FString& Parame
 	Settings->ChumSaturationCurve = SaturationCurve;
 	Settings->ChumAffinityHalfSaturation = 10.0;
 	Settings->MaximumChumModifier = 3.0;
-	Settings->ComfortChallengeMaximumRatio = 0.65;
-	Settings->MatchedChallengeMaximumRatio = 1.05;
 	Settings->MaximumChallengeRatio = 1.35;
-	Settings->TargetChallengeRatio = 0.9;
-	Settings->ComfortChallengeBandWeight = 1.0;
-	Settings->MatchedChallengeBandWeight = 0.0;
-	Settings->RiskyChallengeBandWeight = 0.0;
-	Settings->MinimumChallengeWeightMultiplier = 0.25;
 	Settings->bEnableTimeOfDayEligibilityFilter = false;
 	Settings->bEnableWeatherEligibilityFilter = false;
 
@@ -241,21 +227,34 @@ bool FCatFishSelectionPostFilterNormalizationTest::RunTest(const FString& Parame
 	Context.CombinedFishingStrength = 10.0;
 	Context.CombinedFightStamina = 10.0;
 	Context.RandomSeed = 20260901;
+	// 跨原轻松/高风险带，仍必须用原始权重 1:3 一起归一化，不能先选带或乘挑战倍率。
+	LightFish->FishStrengthPerKilogram = 5.0;
+	HeavyFish->FishStrengthPerKilogram = 12.0;
 
 	const FCatFishSelectionResult BypassedResult = Settings->SelectRuntimeDefinition(Context);
 	TestTrue(TEXT("disabled time and weather filters leave valid candidates selectable"),
 		BypassedResult.bSelected);
 	TestEqual(TEXT("both fish remain after challenge and participant filters"),
 		BypassedResult.EligibleCandidateCount, 2);
-	TestEqual(TEXT("both fish remain in the selected challenge band"),
-		BypassedResult.SelectedBandCandidateCount, 2);
+	TestEqual(TEXT("both fish participate in final weight normalization"),
+		BypassedResult.PositiveWeightCandidateCount, 2);
 	const double ExpectedProbability = BypassedResult.FishDefinitionId == TEXT("HeavyFish") ? 0.75 : 0.25;
 	TestEqual(TEXT("reported probability is normalized only across remaining candidates"),
 		BypassedResult.SelectedNormalizedProbability, ExpectedProbability, UE_DOUBLE_SMALL_NUMBER);
 	TestEqual(TEXT("selected individual weight is frozen once"),
 		BypassedResult.WeightKilograms, 1.0, UE_DOUBLE_SMALL_NUMBER);
 	TestEqual(TEXT("fish strength is sampled weight times that fish's own strength coefficient"),
-		BypassedResult.BaseFishStrength, 10.0, UE_DOUBLE_SMALL_NUMBER);
+		BypassedResult.BaseFishStrength, BypassedResult.FishDefinitionId == TEXT("HeavyFish") ? 12.0 : 5.0,
+		UE_DOUBLE_SMALL_NUMBER);
+	TestEqual(TEXT("challenge no longer scales raw ecological weights"), BypassedResult.SelectedFinalWeight,
+		BypassedResult.FishDefinitionId == TEXT("HeavyFish") ? 3.0 : 1.0, UE_DOUBLE_SMALL_NUMBER);
+	Settings->MaximumChallengeRatio = 1.2;
+	TestEqual(TEXT("hard safety ceiling equality stays eligible"), Settings->SelectRuntimeDefinition(Context).EligibleCandidateCount, 2);
+	Settings->MaximumChallengeRatio = 1.19;
+	const auto BelowCeiling = Settings->SelectRuntimeDefinition(Context);
+	TestEqual(TEXT("hard safety ceiling still removes the excessive individual"), BelowCeiling.FishDefinitionId, FName(TEXT("LightFish")));
+	TestEqual(TEXT("normalization excludes unsafe fish"), BelowCeiling.SelectedNormalizedProbability, 1.0, UE_DOUBLE_SMALL_NUMBER);
+	Settings->MaximumChallengeRatio = 1.35;
 
 	// 力量系数K 未配置的鱼直接退出候选，不回退任何全局系数，也不带着 0 力量混进抽取池。
 	AddExpectedMessage(TEXT("Event=fish_selection_strength_coefficient_unset"), ELogVerbosity::Warning);
