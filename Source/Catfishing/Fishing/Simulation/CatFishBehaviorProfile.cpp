@@ -71,10 +71,11 @@ bool FCatFishBehaviorProfileResolver::Resolve(const UCatFishDefinition& Fish,
 			Fish.SwimSpeedCoefficient);
 		return false;
 	}
-	if (OutBehavior.FieldsTakenFromFishTable < 4)
+	if (OutBehavior.FieldsTakenFromFishTable < 4 && !Fish.bLoggedBehaviorTemplateFallback)
 	{
-		// 不是错误：四列是分批落表的。记一行让验收能看出这条鱼还有几列吃的是测试模板。
-		UE_LOG(LogCatFishing, Verbose,
+		// 四列分批迁移；默认落盘且每资产一次，避免 Development 包里只有 Verbose 而无法判断回退。
+		Fish.bLoggedBehaviorTemplateFallback = true;
+		UE_LOG(LogCatFishing, Warning,
 			TEXT("Event=fish_behavior_profile_partial_fish_table Fish=%s FieldsFromFishTable=%d/4 ")
 			TEXT("FallbackTemplate=%s"),
 			*Fish.FishDefinitionId.ToString(), OutBehavior.FieldsTakenFromFishTable,

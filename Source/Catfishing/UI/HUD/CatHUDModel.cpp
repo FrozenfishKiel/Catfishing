@@ -378,6 +378,11 @@ void UCatHUDModel::Refresh()
 	NewState.bShowRodDurability = NewState.bHasRodDurability && (bHoldingRod || NewState.bHasFishingSession);
 	// FString::Printf 的格式串必须是编译期字面量（UE 5.8 的 TCheckedFormatString 是 consteval），
 	// 所以断裂与否在外层分支，不能用三元运算符选格式串。
+	// 「（已断裂）」不是死文案，别当 09-12「断竿即报废」的遗留删掉。2026-09-13 核过两条可达路径：
+	// ①报废会失败——UCatEquipmentComponent::RetireBrokenFishingRodFromAuthority 有多个 return false
+	//   分支（记 equipment_broken_rod_retire_failed），失败时断竿留在库存格里；
+	// ②存档恢复——CatSaveSubsystem.cpp:281 SetRodRuntimeStateFromAuthority 会把槽里的
+	//   bRodBroken 原样写回活装备。同口径的另一处是 CatItemTooltipModel.cpp 的断竿 tooltip。
 	NewState.RodDurabilityText = NewState.bHasRodDurability
 		? FText::FromString(NewState.bRodBroken
 			? FString::Printf(TEXT("竿耐久 %.0f / %.0f（已断裂）"), NewState.RodDurability, NewState.RodDurabilityMaximum)

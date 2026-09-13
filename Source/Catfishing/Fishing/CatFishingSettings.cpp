@@ -5,6 +5,66 @@
 #include "Fishing/Config/CatFishingFightBalanceDefinition.h"
 #include "Fishing/Simulation/CatFishBehaviorProfile.h"
 #include "Fishing/Simulation/CatFishingBiteTimingModel.h"
+#include "Logging/CatLog.h"
+
+namespace
+{
+	void WarnInvalidFishingTuningOnce(const FName Property)
+	{
+		static TSet<FName> WarnedProperties;
+		if (!WarnedProperties.Contains(Property))
+		{
+			WarnedProperties.Add(Property);
+			UE_LOG(LogCatFishing, Warning,
+				TEXT("Event=fishing_tuning_invalid Property=%s Source=CatFishingSettings Result=LegacyDefault"),
+				*Property.ToString());
+		}
+	}
+	double ResolveFishingTuning(const FName Property, const double Value, const double Minimum, const double Fallback)
+	{
+		if (FMath::IsFinite(Value) && Value >= Minimum) return Value;
+		WarnInvalidFishingTuningOnce(Property);
+		return Fallback;
+	}
+}
+
+double UCatFishingSettings::GetExhaustedFishRevivalSeconds() const
+{
+	return ResolveFishingTuning(TEXT("ExhaustedFishRevivalSeconds"), ExhaustedFishRevivalSeconds, UE_SMALL_NUMBER, 30.0);
+}
+double UCatFishingSettings::GetCatchCompletionRodWearPoints() const
+{
+	return ResolveFishingTuning(TEXT("CatchCompletionRodWearPoints"), CatchCompletionRodWearPoints, 0.0, 1.0);
+}
+double UCatFishingSettings::GetOverpowerFlingDistanceCentimeters() const
+{
+	return ResolveFishingTuning(TEXT("OverpowerFlingDistanceCentimeters"), OverpowerFlingDistanceCentimeters, 0.0, 250.0);
+}
+double UCatFishingSettings::GetOverpowerStrengthRatio() const
+{
+	return ResolveFishingTuning(TEXT("OverpowerStrengthRatio"), OverpowerStrengthRatio, 1.0, 2.0);
+}
+int32 UCatFishingSettings::GetMaximumDeployedRodsPerPlayer() const
+{
+	if (MaximumDeployedRodsPerPlayer > 0) return MaximumDeployedRodsPerPlayer;
+	WarnInvalidFishingTuningOnce(TEXT("MaximumDeployedRodsPerPlayer"));
+	return 2;
+}
+const TArray<double>& UCatFishingSettings::GetOverpowerLandingDistanceFractions() const
+{
+	bool bValid = OverpowerLandingDistanceFractions.Num() >= 2
+		&& OverpowerLandingDistanceFractions[0] == 1.0 && OverpowerLandingDistanceFractions.Last() == 0.0;
+	double Previous = 1.0;
+	for (const double Fraction : OverpowerLandingDistanceFractions)
+	{
+		bValid &= FMath::IsFinite(Fraction) && Fraction >= 0.0 && Fraction <= Previous;
+		Previous = Fraction;
+	}
+	if (bValid) return OverpowerLandingDistanceFractions;
+	WarnInvalidFishingTuningOnce(TEXT("OverpowerLandingDistanceFractions"));
+	static const TArray<double> LegacyDefaults = {1.0, 2.0 / 3.0, 1.0 / 3.0, 0.0};
+	return LegacyDefaults;
+}
 
 // 运行 gate 流程：要求产品显式开启总开关、提供 StateTree 软引用、有限正响应窗/终态复制窗与近岸验证；任一为 Unset 都阻止会话创建。
 bool UCatFishingSettings::IsRuntimeReady() const

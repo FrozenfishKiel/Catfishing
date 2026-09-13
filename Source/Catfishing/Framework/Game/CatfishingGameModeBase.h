@@ -157,6 +157,18 @@ public:
 
 private:
 	friend class FCatFishingBiteTimingWorldTest;
+	friend class FCatRunMorningTargetRecoveryTest;
+	/** 人数缺席时保留清晨输入；只校正尚未对玩家展示的目标，已展示的变化交设计裁决。 */
+	void ReconcilePendingMorningTargetFromAuthority();
+	void HandlePendingMorningTargetRefresh();
+	bool bMorningTargetNeedsPlayerCountReconciliation = false;
+	bool bMorningTargetPublishedToPlayer = false;
+	int32 PendingMorningTargetDayIndex = 0;
+	int32 PendingMorningBaseTarget = 0;
+	float PendingMorningTargetMultiplier = 1.0f;
+	float PendingMorningDailyPressure = 1.0f;
+	int32 LastPendingMorningDiagnosticPlayerCount = INDEX_NONE;
+	FTimerHandle PendingMorningTargetRefreshTimer;
 	/** 遮黑计时到达后复核玩家与冻结鱼，调用唯一供品结算并消费实物；拒绝立即解除本轮锁。 */
 	void CommitAltarDayTransition();
 	/** 淡入结束后发布解锁，并从此刻开始新一天的可玩计时；终局不建立白天计时。 */

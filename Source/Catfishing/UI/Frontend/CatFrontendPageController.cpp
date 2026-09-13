@@ -189,6 +189,15 @@ void UCatFrontendPageController::RequestLoadSelectedSaveSlot()
 		SetLocalResultText(FText::FromString(TEXT("请先选择可读取的存档。")), Save);
 		return;
 	}
+	if (!Save->CanContinueSlot(SelectedSlotId))
+	{
+		SetLocalResultText(Save->IsSlotCompleted(SelectedSlotId)
+			? FText::FromString(TEXT("这一局已完结，请新建存档开始新一局。"))
+			: FText::FromString(TEXT("所选存档当前不可读取。")), Save);
+		UE_LOG(LogCatUI, Warning, TEXT("Event=frontend_save_continue_rejected SlotId=%s Completed=%d Result=KeepSaveList"),
+			*SelectedSlotId.ToString(), Save->IsSlotCompleted(SelectedSlotId));
+		return;
+	}
 	if (UCatFrontendRoomModel* Room = RoomModel.Get())
 	{
 		const FCatOnlineSnapshot Snapshot = Room->GetSnapshot();

@@ -499,17 +499,17 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 		UE_LOG(LogCatFishing, Warning,
 			TEXT("Event=fishing_rod_place_rejected RequestId=%s Reason=AlreadyOperatingRod RodActorId=%s DeployedRodCount=%d MaximumDeployedRods=%d World=%s NetMode=%d Authority=true LocalRole=%d %s"),
 			*Command.RequestId.ToString(), *OperatedRod->GetPresentationState().RodActorId.ToString(),
-			GetDeployedRodCount(PlayerState), MaximumDeployedRodsPerPlayer, *GetNameSafe(World),
+			GetDeployedRodCount(PlayerState), GetDefault<UCatFishingSettings>()->GetMaximumDeployedRodsPerPlayer(), *GetNameSafe(World),
 			static_cast<int32>(World->GetNetMode()), static_cast<int32>(Controller->GetLocalRole()),
 			*CatLogContext::BuildControllerFields(Controller));
 		return Result;
 	}
-	if (GetDeployedRodCount(PlayerState) >= MaximumDeployedRodsPerPlayer)
+	if (GetDeployedRodCount(PlayerState) >= GetDefault<UCatFishingSettings>()->GetMaximumDeployedRodsPerPlayer())
 	{
 		Result.Error = ECatFishingCommandError::RodDeploymentLimitReached;
 		UE_LOG(LogCatFishing, Warning,
 			TEXT("Event=fishing_rod_place_rejected RequestId=%s Reason=DeploymentLimitReached DeployedRodCount=%d MaximumDeployedRods=%d World=%s NetMode=%d Authority=true LocalRole=%d %s"),
-			*Command.RequestId.ToString(), GetDeployedRodCount(PlayerState), MaximumDeployedRodsPerPlayer,
+			*Command.RequestId.ToString(), GetDeployedRodCount(PlayerState), GetDefault<UCatFishingSettings>()->GetMaximumDeployedRodsPerPlayer(),
 			*GetNameSafe(World), static_cast<int32>(World->GetNetMode()), static_cast<int32>(Controller->GetLocalRole()),
 			*CatLogContext::BuildControllerFields(Controller));
 		return Result;
@@ -528,7 +528,7 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 		Result.EquipmentRevision = Loadout.Revision;
 		UE_LOG(LogCatFishing, Warning,
 			TEXT("Event=fishing_rod_place_rejected RequestId=%s Reason=NoUsableInventoryRod DeployedRodCount=%d MaximumDeployedRods=%d EquipmentRevision=%lld World=%s NetMode=%d Authority=true LocalRole=%d %s"),
-			*Command.RequestId.ToString(), GetDeployedRodCount(PlayerState), MaximumDeployedRodsPerPlayer,
+			*Command.RequestId.ToString(), GetDeployedRodCount(PlayerState), GetDefault<UCatFishingSettings>()->GetMaximumDeployedRodsPerPlayer(),
 			Loadout.Revision, *GetNameSafe(World), static_cast<int32>(World->GetNetMode()),
 			static_cast<int32>(Controller->GetLocalRole()), *CatLogContext::BuildControllerFields(Controller));
 		return Result;
@@ -669,7 +669,7 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 		*UseResult.Item.Instance->GetItemInstanceId().ToString(EGuidFormats::DigitsWithHyphens),
 		*UseResult.Item.Instance->GetItemDefinitionId().ToString(), *GetNameSafe(Rod->GetPresentationState().HolderPlayerState),
 		Rod->GetOperatorCount(), Rod->GetPresentationState().RodActorRevision, Equipment->GetSnapshot().Revision,
-		GetDeployedRodCount(PlayerState), MaximumDeployedRodsPerPlayer,
+		GetDeployedRodCount(PlayerState), GetDefault<UCatFishingSettings>()->GetMaximumDeployedRodsPerPlayer(),
 		*GetNameSafe(World), static_cast<int32>(World->GetNetMode()), static_cast<int32>(Controller->GetLocalRole()),
 		*CatLogContext::BuildControllerFields(Controller));
 	return Result;
@@ -972,7 +972,7 @@ FCatFishingCommandResult UCatFishingService::PackRod(AController* Controller, co
 		TEXT("Event=fishing_rod_packed RequestId=%s Rod=%s RodActorId=%s ItemInstance=%s EquipmentRevision=%lld DeployedRodCount=%d MaximumDeployedRods=%d World=%s NetMode=%d Authority=%s LocalRole=%d %s"),
 		*Command.Context.RequestId.ToString(), *GetNameSafe(Rod), *Command.Context.RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
 		*RodState.ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), Equipment->GetSnapshot().Revision,
-		GetDeployedRodCount(PlayerState), MaximumDeployedRodsPerPlayer, *GetNameSafe(GetWorld()),
+		GetDeployedRodCount(PlayerState), GetDefault<UCatFishingSettings>()->GetMaximumDeployedRodsPerPlayer(), *GetNameSafe(GetWorld()),
 		static_cast<int32>(GetWorld()->GetNetMode()), Rod->HasAuthority() ? TEXT("true") : TEXT("false"),
 		static_cast<int32>(Rod->GetLocalRole()),
 		*CatLogContext::BuildControllerFields(Controller));
@@ -1691,7 +1691,7 @@ bool UCatFishingService::RegisterDeployedRod(APlayerState* PlayerState, ACatFish
 	}
 	const FCatFishingRodPresentationState& State = RodActor->GetPresentationState();
 	if ((State.OwnerPlayerState && State.OwnerPlayerState != PlayerState)
-		|| GetDeployedRodCount(PlayerState) >= MaximumDeployedRodsPerPlayer) return false;
+		|| GetDeployedRodCount(PlayerState) >= GetDefault<UCatFishingSettings>()->GetMaximumDeployedRodsPerPlayer()) return false;
 	for (APlayerState* Operator : State.OperatorPlayerStates)
 	{
 		if (FindRodOperatedBy(Operator)) return false;

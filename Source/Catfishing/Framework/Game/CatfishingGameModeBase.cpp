@@ -457,6 +457,8 @@ void ACatfishingGameModeBase::PostLogin(APlayerController* NewPlayer)
 	UE_LOG(LogCatOnline, Log, TEXT("Event=identity_activated StableNetId=%s PlayerState=%s Controller=%s"),
 		*MakeStableNetIdLogValue(PlayerState->GetUniqueId()), *PlayerState->GetClass()->GetName(), *NewPlayer->GetClass()->GetName());
 	Super::PostLogin(NewPlayer);
+	// 身份与 PlayerArray 已注册，重新检查启动时人数缺席的当日目标。
+	HandlePendingMorningTargetRefresh();
 	if (ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(NewPlayer))
 	{
 		CatController->ClientRefreshPublicFishCollection();
@@ -1018,7 +1020,7 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 		return Result;
 	}
 	int32 ExpectedDayDailyOfferingTarget = 0;
-	// 清晨人数快照与按它缩放后的基础目标；两者都只在进入 DayActive 的这一次算，随后当天不再重算。
+	// 清晨人数有效时当天冻结；人数缺席时保留输入，注册完成后补算，不能永久冻结兜底。
 	int32 DayStartMorningPlayerCount = 0;
 	int32 DayStartScaledBaseTarget = 0;
 	int32 DayStartAttributeTarget = 0;
@@ -1042,7 +1044,7 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 		DayStartOldTarget = DayStartRunASC->GetNumericAttribute(UCatRunAttributeSet::GetDailyOfferingTargetAttribute());
 		DayStartDailyOfferingTargetMultiplier = DayStartRunASC->GetNumericAttribute(UCatRunModifierAttributeSet::GetDailyOfferingTargetMultiplierAttribute());
 		DayStartDailyPressure = DayStartRunASC->GetNumericAttribute(UCatRunModifierAttributeSet::GetDailyPressureAttribute());
-		// 清晨人数快照：进入这一天的唯一入口在这里，所以人数也只在这里数一次。
+		// 清晨先取人数；若尚未完成注册，下面建立待解析记录并在发布前/注册后重试。
 		// 数不出人时按 1 人算并记 Warning——这是迁移兜底，不是「没人在场」，绝不让 RunFlow 因为人数缺席停住。
 		DayStartMorningPlayerCount = CountMorningPlayersFromAuthority();
 		if (DayStartMorningPlayerCount <= 0)
@@ -1134,6 +1136,19 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 		++RunPublicState.Phase.DayIndex;
 		// 人数快照与当天目标一起发布：UI 和诊断读同一份事实，不各自再数一次人。
 		RunPublicState.Phase.MorningPlayerCount = DayStartMorningPlayerCount;
+		bMorningTargetNeedsPlayerCountReconciliation = DayStartMorningPlayerCount <= 0
+			&& GetDefault<UCatRunSettings>()->IsPerPlayerDailyOfferingTarget();
+		bMorningTargetPublishedToPlayer = false;
+		PendingMorningTargetDayIndex = RunPublicState.Phase.DayIndex;
+		PendingMorningBaseTarget = DayTuning.DailyOfferingTarget;
+		PendingMorningTargetMultiplier = DayStartDailyOfferingTargetMultiplier;
+		PendingMorningDailyPressure = DayStartDailyPressure;
+		LastPendingMorningDiagnosticPlayerCount = INDEX_NONE;
+		if (bMorningTargetNeedsPlayerCountReconciliation)
+		{
+			PendingMorningTargetRefreshTimer = GetWorldTimerManager().SetTimerForNextTick(
+				this, &ThisClass::HandlePendingMorningTargetRefresh);
+		}
 		if (UCatShopEconomyService* Shop = GetWorld()->GetSubsystem<UCatShopEconomyService>())
 		{
 			if (Shop->AdvanceShopDay(RunPublicState.Phase.DayIndex))
@@ -1591,8 +1606,10 @@ FCatRunCommandResult ACatfishingGameModeBase::CompleteSettlementFromServerReques
 // 白天计时清理流程：从当前 World 清除截止、Morning 和 Dusk 三个 one-shot 句柄；只停止未来回调，不改公开 deadline 事实。
 void ACatfishingGameModeBase::ClearDayTimers()
 {
+	bMorningTargetNeedsPlayerCountReconciliation = false;
 	if (UWorld* World = GetWorld())
 	{
+		World->GetTimerManager().ClearTimer(PendingMorningTargetRefreshTimer);
 		World->GetTimerManager().ClearTimer(DayDeadlineTimerHandle);
 		World->GetTimerManager().ClearTimer(DayMorningEnvironmentRefreshTimerHandle);
 		World->GetTimerManager().ClearTimer(DayDuskEnvironmentRefreshTimerHandle);
@@ -1610,10 +1627,87 @@ void ACatfishingGameModeBase::ClearDayDeadline()
 	RunPublicState.Phase.DeadlineServerTimeSeconds = 0.0;
 }
 
+// 启动缺失人数的补算回调：只唤起唯一公开状态发布入口，不单独复制或重放清晨结算。
+void ACatfishingGameModeBase::HandlePendingMorningTargetRefresh()
+{
+	if (bMorningTargetNeedsPlayerCountReconciliation && HasAuthority() && bRunCommandsOpen)
+		RefreshEnvironmentAndPublish();
+}
+
+void ACatfishingGameModeBase::ReconcilePendingMorningTargetFromAuthority()
+{
+	if (!HasAuthority() || !bMorningTargetNeedsPlayerCountReconciliation) return;
+	if (!bRunCommandsOpen || RunPublicState.Phase.Phase != ECatRunPhase::DayActive
+		|| RunPublicState.Phase.DayIndex != PendingMorningTargetDayIndex)
+	{
+		bMorningTargetNeedsPlayerCountReconciliation = false;
+		return;
+	}
+	const int32 PlayerCount = CountMorningPlayersFromAuthority();
+	if (PlayerCount <= 0) return; // 保留原 Warning 和单人 fail-open；无玩家时不轮询刷日志。
+	const int32 ScaledBaseTarget = GetDefault<UCatRunSettings>()->ScaleDailyOfferingTargetForMorningPlayerCount(
+		PendingMorningBaseTarget, PlayerCount);
+	int32 RecalculatedTarget = 0;
+	auto* State = GetWorld()->GetGameState<ACatfishingGameState>();
+	auto* RunASC = State ? State->GetRunAbilitySystemComponentFromAuthority() : nullptr;
+	const bool bCalculated = UCatRunStartDayExecutionCalculation::TryCalculateDailyOfferingTarget(
+		static_cast<float>(ScaledBaseTarget), PendingMorningTargetMultiplier, PendingMorningDailyPressure, RecalculatedTarget);
+	if (!bCalculated || !RunASC)
+	{
+		if (LastPendingMorningDiagnosticPlayerCount != PlayerCount)
+			UE_LOG(LogCatRun, Warning, TEXT("Event=RunMorningTargetRecalculationUnavailable RunId=%s World=%s NetMode=%d Authority=1 Day=%d Players=%d Result=KeepFallback"),
+				*RunPublicState.Phase.RunId.ToString(), *GetNameSafe(GetWorld()), int32(GetNetMode()),
+				PendingMorningTargetDayIndex, PlayerCount);
+		LastPendingMorningDiagnosticPlayerCount = PlayerCount;
+		return;
+	}
+	const int32 PreviousTarget = RunPublicState.DailyOfferingTarget;
+	if (PlayerCount == RunPublicState.Phase.MorningPlayerCount && RecalculatedTarget == PreviousTarget)
+		return; // 重复注册/环境刷新不能重放目标、推进版本或刷日志。
+	if (bMorningTargetPublishedToPlayer && RecalculatedTarget != PreviousTarget)
+	{
+		// 2026-09-13：是否以及如何向玩家变更已发布的当日任务尚未裁决。只计算候选，不擅自加配额。
+		if (LastPendingMorningDiagnosticPlayerCount != PlayerCount)
+			UE_LOG(LogCatRun, Warning, TEXT("Event=RunMorningTargetChangeNeedsDesign RunId=%s World=%s NetMode=%d Authority=1 Day=%d Players=%d PublishedTarget=%d RecalculatedTarget=%d Result=KeepPublishedTarget"),
+				*RunPublicState.Phase.RunId.ToString(), *GetNameSafe(GetWorld()), int32(GetNetMode()),
+				PendingMorningTargetDayIndex, PlayerCount, PreviousTarget, RecalculatedTarget);
+		LastPendingMorningDiagnosticPlayerCount = PlayerCount;
+		return;
+	}
+	if (PreviousTarget != RecalculatedTarget)
+	{
+		// 只覆盖目标属性；不能重放 StartDay GE（会清供品/进度差值），不能重启日钟、商店或身体初始化。
+		UGameplayEffect* Correction = NewObject<UGameplayEffect>(GetTransientPackage());
+		Correction->DurationPolicy = EGameplayEffectDurationType::Instant;
+		FGameplayModifierInfo& Modifier = Correction->Modifiers.AddDefaulted_GetRef();
+		Modifier.Attribute = UCatRunAttributeSet::GetDailyOfferingTargetAttribute();
+		Modifier.ModifierOp = EGameplayModOp::Override;
+		Modifier.ModifierMagnitude = FScalableFloat(static_cast<float>(RecalculatedTarget));
+		if (!RunASC->ApplyGameplayEffectToSelf(Correction, 1.0f, RunASC->MakeEffectContext()).WasSuccessfullyApplied()
+			|| !FMath::IsNearlyEqual(RunASC->GetNumericAttribute(UCatRunAttributeSet::GetDailyOfferingTargetAttribute()),
+				static_cast<float>(RecalculatedTarget)))
+		{
+			UE_LOG(LogCatRun, Warning, TEXT("Event=RunMorningTargetCorrectionFailed RunId=%s World=%s NetMode=%d Authority=1 Day=%d Players=%d Result=RetryOnRegistration"),
+				*RunPublicState.Phase.RunId.ToString(), *GetNameSafe(GetWorld()), int32(GetNetMode()),
+				PendingMorningTargetDayIndex, PlayerCount);
+			return;
+		}
+	}
+	RunPublicState.DailyOfferingTarget = RecalculatedTarget;
+	RunPublicState.Phase.MorningPlayerCount = PlayerCount;
+	// 0 -> 1 不代表原晨间名单已经齐全。当天保留核对资格，后续变动受“已展示”闸门约束；
+	// 稳定人数直接返回，白天退出统一清理。真正中途入局与启动注册的区分仍待名单口径裁决。
+	GetWorldTimerManager().ClearTimer(PendingMorningTargetRefreshTimer);
+	++RunPublicState.Revision;
+	UE_LOG(LogCatRun, Display, TEXT("Event=RunMorningTargetRecalculated RunId=%s World=%s NetMode=%d Authority=1 Day=%d Players=%d OldTarget=%d NewTarget=%d Revision=%lld Result=ResolvedBeforeTargetChangeVisible"),
+		*RunPublicState.Phase.RunId.ToString(), *GetNameSafe(GetWorld()), int32(GetNetMode()),
+		PendingMorningTargetDayIndex, PlayerCount, PreviousTarget, RecalculatedTarget, RunPublicState.Revision);
+}
+
 // 清晨人数快照流程：只数「这一刻还在局里、且有稳定身份」的玩家。
 // 数的是 PlayerState 而不是 Character——倒地、还没出生或正在重生的猫都还在局里，任务不因此变轻
 // （局与进程 §3.1.2:58「当天内不变，中途有人加入或退出都不重算」，祭坛到场判定另有自己的口径）。
-// 数不出人时返回 0，交调用方按 1 人兜底：清晨快照是迁移进来的新事实，不能因为它缺席就让整天算不出目标。
+// 数不出人时返回 0，由调用方按 1 人兜底并保留待补算状态。
 int32 ACatfishingGameModeBase::CountMorningPlayersFromAuthority() const
 {
 	const AGameStateBase* CountingGameState = GetWorld() ? GetWorld()->GetGameState() : nullptr;
@@ -1624,7 +1718,7 @@ int32 ACatfishingGameModeBase::CountMorningPlayersFromAuthority() const
 	int32 MorningPlayerCount = 0;
 	for (const APlayerState* PlayerState : CountingGameState->PlayerArray)
 	{
-		if (PlayerState && !PlayerState->IsOnlyASpectator() && PlayerState->GetUniqueId().IsValid())
+		if (PlayerState && !PlayerState->IsInactive() && !PlayerState->IsOnlyASpectator() && PlayerState->GetUniqueId().IsValid())
 		{
 			++MorningPlayerCount;
 		}
@@ -1747,6 +1841,7 @@ void ACatfishingGameModeBase::HandleDayDeadlineElapsed()
 // 环境发布流程：以当前 Phase 与 Revision 调用只读 provider；成功且同 Revision 时替换环境 DTO，失败或版本不齐时发布同 Revision 空环境，最后把唯一公开聚合写入 GameState；本流程不写角色身体或表现状态。
 bool ACatfishingGameModeBase::RefreshEnvironmentAndPublish()
 {
+	ReconcilePendingMorningTargetFromAuthority();
 	const ICatEnvironmentProvider* Provider = Cast<ICatEnvironmentProvider>(EnvironmentProvider);
 	const FCatEnvironmentResult EnvironmentResult = Provider
 		? Provider->EvaluateEnvironment(RunPublicState.Phase, RunPublicState.Revision)
@@ -1774,6 +1869,19 @@ bool ACatfishingGameModeBase::RefreshEnvironmentAndPublish()
 	if (CatGameState)
 	{
 		CatGameState->SetRunPublicStateFromAuthority(RunPublicState);
+		if (RunPublicState.Phase.Phase == ECatRunPhase::DayActive)
+		{
+			for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+			{
+				const APlayerController* Controller = It->Get();
+				if (Controller && Controller->Player)
+				{
+					// 有真实连接或 LocalPlayer 时已可能看见目标；以后不能静默改变当日要求。
+					bMorningTargetPublishedToPlayer = true;
+					break;
+				}
+			}
+		}
 	}
 	ApplyWeatherWetnessToCharacters();
 	return bEnvironmentSucceeded && CatGameState != nullptr;

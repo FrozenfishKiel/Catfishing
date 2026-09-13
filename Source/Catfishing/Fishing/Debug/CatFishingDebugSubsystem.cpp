@@ -381,13 +381,8 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 			double StaminaScale = 1.0;
 			if (SessionSnapshot->bPerfectHook)
 			{
-				const UCatFishingSettings* FishingSettings = GetDefault<UCatFishingSettings>();
-				const UCatBitePersonalityDefinition* Bite = FishingSettings
-					? FishingSettings->FindBitePersonality(FishDefinition->BitePersonalityId) : nullptr;
-				if (Bite)
-				{
-					StaminaScale = Bite->PerfectFishStaminaMultiplier;
-				}
+				// 与正式入场削减同源；旧 Bite 完美倍率已退出运行链（2026-09-13）。
+				StaminaScale = GetDefault<UCatFishCatalogSettings>()->ResolvePerfectHookReduction(*FishDefinition).FishStaminaMultiplier;
 			}
 			// 体力系数 × 实际重量才是本场体力上限；调试面板与会话必须同源，不能拿系数当体力点显示。
 			const double MaximumStamina = FishDefinition->ResolveInitialFightStamina(

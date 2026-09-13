@@ -251,7 +251,7 @@ public:
 	/**
 	 * 力量系数 K：鱼表格「力量系数K」列，本条鱼的实例力量 ＝ 实际重量 × K（钓鱼规则 §4.1「鱼力量 F_fish」行）。
 	 * 逐鱼配，不走全局常数（2026-09-09 八问④撤回工程自补的全局 StrengthPerKilogram）；湖心巨影 K＝5，与竿强 210 配对。
-	 * 0 表示未配置：选鱼链按 fail-closed 跳过该候选，不回退任何全局系数。
+	 * 0 表示尚未迁移：选鱼链回退旧平衡资产 StrengthPerKilogram 并告警，不能因该列没填而跳光候选。
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing", meta = (ClampMin = "0.0", DisplayName = "力量系数K"))
 	double FishStrengthPerKilogram = 0.0;
@@ -360,10 +360,13 @@ public:
 	bool bEnableRuntimeDefinition = false;
 
 private:
+	friend struct FCatFishBehaviorProfileResolver;
 	/**
 	 * 本条鱼的旧定额体力折算是否已经报过一次。
 	 * 选鱼链每评估一次候选就会取一次系数，不去重会把日志刷满；它只服务日志，不参与任何数值，
 	 * 因此不是 UPROPERTY、不复制、不存档。
 	 */
 	mutable bool bLoggedLegacyFightStaminaConversion = false;
+	/** 只用于迁移诊断去重，不序列化、不复制，也不参与行为决策。 */
+	mutable bool bLoggedBehaviorTemplateFallback = false;
 };

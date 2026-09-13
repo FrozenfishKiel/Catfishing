@@ -187,8 +187,8 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("浮漂真咬时下沉"), Hook->GetPresentationState().BobberMode, ECatFishingBobberPresentationMode::Sunk);
 		TestEqual(TEXT("实际预警持续完整时段（帧量化容差）"), ObservedProbeTime - ObservedWarningTime, 1.5, 0.04);
 		double ExpectedProbeSeconds = 0.0;
-		TestTrue(TEXT("本场鱼配了试探期停留时长"), Session->TryResolveProbeDurationSeconds(ExpectedProbeSeconds));
-		TestEqual(TEXT("试探期按鱼种 ProbeDurationSeconds 停留（帧量化容差）"),
+		TestTrue(TEXT("本场试探期时长可由逐鱼覆盖或参数页区间解析"), Session->TryResolveProbeDurationSeconds(ExpectedProbeSeconds));
+		TestEqual(TEXT("试探期按解析后的时长停留（逐鱼覆盖或参数页区间，帧量化容差）"),
 			World->GetTimeSeconds() - ObservedProbeTime, ExpectedProbeSeconds, 0.04);
 		TestNotNull(TEXT("提竿前鱼影一直在水里"), Session->GetSnapshot().FishEncounterActor.Get());
 		// 正式 Morning/Day/Dusk timer 在等待期间会刷新鱼情，必须捕获实际真咬时的环境。

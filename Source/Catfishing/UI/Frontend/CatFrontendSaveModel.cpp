@@ -107,6 +107,31 @@ const TArray<FCatSaveSlotSummary>& UCatFrontendSaveModel::GetSlotSummaries() con
 	return EmptySlotSummaries;
 }
 
+bool UCatFrontendSaveModel::CanContinueSummary(const FCatSaveSlotSummary& Summary)
+{
+	return !Summary.SlotId.IsNone() && !Summary.bRunCompleted;
+}
+
+bool UCatFrontendSaveModel::IsSlotCompleted(const FName SlotId) const
+{
+	for (const FCatSaveSlotSummary& Summary : GetSlotSummaries())
+		if (Summary.SlotId == SlotId && !SlotId.IsNone()) return Summary.bRunCompleted;
+	return false;
+}
+
+bool UCatFrontendSaveModel::CanContinueSlot(const FName SlotId) const
+{
+	for (const FCatSaveSlotSummary& Summary : GetSlotSummaries())
+		if (Summary.SlotId == SlotId) return CanContinueSummary(Summary);
+	return false;
+}
+
+FText UCatFrontendSaveModel::GetSlotStatusText(const FName SlotId) const
+{
+	if (IsSlotCompleted(SlotId)) return FText::FromString(TEXT("已完结"));
+	return CanContinueSlot(SlotId) ? FText::FromString(TEXT("可继续")) : FText::FromString(TEXT("存档不可用"));
+}
+
 // 旅行许可读取流程：只转发 Save 成功读入后的正式事实；来源失效时 fail-closed，Controller 不能据失效选择创建房间。
 bool UCatFrontendSaveModel::HasLoadedRunForTravel() const
 {

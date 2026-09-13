@@ -110,8 +110,9 @@ public:
 	 */
 	bool RetireBrokenFishingRodFromAuthority(FGuid FishingSessionId);
 
-	/** 结束使用记录；快速抖动前退饵，上鱼成功可返还已确认消耗的一份。重放不重复返还。 */
-	FCatFishingUseOperationResult ReleaseFishingUse(FGuid FishingSessionId, bool bReturnCaughtBait = false);
+	/** 结束使用记录；仅真咬前未提交的冻结饵可退，重放不重复返还。 */
+	// 墓碑（2026-09-13）：删除 bReturnCaughtBait 参数；钓鱼规则 §3.3/§3.4 规定真咬后任何结局均消耗 1 份饵。
+	FCatFishingUseOperationResult ReleaseFishingUse(FGuid FishingSessionId);
 	/** 当前是否有仍未结束的 Fishing 使用记录；失败预算用它避开进行中的钓鱼结算。 */
 	bool HasActiveFishingUse() const;
 	/** 指定 Fishing 会话是否仍处于活动状态；Commit/Release 用它防止已结束会话重复改写。 */
@@ -133,7 +134,7 @@ private:
 		FName RodDefinitionId = NAME_None;
 		/** 世界鱼竿背后的正式库存组件；借竿时属于部署者，磨损查询和写入都只从这里找同一实例。 */
 		TWeakObjectPtr<UCatInventoryComponent> RodInventory;
-		/** Begin 扣除的一份鱼饵定义；确认消耗后仍作上鱼退款凭证，实际返还后清空。 */
+		/** Begin 冻结的一份鱼饵定义；只有尚未提交的冻结饵可按此定义返还。 */
 		FName FrozenBaitDefinitionId = NAME_None;
 		/** 已接收的竿磨损序号；磨损事件按递增序号提交，重复或跳号不会改耐久。 */
 		int64 LastWearSequence = 0;
@@ -143,8 +144,7 @@ private:
 		bool bBaitQuantityFrozen = false;
 		/** 鱼饵是否已经被本会话确认消耗；重复结算只返回终态，暂存物保持关闭状态。 */
 		bool bBaitCommitted = false;
-		/** 成功上鱼的退款资格；满包后仍保留，后续 Release 重试不丢失裁决。 */
-		bool bReturnCaughtBait = false;
+		// 墓碑（2026-09-13）：删除上鱼退款资格 bReturnCaughtBait，已提交的饵不再返还。
 		/** 终局已请求退饵但背包暂时无空间；库存变化时重试同一记录。 */
 		bool bReturnPending = false;
 		/** 释放结算是否完成；待退款也已结束玩法，但保留此标志为 false 以继续结算。 */

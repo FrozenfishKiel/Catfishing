@@ -34,12 +34,19 @@ void UCatFrontendSaveSlotRowWidget::ConfigureRow(UCatFrontendRootWidget* InRootW
 {
 	RootWidget = InRootWidget;
 	SlotId = Summary.SlotId;
+	bRunCompleted = Summary.bRunCompleted;
+	bCanContinue = UCatFrontendSaveModel::CanContinueSummary(Summary);
+	CompletionStatusText = bRunCompleted ? FText::FromString(TEXT("已完结")) : FText::GetEmpty();
+	// 完结行保留选择以供查看/主动删除，只把展示置灰；新建槽按钮不依赖本行状态。
+	SetRenderOpacity(bRunCompleted ? 0.5f : 1.0f);
 	if (SaveSlotNameText) { SaveSlotNameText->SetText(FText::FromString(Summary.DisplayName)); }
 	if (SaveSlotMetaText)
 	{
-		SaveSlotMetaText->SetText(Summary.LastSavedAt.GetTicks() > 0
+		const FText SavedAtText = Summary.LastSavedAt.GetTicks() > 0
 			? FText::FromString(FString::Printf(TEXT("最近保存：%s"), *Summary.LastSavedAt.ToString()))
-			: FText::FromString(TEXT("最近保存时间不可用")));
+			: FText::FromString(TEXT("最近保存时间不可用"));
+		SaveSlotMetaText->SetText(bRunCompleted
+			? FText::Format(FText::FromString(TEXT("已完结 · {0}")), SavedAtText) : SavedAtText);
 	}
 }
 
@@ -564,7 +571,8 @@ void UCatFrontendRootWidget::HandleSaveModelChanged()
 	const bool bHasSelection = PageController && !PageController->GetSelectedSlotId().IsNone();
 	if (CreateSaveButton) { CreateSaveButton->SetIsEnabled(bCanSubmit); }
 	if (CreateSaveNameTextBox) { CreateSaveNameTextBox->SetIsEnabled(bCanSubmit); }
-	if (LoadSelectedSaveButton) { LoadSelectedSaveButton->SetIsEnabled(bCanSubmit && bHasSelection); }
+	if (LoadSelectedSaveButton) { LoadSelectedSaveButton->SetIsEnabled(bCanSubmit && bHasSelection
+		&& SaveModel->CanContinueSlot(PageController->GetSelectedSlotId())); }
 	if (DeleteSelectedSaveButton) { DeleteSelectedSaveButton->SetIsEnabled(bCanSubmit && bHasSelection); }
 	if (ConfirmDeleteSaveButton) { ConfirmDeleteSaveButton->SetIsEnabled(bCanSubmit && PageController && !PageController->GetPendingDeleteSlotId().IsNone()); }
 	if (SaveRowsScrollBox) { SaveRowsScrollBox->SetIsEnabled(bCanSubmit); }

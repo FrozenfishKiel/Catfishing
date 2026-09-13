@@ -17,13 +17,15 @@ class CATFISHING_API UCatBitePersonalityDefinition : public UPrimaryDataAsset
 public:
 	bool IsRuntimeDefinitionReady() const;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly) FName BitePersonalityId = NAME_None;
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0")) double ProbeDurationSeconds = 0.0;
+	/** 可选的逐鱼试探期覆盖（秒）；0/留空按参数页 UCatFishingSettings::ProbeDurationRangeSeconds 随机。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0", Units="s")) double ProbeDurationSeconds = 0.0;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0")) double TrueBiteWindowSeconds = 0.0;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0")) double PerfectHookWindowSeconds = 0.0;
 	/**
 	 * 以下三项完美削减倍率已退为过渡字段：正式口径按鱼册稀有度档取，
 	 * 见 UCatFishCatalogSettings::ResolvePerfectHookReduction（2026-09-09 晚裁「四套性格模板是测试用」）。
-	 * 暂不删除是因为钓鱼会话仍在读旧字段；调用方改读目录设置后，这三条连同下面的就绪校验一起删。
+	 * 2026-09-13：生产会话与 Debug 均已改读目录；这三项不参与就绪校验，也不产生玩法输出。
+	 * 旧 Bite 资产仍序列化它们，二进制 Blueprint/外部消费者尚未经编辑器迁移核实；本轮只保留反射兼容。
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(DeprecatedProperty, ClampMin="0", ClampMax="1")) double PerfectFishStrengthMultiplier = 0.0;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(DeprecatedProperty, ClampMin="0", ClampMax="1")) double PerfectFishStaminaMultiplier = 0.0;

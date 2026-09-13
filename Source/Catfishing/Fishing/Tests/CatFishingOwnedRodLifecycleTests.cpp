@@ -479,7 +479,7 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 				// 真咬尚未成立，所以预警前后 X 收线都要把饵退还钓手——原断言 bAfterWarning ? 1 : 2
 				// 写的是已经退役的旧边界（扣饵现在只发生在 OpenTrueBiteWindowFromAuthority 与超时兜底）。
 				// 真咬成立之后「不退饵」的那一侧本用例覆盖不到：要先走完试探期停留才开真咬窗，
-				// 而停留时长 ProbeDurationSeconds 尚未配在鱼的 Bite 性格资产上（同批 BiteTiming 用例已红）。
+				// 本夹具只驱动 Waiting 预警，未等待试探完成；四份正式 Bite 资产已配时长，新资产可回退参数页区间。
 				TestEqual(TEXT("recall refunds the caster while the true bite is not yet established"),
 					Quantity(Helper.Equipment, TEXT("BugBait")), 2);
 				TestEqual(TEXT("recall never gives bait to the person pressing X"), Quantity(Owner.Equipment, TEXT("BugBait")), 4);

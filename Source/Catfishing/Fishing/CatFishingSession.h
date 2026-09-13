@@ -54,7 +54,7 @@ public:
 	void RefreshBiteAvailabilityFromAuthority();
 	/**
 	 * 进入试探期（钓鱼规则 §3.4:141 演出时序）：抽中瞬间就选鱼并生成按真鱼体型的鱼影，浮漂轻点，
-	 * 停留 ProbeDurationSeconds 之后浮漂猛沉、才打开真咬响应窗。
+	 * 停留解析后的试探时长（逐鱼可选覆盖，否则参数页区间）之后浮漂猛沉、才打开真咬响应窗。
 	 * 2026-09-12 前是「Probe 只打开响应窗、鱼在合法左键之后才创建」，那样提竿前水里根本没有影子；
 	 * 而 09-12 裁「竿强瞬断报废鱼竿」的前提正是玩家看得见那团黑影才谈得上知情的赌博（钓鱼规则 §4.2:176）。
 	 */
@@ -163,6 +163,8 @@ private:
 	friend class FCatFishingSlackAimCommandRoutingTest;
 	friend class FCatRodSessionDurabilityTest;
 	friend class FCatFishingBiteTimingWorldTest;
+	friend class FCatFishingBaitTerminalConsumptionTest;
+	friend class FCatFishingProbeDurationOverrideTest;
 	friend class FCatFishingSessionReplicationContractTest;
 	friend class FCatFishingSessionSnapshotVersionMutationRulesTest;
 	friend class FCatFishingSessionTerminationOutcomeTest;
@@ -265,7 +267,7 @@ private:
 	void HandleProbeStayTimer();
 	/** 真咬窗口的唯一打开口；试探期停留结束后由计时器调用，写 TrueBiteWindow 阶段并起响应计时。 */
 	bool OpenTrueBiteWindowFromAuthority();
-	/** 读本场鱼的试探期停留时长（鱼种 Bite 性格资产 ProbeDurationSeconds）；未配置返回 false，调用方 fail-closed。 */
+	/** 按秒解析本场试探时长：逐鱼正覆盖优先，否则按冻结种子取参数页区间；两者均不可用才返回 false。 */
 	bool TryResolveProbeDurationSeconds(double& OutProbeSeconds) const;
 	void HandleTrueBiteWindowExpired();
 	/** 咬钩计时到点那一刻冻结选择上下文、选鱼、生成鱼影 Encounter；饵的数量在真咬成立时才扣。 */

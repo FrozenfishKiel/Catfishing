@@ -23,7 +23,7 @@ class CATFISHING_API UCatFishingService : public UWorldSubsystem
 
 public:
 	/** 每人场上合计最多两根实体竿；手持和损坏但尚未收回的竿也占名额。 */
-	static constexpr int32 MaximumDeployedRodsPerPlayer = 2;
+	// 墓碑（2026-09-13）：每人部署竿上限改读 CatFishingSettings，默认仍为两根。
 
 	/** 只在 authority Game World 创建服务；客户端通过复制 Session 观察。 */
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;

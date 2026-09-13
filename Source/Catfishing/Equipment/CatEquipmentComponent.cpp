@@ -276,6 +276,17 @@ FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(co
 		|| !PlayerState->HasServerAuthorizedEquipmentUnlock(Float->RequiredUnlockId)
 		|| (Scoop && !PlayerState->HasServerAuthorizedEquipmentUnlock(Scoop->RequiredUnlockId)))
 	{
+		// 2026-09-13：这道门当前一定拒绝 10 件配了 RequiredUnlockId 的装备（7 种饵、2 种漂、二级竿），
+		// 因为授权只能来自已 durable ACK 的 Unlock Grant，而它唯一的生产者
+		// UCatRunImprintService::RecordCommittedUnlock 在正式链路上零调用点——「谁发解锁」尚未裁。
+		// 不改判定（不替策划决定解锁经济），只把静默的 PermissionDenied 变成能在 playtest 里查到的日志。
+		UE_LOG(LogCatEquipment, Warning,
+			TEXT("Event=equipment_loadout_unlock_denied RequestId=%s Owner=%s HasPlayerState=%s "
+				"RodUnlock=%s BaitUnlock=%s FloatUnlock=%s ScoopUnlock=%s Result=NoUnlockGrantProducerYet"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(GetOwner()),
+			PlayerState ? TEXT("true") : TEXT("false"),
+			*Rod->RequiredUnlockId.ToString(), *Bait->RequiredUnlockId.ToString(),
+			*Float->RequiredUnlockId.ToString(), Scoop ? *Scoop->RequiredUnlockId.ToString() : TEXT("None"));
 		Result.Error = ECatDomainCommandError::PermissionDenied;
 	}
 	else
@@ -1111,7 +1122,7 @@ bool UCatEquipmentComponent::RetireBrokenFishingRodFromAuthority(const FGuid Fis
 	return true;
 }
 
-FCatFishingUseOperationResult UCatEquipmentComponent::ReleaseFishingUse(const FGuid FishingSessionId, const bool bReturnCaughtBait)
+FCatFishingUseOperationResult UCatEquipmentComponent::ReleaseFishingUse(const FGuid FishingSessionId)
 {
 	FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
 	if (!Record) return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::NotFound, false);
@@ -1119,9 +1130,8 @@ FCatFishingUseOperationResult UCatEquipmentComponent::ReleaseFishingUse(const FG
 	if (!GetOwner() || !GetOwner()->HasAuthority())
 		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::DependencyUnavailable, false, Record);
 	UCatInventoryComponent* Inventory = ResolveOwnerInventoryComponent();
-	Record->bReturnCaughtBait |= bReturnCaughtBait;
-	const bool bReturnBait = (Record->bBaitQuantityFrozen && !Record->bBaitCommitted)
-		|| (Record->bReturnCaughtBait && Record->bBaitCommitted && !Record->FrozenBaitDefinitionId.IsNone());
+	// 墓碑（2026-09-13）：移除已提交饵的上鱼退款分支；§3.3/§3.4 的唯一退款条件是真咬前尚未提交。
+	const bool bReturnBait = Record->bBaitQuantityFrozen && !Record->bBaitCommitted;
 	if (bReturnBait)
 	{
 		UCatEquipmentDefinition* Bait = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(Record->FrozenBaitDefinitionId);

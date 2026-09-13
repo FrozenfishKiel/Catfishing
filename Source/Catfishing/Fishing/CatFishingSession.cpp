@@ -54,26 +54,7 @@
 #include "StateTree.h"
 #include "TimerManager.h"
 
-namespace
-{
-	/**
-	 * 翻肚鱼苏醒时限，秒。钓鱼规则 §5.3（:260）"超过苏醒时限仍未上岸就苏醒逃跑，时限是配置项，默认 30 秒"。
-	 * 这里是本文件的占位常量：UCatFishingSettings 本轮由别的改动占用，正式值要随参数页搬进 Config 项。
-	 */
-	constexpr double ExhaustedFishRevivalSeconds = 30.0;
-
-	/**
-	 * 渔获结束时鱼竿另扣的基础磨损点数。钓鱼规则 §4.4（:203）"搏斗以渔获结束时，竿另扣基础磨损 1 点"。
-	 * 与 Runner 的逐步磨损是两笔账：逐步磨损按线力计价，这一点只在真的拿到鱼时扣一次。
-	 */
-	constexpr double CatchCompletionRodWearPoints = 1.0;
-	// 碾压甩岸距离（钓鱼规则 §4.2，2026-09-12 拍「沿钓线朝身后甩一段固定距离」）。
-	// 2.5 米是快照：够让鱼飞过猫头顶落在身后、又不至于飞出屏幕。正式值随参数页落 Config。
-	constexpr double OverpowerFlingDistanceCentimeters = 250.0;
-
-	/** 碾压门槛：猫力达到鱼力的这个倍数即碾压甩岸。钓鱼规则 §4.2（:178）。 */
-	constexpr double OverpowerStrengthRatio = 2.0;
-}
+// 墓碑（2026-09-13）：玩法常量移至 UCatFishingSettings 与 DefaultGame.ini；默认值及服务器裁决顺序不变。
 
 // 构造流程：创建唯一 StateTree 组件、关闭自动启动并开启 Actor 复制；阶段只在事件驱动时更新。
 ACatFishingSession::ACatFishingSession()
@@ -940,10 +921,9 @@ void ACatFishingSession::HandleProbeTimer()
 
 // 试探期停留时长读取流程（钓鱼规则 §3.4:141「试探期 2～4 秒随机，占位，快照，**参数页为准**」）：
 // 设计把这个数归参数页，所以正式事实源是 UCatFishingSettings::ProbeDurationRangeSeconds，
-// 逐鱼 Bite 资产上的 ProbeDurationSeconds 只是可选覆盖（留给将来做逐鱼差异，现有资产都没填）。
+// 逐鱼 Bite 资产上的 ProbeDurationSeconds 是可选覆盖；四份正式 Bite 资产已序列化该字段，新资产可留 0。
 // 注意别把它和 09-09 晚裁的「正式口径逐鱼配」混为一谈——那条指的是食性／发力段长／休息段长／
-// 游速系数四列，不含试探期。此前这里只认逐鱼资产并 fail-closed，等于让试探期永远过不去、
-// 真咬窗不可达，是取错了事实源。
+// 游速系数四列，不含试探期。留 0 时必须允许资产通过就绪校验，否则新资产会在选鱼时被过滤，根本到不了区间回退。
 bool ACatFishingSession::TryResolveProbeDurationSeconds(double& OutProbeSeconds) const
 {
 	OutProbeSeconds = 0.0;
@@ -973,7 +953,7 @@ bool ACatFishingSession::TryResolveProbeDurationSeconds(double& OutProbeSeconds)
 // 试探期进入流程（钓鱼规则 §3.4:141 演出时序）：
 // ①咬钩计时到点这一刻就冻结上下文并抽鱼，同时按真鱼体型生成水里的鱼影 Encounter；
 // ②给这一竿的钓手揭开图鉴剪影层，永不撤销；
-// ③浮漂保持轻点（EnterPhase 里 Probe 对应 BiteWarning 表现），停留 ProbeDurationSeconds；
+// ③浮漂保持轻点（EnterPhase 里 Probe 对应 BiteWarning 表现），停留逐鱼覆盖或参数页区间解析的秒数；
 // ④停留到点才由 HandleProbeStayTimer 把浮漂转猛沉、打开真咬响应窗。
 // 墓碑：2026-09-12 之前本函数叫 OpenTrueBiteWindowFromStateTree，进 Probe 就直接开真咬窗，
 // 鱼与鱼影要等合法左键之后才创建——提竿前水里什么都没有，玩家没法凭鱼影决定要不要提。
@@ -1016,7 +996,7 @@ bool ACatFishingSession::BeginProbeFromStateTree()
 	if (!TryResolveProbeDurationSeconds(ProbeSeconds))
 	{
 		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated,
-			TEXT("Probe duration unset on bite personality"));
+			TEXT("Probe duration unavailable: no valid override or settings range"));
 		return false;
 	}
 
@@ -1288,7 +1268,7 @@ void ACatFishingSession::HandleTrueBiteWindowExpired()
 		return;
 	}
 	bTrueBiteWindowAcceptingHook = false;
-	// 正常路径上饵在预警/下沉时已提交，这里再收口一次：AlreadyResolved 与首次提交都算扣到了，
+	// 正常路径上饵在真咬下沉时已提交，这里再收口一次：AlreadyResolved 与首次提交都算扣到了，
 	// 其余错误说明装备事务本身已经坏掉，按失效终止而不是悄悄放过一份没扣的饵。
 	UCatEquipmentComponent* Equipment = CastEquipment.Get();
 	const FCatFishingUseOperationResult BaitCommit = Equipment
@@ -1898,7 +1878,7 @@ bool ACatFishingSession::CommitCatchEquipmentFromAuthority()
 	// 所以此处**必须**再扣，原先"捕获仅收口饵料，不能再重复扣耐久"的口径是错的。
 	// 磨损接口按累计绝对值写回，序号必须严格 +1：直接用刚拿到的记录值做基准，不另存第二份账。
 	const FCatFishingUseOperationResult Wear = Equipment->ApplyFishingRodWear(Snapshot.FishingSessionId,
-		Bait.WearSequence + 1, Bait.AbsoluteRodWear + CatchCompletionRodWearPoints);
+		Bait.WearSequence + 1, Bait.AbsoluteRodWear + GetDefault<UCatFishingSettings>()->GetCatchCompletionRodWearPoints());
 	if (!Wear.bApplied)
 	{
 		UE_LOG(LogCatFishing, Error,
@@ -1928,7 +1908,7 @@ bool ACatFishingSession::CommitCatchEquipmentFromAuthority()
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_catch_rod_wear_applied SessionId=%s RodItemInstanceId=%s WearSequence=%lld WearPoints=%.3f RodDurability=%.3f Broken=%s"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-		*AttemptSnapshot.RodItemInstanceId.ToString(), Wear.WearSequence, CatchCompletionRodWearPoints,
+		*AttemptSnapshot.RodItemInstanceId.ToString(), Wear.WearSequence, GetDefault<UCatFishingSettings>()->GetCatchCompletionRodWearPoints(),
 		Wear.RemainingRodDurability, Wear.bRodBroken ? TEXT("true") : TEXT("false"));
 	return true;
 }
@@ -2226,7 +2206,7 @@ bool ACatFishingSession::EvaluateStrengthCheckOrderFromAuthority(const TCHAR* Tr
 		return true;
 	}
 	// ② 碾压：猫力达到鱼力的 2 倍即碾压，直接把鱼甩上岸；达标立即飞鱼、跳过或中断搏斗循环。
-	if (CombinedStrength >= FishStrength * OverpowerStrengthRatio)
+	if (CombinedStrength >= FishStrength * GetDefault<UCatFishingSettings>()->GetOverpowerStrengthRatio())
 	{
 		UE_LOG(LogCatFishing, Log,
 			TEXT("Event=fishing_fish_overpowered SessionId=%s Trigger=%s CombinedStrength=%.3f FishStrength=%.3f "
@@ -2265,7 +2245,7 @@ bool ACatFishingSession::FlingFishAshoreFromAuthority()
 	// 落点（钓鱼规则 §4.2，2026-09-12 拍）：沿钓线方向朝持竿猫身后甩一段固定距离。
 	// 取固定距离而不是按超出倍率缩放——倍率缩放会让 4 倍碾压的鱼飞出屏幕，反而看不见那一下。
 	// 撞水或撞墙就按比例往回收，收不到干地才退回落在猫脚下。
-	// OverpowerFlingDistanceCentimeters 是快照值，正式值随参数页「碾压甩岸距离」行落 Config。
+	// 距离与回收采样比例统一读参数配置，非法值回退迁移前默认值并告警。
 	TArray<const AActor*> IgnoredActors;
 	IgnoredActors.Reserve(5);
 	IgnoredActors.Add(this);
@@ -2280,7 +2260,7 @@ bool ACatFishingSession::FlingFishAshoreFromAuthority()
 	const UCatWaterQuerySubsystem* Water = World->GetSubsystem<UCatWaterQuerySubsystem>();
 	constexpr double MinimumDryGroundHeightCentimeters = 1.0;
 	// 依次试满距、2/3、1/3，最后退回脚下（0）；第一个落在干地上的点就用它。
-	static constexpr double DistanceFractions[] = {1.0, 2.0 / 3.0, 1.0 / 3.0, 0.0};
+	const TArray<double>& DistanceFractions = GetDefault<UCatFishingSettings>()->GetOverpowerLandingDistanceFractions();
 	FVector LandingPoint = FootPoint;
 	FVector LandingNormal = FVector::UpVector;
 	bool bFoundDryGround = false;
@@ -2288,7 +2268,7 @@ bool ACatFishingSession::FlingFishAshoreFromAuthority()
 	{
 		const FVector Candidate = BackwardDirection.IsNearlyZero()
 			? FootPoint
-			: FootPoint + BackwardDirection * (OverpowerFlingDistanceCentimeters * Fraction);
+			: FootPoint + BackwardDirection * (GetDefault<UCatFishingSettings>()->GetOverpowerFlingDistanceCentimeters() * Fraction);
 		const FCatWorldSurfaceResult Surface = FCatWorldSurfaceResolver::ResolveHighestBlockingSurface(
 			World, Candidate, ItemSettings->LandingGroundTraceChannel, IgnoredActors);
 		const FVector Point = Surface.bSucceeded ? Surface.WorldPosition : Candidate;
@@ -2310,7 +2290,7 @@ bool ACatFishingSession::FlingFishAshoreFromAuthority()
 			TEXT("Event=fishing_overpower_fling_rejected SessionId=%s FootPoint=%s Backward=%s "
 				"FlingDistance=%.1f Reason=NoDryGroundAlongBackwardArc"),
 			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *FootPoint.ToCompactString(),
-			*BackwardDirection.ToCompactString(), OverpowerFlingDistanceCentimeters);
+			*BackwardDirection.ToCompactString(), GetDefault<UCatFishingSettings>()->GetOverpowerFlingDistanceCentimeters());
 		return false;
 	}
 	return SpawnLandedFishPickupFromAuthority(LandingPoint, LandingNormal,
@@ -2329,10 +2309,10 @@ void ACatFishingSession::ScheduleExhaustedRevivalTimerFromAuthority()
 		return; // 重复阶段事件不重新起算，否则反复进 ExhaustedReel 就能无限续命。
 	}
 	GetWorldTimerManager().SetTimer(ExhaustedRevivalTimerHandle, this, &ThisClass::HandleExhaustedRevivalTimer,
-		ExhaustedFishRevivalSeconds, false);
+		GetDefault<UCatFishingSettings>()->GetExhaustedFishRevivalSeconds(), false);
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_exhausted_revival_armed SessionId=%s RevivalSeconds=%.2f FishDefinition=%s"),
-		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), ExhaustedFishRevivalSeconds,
+		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), GetDefault<UCatFishingSettings>()->GetExhaustedFishRevivalSeconds(),
 		FishDefinition ? *FishDefinition->FishDefinitionId.ToString() : TEXT("None"));
 }
 
@@ -2352,7 +2332,7 @@ void ACatFishingSession::HandleExhaustedRevivalTimer()
 	}
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_exhausted_fish_revived SessionId=%s RevivalSeconds=%.2f FishDefinition=%s Result=Escaped %s"),
-		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), ExhaustedFishRevivalSeconds,
+		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), GetDefault<UCatFishingSettings>()->GetExhaustedFishRevivalSeconds(),
 		FishDefinition ? *FishDefinition->FishDefinitionId.ToString() : TEXT("None"),
 		*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
 	TerminateSession(ECatFishingOutcome::Escaped, TEXT("Exhausted fish revived before reaching the shore"));
@@ -2789,9 +2769,8 @@ void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, cons
 				*AttemptSnapshot.RodItemInstanceId.ToString(), bRetired ? TEXT("true") : TEXT("false"),
 				bRodActorDestroyed ? TEXT("true") : TEXT("false"));
 		}
-		Equipment->ReleaseFishingUse(Snapshot.FishingSessionId,
-			FinalPhase == ECatFishingPhase::Resolved
-			&& (FinalOutcome == ECatFishingOutcome::Caught || FinalOutcome == ECatFishingOutcome::Landed));
+		// 墓碑（2026-09-13）：上鱼不再要求返还已提交鱼饵；所有终局共用未提交才返还的结算入口。
+		Equipment->ReleaseFishingUse(Snapshot.FishingSessionId);
 	}
 	if (StateTreeComponent && StateTreeComponent->IsRunning())
 	{

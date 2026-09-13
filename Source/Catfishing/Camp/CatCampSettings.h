@@ -11,6 +11,10 @@ class CATFISHING_API UCatCampSettings : public UDeveloperSettings
 	GENERATED_BODY()
 
 public:
+	/** 玩家出生点围绕营地中心的水平半径，厘米；默认保持原布局。 */
+	UPROPERTY(Config, EditAnywhere, Category="Spawn", meta=(ClampMin="0.01", Units="cm"))
+	double PlayerEntryRingRadiusCentimeters = 300.0;
+	double GetPlayerEntryRingRadiusCentimeters() const;
 	/** 统一裁决休息、救援等固定营地入口能否开放；缺 gate 或合法范围时返回 false，使各入口以同一边界 fail-closed。 */
 	bool IsRuntimeReady() const;
 

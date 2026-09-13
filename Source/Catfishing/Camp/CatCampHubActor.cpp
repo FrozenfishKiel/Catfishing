@@ -22,8 +22,7 @@ ACatFishTankActor* ACatCampHubActor::ResolveSharedFishTank() const
 
 namespace
 {
-	/** 营地玩家出生环的默认半径，单位厘米；它让初始 Pawn 离开营地中心和 PlayerStart 胶囊，同时仍处在常规营地交互半径内。 */
-	constexpr double CatCampPlayerEntryRingRadiusCentimeters = 300.0;
+	// 墓碑（2026-09-13）：出生环半径移至 CatCampSettings；地面探测余量与碰撞容差仍是工程常量。
 
 	/** 营地出生地面探测的上方余量，单位厘米；它允许营地实例按地面设施或 PlayerStart 中心两种编辑器高度摆放。 */
 	constexpr double CatCampPlayerEntryGroundProbeUpCentimeters = 1200.0;
@@ -129,7 +128,7 @@ bool ACatCampHubActor::TryResolvePlayerEntryTransform(const int32 PreferredEntry
 		const int32 CandidateIndex =
 			(PreferredEntryIndex + AttemptIndex) % CatGameplayPlayerLimits::MaxCampSpawnPlayers;
 		const FVector CandidateAnchorLocation =
-			GetActorLocation() + CandidateDirections[CandidateIndex] * CatCampPlayerEntryRingRadiusCentimeters;
+			GetActorLocation() + CandidateDirections[CandidateIndex] * GetDefault<UCatCampSettings>()->GetPlayerEntryRingRadiusCentimeters();
 		FVector CandidateLocation = FVector::ZeroVector;
 		if (!TryProjectCampEntryCandidateToGround(World, this, CandidateAnchorLocation, PawnHalfHeight,
 			CandidateLocation))

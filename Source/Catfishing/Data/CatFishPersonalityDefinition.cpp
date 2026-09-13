@@ -2,16 +2,13 @@
 
 bool UCatBitePersonalityDefinition::IsRuntimeDefinitionReady() const
 {
-	return !BitePersonalityId.IsNone() && FMath::IsFinite(ProbeDurationSeconds) && ProbeDurationSeconds > 0.0
+	// 时长事实源在参数页；0 表示未覆盖，正值按秒覆盖，负数与非有限值属于错误配置。
+	return !BitePersonalityId.IsNone() && FMath::IsFinite(ProbeDurationSeconds) && ProbeDurationSeconds >= 0.0
 		&& FMath::IsFinite(TrueBiteWindowSeconds) && TrueBiteWindowSeconds > 0.0
 		&& FMath::IsFinite(PerfectHookWindowSeconds) && PerfectHookWindowSeconds > 0.0
-		&& PerfectHookWindowSeconds <= TrueBiteWindowSeconds
-		// 三项完美倍率已退为过渡字段（正式取值见 UCatFishCatalogSettings::ResolvePerfectHookReduction）；
-		// 这里继续要求合法值，只为让仍在读旧字段的钓鱼会话不会拿到 0 而把鱼力量清零，调用方改读后整组删除。
-		&& FMath::IsFinite(PerfectFishStrengthMultiplier) && PerfectFishStrengthMultiplier > 0.0 && PerfectFishStrengthMultiplier <= 1.0
-		&& FMath::IsFinite(PerfectFishStaminaMultiplier) && PerfectFishStaminaMultiplier > 0.0 && PerfectFishStaminaMultiplier <= 1.0
-		&& FMath::IsFinite(PerfectInitialLineLengthMultiplier) && PerfectInitialLineLengthMultiplier > 0.0
-		&& PerfectInitialLineLengthMultiplier <= 1.0;
+		&& PerfectHookWindowSeconds <= TrueBiteWindowSeconds;
+	// 墓碑（2026-09-13）：三项旧完美倍率不再参与就绪校验；生产及 Debug 都读鱼目录的正式倍率。
+	// 新 Bite 留空旧字段不能因此从候选中消失。字段仍保留供旧资产反序列化，迁移资产前不删反射入口。
 }
 
 void UCatFightPersonalityDefinition::PostLoad()

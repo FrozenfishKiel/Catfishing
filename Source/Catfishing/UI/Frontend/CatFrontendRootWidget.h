@@ -31,6 +31,15 @@ public:
 	/** 用 SaveModel 的真实摘要配置本行；写入展示文本和稳定 SlotId，点击以后不通过行索引或文本猜测存档身份。 */
 	void ConfigureRow(UCatFrontendRootWidget* InRootWidget, const FCatSaveSlotSummary& Summary);
 
+	/** 只读展示状态；ConfigureRow 随摘要刷新，资产可据此绑定完成标识与颜色。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category="Catfishing|Save")
+	bool bRunCompleted = false;
+	/** 行内若另有继续按钮，直接绑定其 IsEnabled；选择行仍允许查看摘要或主动删除。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category="Catfishing|Save")
+	bool bCanContinue = false;
+	UPROPERTY(BlueprintReadOnly, Transient, Category="Catfishing|Save")
+	FText CompletionStatusText;
+
 protected:
 	/** WidgetTree 建立后绑定本行选择按钮；按钮缺失时保持不可操作并记录资产合同错误，不生成替身。 */
 	virtual void NativeOnInitialized() override;
