@@ -220,9 +220,17 @@ bool UCatAbilitySystemComponent::ApplyFishingStaminaDelta(const float Delta)
 		{
 			return false;
 		}
-		if (FMath::IsNearlyZero(GreenDelta))
+		// 只在绿段**恰好**为零时提前返回：那时整笔消耗都由黄段吸收，是一次成功提交，
+		// 调用方不该按失败重试。
+		// 2026-09-13 修：原来写的是 FMath::IsNearlyZero(GreenDelta)，容差 1e-4。绿段余额极小
+		// （例如 1e-9）时 GreenDelta 是非零的、确实欠着绿段，却被当成「绿段已空」提前返回成功，
+		// 于是这笔钱谁都没扣：绿段余额不变，而 CatFishingFightRunner 按「FrozenOperatorStamina > 0」
+		// 保留满力量，主控就一直是满力。Runner.PrimaryOperatorStrengthAndCostsIgnorePhysicalHelpers
+		// 抓的正是这个（4319c31 加绿/黄分流时引入，99ff6ef 没有这个分支）。
+		// GreenDelta = -Min(CurrentGreen, -Delta)：CurrentGreen 为 0 时它恰好是 ±0，所以精确比较
+		// 覆盖了「没有绿色金额」这一个意图，不会漏掉「金额很小但非零」。
+		if (GreenDelta == 0.0f)
 		{
-			// 绿段已空、整笔消耗都由黄段吸收；这仍是一次成功的消耗提交，调用方不该按失败重试。
 			return true;
 		}
 	}

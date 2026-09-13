@@ -86,6 +86,10 @@ bool FCatFishingOperatorRunnerIntegrationTest::RunTest(const FString& Parameters
 	Runner->Config.FishFullEffortSpeedCentimetersPerSecond = 75.0;
 	Runner->Config.MaximumLineLengthCentimeters = 1000.0;
 	Runner->Config.RodDurability = 1000.0;
+	// 2026-09-13：本用例有「主控保留正常放线回体」的断言，需要成长项给出的正速率作前置。
+	// 设计把**基础**放线回体定为 0（钓鱼规则 §4.4:213），9bfb4d5 把模拟器默认从 1.5 改成 0 之后
+	// 这类断言永远不成立；同时它让「不该回体」的几条从空断言变成真检查。
+	Runner->Config.SlackStaminaRegenPerSecond = 2.75;
 	Runner->State.FishStamina = 100.0;
 	Runner->State.LineLengthCentimeters = 500.0;
 	Runner->State.FishWorldPosition = FVector(500.0, 0.0, 0.0);

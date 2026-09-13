@@ -203,7 +203,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatEquipmentItemPickupBoundaryTest,
 	"Catfishing.Unit.Inventory.EquipmentItemPickupRejectsFullBagAndPreventsReentrantDoubleGrant",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-// 装备世界物拾取测试流程：先让背包满载验证失败会保留且可重试，再释放空位并在库存变更回调重入同一物品；成功只能发货一次并销毁世界物。
+// 装备世界物拾取测试流程：先让背包满载验证失败会保留且可重试，再释放空位并在库存变更回调重入同一物品；
+// 成功只能发货一次，原 Actor 交给库存实例保管（隐藏、关碰撞、不可再拾取），不销毁——再次丢弃要复用它。
 bool FCatEquipmentItemPickupBoundaryTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -255,7 +256,23 @@ bool FCatEquipmentItemPickupBoundaryTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("重入拾取被世界物占用状态拒绝"), bReentrantPickupResult);
 	TestEqual(TEXT("成功拾取只入账一件装备"),
 		Inventory->CountVisibleInventoryQuantityByDefinitionId(EquipmentDefinition->GetInventoryDefinitionId()), 1);
-	TestTrue(TEXT("成功拾取销毁世界物"), Pickup->IsActorBeingDestroyed());
+	// 2026-09-13 修：原来这里断言「成功拾取销毁世界物」，那是旧生命周期。
+	// 现行链路把原 Actor 交给库存实例保管（CatItem.cpp:126 交接、:154 保留并关掉物理／碰撞／可见性），
+	// 只有没有实例保留它的批次才走 :160 的 Destroy——因为再次丢弃要复用同一个 Actor
+	//（CatInventoryComponent.cpp:2401 取 GetWorldActor()、:2448 重设变换与碰撞）。
+	// Editor 侧同口径回归 09-11 已随 1681d48 迁移（CatInventoryWorldActionsTests.cpp:351-364），
+	// 这条 Unit 末尾的销毁断言当时漏了迁移，从此一直红着。
+	// 原断言要抓的是「成功后世界里还留着可重复拾取的副本」，下面第二条直接验这件事，比验销毁更贴那个意图。
+	TestTrue(TEXT("成功拾取保留原Actor并隐藏关碰撞"), IsValid(Pickup) && !Pickup->IsActorBeingDestroyed()
+		&& Pickup->IsHidden() && !Pickup->GetActorEnableCollision());
+	TestFalse(TEXT("库存保管的原物不可重复拾取"), ICatInteractable::Execute_CanInteract(Pickup, Controller));
+	bool bInstanceHoldsPickup = false;
+	for (int32 SlotIndex = 0; SlotIndex < Inventory->GetInventorySlotCount() && !bInstanceHoldsPickup; ++SlotIndex)
+	{
+		const FCatInventoryEntry* Entry = Inventory->GetInventoryEntryAtSlot(SlotIndex);
+		bInstanceHoldsPickup = Entry && Entry->Instance && Entry->Instance->GetWorldActor() == Pickup;
+	}
+	TestTrue(TEXT("入账实例保存原Actor"), bInstanceHoldsPickup);
 	return !HasAnyErrors();
 }
 

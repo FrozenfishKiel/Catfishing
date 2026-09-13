@@ -294,7 +294,15 @@ bool FCatFishingEffortReleaseAndExhaustionTest::RunTest(const FString& Parameter
 	TestEqual(TEXT("力竭后持竿不扣体"), Exhausted.CatHoldStaminaDrain, 0.0);
 	TestEqual(TEXT("力竭鱼不再扣自身体力"), Exhausted.FishStaminaDrain, 0.0);
 
-	const auto Released = Step(Config, MakeState(ECatFightCatAction::Slack), MakeHeldConstraint());
+	// 2026-09-13：放线回体要有「成长项给了速率」这个前置才可能发生——设计把**基础**放线回体定为 0
+	//（钓鱼规则 §4.4:213；设计修改记录保留基础 0），9bfb4d5 把模拟器默认从 1.5 改成 0，
+	// 此后这条「该回体」的断言就永远不成立了。这里显式造带正速率的成长场景；
+	// **不给共享 MakeConfig() 全局加回体**，那会悄悄改掉本文件其他用例的前提。
+	const auto ReleasedBase = Step(Config, MakeState(ECatFightCatAction::Slack), MakeHeldConstraint());
+	TestEqual(TEXT("基础放线不回体：速率 0 时恢复为零"), ReleasedBase.CatStaminaDrain, 0.0);
+	FCatFightSimulationConfig RecoveringConfig = Config;
+	RecoveringConfig.SlackStaminaRegenPerSecond = 2.75;
+	const auto Released = Step(RecoveringConfig, MakeState(ECatFightCatAction::Slack), MakeHeldConstraint());
 	TestTrue(TEXT("完全放线步骤有效"), Released.bSucceeded);
 	TestEqual(TEXT("真正解除约束后无猫负载"), Released.CatNormalizedEffortLoad, 0.0);
 	TestTrue(TEXT("未满线右键保留恢复豁免，即使起步尚未完成全部意图"),
@@ -304,7 +312,7 @@ bool FCatFishingEffortReleaseAndExhaustionTest::RunTest(const FString& Parameter
 		Released.GetRodActionStaminaDrain(), 0.0);
 	TestTrue(TEXT("解除约束且无主动努力时猫恢复体力"), Released.CatStaminaDrain < 0.0);
 	TestTrue(TEXT("放线恢复不突破体力上限"),
-		MakeState().CatStamina - Released.CatStaminaDrain <= Config.CatStaminaMaximum);
+		MakeState().CatStamina - Released.CatStaminaDrain <= RecoveringConfig.CatStaminaMaximum);
 	return !HasAnyErrors();
 }
 
@@ -416,7 +424,13 @@ bool FCatFishingLineLimitRecoveryTransitionTest::RunTest(const FString& Paramete
 {
 	(void)Parameters;
 	using namespace CatFishingEffortTest;
-	const auto Config = MakeConfig();
+	// 2026-09-13：本用例通篇验「什么时候该回体、什么时候不该」，必须有正的放线回体速率。
+	// 设计把**基础**放线回体定为 0（钓鱼规则 §4.4:213），9bfb4d5 把模拟器默认从 1.5 改成 0 之后，
+	// 「该回体」的两条断言永远不成立；而「不该回体」的几条（跨上限当步、鱼回游造的几何余线）
+	// 在零速率下本来就是空断言——给了正速率它们才从空转变成真检查。基础零速率那一档由
+	// ExhaustionAndReleasedSlackRespectEffortBoundaries 覆盖。
+	FCatFightSimulationConfig Config = MakeConfig();
+	Config.SlackStaminaRegenPerSecond = 2.75;
 	const auto Constraint = MakeHeldConstraint();
 	auto State = MakeState(ECatFightCatAction::Slack);
 	State.LineLengthCentimeters = Config.MaximumLineLengthCentimeters - 1.0;
