@@ -2,7 +2,7 @@
 
 ## 2026-09-11：正式角色 CMC 移动预测（源码检查点）
 
-客户端打包日志 `C:/Users/Administrator/Downloads/Logs/Catfishing.log:1344` 确认原运行链为 `UprightCMCServerSnapshots`，owning client 同样只追随服务器快照。正式角色此次迁移到引擎 CMC 的 SavedMove、打包移动 RPC、服务器校正/重放和代理平滑；下文日期更早的“客户端仅跟随快照”记录是历史验收，不再描述正式角色的当前实现。独立 `ACatPhysicsPrototypePawn` 仍使用已确认的 Chaos 输入/快照通道。
+客户端打包日志 `<客户端下载目录>/Logs/Catfishing.log:1344` 确认原运行链为 `UprightCMCServerSnapshots`，owning client 同样只追随服务器快照。正式角色此次迁移到引擎 CMC 的 SavedMove、打包移动 RPC、服务器校正/重放和代理平滑；下文日期更早的“客户端仅跟随快照”记录是历史验收，不再描述正式角色的当前实现。独立 `ACatPhysicsPrototypePawn` 仍使用已确认的 Chaos 输入/快照通道。
 
 工作区基线：开始时只有用户未跟踪的《裁决同步 · 程序（工程待办）.md》；实施中的 GameMode、OnlineSubsystem、房主退出测试、Fishing/Equipment 与 UI 改动属于并行任务，不纳入本功能提交。修改前主工程旧二进制的 `Catfishing.CMC` 8 项通过，日志 `Saved/Logs/MovementPrediction-BaselineRetry.log`；首次启动受 DDC 无可写节点阻塞，改用测试进程内存缓存后取得基线。并行改动曾造成退出测试及 Fishing 编译错误，因此后续从已提交 `b955e0e` 建立 `Saved/Validation/MovementPrediction-20260911` 隔离副本，生产源码仅叠加本轮改动、共享正式 Content。三客户端测试夹具另包含并行任务当时加入的共享拾竿阶段（现已提交为 `82ac481`）；对应新生产功能未叠入，因此不据此验收共享拾竿功能。本轮最终失败发生在这些新增阶段之前。
 
@@ -343,7 +343,7 @@ pwsh -File Build/Automation/verify_physics_grab_prototype.ps1 -Mode BuildGame
 
 原型 `presentation_delivery`：`Report-20260909-114801-453/index.json` 的实际地图侧视渲染网络用例通过，真实拉动 21.901 cm；有一条引擎 `r.MotionVectorSimulation` render-thread flag 警告，无抓握用例失败。图片 `Saved/Validation/PhysicsGrabPrototype-20260909/Saved/Automation/PhysicsGrabPrototype/Images/20260909-034821-gripped-and-pulling.png` 已目视检查：两猫、伸爪接触、彩色场地和中文 HUD 可见，旧多日光争用警告已消失。侧视相机仅供测试截图；玩家默认使用第三人称操作镜头。
 
-2026-09-09 11:50 通过启动脚本打开 Solo 独立窗口，未使用 `-log` 或 `-abslog`。实际默认文件为 `D:/develop/Catfishing/Saved/Validation/PhysicsGrabPrototype-20260909/Saved/Logs/Catfishing.log`，已确认新的 `physics_prototype_arena_ready`、两个 `physics_prototype_visual_ready`、`physics_body_started` 及抓握创建/释放事件；启动与操作日志快照留在证据目录 `Solo-20260909-115036.log`。这证明单机编辑器 Game 窗口落盘；Cook、打包后双进程联机及延迟手感仍未验收，不等同于正式表现交付完成。
+2026-09-09 11:50 通过启动脚本打开 Solo 独立窗口，未使用 `-log` 或 `-abslog`。实际默认文件为 `Saved/Validation/PhysicsGrabPrototype-20260909/Saved/Logs/Catfishing.log`，已确认新的 `physics_prototype_arena_ready`、两个 `physics_prototype_visual_ready`、`physics_body_started` 及抓握创建/释放事件；启动与操作日志快照留在证据目录 `Solo-20260909-115036.log`。这证明单机编辑器 Game 窗口落盘；Cook、打包后双进程联机及延迟手感仍未验收，不等同于正式表现交付完成。
 
 ## 试玩反馈修复：跳跃表现
 

@@ -1,5 +1,5 @@
 ## ui与交互
-> 沿用基线 D:\LocalGameProject\Unreal\Catfishing\Docs\gap-analysis\2026-09-09，本轮未重跑：文档与代码均未变
+> 沿用基线 Docs/gap-analysis/2026-09-09，本轮未重跑：文档与代码均未变
 
 ### Features
 

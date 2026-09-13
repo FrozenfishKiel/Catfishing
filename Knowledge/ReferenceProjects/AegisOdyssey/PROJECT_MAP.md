@@ -2,38 +2,38 @@
 
 更新时间：2026-09-10
 
-文档状态：当前项目的 `reference_context` 地图。本文只说明 `D:\UnreaProjects\AegisOdyssey` 作为外部参考项目时的入口、主链、可参考边界和误读风险，不把 AegisOdyssey 的架构规则提升为 Catfishing 当前规则。
+文档状态：当前项目的 `reference_context` 地图。本文只说明 `<参考工程根>` 作为外部参考项目时的入口、主链、可参考边界和误读风险，不把 AegisOdyssey 的架构规则提升为 Catfishing 当前规则。
 
 范围：覆盖 AegisOdyssey 的 UE 项目入口、源码模块、配置、插件、项目自带知识库、主要运行时链路和适合 Catfishing 检索的参考方向。本文不覆盖 `.uasset` / `.umap` 二进制资产内部字段，不证明 AegisOdyssey 本身可构建、可运行或已完成正式联机交付。
 
 ## 事实来源
 
-- `D:\UnreaProjects\AegisOdyssey\AegisOdyssey.uproject`
-- `D:\UnreaProjects\AegisOdyssey\Config\DefaultEngine.ini`
-- `D:\UnreaProjects\AegisOdyssey\Config\DefaultGame.ini`
-- `D:\UnreaProjects\AegisOdyssey\Config\DefaultInput.ini`
-- `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey.Target.cs`
-- `D:\UnreaProjects\AegisOdyssey\Source\AegisOdysseyEditor.Target.cs`
-- `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\AegisOdyssey.Build.cs`
-- `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\GameModes\*.h/.cpp`
-- `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\System\*.h/.cpp`
-- `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\Character\*.h/.cpp`
-- `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\Player\*.h/.cpp`
-- `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\AbilitySystem\**`
-- `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\Input\**`
-- `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\Inventory\**`
-- `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\Equipment\**`
-- `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\Interaction\**`
-- `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\Harvest\**`
-- `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\Crafting\**`
-- `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\SkillSystem\**`
-- `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\UI\**`
-- `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\StateTree\**`
-- `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\Character\Enemies\AI\**`
-- `D:\UnreaProjects\AegisOdyssey\Plugins\GameFeatures\AOGameCore\AOGameCore.uplugin`
-- `D:\UnreaProjects\AegisOdyssey\Plugins\CommonUser\Source\CommonUser\Public\CommonSessionSubsystem.h`
-- `D:\UnreaProjects\AegisOdyssey\Plugins\CommonUser\Source\CommonUser\Public\CommonUserSubsystem.h`
-- `D:\UnreaProjects\AegisOdyssey\Docs\Knowledge\*\PROJECT_MAP.md`
+- `AegisOdyssey.uproject`
+- `Config\DefaultEngine.ini`
+- `Config\DefaultGame.ini`
+- `Config\DefaultInput.ini`
+- `Source\AegisOdyssey.Target.cs`
+- `Source\AegisOdysseyEditor.Target.cs`
+- `Source\AegisOdyssey\AegisOdyssey.Build.cs`
+- `Source\AegisOdyssey\GameModes\*.h/.cpp`
+- `Source\AegisOdyssey\System\*.h/.cpp`
+- `Source\AegisOdyssey\Character\*.h/.cpp`
+- `Source\AegisOdyssey\Player\*.h/.cpp`
+- `Source\AegisOdyssey\AbilitySystem\**`
+- `Source\AegisOdyssey\Input\**`
+- `Source\AegisOdyssey\Inventory\**`
+- `Source\AegisOdyssey\Equipment\**`
+- `Source\AegisOdyssey\Interaction\**`
+- `Source\AegisOdyssey\Harvest\**`
+- `Source\AegisOdyssey\Crafting\**`
+- `Source\AegisOdyssey\SkillSystem\**`
+- `Source\AegisOdyssey\UI\**`
+- `Source\AegisOdyssey\StateTree\**`
+- `Source\AegisOdyssey\Character\Enemies\AI\**`
+- `Plugins\GameFeatures\AOGameCore\AOGameCore.uplugin`
+- `Plugins\CommonUser\Source\CommonUser\Public\CommonSessionSubsystem.h`
+- `Plugins\CommonUser\Source\CommonUser\Public\CommonUserSubsystem.h`
+- `Docs\Knowledge\*\PROJECT_MAP.md`
 - Catfishing 当前仓库内已保留本参考地图；源码层没有直接 include、配置或运行时依赖 AegisOdyssey。
 
 ## 地图定位
@@ -41,7 +41,7 @@
 AegisOdyssey 位于当前仓库旁侧：
 
 ```text
-D:\UnreaProjects\AegisOdyssey
+<参考工程根>
 ```
 
 它是 UE 5.6 项目，主模块为 `AegisOdyssey`。从项目 README、`AegisOdyssey.uproject` 和源码目录看，它是基于 `CommonGame/CommonUI + GAS + StateTree + GameFeatures + MVVM` 的第三人称动作 RPG 项目，重点系统包括角色、战斗、库存、装备、交互、采集、制造、技能和 AI。
@@ -417,20 +417,20 @@ Catfishing 若参考 Aegis 的联机方向，只能参考“不要绕开 CommonU
 
 ## 最短阅读顺序
 
-1. `D:\UnreaProjects\AegisOdyssey\README.md`
-2. `D:\UnreaProjects\AegisOdyssey\AegisOdyssey.uproject`
-3. `D:\UnreaProjects\AegisOdyssey\Config\DefaultEngine.ini`
-4. `D:\UnreaProjects\AegisOdyssey\Config\DefaultGame.ini`
-5. `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\AegisOdyssey.Build.cs`
-6. `D:\UnreaProjects\AegisOdyssey\Docs\Knowledge\GameplayFramework\PROJECT_MAP.md`
-7. `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\GameModes\AOGameMode.*`
-8. `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\GameModes\AOExperienceManagerComponent.*`
-9. `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\Character\AOCharacter.*`
-10. `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\Character\AOExtPawnComponent.*`
-11. `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\Character\AOHeroComponent.*`
-12. `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\Character\AOPawnData.*`
-13. `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\AbilitySystem\AOAbilitySystem.*`
-14. `D:\UnreaProjects\AegisOdyssey\Source\AegisOdyssey\Input\AOInputConfig.*`
+1. `README.md`
+2. `AegisOdyssey.uproject`
+3. `Config\DefaultEngine.ini`
+4. `Config\DefaultGame.ini`
+5. `Source\AegisOdyssey\AegisOdyssey.Build.cs`
+6. `Docs\Knowledge\GameplayFramework\PROJECT_MAP.md`
+7. `Source\AegisOdyssey\GameModes\AOGameMode.*`
+8. `Source\AegisOdyssey\GameModes\AOExperienceManagerComponent.*`
+9. `Source\AegisOdyssey\Character\AOCharacter.*`
+10. `Source\AegisOdyssey\Character\AOExtPawnComponent.*`
+11. `Source\AegisOdyssey\Character\AOHeroComponent.*`
+12. `Source\AegisOdyssey\Character\AOPawnData.*`
+13. `Source\AegisOdyssey\AbilitySystem\AOAbilitySystem.*`
+14. `Source\AegisOdyssey\Input\AOInputConfig.*`
 15. 按任务进入 `Docs\Knowledge\InventoryEquipment`、`InteractionSystem`、`HarvestSystem`、`CraftingSystem`、`SkillSystem`、`AI`、`StateTreeAI`、`MultiplayerSystem`。
 
 ## 容易误读的点

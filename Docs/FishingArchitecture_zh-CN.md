@@ -426,7 +426,7 @@ Runner只冻结主控ASC、输入及身体运动样本，并在最终求解后�
 
 `runtime_behavior`：共享项目 `FinalReport/index.json` 共222项，221成功（215 clean、6 warning）、1失败、0未运行；唯一失败是基线已有初级竿150/500不一致，未修改资产或断言。新无Session/Falling/碰撞回归、12个BorrowedRod真实场景、四端GroupListenThreeClients及原松线/鱼行为联机回归均通过。首轮 `IntegratedReport` 的两处新夹具失败保留：普通移动需经MoveAutonomous初始化模拟输入倍率；新场需等待真实首个完整组求解后才能验证旧场销毁不会拆除它。修正实际入口与等待条件后保留原行为断言通过。6项warning涉及旧PIE临时World网络名称、测试取消/水深/无人接管及托管Actor销毁时World上下文，不能把它们计作clean。
 
-`presentation_delivery`：尚未完成正式地图真人四端、打包双端默认落盘或Cook验收。本轮未写正式BP/WBP/状态树资产；二进制隐藏图和兼容反射入口仍按上表的未确认边界保留。实际运行日志为 `D:/develop/Catfishing/Saved/Automation/PreFightFormation-20260908/FinalTests.log`，包含PIE房主/三个客户端World观察；同进程日志不能替代打包房主与客户端各自落盘。`LogCatFishing` 的 `fishing_group_movement_binding` 带 `Unloaded`、名单和成员世代；结合 `fishing_group_unloaded_solve_rejected`、`fishing_fight_runner_stopped`、`fishing_exhausted_constraint_rejected` 与现有Session/资源事件复核模式交接。只读复用模型不代表无载阶段新增体力收费，测试通过也不能替代正式派对手感验收。持续缺口仍只归入 `Docs/Development/需求对齐差距清单.md`。
+`presentation_delivery`：尚未完成正式地图真人四端、打包双端默认落盘或Cook验收。本轮未写正式BP/WBP/状态树资产；二进制隐藏图和兼容反射入口仍按上表的未确认边界保留。实际运行日志为 `Saved/Automation/PreFightFormation-20260908/FinalTests.log`，包含PIE房主/三个客户端World观察；同进程日志不能替代打包房主与客户端各自落盘。`LogCatFishing` 的 `fishing_group_movement_binding` 带 `Unloaded`、名单和成员世代；结合 `fishing_group_unloaded_solve_rejected`、`fishing_fight_runner_stopped`、`fishing_exhausted_constraint_rejected` 与现有Session/资源事件复核模式交接。只读复用模型不代表无载阶段新增体力收费，测试通过也不能替代正式派对手感验收。持续缺口仍只归入 `Docs/Development/需求对齐差距清单.md`。
 
 
 ### 2.1 水域（样条烘焙 → 只读缓存）

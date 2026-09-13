@@ -399,7 +399,7 @@ Root 会在四个子 WBP 的 WidgetTree 内按名称解析以下关键控件：�
 
 默认淡入和淡出时间都是 `0.2` 秒。`ShowAt()` 用进入事件的鼠标屏幕绝对坐标完成首次定位，`NativeTick()` 在可见期间持续读取鼠标位置，转换到玩家屏幕几何后写入 `RootBorder` 的 RenderTranslation；淡出期间也继续跟随，收起后停止。位置更新不会重复发起显示，换格时透明度仍从当前值接续。
 
-迁移入口是 `Scripts/migrate_item_tooltip.py`。脚本从 `D:\UnreaProjects\AegisOdyssey\Content` 复制旧 WBP 和最小依赖闭包，目标资产是 `/Game/UI/Inventory/WBP_CatItemTooltip`；它会调用 `UCatItemTooltipAuthoringLibrary::InstallLegacyParentRedirect()` 临时解析 Aegis 旧父类，再调用 `FinalizeMigratedTooltipWidget()` 固定父类、清理旧 MVVM 绑定并补齐 `InstanceDetailsText`。脚本拒绝覆盖已有目标资产或不同内容的同路径依赖。
+迁移入口是 `Scripts/migrate_item_tooltip.py`。脚本从 `<参考工程 AegisOdyssey 根>/Content` 复制旧 WBP 和最小依赖闭包，目标资产是 `/Game/UI/Inventory/WBP_CatItemTooltip`；它会调用 `UCatItemTooltipAuthoringLibrary::InstallLegacyParentRedirect()` 临时解析 Aegis 旧父类，再调用 `FinalizeMigratedTooltipWidget()` 固定父类、清理旧 MVVM 绑定并补齐 `InstanceDetailsText`。脚本拒绝覆盖已有目标资产或不同内容的同路径依赖。
 
 ### 接手核对
 

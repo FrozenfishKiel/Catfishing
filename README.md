@@ -71,7 +71,16 @@ Catfishing 是一个基于 Unreal Engine 5.8 的联机钓鱼与营地协作项�
 
 ### 基础环境
 
-- Unreal Engine：`C:\Program Files\Epic Games\UE_5.8`（2026-09-13 更正，原记 `D:\UE_5.8` 已不存在）
+- Unreal Engine：5.8（版本号见 `Catfishing.uproject` 的 `EngineAssociation`）。
+  **引擎装在哪台机器上都不一样，本仓库任何文档都不写死它的绝对路径**——下面的命令统一用
+  `$env:UE_ROOT` 指代引擎安装目录，每个新终端先设一次：
+
+  ```powershell
+  $env:UE_ROOT = '<你机器上 UE 5.8 的安装目录>'   # 该目录下应有 Engine\Build\BatchFiles\Build.bat
+  ```
+
+  别指望自动发现：注册表 `HKLM:\SOFTWARE\EpicGames\Unreal Engine` 只登记 Launcher 装的版本，
+  本机那里有 4.27／5.3～5.6 而**没有 5.8**。
 - 项目文件：`Catfishing.uproject`
 - 默认地图：`/Game/Catfishing/Maps/Frontend`
 - 当前基础地图：`Frontend`、`Lake`
@@ -81,9 +90,9 @@ Catfishing 是一个基于 Unreal Engine 5.8 的联机钓鱼与营地协作项�
 在项目根目录运行：
 
 ```powershell
-& 'C:\Program Files\Epic Games\UE_5.8\Engine\Build\BatchFiles\Build.bat' CatfishingEditor Win64 Development -Project="$PWD\Catfishing.uproject" -WaitMutex -NoHotReload
+& "$env:UE_ROOT\Engine\Build\BatchFiles\Build.bat" CatfishingEditor Win64 Development -Project="$PWD\Catfishing.uproject" -WaitMutex -NoHotReload
 
-& 'C:\Program Files\Epic Games\UE_5.8\Engine\Build\BatchFiles\Build.bat' Catfishing Win64 Development -Project="$PWD\Catfishing.uproject" -WaitMutex -NoHotReload
+& "$env:UE_ROOT\Engine\Build\BatchFiles\Build.bat" Catfishing Win64 Development -Project="$PWD\Catfishing.uproject" -WaitMutex -NoHotReload
 ```
 
 ### 自动化测试
@@ -94,7 +103,7 @@ Catfishing 是一个基于 Unreal Engine 5.8 的联机钓鱼与营地协作项�
 日常跑：
 
 ```powershell
-& 'C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe' "$PWD\Catfishing.uproject" -ExecCmds="Automation RunTests Catfishing.Unit; Quit" -unattended -nopause -nosplash -NullRHI -log
+& "$env:UE_ROOT\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" "$PWD\Catfishing.uproject" -ExecCmds="Automation RunTests Catfishing.Unit; Quit" -unattended -nopause -nosplash -NullRHI -log
 ```
 
 结果在 `Saved/Logs/Catfishing.log`，数两个标记：
@@ -125,7 +134,7 @@ Catfishing.Unit.Inventory.EquipmentItemPickupRejectsFullBagAndPreventsReentrantD
 ```powershell
 New-Item -ItemType Directory -Force -Path 'Saved/Automation/user-acceptance-01/Report' | Out-Null
 
-& 'C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe' "$PWD\Catfishing.uproject" -unattended -nop4 -nosplash -nullrhi -DDC-ForceMemoryCache '-ExecCmds=Automation RunTests Catfishing.Unit;Quit' '-TestExit=Automation Test Queue Empty' "-ReportExportPath=$PWD\Saved\Automation\user-acceptance-01\Report" "-abslog=$PWD\Saved\Automation\user-acceptance-01\Automation.log"
+& "$env:UE_ROOT\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" "$PWD\Catfishing.uproject" -unattended -nop4 -nosplash -nullrhi -DDC-ForceMemoryCache '-ExecCmds=Automation RunTests Catfishing.Unit;Quit' '-TestExit=Automation Test Queue Empty' "-ReportExportPath=$PWD\Saved\Automation\user-acceptance-01\Report" "-abslog=$PWD\Saved\Automation\user-acceptance-01\Automation.log"
 ```
 
 ```powershell

@@ -8,7 +8,7 @@
 
 - 当前项目实现：`Source/Catfishing/Save/CatRunSaveGame.h/.cpp`、`Source/Catfishing/Save/CatSaveSubsystem.h/.cpp`、`Source/Catfishing/Online/CatOnlineSubsystem.h/.cpp`、`Source/Catfishing/Framework/Game/CatfishingGameModeBase.cpp`。
 - 本轮原始验证：`Saved/Logs/SaveLyraFinalTests.log`、`.codex/state/save-lyra-baseline/editor-build.log`、`.codex/state/save-lyra-baseline/game-build.log`；用例入口 `Source/CatfishingEditor/Save/Tests/CatSaveRoundTripTests.cpp`。
-- 参考实现：`D:/UnreaProjects/LyraStarterGame/Source/LyraGame/Settings/LyraSettingsShared.h/.cpp`。
+- 参考实现：`<参考工程 LyraStarterGame 根>/Source/LyraGame/Settings/LyraSettingsShared.h/.cpp`。
 - 需求来源：下文“飞书策划来源”所列的只读版本。
 
 范围：本文记录第九模块 `Save / Persistence` 的策划来源、当前聊天补充决策和仍需确认的问题。本文不记录测试、验收或完成结论；项目长期进度入口待人工另定。

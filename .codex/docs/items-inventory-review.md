@@ -39,7 +39,7 @@
 
 - 差异基线：`.codex/state/items-inventory-baseline/{Source,Config,Knowledge,Docs}`；本报告不把完整 `git diff` 或 `items-inventory-changes.json` 当作范围权威。
 - 当前源码：`Source/Catfishing/Inventory/`、`Equipment/`、`Data/`、`Fishing/`、`Save/`、`UI/Inventory/`、`Items/`。
-- 参照源码：`D:/UnreaProjects/AegisOdyssey/Source/AegisOdyssey/Inventory/AOInventoryComponent.h:27`、`AOInventoryItemInstance.cpp:43`、`AOInventoryItemDefinition.h:50`、`Items/AOItem.cpp:48-69`、`Items/AOEquipmentItem.cpp:25-39`、`Equipment/AOEquipmentInstance.cpp:144`。
+- 参照源码：`<参考工程 AegisOdyssey 根>/Source/AegisOdyssey/Inventory/AOInventoryComponent.h:27`、`AOInventoryItemInstance.cpp:43`、`AOInventoryItemDefinition.h:50`、`Items/AOItem.cpp:48-69`、`Items/AOEquipmentItem.cpp:25-39`、`Equipment/AOEquipmentInstance.cpp:144`。
 - 最终证据复核：`.codex/state/items-inventory-baseline/final-editor-build.log:116`、`final-game-build.log:115`、`final-comment-scan.log:1`、`fragment-final-check.log:1646,1650`、`final-inventory-equipment-tests.log:2569-2571,2610`、`pickup-final-retest.log:1989-1996,2006`、`anchor-retest.log:2084,2100,2108,2111`；原 `integrated-tests.log:2159,2183,2195` 只作为 anchor 旧失败证据。
 
 ## 3. 改动总览
