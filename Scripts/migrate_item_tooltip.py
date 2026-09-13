@@ -8,7 +8,11 @@ import unreal
 
 
 # Aegis 项目的 Content 根目录，代表本次迁移读取的唯一旧资产来源；脚本只从这里复制 WBP 和它的正式依赖。
-SOURCE_CONTENT = r"D:\UnreaProjects\AegisOdyssey\Content"
+# 参考工程在每台机器上的位置不同（协作仓库不写死绝对路径）：
+# 用 CAT_AEGIS_CONTENT 指向 AegisOdyssey 的 Content 目录。
+SOURCE_CONTENT = os.environ.get("CAT_AEGIS_CONTENT")
+if not SOURCE_CONTENT:
+    raise SystemExit("请设置环境变量 CAT_AEGIS_CONTENT 指向参考工程 AegisOdyssey 的 Content 目录")
 # 当前 Catfishing 工程的 Content 根目录，代表迁移资产落盘位置；所有目标路径都相对它生成。
 TARGET_CONTENT = os.path.join(unreal.Paths.project_dir(), "Content")
 # 旧 WBP 在 Aegis 中的包路径；它会先被临时复制到当前工程，再经父类重定向加载。

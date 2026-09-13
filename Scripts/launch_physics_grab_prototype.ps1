@@ -3,9 +3,12 @@ param(
     [ValidatePattern('^[A-Za-z0-9_-]+$')][string]$RunName = 'PhysicsGrabPrototype-20260909',
     [ValidatePattern('^[A-Za-z0-9.\-]+$')][string]$Address = '127.0.0.1',
     [ValidateRange(1024, 65535)][int]$Port = 7779,
-    [string]$EngineRoot = 'D:\UE_5.8'
+    [string]$EngineRoot = $env:UE_ROOT
 )
 
+if (-not $EngineRoot) {
+    throw '请先设置 $env:UE_ROOT 指向本机 UE 5.8 安装目录，或用 -EngineRoot 传入；这是协作仓库，脚本里不写死绝对路径。'
+}
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))

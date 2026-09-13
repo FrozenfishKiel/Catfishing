@@ -4,11 +4,14 @@ param(
     [string]$Mode,
     [ValidatePattern('^[A-Za-z0-9_-]+$')]
     [string]$RunName = 'PhysicsGrabPrototype-20260909',
-    [string]$EngineRoot = 'D:\UE_5.8',
+    [string]$EngineRoot = $env:UE_ROOT,
     [string]$Filter = 'Catfishing.PhysicsGrabPrototype',
     [switch]$Render
 )
 
+if (-not $EngineRoot) {
+    throw '请先设置 $env:UE_ROOT 指向本机 UE 5.8 安装目录，或用 -EngineRoot 传入；这是协作仓库，脚本里不写死绝对路径。'
+}
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
