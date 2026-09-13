@@ -271,22 +271,26 @@ FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(co
 	{
 		Result.Error = ECatDomainCommandError::InvalidPayload;
 	}
-	else if (!PlayerState || !PlayerState->HasServerAuthorizedEquipmentUnlock(Rod->RequiredUnlockId)
-		|| !PlayerState->HasServerAuthorizedEquipmentUnlock(Bait->RequiredUnlockId)
-		|| !PlayerState->HasServerAuthorizedEquipmentUnlock(Float->RequiredUnlockId)
-		|| (Scoop && !PlayerState->HasServerAuthorizedEquipmentUnlock(Scoop->RequiredUnlockId)))
+	else if (!PlayerState)
 	{
-		// 2026-09-13：这道门当前一定拒绝 10 件配了 RequiredUnlockId 的装备（7 种饵、2 种漂、二级竿），
-		// 因为授权只能来自已 durable ACK 的 Unlock Grant，而它唯一的生产者
-		// UCatRunImprintService::RecordCommittedUnlock 在正式链路上零调用点——「谁发解锁」尚未裁。
-		// 不改判定（不替策划决定解锁经济），只把静默的 PermissionDenied 变成能在 playtest 里查到的日志。
-		UE_LOG(LogCatEquipment, Warning,
-			TEXT("Event=equipment_loadout_unlock_denied RequestId=%s Owner=%s HasPlayerState=%s "
-				"RodUnlock=%s BaitUnlock=%s FloatUnlock=%s ScoopUnlock=%s Result=NoUnlockGrantProducerYet"),
-			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(GetOwner()),
-			PlayerState ? TEXT("true") : TEXT("false"),
-			*Rod->RequiredUnlockId.ToString(), *Bait->RequiredUnlockId.ToString(),
-			*Float->RequiredUnlockId.ToString(), Scoop ? *Scoop->RequiredUnlockId.ToString() : TEXT("None"));
+		// 墓碑（2026-09-13）：这里原来还对竿／饵／漂／抄网各查一次
+		// HasServerAuthorizedEquipmentUnlock(RequiredUnlockId)。删掉这半条件，只留 PlayerState 必须在。
+		//
+		// 为什么删：设计里的「解锁」是**商店上新货**，不是「已有的东西不许装备」——
+		// 道具册 §5（Knowledge/Design/GDD 系统分册/道具/道具.md:123，09-09 拍）
+		// 「图鉴收集里程碑附带装备解锁是完整版预留，Demo 不做：Demo 里三档竿、三种漂、抄网、
+		// 鱼护开局就在货架，全靠商店买」。这条口径在商店侧已经由 FCatShopCatalogEntry 的
+		// RequiredShopUnlockId 正确承载（配了它的货架条目直接判无效，见 CatShopCatalogTypes.cpp:17,55）。
+		//
+		// 而这道装备门是另一套平行概念，且它的授权只能来自已 durable ACK 的 Unlock Grant，
+		// 唯一生产者 UCatRunImprintService::RecordCommittedUnlock 在正式链路上零调用点。
+		// 结果是 10 件配了 RequiredUnlockId 的 Demo 装备一律 PermissionDenied：
+		// 7 种饵、Equip_Float_Bell 与 Equip_Float_YarnBall、商店在卖的 Equip_Rod_ShopT2。
+		// 铃铛漂「咬钩铃响、全场可闻」是 09-12 刚接好的功能，因为漂配不上所以永远触发不了。
+		//
+		// 字段本身保留：CatRodSkinDefinition 上的同名字段是外观解锁（那条确实跟人走，程序页第 127 条
+		// 与外观内容一起挂起），装备定义上的这个留着等完整版的解锁经济，届时按「上新货」而不是
+		// 「禁止装备」重新接。物品仍必须在自己库存里——RodItemInstanceId 等三个实例校验没动。
 		Result.Error = ECatDomainCommandError::PermissionDenied;
 	}
 	else

@@ -110,6 +110,10 @@ bool ACatfishingPlayerState::AuthorizeEquipmentUnlockFromProfileGrant(const FCat
 }
 
 // 装备解锁证明读取流程：None 表示定义明确声明 starter；非空 UnlockId 必须命中服务器当前 PlayerState 授权快照，本地 SaveGame 不能被 Equipment 组件直接读取。
+// 2026-09-13 起本函数零调用点，别当死代码删：原来的调用方是 ConfigureLoadoutFromAuthority 的装备门，
+// 按道具册 §5「Demo 不做解锁、解锁＝商店上新货」删掉了（墓碑在 CatEquipmentComponent.cpp 那一支）。
+// 整条授权链（Publish → ServerPublish → SetAuthorized… → AuthorizedEquipmentUnlockIds）保留，
+// 等完整版的解锁经济落地时按「上新货」重新接消费侧。
 bool ACatfishingPlayerState::HasServerAuthorizedEquipmentUnlock(const FName UnlockId) const
 {
 	return UnlockId.IsNone() || AuthorizedEquipmentUnlockIds.Contains(UnlockId);
