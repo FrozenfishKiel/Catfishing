@@ -64,8 +64,10 @@ public:
 	virtual bool Interact_Implementation(AController* RequestingController, FGuid RequestId) override;
 
 protected:
-	/** 接收服务器附着时保留本物原有世界尺寸；位置、朝向及解除附着仍沿用引擎处理。 */
+	/** 将附件应用推迟到本批复制通知结束，避免仍在模拟物理的根组件拒绝嘴部附着。 */
 	virtual void OnRep_AttachmentReplication() override;
+	/** 复制通知全部执行后，按服务器 bRepPhysics 先收敛刚体、再应用附件；未解析引用补齐后的重试也走这里，保留原世界尺寸。 */
+	virtual void PostRepNotifies() override;
 
 	/** authority 进入 World 时按配置补齐正式鱼库存槽位；客户端只等待 InventoryComponent 复制。 */
 	virtual void BeginPlay() override;
@@ -74,7 +76,7 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
-	/** 归属复制后同步碰撞；只有服务器裁决嘴部和隐藏，客户端保留引擎收到的附着结果，避免复制顺序改变表现。 */
+	/** 按库存归属同步交互碰撞；服务器立即裁决携带和隐藏，客户端物理及附件统一留到 PostRepNotifies 应用。 */
 	UFUNCTION()
 	void OnRep_InventoryOwner();
 

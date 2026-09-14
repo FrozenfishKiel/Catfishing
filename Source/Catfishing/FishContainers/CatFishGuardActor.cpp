@@ -205,31 +205,59 @@ void ACatFishGuardActor::SetInventoryOwnerFromAuthority(AActor* NewInventoryOwne
 		*GetName(), *GetNameSafe(InventoryOwner), IsGrounded(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole());
 }
 
-// 附着接收流程：有父组件时，用原物当前世界尺寸计算附着所需的局部缩放，只修正待应用的附着参数。
-// 然后由引擎处理位置、朝向、附着或解绑；不让网络量化后的缩放改写原物，也不保存尺寸快照。
+// 本回调只延迟表现，不丢弃 AttachmentReplication 数据；引擎在本批 RepNotify 结束后调用 PostRepNotifies。
+// 未解析引用补齐后会重新进入同一套复制通知收口，所以这里不需要自建附件待处理队列。
+// 不能在这里先调用父类：Drop 后根组件仍可能模拟物理，AttachToComponent 会拒绝附着并改变相对变换，后续停物理不会自动重试。
 void ACatFishGuardActor::OnRep_AttachmentReplication()
 {
-	if (RootComponent && AttachmentReplication.AttachParent)
-	{
-		USceneComponent* Parent = AttachmentReplication.AttachComponent ? AttachmentReplication.AttachComponent.Get()
-			: AttachmentReplication.AttachParent->GetRootComponent();
-		if (Parent)
-		{
-			AttachmentReplication.RelativeScale3D = RootComponent->IsUsingAbsoluteScale() ? GetActorScale3D()
-				: GetActorTransform().GetRelativeTransform(Parent->GetSocketTransform(AttachmentReplication.AttachSocket)).GetScale3D();
-		}
-	}
-	Super::OnRep_AttachmentReplication();
+	// 统一由 PostRepNotifies 在物理模式收敛后消费服务器附件，不另存 pending 状态或开启 Tick 重试。
 }
 
-// 归属收敛流程：两端都按库存归属设置碰撞并停止携带刚体；嘴部资格、附着与隐藏只由服务器决定。
-// 客户端让引擎消费服务器的 AttachmentReplication/bHidden，避免旧鱼销毁晚到时重新裁决并覆盖正确附着。
+// 客户端还原流程：等归属、移动和附件通知执行完，先按服务器 bRepPhysics 解除附件或停止刚体，再处理非物理附件。
+// 使用引擎物理同步入口同时清除过期的物理复制目标；丢弃时忽略迟到的旧附件，固定放置或落地时再让空附件走引擎解绑和移动收敛。
+// 附着前只重算抵消父级/Socket 缩放的局部尺寸，位置和朝向仍来自服务器；重复通知不会重建同模式刚体，已正确附着时引擎只刷新变换。
+void ACatFishGuardActor::PostRepNotifies()
+{
+	Super::PostRepNotifies();
+	if (HasAuthority() || !RootComponent) return;
+	AActor* PreviousParent = GetAttachParentActor();
+	const bool bPreviouslySimulating = RootComponent->IsSimulatingPhysics();
+	if (GetReplicatedMovement().bRepPhysics)
+	{
+		DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+	}
+	SyncReplicatedPhysicsSimulation();
+	if (!GetReplicatedMovement().bRepPhysics)
+	{
+		if (AttachmentReplication.AttachParent)
+		{
+			USceneComponent* Parent = AttachmentReplication.AttachComponent ? AttachmentReplication.AttachComponent.Get()
+				: AttachmentReplication.AttachParent->GetRootComponent();
+			if (Parent)
+			{
+				AttachmentReplication.RelativeScale3D = RootComponent->IsUsingAbsoluteScale() ? GetActorScale3D()
+					: GetActorTransform().GetRelativeTransform(Parent->GetSocketTransform(AttachmentReplication.AttachSocket)).GetScale3D();
+			}
+		}
+		Super::OnRep_AttachmentReplication();
+	}
+	if (PreviousParent != GetAttachParentActor() || bPreviouslySimulating != RootComponent->IsSimulatingPhysics())
+	{
+		UE_LOG(LogCatFishContainers, Log,
+			TEXT("Event=fish_guard_replication_reconciled Guard=%s Owner=%s PreviousParent=%s Parent=%s RepPhysics=%d Simulating=%d World=%s NetMode=%d Authority=%d LocalRole=%d"),
+			*GetName(), *GetNameSafe(InventoryOwner), *GetNameSafe(PreviousParent), *GetNameSafe(GetAttachParentActor()),
+			GetReplicatedMovement().bRepPhysics, RootComponent->IsSimulatingPhysics(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole());
+	}
+}
+
+// 归属收敛流程：两端都按库存归属设置碰撞，客户端到此结束，物理与附件由本批通知末尾统一处理。
+// 服务器先停止携带刚体，再裁决嘴部资格、附件与隐藏；客户端不从嘴部引用重新裁决归属。
 // 附着保留原世界尺寸，嘴部配置只调整位置和朝向，不能再覆盖引擎为抵消角色/Socket缩放算出的局部缩放。
 void ACatFishGuardActor::OnRep_InventoryOwner()
 {
 	SetActorEnableCollision(InventoryOwner == nullptr);
-	if (InventoryOwner) WorldCollision->SetSimulatePhysics(false);
 	if (!HasAuthority()) return;
+	if (InventoryOwner) WorldCollision->SetSimulatePhysics(false);
 	if (InventoryOwner)
 	{
 		ACatCharacter* Character = Cast<ACatCharacter>(InventoryOwner);

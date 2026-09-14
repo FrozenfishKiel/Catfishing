@@ -103,7 +103,8 @@ namespace CatFishGuardCarryNetwork
 		 * 2. 等初始复制完整才从客户端拾取；收到对应回执后检查两端归属、嘴部附着与原鱼。
 		 * 3. 从客户端背包读取实际槽位和 GUID 发送 Place，等地面、扣格和固定变换收敛后再次拾取。
 		 * 4. 第二次携带收敛后无参通知服务器丢弃当前携带物，分别采样两端释放后的位移，等真实刚体落稳、位置收敛且嘴空。
-		 * 5. 占嘴阶段用另一只可打开的地面鱼护验证按钮禁用；原鱼护落地后重新打开它，经真实 Slate 点击取出原鱼并保存前后画面。
+		 * 5. 每次落稳均由拥有客户端重新拾取同一 Actor，连续三次核对原库存、GUID、关闭物理和嘴部附着；权威角色每次移动250厘米，再等客户端角色和鱼护的世界位置共同收敛。
+		 * 6. 第三次重新拾取后的移动收敛后再次丢下，保留原占嘴按钮禁用检查，并从落地原鱼护经真实 Slate 点击取出原鱼和保存前后画面。
 		 * 前提丢失或拾取、放置回执拒绝时立即带阶段报错；丢弃只观察复制结果，未收敛时继续等待并在阶段超时报告原因。 */
 		bool Update() override
 		{
@@ -111,6 +112,18 @@ namespace CatFishGuardCarryNetwork
 			if (StageStartedAt <= 0.0) StageStartedAt = Now;
 			if (Now - StageStartedAt > 45.0)
 			{
+				// Drop 后重新拾取的旧实现可能只同步库存而不触发客户端附着；超时前读取实际父级和 socket，避免把该回归写成笼统的阶段等待失败。
+				if (Stage == 7 && ClientGuard.IsValid() && ClientController.IsValid())
+				{
+					const ACatCharacter* TimedOutClientCat = Cast<ACatCharacter>(ClientController->GetPawn());
+					if (TimedOutClientCat && (ClientGuard->GetAttachParentActor() != TimedOutClientCat
+						|| ClientGuard->GetRootComponent()->GetAttachParent() != TimedOutClientCat->GetMesh()
+						|| ClientGuard->GetRootComponent()->GetAttachSocketName() != GetDefault<UCatFishPickupSettings>()->MouthCarrySocketName))
+					{
+						Test->AddError(TEXT("FishGuard post-drop repick attachment failed: original client guard did not restore its mouth parent/socket."));
+						return true;
+					}
+				}
 				Test->AddError(FString::Printf(TEXT("FishGuard carry timed out: stage=%d waiting=%s"), Stage, *WaitingFor));
 				return true;
 			}
@@ -176,7 +189,7 @@ namespace CatFishGuardCarryNetwork
 					Stage, *RequestId.ToString(), int32(Result.Error), Result.bCommitted));
 				return true;
 			}
-			if (Stage == 2 || Stage == 4)
+			if (Stage == 2 || Stage == 4 || Stage == 7)
 			{
 				if (!BothSidesMatch(true, false)) return false;
 				if (Stage == 2 && !VerifyFormalCarryButtonDisabledForOccupiedGuard()) return false;
@@ -200,19 +213,61 @@ namespace CatFishGuardCarryNetwork
 				WaitingFor = TEXT("authority backpack holds same GUID and original world actor");
 				if (!ServerEntry || ServerEntry->StackCount != 1 || !ServerEntry->Instance
 					|| ServerEntry->Instance->GetWorldActor() != ServerGuard.Get()) return false;
-				RequestId = FGuid::NewGuid();
 				if (Stage == 2)
 				{
+					RequestId = FGuid::NewGuid();
 					ClientController->ServerReleaseInventoryItemToWorld(RequestId, ClientCat, Slot, Item->GetItemInstanceId(), 1,
 						ECatInventoryWorldAction::Place);
 				}
-				else
+				else if (Stage == 4)
 				{
+					RequestId = FGuid::NewGuid();
 					ClientController->ServerDropCarriedItem();
 				}
-				++Stage;
+				else
+				{
+					// 携带状态已在两端逐项确认后才移动权威角色；250厘米既超过插值噪声，也不越过本用例的200至400厘米验收窗口。
+					CarryMoveStart[0] = ServerCat->GetActorLocation();
+					CarryMoveStart[1] = ClientCat->GetActorLocation();
+					CarryGuardMoveStart[0] = ServerGuard->GetActorLocation();
+					CarryGuardMoveStart[1] = ClientGuard->GetActorLocation();
+					// 三轮按前、后、前交替移动，单轮仍是250厘米，同时让最终落点留在原地面鱼护 UI 的可交互范围内。
+					const double Direction = DropRepickCount % 2 == 0 ? -1.0 : 1.0;
+					CarryMoveTarget = CarryMoveStart[0] + ServerCat->GetActorForwardVector().GetSafeNormal2D() * (250.0 * Direction);
+					ServerCat->SetActorLocation(CarryMoveTarget, false, nullptr, ETeleportType::None);
+					ServerCat->ForceNetUpdate();
+					ServerGuard->ForceNetUpdate();
+				}
+				Stage = Stage == 7 ? 8 : Stage + 1;
 				StageStartedAt = Now;
 				StableSince = 0.0;
+				return false;
+			}
+			if (Stage == 8)
+			{
+				// 不能只读嘴部相对变换：角色复制未跟随时，鱼护仍可能相对附着正确；这里同时要求两端角色和鱼护各自在世界空间移动并收敛。
+				WaitingFor = TEXT("authority moves 200-400 cm and client cat plus attached original guard converge in world space");
+				const double ServerCatDistance = FVector::Dist(ServerCat->GetActorLocation(), CarryMoveStart[0]);
+				const double ClientCatDistance = FVector::Dist(ClientCat->GetActorLocation(), CarryMoveStart[1]);
+				const double ServerGuardDistance = FVector::Dist(ServerGuard->GetActorLocation(), CarryGuardMoveStart[0]);
+				const double ClientGuardDistance = FVector::Dist(ClientGuard->GetActorLocation(), CarryGuardMoveStart[1]);
+				const bool bWorldMovementConverged = BothSidesMatch(true, false)
+					&& ServerCatDistance >= 200.0 && ServerCatDistance <= 400.0
+					&& FVector::Dist(ServerCat->GetActorLocation(), CarryMoveTarget) <= 2.0
+					&& ClientCatDistance >= 200.0 && ClientCatDistance <= 400.0
+					&& FVector::Dist(ServerCat->GetActorLocation(), ClientCat->GetActorLocation()) <= 15.0
+					&& ServerGuardDistance >= 200.0 && ServerGuardDistance <= 400.0
+					&& ClientGuardDistance >= 200.0 && ClientGuardDistance <= 400.0
+					&& FVector::Dist(ServerGuard->GetActorLocation(), ClientGuard->GetActorLocation()) <= 15.0;
+				if (!bWorldMovementConverged) { StableSince = 0.0; return false; }
+				if (StableSince <= 0.0) StableSince = Now;
+				if (Now - StableSince < 0.25) return false;
+				ClientController->ServerDropCarriedItem();
+				Stage = 5;
+				StageStartedAt = Now;
+				StableSince = 0.0;
+				bDropSampled[0] = bDropSampled[1] = false;
+				bDropMoved[0] = bDropMoved[1] = false;
 				return false;
 			}
 			if (Stage == 3 || Stage == 5)
@@ -248,7 +303,15 @@ namespace CatFishGuardCarryNetwork
 					StageStartedAt = Now;
 					return false;
 				}
-				Stage = 6;
+				if (DropRepickCount < 3)
+				{
+					// 只在物理落稳、两端都已空嘴后经拥有客户端发起 RPC；旧实现缺失此段，会在附着复制断开时被后续断言明确捕获。
+					RequestId = FGuid::NewGuid();
+					++DropRepickCount;
+					ClientController->ServerPickUpFishGuard(ClientGuard.Get(), RequestId);
+					Stage = 7;
+				}
+				else Stage = 6;
 				StageStartedAt = Now;
 				StableSince = 0.0;
 				return false;
@@ -566,8 +629,10 @@ namespace CatFishGuardCarryNetwork
 		FAutomationTestBase* Test = nullptr;
 		/** 场景中原鱼护的世界缩放；准备阶段记录非默认尺寸，双方携带和落地阶段读取，防止两端一起变大仍被当作复制正确。 */
 		FVector OriginalGuardWorldScale = FVector::OneVector;
-		/** 当前异步步骤，0准备/1初始复制/2占嘴时 Carry 禁用并放置/3放置/4再拾取/5丢弃/6空嘴 Carry；仅在条件齐备后推进，避免重复 RPC。 */
+		/** 当前异步步骤，0准备/1初始复制/2占嘴时 Carry 禁用并放置/3放置/4首次再拾取/5每轮丢弃落稳/6空嘴 Carry/7落地后再拾取/8携带移动收敛；仅在条件齐备后推进，避免重复 RPC。 */
 		int32 Stage = 0;
+		/** 已完成落稳并重新拾取的循环次数；Stage 5 写入，Stage 7/8 消费，达到三次后才允许最终落地进入原 Stage 6 取鱼。 */
+		int32 DropRepickCount = 0;
 		/** 当前步骤起始单调时间，单位秒；每次推进刷新，超时用它限制等待。 */
 		double StageStartedAt = 0.0;
 		/** 连续稳定窗口起始时间，单位秒；任一地面条件失配清零，防止单帧巧合通过。 */
@@ -614,6 +679,12 @@ namespace CatFishGuardCarryNetwork
 		bool bDropSampled[2] = {false, false};
 		/** 两端是否都发生过超过2厘米的释放后位移；采样累积，最终必须连同落地收敛成立。 */
 		bool bDropMoved[2] = {false, false};
+		/** 本轮权威移动前两端角色的世界位置，单位厘米；Stage 7 写入，Stage 8 读取，用来证明客户端角色实际移动而非只保留相对嘴部附件。 */
+		FVector CarryMoveStart[2] = {FVector::ZeroVector, FVector::ZeroVector};
+		/** 本轮权威移动前两端原鱼护的世界位置，单位厘米；与角色起点配对保存，Stage 8 据此检查附着鱼护也在世界空间移动。 */
+		FVector CarryGuardMoveStart[2] = {FVector::ZeroVector, FVector::ZeroVector};
+		/** 服务器角色本轮应抵达的世界位置；Stage 7 由当前朝向计算并写入，作为250厘米移动的权威目标供 Stage 8 排查。 */
+		FVector CarryMoveTarget = FVector::ZeroVector;
 	};
 }
 
