@@ -5,10 +5,12 @@
 #include "Components/SceneCaptureComponent2D.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
+#include "Engine/TextureCube.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/World.h"
 #include "GameFramework/Character.h"
 #include "Logging/CatLog.h"
+#include "UObject/ConstructorHelpers.h"
 
 ACatFrontendCharacterPreview::ACatFrontendCharacterPreview()
 {
@@ -23,13 +25,55 @@ ACatFrontendCharacterPreview::ACatFrontendCharacterPreview()
 	Capture = CreateDefaultSubobject<USceneCaptureComponent2D>(TEXT("PreviewCapture"));
 	Capture->SetupAttachment(Mesh);
 	Capture->PrimitiveRenderMode = ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
-	Capture->CaptureSource = ESceneCaptureSource::SCS_SceneColorHDR;
+	// SceneColorHDR disables post processing (and thus temporal AA). Fur needs the final-color path.
+	Capture->CaptureSource = ESceneCaptureSource::SCS_FinalToneCurveHDR;
+	Capture->bAlwaysPersistRenderingState = true;
 	Capture->bCaptureEveryFrame = true;
 	Capture->bCaptureOnMovement = false;
 	Capture->FOVAngle = 35;
-	Capture->ShowFlags.SetAtmosphere(false);
-	Capture->ShowFlags.SetFog(false);
-	Capture->ShowFlags.SetMotionBlur(false);
+	Capture->PostProcessSettings.bOverride_AutoExposureMethod = true;
+	Capture->PostProcessSettings.AutoExposureMethod = EAutoExposureMethod::AEM_Manual;
+	Capture->PostProcessSettings.bOverride_AutoExposureApplyPhysicalCameraExposure = true;
+	Capture->PostProcessSettings.AutoExposureApplyPhysicalCameraExposure = false;
+	Capture->PostProcessSettings.bOverride_DynamicGlobalIlluminationMethod = true;
+	Capture->PostProcessSettings.DynamicGlobalIlluminationMethod = EDynamicGlobalIlluminationMethod::None;
+	Capture->PostProcessSettings.bOverride_ReflectionMethod = true;
+	Capture->PostProcessSettings.ReflectionMethod = EReflectionMethod::None;
+	// Hair cards need diffuse fill from all directions, as in an asset preview studio.
+	// This cubemap belongs only to the capture; it does not add a skylight to the game world.
+	static ConstructorHelpers::FObjectFinder<UTextureCube> AmbientCube(TEXT("/Engine/EngineResources/GrayLightTextureCube.GrayLightTextureCube"));
+	Capture->PostProcessSettings.AmbientCubemap = AmbientCube.Object;
+	Capture->PostProcessSettings.bOverride_AmbientCubemapIntensity = true;
+	Capture->PostProcessSettings.AmbientCubemapIntensity = .65f;
+	Capture->PostProcessSettings.bOverride_AmbientOcclusionIntensity = true;
+	Capture->PostProcessSettings.AmbientOcclusionIntensity = 0.f;
+	// Final color does not retain opacity unless global alpha output is enabled. Keep that
+	// project-wide setting untouched and capture inverse opacity from the same posed mesh.
+	MaskCapture = CreateDefaultSubobject<USceneCaptureComponent2D>(TEXT("PreviewMaskCapture"));
+	MaskCapture->SetupAttachment(Capture);
+	MaskCapture->PrimitiveRenderMode = ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
+	MaskCapture->CaptureSource = ESceneCaptureSource::SCS_SceneColorHDR;
+	MaskCapture->bCaptureEveryFrame = true;
+	MaskCapture->bCaptureOnMovement = false;
+	MaskCapture->FOVAngle = Capture->FOVAngle;
+	// Component registration rebuilds ShowFlags from the archetype and serialized overrides.
+	// Persist overrides rather than relying on the constructor's transient bitset.
+	auto SetFlags = [](USceneCaptureComponent2D* Component, std::initializer_list<TPair<const TCHAR*, bool>> Settings)
+	{
+		TArray<FEngineShowFlagsSetting> Flags;
+		for (const auto& Entry : Settings)
+		{
+			FEngineShowFlagsSetting& Flag = Flags.AddDefaulted_GetRef();
+			Flag.ShowFlagName = Entry.Key;
+			Flag.Enabled = Entry.Value;
+		}
+		Component->SetShowFlagSettings(Flags);
+	};
+	SetFlags(Capture, {{TEXT("TemporalAA"), true}, {TEXT("AntiAliasing"), true}, {TEXT("PostProcessing"), true},
+		{TEXT("AmbientCubemap"), true}, {TEXT("SkyLighting"), true},
+		{TEXT("Atmosphere"), false}, {TEXT("Fog"), false}, {TEXT("MotionBlur"), false}, {TEXT("Bloom"), false}});
+	SetFlags(MaskCapture, {{TEXT("Lighting"), false}, {TEXT("PostProcessing"), false},
+		{TEXT("Atmosphere"), false}, {TEXT("Fog"), false}});
 	KeyLight = CreateDefaultSubobject<UPointLightComponent>(TEXT("PreviewKey"));
 	KeyLight->SetupAttachment(Mesh);
 	KeyLight->SetRelativeLocation(FVector(70, 70, 110));
@@ -40,7 +84,7 @@ ACatFrontendCharacterPreview::ACatFrontendCharacterPreview()
 	{
 		Light->SetCastShadows(false);
 		Light->SetUseInverseSquaredFalloff(false);
-		Light->SetIntensity(5.f);
+		Light->SetIntensity(1.5f);
 		Light->SetAttenuationRadius(400.f);
 	}
 	KeyLight->SetLightColor(FLinearColor(1.f, .83f, .61f));
@@ -66,8 +110,17 @@ bool ACatFrontendCharacterPreview::InitializePreview(TSubclassOf<ACharacter> Cha
 	Texture->InitCustomFormat(640, 768, PF_FloatRGBA, false);
 	Capture->TextureTarget = Texture;
 	Capture->ShowOnlyComponent(Mesh);
-	Capture->CaptureScene();
-	UE_LOG(LogCatUI, Log, TEXT("Event=frontend_character_preview_created World=%s NetMode=%d Actor=%s Source=%s"),
+	MaskTexture = NewObject<UTextureRenderTarget2D>(this);
+	MaskTexture->ClearColor = FLinearColor(0, 0, 0, 1);
+	MaskTexture->InitCustomFormat(640, 768, PF_FloatRGBA, false);
+	MaskCapture->TextureTarget = MaskTexture;
+	MaskCapture->ShowOnlyComponent(Mesh);
+	// Both captures update on the next frame; an extra immediate capture duplicates that work.
+	UE_LOG(LogCatUI, Log, TEXT("Event=frontend_character_preview_rendering World=%s NetMode=%d Actor=%s PostProcessing=%d TemporalAA=%d AntiAliasing=%d AmbientCube=%s AmbientIntensity=%.2f"),
+		*GetNameSafe(GetWorld()), GetWorld() ? int32(GetWorld()->GetNetMode()) : -1, *GetName(),
+		Capture->ShowFlags.PostProcessing, Capture->ShowFlags.TemporalAA, Capture->ShowFlags.AntiAliasing,
+		*GetNameSafe(Capture->PostProcessSettings.AmbientCubemap), Capture->PostProcessSettings.AmbientCubemapIntensity);
+	UE_LOG(LogCatUI, Log, TEXT("Event=frontend_character_preview_created World=%s NetMode=%d Actor=%s Source=%s Color=FinalToneCurveHDR Mask=SceneColorInverseOpacity Size=640x768"),
 		*GetNameSafe(GetWorld()), GetWorld() ? int32(GetWorld()->GetNetMode()) : -1, *GetName(), *CharacterClass->GetPathName());
 	return true;
 }

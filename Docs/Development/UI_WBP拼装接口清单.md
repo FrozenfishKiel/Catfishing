@@ -60,7 +60,9 @@ HUD、背包、背包格子、交互提示和局内 ESC 菜单的默认路径来
 
 首页接入交付首页视觉、退出确认表现及必要 Root 适配。随后存档、加入、房间和设置页统一沿用同一背景与配色；这些局部交付不关闭 Frontend / Online 模块。设置页通过调整行高和下拉框内部留白修正闭合控件的文字裁切，展开选项列表尚未完成本轮人工交互验证。
 
-`Scripts/style_frontend_pages.py` 负责加入、房间、设置及三个好友/玩家动态行 WBP：保留原控件名、类型和请求绑定，增加列面板，统一文字、按钮、输入框、滑条和滚动条，取消动态行的旧固定高度。设置行改为至少 64 设计像素，下拉框采用 17 号原中文字体与紧凑内边距；字段含义、数值单位、选项、busy、草稿/应用/取消、权限和不支持说明均保持原规则。脚本拒绝未保存目标包，备份位于 `Saved/Automation/FrontendPagesStyle/Backups`，完整生成入口在首页和存档样式之后执行它。没有新增网络或设置持久化入口，没有扩大 Cook 目录。
+`Scripts/style_frontend_pages.py` 负责加入、设置和好友行的通用样式；房间页面与成员席位已由 `Scripts/style_frontend_room.py` 接管，完整生成入口随后调用该脚本。保留原控件名、类型和请求绑定，统一文字、按钮、输入框、滑条和滚动条。设置行至少 64 设计像素，下拉框采用 17 号原中文字体与紧凑内边距；字段含义、数值单位、选项、busy、草稿/应用/取消、权限和不支持说明均保持原规则。通用样式备份位于 `Saved/Automation/FrontendPagesStyle/Backups`，房间样式备份位于 `Saved/Automation/RoomStage/Backups`。
+
+房间 `CharacterPreviewImage` 的 `/Game/UI/Frontend/M_UI_RoomCharacterPreview` 使用 UI 域 AlphaComposite 材质：`CharacterTexture.RGB` 为最终颜色，`1-CharacterMaskTexture.A` 为透明度。两个参数均由席位的本地 `ACatFrontendCharacterPreview` 提供 640×768 实时纹理，不可把单张 SceneColorHDR 的旧接法接回颜色输入。原生捕获使用局部灰色环境补光及持久化抗锯齿配置，CuteCat 原材质和 idle 不变。准备刷新复用 Actor，空位、离房和页面退出释放捕获。清晰度修复及分层证据见《主界面重构设计笔记》2026-09-14 对应节。
 
 存档样式入口 `Scripts/style_frontend_save.py` 修改原 `WBP_CatFrontendSaveList`、`WBP_CatSaveSlotRow` 和 Root，执行前拒绝目标包的未保存修改，并按 SHA256 备份到 `Saved/Automation/FrontendSaveStyle/Backups`。完整生成脚本在首页样式后执行它。两个样式脚本通过 `CompileStyledFrontendWidget` 补齐新增控件 GUID 后编译，保留已有 GUID 和绑定。
 

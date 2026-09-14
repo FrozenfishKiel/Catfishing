@@ -68,8 +68,22 @@ def tick(delta):
                 state['animation_position']=state['preview_mesh'].get_position()
                 state['checks']['idle_playing']=state['preview_mesh'].is_playing()
                 state['checks']['preview_materials']=[str(m) for m in state['preview_mesh'].get_materials()]
+                state['checks']['aa_method']=unreal.SystemLibrary.get_console_variable_int_value('r.AntiAliasingMethod')
             if actors:
-                capture=actors[0].get_component_by_class(unreal.SceneCaptureComponent2D)
+                captures=actors[0].get_components_by_class(unreal.SceneCaptureComponent2D)
+                capture=next(c for c in captures if c.get_name()=='PreviewMaskCapture')
+                color_capture=next(c for c in captures if c.get_name()=='PreviewCapture')
+                state['checks']['final_color_capture']=color_capture.get_editor_property('capture_source')==unreal.SceneCaptureSource.SCS_FINAL_TONE_CURVE_HDR
+                state['checks']['paired_captures']=len(captures)==2
+                pp=color_capture.get_editor_property('post_process_settings')
+                state['checks']['ambient_fill_loaded']=pp.get_editor_property('AmbientCubemap') is not None
+                state['checks']['ambient_fill_intensity']=pp.get_editor_property('AmbientCubemapIntensity')
+                flags={f.get_editor_property('show_flag_name'):f.get_editor_property('enabled')
+                       for f in color_capture.get_editor_property('show_flag_settings')}
+                state['checks']['persistent_aa_and_fill']=all(flags.get(n) for n in ('TemporalAA','AntiAliasing','PostProcessing','AmbientCubemap'))
+                mid=child(rows[0],'CharacterPreviewImage').get_dynamic_material()
+                state['checks']['color_texture_bound']=mid.get_texture_parameter_value('CharacterTexture')==color_capture.get_editor_property('texture_target')
+                state['checks']['mask_texture_bound']=mid.get_texture_parameter_value('CharacterMaskTexture')==capture.get_editor_property('texture_target')
                 result=unreal.RenderingLibrary.read_render_target(state['root'].get_world(),capture.get_editor_property('texture_target'))
                 if isinstance(result,tuple) and len(result)==2:
                     ok,samples=result if isinstance(result[0],bool) else (result[1],result[0])
@@ -77,7 +91,7 @@ def tick(delta):
                     samples=result;ok=result is not None
                 state['checks']['capture_read_ok']=ok
                 state['checks']['capture_alpha_range']=[min(c.a for c in samples),max(c.a for c in samples)] if samples else []
-                state['checks']['capture_opaque_rgb']=[max(c.r for c in samples if c.a<128),max(c.g for c in samples if c.a<128),max(c.b for c in samples if c.a<128)]
+                state['checks']['mask_opaque_rgb']=[max(c.r for c in samples if c.a<128),max(c.g for c in samples if c.a<128),max(c.b for c in samples if c.a<128)]
                 mat=unreal.load_asset('/Game/UI/Frontend/M_UI_RoomCharacterPreview')
                 state['checks']['material_parameters']=str(unreal.MaterialEditingLibrary.get_texture_parameter_names(mat))
                 state['checks']['material_opacity_input']=str(unreal.MaterialEditingLibrary.get_material_property_input_node(mat,unreal.MaterialProperty.MP_OPACITY))
@@ -146,8 +160,12 @@ performance=unreal.get_default_object(unreal.load_class(None,'/Script/UnrealEd.E
 state['previous_throttle']=performance.get_editor_property('bThrottleCPUWhenNotForeground')
 state['previous_stats']=unreal.SystemLibrary.get_console_variable_int_value('cat.Fishing.Stats')
 unreal.EditorPythonScripting.set_keep_python_script_alive(True)
-runpy.run_path(str(Path(__file__).with_name('style_frontend_room.py')),run_name='__main__')
-runpy.run_path(str(Path(__file__).with_name('style_lake_party.py')),run_name='__main__')
+room_style=runpy.run_path(str(Path(__file__).with_name('style_frontend_room.py')))
+if '-RoomPreviewMaterialOnly' in unreal.SystemLibrary.get_command_line():
+    room_style['preview_material']()
+else:
+    room_style['main']()
+    runpy.run_path(str(Path(__file__).with_name('style_lake_party.py')),run_name='__main__')
 state['checks']['frontend_fonts']=unreal.CatFrontendWidgetAuthoringLibrary.validate_frontend_widget_blueprint_fonts()
 registry=unreal.AssetRegistryHelpers.get_asset_registry()
 state['checks']['party_cook_reference']='/Game/UI/Party/WBP_CatPartyMemberRow' in [str(n) for n in registry.get_dependencies('/Game/UI/Save/WBP_CatLakeMainMenu',unreal.AssetRegistryDependencyOptions())]

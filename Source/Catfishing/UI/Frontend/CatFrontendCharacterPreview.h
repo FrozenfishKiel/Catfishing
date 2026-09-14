@@ -20,10 +20,13 @@ public:
 	ACatFrontendCharacterPreview();
 	bool InitializePreview(TSubclassOf<ACharacter> CharacterClass, UAnimSequence* Animation);
 	UTextureRenderTarget2D* GetTexture() const { return Texture; }
+	UTextureRenderTarget2D* GetMaskTexture() const { return MaskTexture; }
 private:
 	UPROPERTY() TObjectPtr<USkeletalMeshComponent> Mesh;
 	UPROPERTY() TObjectPtr<USceneCaptureComponent2D> Capture;
+	UPROPERTY() TObjectPtr<USceneCaptureComponent2D> MaskCapture;
 	UPROPERTY() TObjectPtr<UPointLightComponent> KeyLight;
 	UPROPERTY() TObjectPtr<UPointLightComponent> FillLight;
 	UPROPERTY() TObjectPtr<UTextureRenderTarget2D> Texture;
+	UPROPERTY() TObjectPtr<UTextureRenderTarget2D> MaskTexture;
 };

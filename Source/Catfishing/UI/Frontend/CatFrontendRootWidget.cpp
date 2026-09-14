@@ -163,6 +163,7 @@ void UCatFrontendRoomPlayerSlotWidget::SetPreviewActive(bool bActive)
 	}
 	PreviewBrush = UMaterialInstanceDynamic::Create(PreviewMaterial, this);
 	PreviewBrush->SetTextureParameterValue(TEXT("CharacterTexture"), PreviewActor->GetTexture());
+	PreviewBrush->SetTextureParameterValue(TEXT("CharacterMaskTexture"), PreviewActor->GetMaskTexture());
 	CharacterPreviewImage->SetBrushFromMaterial(PreviewBrush);
 	CharacterPreviewImage->SetVisibility(ESlateVisibility::HitTestInvisible);
 }

@@ -17,19 +17,26 @@ def preview_material():
     lib = unreal.MaterialEditingLibrary
     if mat:
         opacity=lib.get_material_property_input_node(mat,unreal.MaterialProperty.MP_OPACITY)
-        if opacity and lib.get_inputs_for_material_expression(mat,opacity):
+        parameters=[str(p) for p in lib.get_texture_parameter_names(mat)]
+        if (opacity and any(lib.get_inputs_for_material_expression(mat,opacity))
+                and 'CharacterMaskTexture' in parameters
+                and mat.get_editor_property('blend_mode')==unreal.BlendMode.BLEND_ALPHA_COMPOSITE):
             return mat
     if not mat:
         mat = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
             MATERIAL.rsplit('/',1)[1], MATERIAL.rsplit('/',1)[0], unreal.Material, unreal.MaterialFactoryNew())
     mat.set_editor_property('material_domain', unreal.MaterialDomain.MD_UI)
-    mat.set_editor_property('blend_mode', unreal.BlendMode.BLEND_TRANSLUCENT)
+    # Final color is already composited over black; preserve its antialiased edge coverage.
+    mat.set_editor_property('blend_mode', unreal.BlendMode.BLEND_ALPHA_COMPOSITE)
     lib.delete_all_material_expressions(mat)
     tex = lib.create_material_expression(mat, unreal.MaterialExpressionTextureSampleParameter2D, -400, 0)
     tex.set_editor_property('parameter_name','CharacterTexture')
     tex.set_editor_property('texture',unreal.load_asset('/Engine/EngineResources/WhiteSquareTexture'))
+    mask = lib.create_material_expression(mat, unreal.MaterialExpressionTextureSampleParameter2D, -400, 240)
+    mask.set_editor_property('parameter_name','CharacterMaskTexture')
+    mask.set_editor_property('texture',unreal.load_asset('/Engine/EngineResources/WhiteSquareTexture'))
     inverse = lib.create_material_expression(mat, unreal.MaterialExpressionOneMinus, -180, 160)
-    assert lib.connect_material_expressions(tex,'A',inverse,'')
+    assert lib.connect_material_expressions(mask,'A',inverse,'')
     assert lib.connect_material_property(tex,'RGB',unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     assert lib.connect_material_property(inverse,'',unreal.MaterialProperty.MP_OPACITY)
     lib.recompile_material(mat)
