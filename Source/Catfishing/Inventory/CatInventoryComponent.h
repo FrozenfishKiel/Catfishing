@@ -251,8 +251,15 @@ public:
 	/** 整批收货必须先做容量预演；失败时不触碰正式库存，避免半批成功。 */
 	bool CanFullyAcceptInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch) const;
 
-	/** 先预检整批载荷，再把它写入当前库存组件；成功后只由这一份组件成为事实源。 */
-	bool TryAddInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch);
+	/**
+	 * authority 调用整批收货；带 CommitTransaction 时只接受非空定义批次，拒绝任何 InstanceEntries。
+	 * 回调在全部物品入库后同步执行一次；返回 false 会恢复库存条目，回调自身的外部写入必须由调用方恢复。
+	 * 回调不得重入修改本库存或提前通知观察者；本入口不缓存终态，业务调用方负责去重。
+	 * bBroadcastChange 默认开启，成功变更或写入后的回滚都会通知；关闭时成功后的通知由调用方在业务提交完整后发出。
+	 * 无回调的空批次在 authority 上返回 true；带回调的空批次返回 false，且不会执行回调。
+	 */
+	bool TryAddInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch,
+		const TFunction<bool()>& CommitTransaction = nullptr, bool bBroadcastChange = true);
 
 	/** 只读预检稳定物品 ID 能否进入当前正式库存；商店、奖励和初始化发货用它在提交前确认目录、authority 和容量。 */
 	ECatDomainCommandError ValidateInventoryDefinitionGrantFromAuthority(FGuid RequestId, FName DefinitionId,
@@ -268,16 +275,6 @@ public:
 	/** authority 按已经解析出的物品定义发货；调用方只提供业务载荷，库存按当前条目、容量和幂等缓存裁决。 */
 	FCatDomainCommandResult GrantResolvedInventoryDefinitionFromAuthority(FGuid RequestId,
 		UCatInventoryItemDefinition* ItemDefinition, int32 Count);
-
-	/** 只读预检一批已解析定义能否完整进入当前正式库存；调用方用它在扣款、奖励结算等不可逆动作前确认容量。 */
-	ECatDomainCommandError ValidateInventoryDefinitionBatchGrantFromAuthority(FGuid RequestId,
-		const FString& IdempotencyPayloadContext,
-		const FCatInventoryReceiveBatch& ReceiveBatch) const;
-
-	/** authority 按一批已解析定义发货；正式库存先物化实例批次，再负责幂等、容量预演、变化广播和成功重放。 */
-	FCatDomainCommandResult GrantInventoryDefinitionBatchFromAuthority(FGuid RequestId,
-		const FString& IdempotencyPayloadContext,
-		const FCatInventoryReceiveBatch& ReceiveBatch);
 
 	/** Actor 级收货用这个开关区分公共入口和专用容器；避免外部系统误把所有库存都当默认背包。 */
 	bool CanReceiveUnifiedInventoryIntake() const;
@@ -419,7 +416,9 @@ protected:
 	friend class UCatEquipmentComponent;
 	/** Internal mutation lets the fishing coordinator establish its record before notifying observers. */
 	bool ConsumeItemAtSlotInternal(int32 SlotIndex, int32 ConsumeCount, bool bBroadcastChange);
-	bool TryAddInventoryBatchInternal(const FCatInventoryReceiveBatch& ReceiveBatch, bool bBroadcastChange);
+	/** 收货、转移和购买共用的内部入口；沿用公开接口的定义批次回调约束，失败恢复原格及记录的运行宿主，按开关通知。 */
+	bool TryAddInventoryBatchInternal(const FCatInventoryReceiveBatch& ReceiveBatch, bool bBroadcastChange,
+		const TFunction<bool()>& CommitTransaction = nullptr);
 	/** 本库存独立的显示 Model；组件按需创建并持有，服务器本地提交或客户端复制后更新，其他库存不会写入它。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryModel> InventoryModel;

@@ -7,6 +7,10 @@
 #include "Engine/DataTable.h"
 #include "Framework/Game/CatfishingGameState.h"
 #include "Logging/CatLog.h"
+#include "Misc/ScopeExit.h"
+#include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventorySettings.h"
+#include "Inventory/CatInventoryItemDefinition.h"
 #include "ShopEconomy/CatShopCartCommandUtils.h"
 #include "ShopEconomy/CatShopInventoryComponent.h"
 #include "ShopEconomy/CatShopEconomySettings.h"
@@ -136,41 +140,7 @@ FCatShopWalletSnapshot UCatShopEconomyService::GetWalletSnapshot() const
 	return Snapshot;
 }
 
-// 库存读取流程：先清输出，再从指定摊位库存读取 EntryId；服务不维护全局货架 Map。
-bool UCatShopEconomyService::TryGetStockSnapshot(const UCatShopInventoryComponent* ShopInventory,
-	const FName EntryId, FCatShopStockSnapshot& OutSnapshot) const
-{
-	OutSnapshot = FCatShopStockSnapshot();
-	if (!ShopInventory)
-	{
-		return false;
-	}
-	return ShopInventory->TryGetStockSnapshot(EntryId, OutSnapshot);
-}
-
-// 目录项读取流程：先清输出，再从指定摊位库存取回当前货架配置；它和库存读取分开，因为两者回答的是两个问题。
-bool UCatShopEconomyService::TryGetCatalogEntry(const UCatShopInventoryComponent* ShopInventory,
-	const FName EntryId, FCatShopCatalogEntry& OutEntry) const
-{
-	OutEntry = FCatShopCatalogEntry();
-	if (!ShopInventory)
-	{
-		return false;
-	}
-	return ShopInventory->TryGetCatalogEntry(EntryId, OutEntry);
-}
-
-// 重放判定流程：用与 PurchaseCatalogCart 完全相同的三段拼出幂等键，再只查终态表是否已有该键。
-// 键的拼法必须和整车购买写口逐字一致，否则商店交易入口会把重试当成首次请求，白跑一趟交付前置校验。
-// 只读：不比对载荷签名（载荷不一致由购买写口自己判 InvalidPayload），不看成败，不改任何状态。
-bool UCatShopEconomyService::HasCatalogCartTerminal(const FCatShopCartCommand& Command) const
-{
-	const FString CacheKey = MakeTerminalKey(Command.Context.StableNetId, TEXT("CartPurchase"),
-		Command.Context.RequestId);
-	return CartTerminalCache.Contains(CacheKey);
-}
-
-// 账本读取流程：复制本局交易记录；广播层可展示金额和交付状态，但不能绕过确认入口直接改服务内数组。
+// 账本读取流程：复制本局已完成交易记录；广播层只读展示金额和实物，不可修改服务内数组。
 TArray<FCatShopTransactionRecord> UCatShopEconomyService::GetTransactionLedgerSnapshot() const
 {
 	return TransactionLedger;
@@ -290,16 +260,40 @@ bool UCatShopEconomyService::ResolveCatalogCartForAuthority(const FCatShopCartCo
 	return true;
 }
 
-// 整车购买流程：
-// 1. 先用身份、CartPurchase 和 RequestId 查询幂等终态；成功订单重放时重读账本/库存，把交付状态带回最新值。
-//    若首次终态是拒绝，重放必须返回首次错误，不能把一次失败请求伪装成已经结算。
-// 2. 首次命令复用整车报价判据，然后让摊位库存整批扣减；扣库存失败时公款和账本保持不变。
-// 3. 库存扣完后一次扣总价，并为每个 EntryId 写一条待交付账本，免费商品也以 0 元购买行进入同一交付链。
-// 提交守卫覆盖库存、GAS、账本及广播，期间嵌套购买或售鱼直接拒绝且不缓存，避免回调抢先复用尚未完成的请求。
+// 整车成交流程：
+// 1. 先拒绝嵌套交易，再在守卫内校验请求和载荷签名；无效请求及载荷漂移直接拒绝，不覆盖缓存。
+//    统一重放标记清除本次提交标志并保留首次提交事实：成功返回 AlreadyResolved 且仍被接受，拒绝保留首次错误。
+//    重放均刷新快照，不访问收货仓库或补发物品。
+// 2. 从服务器货架解析报价与物品定义，整批入库前校验公共仓库的权限、World 与容量。
+// 3. 仓库暂存实物后同步扣货架和公款；任一步失败恢复原库存，不写账本也不通知收货。
+// 4. 报价、收货前提或同步提交失败会缓存拒绝；条件改变后重试需新 RequestId。
+// 5. 成功时仅正价购买推进公款版本，每行写一条账本，免费商品也记账；缓存终态后再通知库存和公开流水。
+//    守卫持续覆盖这些同步通知，阻止观察者在本次调用结束前嵌套购买或售鱼。
 FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const FCatShopCartCommand& Command,
-	UCatShopInventoryComponent* ShopInventory)
+	UCatShopInventoryComponent* ShopInventory, UCatInventoryComponent* ReceivingInventory)
 {
 	FCatShopCartTransactionResult Result;
+	// 在首个提前返回前注册同步退出日志，每次离开本作用域时读取最终 Result，不另存或修改交易状态。
+	// 接受结果（含成功重放）使用 Log，其余拒绝使用 Warning；RequestId 供请求链关联，玩家身份仅输出散列。
+	// Authority=1 来自本服务仅在服务器创建的约束；LocalRole 读取来源货架宿主，缺失时为 -1，并非请求玩家的角色。
+	// 日志守卫先于事务守卫构造，因此常规路径先解除事务守卫再记录结果；它不是异步回调，也不承担回滚。
+	ON_SCOPE_EXIT
+	{
+		const FString Message = FString::Printf(
+			TEXT("Event=shop_cart_result RequestId=%s World=%s NetMode=%d Authority=1 LocalRole=%d Player=%08x Inventory=%s Error=%s Committed=%d"),
+			*Command.Context.RequestId.ToString(), *GetNameSafe(GetWorld()), GetWorld()->GetNetMode(),
+			ShopInventory && ShopInventory->GetOwner() ? static_cast<int32>(ShopInventory->GetOwner()->GetLocalRole()) : -1,
+			GetTypeHash(Command.Context.StableNetId), *GetNameSafe(ReceivingInventory),
+			*UEnum::GetValueAsString(Result.Command.Error), Result.Command.bCommitted);
+		if (CatIsAcceptedDomainCommandResult(Result.Command))
+		{
+			UE_LOG(LogCatfishing, Log, TEXT("%s"), *Message);
+		}
+		else
+		{
+			UE_LOG(LogCatfishing, Warning, TEXT("%s"), *Message);
+		}
+	};
 	Result.Command.RequestId = Command.Context.RequestId;
 	Result.Wallet = GetWalletSnapshot();
 	if (bTransactionInProgress)
@@ -330,12 +324,8 @@ FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const 
 			return Result;
 		}
 		Result = *Cached;
-		RefreshCartReplayResultFromLedger(Result);
-		Result.Command.bCommitted = false;
-		if (Cached->Command.Error == ECatDomainCommandError::None && !Result.Transactions.IsEmpty())
-		{
-			Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
-		}
+		RefreshCartReplaySnapshots(Result);
+		MarkCommandReplayed(Result.Command);
 		return Result;
 	}
 
@@ -349,12 +339,49 @@ FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const 
 		CacheCartTerminalResult(CacheKey, PayloadSignature, Result);
 		return Result;
 	}
-	int32 WalletDelta = -ResolvedCart.TotalPrice;
-	// 货架持有原状态直到GE确认；拒绝扣款不会消耗限量商品，公开通知仍留到双方与账本全部提交之后。
-	if (!ShopInventory->ConsumeCatalogEntriesFromAuthority(ResolvedCart.Command.Lines, Result.Stocks, [&]()
+	FCatInventoryReceiveBatch ReceiveBatch;
+	if (!IsValid(ReceivingInventory) || ReceivingInventory->GetWorld() != GetWorld()
+		|| !ReceivingInventory->GetOwner() || !ReceivingInventory->GetOwner()->HasAuthority()
+		|| ShopInventory->GetWorld() != GetWorld())
+	{
+		Rejection = ECatDomainCommandError::DependencyUnavailable;
+	}
+	else
+	{
+		const UCatInventorySettings* Settings = GetDefault<UCatInventorySettings>();
+		for (const FCatShopResolvedCartLine& Line : ResolvedCart.Lines)
 		{
-			return TryApplyTeamWalletTransaction(WalletDelta, Command.Context.RequestId);
-		}))
+			UCatInventoryItemDefinition* Definition = Settings->FindRuntimeDefinition(Line.Entry.DefinitionId);
+			if (!Definition || !Definition->IsInventoryRuntimeDefinitionReady())
+			{
+				Rejection = ECatDomainCommandError::InvalidPayload;
+				break;
+			}
+			FCatInventoryDefinitionEntry& Entry = ReceiveBatch.DefinitionEntries.AddDefaulted_GetRef();
+			Entry.ItemDefinition = Definition;
+			Entry.Count = Line.DeliveryQuantity;
+		}
+		if (Rejection == ECatDomainCommandError::None && !ReceivingInventory->CanFullyAcceptInventoryBatch(ReceiveBatch))
+		{
+			Rejection = ECatDomainCommandError::CapacityExceeded;
+		}
+	}
+	if (Rejection != ECatDomainCommandError::None)
+	{
+		Result.Command.Error = Rejection;
+		Result.Command.Revision = WalletRevision;
+		CacheCartTerminalResult(CacheKey, PayloadSignature, Result);
+		return Result;
+	}
+	int32 WalletDelta = -ResolvedCart.TotalPrice;
+	// 实物写入中可能创建实例或失败，必须早于扣款；货架和仓库各自保存原状态，付款拒绝时同步恢复。
+	if (!ReceivingInventory->TryAddInventoryBatch(ReceiveBatch, [&]()
+		{
+			return ShopInventory->ConsumeCatalogEntriesFromAuthority(ResolvedCart.Command.Lines, Result.Stocks, [&]()
+			{
+				return TryApplyTeamWalletTransaction(WalletDelta, Command.Context.RequestId);
+			});
+		}, false))
 	{
 		Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
 		Result.Command.Revision = WalletRevision;
@@ -374,7 +401,6 @@ FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const 
 		Record.RequestId = Command.Context.RequestId;
 		Record.StableNetId = Command.Context.StableNetId;
 		Record.bPurchase = true;
-		Record.bDeliveryPending = true;
 		Record.EntryId = Line.Entry.EntryId;
 		Record.ShopInventoryId = Command.ShopInventoryId;
 		Record.DefinitionId = Line.Entry.DefinitionId;
@@ -396,6 +422,7 @@ FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const 
 	Result.Command.Revision = WalletRevision;
 	Result.Wallet = GetWalletSnapshot();
 	CacheCartTerminalResult(CacheKey, PayloadSignature, Result);
+	ReceivingInventory->BroadcastInventoryChange();
 	for (const FCatShopTransactionRecord& Record : Result.Transactions)
 	{
 		OnPublicTransactionCommitted.Broadcast(MakePublicTransaction(Record));
@@ -569,98 +596,6 @@ FCatShopTransactionResult UCatShopEconomyService::ApplyFishSale(const FCatShopFi
 	Result.Transaction = Record;
 	CacheTerminalResult(CacheKey, PayloadSignature, Result);
 	OnPublicTransactionCommitted.Broadcast(MakePublicTransaction(Record));
-	return Result;
-}
-
-// 交付确认流程：先按确认 RequestId 重放，再用 TransactionId 找到原订单；成功终态可幂等返回，失败终态必须返回首次错误。
-// 只允许原买家用真实下游回执把 Pending 推进到 Delivered。
-FCatShopTransactionResult UCatShopEconomyService::ConfirmTransactionDelivery(
-	const FCatShopDeliveryConfirmationCommand& Command)
-{
-	FCatShopTransactionResult Result;
-	Result.Command.RequestId = Command.Context.RequestId;
-	Result.Wallet = GetWalletSnapshot();
-	if (!Command.Context.RequestId.IsValid() || Command.Context.StableNetId.IsEmpty()
-		|| !Command.TransactionId.IsValid() || !Command.DeliveryReceiptId.IsValid())
-	{
-		Result.Command.Error = ECatDomainCommandError::InvalidPayload;
-		Result.Command.Revision = WalletRevision;
-		return Result;
-	}
-	const FString CacheKey = MakeTerminalKey(Command.Context.StableNetId, TEXT("Delivery"), Command.Context.RequestId);
-	const FString PayloadSignature = MakeDeliveryPayloadSignature(Command);
-	if (const FCatShopTransactionResult* Cached = TerminalCache.Find(CacheKey))
-	{
-		if (!DoesTerminalPayloadMatch(CacheKey, PayloadSignature))
-		{
-			Result.Command.Error = ECatDomainCommandError::InvalidPayload;
-			Result.Command.Revision = WalletRevision;
-			return Result;
-		}
-		Result = *Cached;
-		if (Cached->Command.bCommitted && Cached->Command.Error == ECatDomainCommandError::None)
-		{
-			Result.Command.bCommitted = false;
-			Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
-		}
-		return Result;
-	}
-	FCatShopTransactionRecord* Record = TransactionLedger.FindByPredicate([&Command](const FCatShopTransactionRecord& Candidate)
-	{
-		return Candidate.TransactionId == Command.TransactionId;
-	});
-	if (!bCommandsOpen)
-	{
-		Result.Command.Error = ECatDomainCommandError::CommandsClosed;
-	}
-	else if (!Record)
-	{
-		Result.Command.Error = ECatDomainCommandError::NotFound;
-	}
-	else
-	{
-		Result.Transaction = *Record;
-		if (const UCatShopInventoryComponent* CurrentInventory =
-			FindRegisteredShopInventoryById(Record->ShopInventoryId))
-		{
-			CurrentInventory->TryGetStockSnapshot(Record->EntryId, Result.Stock);
-		}
-		if (Record->StableNetId != Command.Context.StableNetId)
-		{
-			Result.Command.Error = ECatDomainCommandError::PermissionDenied;
-		}
-		else if (Command.Context.ExpectedRevision != Record->WalletRevision)
-		{
-			Result.Command.Error = ECatDomainCommandError::RevisionConflict;
-		}
-		else if (Record->bDeliveryConfirmed)
-		{
-			Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
-		}
-		else if (!Record->bPurchase || !Record->bDeliveryPending
-			|| Record->DefinitionId.IsNone() || Record->PurchaseQuantity <= 0)
-		{
-			Result.Command.Error = ECatDomainCommandError::InvalidPhase;
-		}
-		else
-		{
-			Record->bDeliveryPending = false;
-			Record->bDeliveryConfirmed = true;
-			Record->DeliveryReceiptId = Command.DeliveryReceiptId;
-			Result.Command.bCommitted = true;
-			Result.Command.Error = ECatDomainCommandError::None;
-			Result.Transaction = *Record;
-		}
-	}
-	Result.Command.Revision = WalletRevision;
-	Result.Wallet = GetWalletSnapshot();
-	CacheTerminalResult(CacheKey, PayloadSignature, Result);
-	if (Result.Command.bCommitted)
-	{
-		// 交付确认不动公款，但它把订单从"已付款待取"推到"已到货"，这是全队都要看到的状态变化，
-		// 所以和购买、售鱼走同一条广播；订阅方据此更新同一条交易记录，而不是新增一条。
-		OnPublicTransactionCommitted.Broadcast(MakePublicTransaction(Result.Transaction));
-	}
 	return Result;
 }
 
@@ -885,26 +820,13 @@ UDataTable* UCatShopEconomyService::GetFishSalePriceTable() const
 	return FishSalePriceTable.IsNull() ? nullptr : FishSalePriceTable.LoadSynchronous();
 }
 
-// 购物车重放刷新流程：
-// 1. 按缓存里的 TransactionId 到当前账本重读每一行，避免已确认交付的订单仍返回首次缓存时的 Pending。
-// 2. 再按每行来源摊位重读当前库存快照，让客户端收到的重放结果和公开货架保持同一版本事实。
-// 3. 只改传入结果副本，不修改账本、库存或终态缓存。
-void UCatShopEconomyService::RefreshCartReplayResultFromLedger(FCatShopCartTransactionResult& Result) const
+// 重放保留首次已成交记录，按记录的来源摊位刷新货架，再读取当前公款；只改返回副本，不写库存或缓存。
+// 先清空旧货架快照，已注销货架或找不到的条目直接跳过；公款及命令版本仍刷新，成交记录保持首次事实。
+void UCatShopEconomyService::RefreshCartReplaySnapshots(FCatShopCartTransactionResult& Result) const
 {
 	Result.Stocks.Reset();
 	for (FCatShopTransactionRecord& Record : Result.Transactions)
 	{
-		if (Record.TransactionId.IsValid())
-		{
-			if (const FCatShopTransactionRecord* CurrentRecord = TransactionLedger.FindByPredicate(
-				[&Record](const FCatShopTransactionRecord& Candidate)
-				{
-					return Candidate.TransactionId == Record.TransactionId;
-				}))
-			{
-				Record = *CurrentRecord;
-			}
-		}
 		if (const UCatShopInventoryComponent* CurrentInventory =
 			FindRegisteredShopInventoryById(Record.ShopInventoryId))
 		{
@@ -928,8 +850,6 @@ FCatShopPublicTransaction UCatShopEconomyService::MakePublicTransaction(const FC
 	Public.TransactionId = Record.TransactionId;
 	Public.bPurchase = Record.bPurchase;
 	Public.bFishSale = Record.bFishSale;
-	Public.bDeliveryPending = Record.bDeliveryPending;
-	Public.bDeliveryConfirmed = Record.bDeliveryConfirmed;
 	Public.EntryId = Record.EntryId;
 	Public.ShopInventoryId = Record.ShopInventoryId;
 	Public.DefinitionId = Record.DefinitionId;
@@ -1016,14 +936,6 @@ FString UCatShopEconomyService::MakeFishSalePayloadSignature(const FCatShopFishS
 	}
 	return FString::Printf(TEXT("InventoryCommit=%s|Fish=%s"),
 		*Command.InventoryCommitId.ToString(EGuidFormats::DigitsWithHyphens), *FString::Join(Lines, TEXT(",")));
-}
-
-// 交付载荷签名流程：冻结原交易、下游回执和公款前提；回执漂移必须拒绝而不是重放。
-FString UCatShopEconomyService::MakeDeliveryPayloadSignature(const FCatShopDeliveryConfirmationCommand& Command)
-{
-	return FString::Printf(TEXT("Expected=%lld|Transaction=%s|Receipt=%s"),
-		Command.Context.ExpectedRevision, *Command.TransactionId.ToString(EGuidFormats::DigitsWithHyphens),
-		*Command.DeliveryReceiptId.ToString(EGuidFormats::DigitsWithHyphens));
 }
 
 // 载荷比对流程：终态缓存必须伴随签名一起存在且完全一致；缺失签名按不安全缓存处理并拒绝漂移。

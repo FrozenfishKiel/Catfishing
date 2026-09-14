@@ -16,8 +16,6 @@
 #include "Inventory/CatFishInventoryItemInstance.h"
 #include "Inventory/CatInventoryAccessRules.h"
 #include "Inventory/CatInventoryComponent.h"
-#include "Inventory/CatInventorySettings.h"
-#include "Inventory/CatInventoryStatics.h"
 #include "Logging/CatLog.h"
 #include "ShopEconomy/CatShopCartCommandUtils.h"
 #include "ShopEconomy/CatShopEconomyService.h"
@@ -46,23 +44,6 @@ namespace
 		return nullptr;
 	}
 
-	// 购物车交付批次构建流程：商店账本只保存稳定定义 ID 和数量，这里把它解析成正式库存定义批次；容量、实例创建和幂等仍由 InventoryComponent 负责。
-	bool AppendShopDeliveryEntryToInventoryBatch(const FName DefinitionId, const int32 Quantity,
-		FCatInventoryReceiveBatch& OutReceiveBatch)
-	{
-		const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
-		UCatInventoryItemDefinition* Definition = InventorySettings
-			? InventorySettings->FindRuntimeDefinition(DefinitionId) : nullptr;
-		if (Definition == nullptr || Quantity <= 0 || !Definition->IsInventoryRuntimeDefinitionReady())
-		{
-			return false;
-		}
-		FCatInventoryDefinitionEntry& Entry = OutReceiveBatch.DefinitionEntries.AddDefaulted_GetRef();
-		Entry.ItemDefinition = Definition;
-		Entry.Count = Quantity;
-		return true;
-	}
-
 	// 售鱼终态键流程：同一玩家同一 RequestId 只允许形成一笔售鱼协调链，避免可靠 RPC 重放时再次扣库存或再次入账。
 	FString MakeFishSaleTerminalKey(const FString& StableNetId, const FGuid RequestId)
 	{
@@ -87,7 +68,7 @@ FCatShopOrderResult UCatShopTradeController::SubmitCartFromKiosk(AController* Re
 	// 1. 先重读服务器玩法 gate 和原始 RPC 载荷大小，拒绝无效局状态或异常购物车。
 	// 2. 再从请求 Controller 重建稳定玩家身份，并要求摊位在当前 World 内证明玩家仍在服务半径。
 	// 3. 摊位只给来源货架库存，营地收货仓库由 ShopEconomy 在 World 中解析，Controller 只保留交易意图。
-	// 4. 所有前提成立后才构造购物车命令并进入订单链；任一前置失败都会带 Delivery 结果回到 UI。
+	// 4. 将来源与收货库存交经济服务统一成交；实物回执直接采用成交终态，所有前置失败也带结果回到 UI。
 	FCatShopOrderResult Result;
 	Result.CartTransaction.Command.RequestId = RequestId;
 	Result.Delivery.RequestId = RequestId;
@@ -136,7 +117,16 @@ FCatShopOrderResult UCatShopTradeController::SubmitCartFromKiosk(AController* Re
 	Command.Context.StableNetId = CurrentPlayerState->GetUniqueId()->ToString();
 	Command.ShopInventoryId = ShopInventory->GetShopInventoryId();
 	Command.Lines = Lines;
-	Result = RunCartOrder(Command, ShopInventory, DeliveryInventory);
+	UCatShopEconomyService* Shop = World->GetSubsystem<UCatShopEconomyService>();
+	if (Shop)
+	{
+		Result.CartTransaction = Shop->PurchaseCatalogCart(Command, ShopInventory, DeliveryInventory->GetInventoryComponent());
+	}
+	else
+	{
+		Result.CartTransaction.Command.Error = ECatDomainCommandError::DependencyUnavailable;
+	}
+	Result.Delivery = Result.CartTransaction.Command;
 	Result.Delivery.RequestId = RequestId;
 	UE_LOG(LogCatfishing, Log,
 		TEXT("Event=shop_cart_submitted RequestId=%s LineCount=%d Order=%s Delivery=%s"),
@@ -295,170 +285,5 @@ FCatShopOrderResult UCatShopTradeController::SubmitFishSaleFromPlayer(AControlle
 	}
 	Finish(ECatDomainCommandError::None);
 	Inventory->BroadcastInventoryChange();
-	return Result;
-}
-
-// 购物车订单链流程：
-// 1. 取商店依赖和来源摊位库存，首次请求先解析整车报价，再在扣钱之前问完公共仓库整批接收前提。
-// 2. 前提成立后提交整车购买，随后用购物车 RequestId 和服务器身份把完整购物车批次一次放入营地公共仓库。
-// 3. 重放时发货 payload 仍按整车账本重建，只给仍 Pending 的账本补确认，避免部分确认失败后拿缩水批次撞仓库幂等签名。
-// 4. 每条购买账本用自己的 TransactionId 作为交付确认 RequestId，避免一车多行互相撞同一个确认幂等键。
-FCatShopOrderResult UCatShopTradeController::RunCartOrder(const FCatShopCartCommand& Command,
-	UCatShopInventoryComponent* ShopInventory, ACatCampInventoryActor* DeliveryInventory)
-{
-	FCatShopOrderResult Result;
-	Result.CartTransaction.Command.RequestId = Command.Context.RequestId;
-	Result.Delivery.RequestId = Command.Context.RequestId;
-	UWorld* World = GetWorld();
-	UCatShopEconomyService* Shop = World ? World->GetSubsystem<UCatShopEconomyService>() : nullptr;
-	if (!Shop || !ShopInventory || ShopInventory->GetShopInventoryId() != Command.ShopInventoryId)
-	{
-		Result.CartTransaction.Command.Error = ECatDomainCommandError::DependencyUnavailable;
-		Result.Delivery.Error = ECatDomainCommandError::DependencyUnavailable;
-		return Result;
-	}
-
-	// 交付侧的前提必须问在扣钱之前。整车购买一提交就会把总价从公款划走、把限量条目的库存也扣掉，
-	// 而商店服务没有退款写口，所以首次请求必须先让公共仓库按整批物品模拟一次容量和堆叠。
-	// 同 RequestId 重放不跑这道前置 gate：钱和货架库存可能已经在首次提交里改变了，重试要拿回既有回执或补交付确认。
-	UCatInventoryComponent* DeliveryInventoryComponent = DeliveryInventory
-		? DeliveryInventory->GetInventoryComponent() : nullptr;
-	if (!Shop->HasCatalogCartTerminal(Command))
-	{
-		FCatShopResolvedCart ResolvedCart;
-		ECatDomainCommandError QuoteRejection = ECatDomainCommandError::None;
-		if (!Shop->ResolveCatalogCartForAuthority(Command, ShopInventory, ResolvedCart, QuoteRejection))
-		{
-			Result.CartTransaction.Wallet = Shop->GetWalletSnapshot();
-			Result.CartTransaction.Command.Error = QuoteRejection;
-			Result.CartTransaction.Command.Revision = Result.CartTransaction.Wallet.Revision;
-			Result.Delivery.Error = QuoteRejection;
-			return Result;
-		}
-		FCatInventoryReceiveBatch DeliveryBatch;
-		DeliveryBatch.DefinitionEntries.Reserve(ResolvedCart.Lines.Num());
-		bool bDeliveryBatchReady = true;
-		for (const FCatShopResolvedCartLine& Line : ResolvedCart.Lines)
-		{
-			bDeliveryBatchReady &= AppendShopDeliveryEntryToInventoryBatch(
-				Line.Entry.DefinitionId, Line.DeliveryQuantity, DeliveryBatch);
-		}
-		const ECatDomainCommandError DeliveryRejection = !DeliveryInventoryComponent
-			? ECatDomainCommandError::DependencyUnavailable
-			: (!bDeliveryBatchReady
-				? ECatDomainCommandError::InvalidPayload
-				: DeliveryInventoryComponent->ValidateInventoryDefinitionBatchGrantFromAuthority(
-					Command.Context.RequestId, Command.Context.StableNetId, DeliveryBatch));
-		if (DeliveryRejection != ECatDomainCommandError::None)
-		{
-			// 订单这一段报的是交付侧的错误码，因为订单压根没提交：公款、商店库存和账本一个字都没动。
-			// Revision 仍给当前公款版本，调用方据此重读并决定要不要换个条件重试。
-			Result.CartTransaction.Wallet = Shop->GetWalletSnapshot();
-			Result.CartTransaction.Command.Error = DeliveryRejection;
-			Result.CartTransaction.Command.Revision = Result.CartTransaction.Wallet.Revision;
-			Result.Delivery.Error = DeliveryRejection;
-			UE_LOG(LogCatfishing, Warning,
-				TEXT("Event=shop_cart_delivery_precheck_rejected RequestId=%s LineCount=%d Error=%s"),
-				*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-				DeliveryBatch.DefinitionEntries.Num(),
-				*UEnum::GetValueAsString(DeliveryRejection));
-			return Result;
-		}
-	}
-
-	Result.CartTransaction = Shop->PurchaseCatalogCart(Command, ShopInventory);
-	const bool bOrderStanding = !Result.CartTransaction.Transactions.IsEmpty()
-		&& (Result.CartTransaction.Command.bCommitted
-			|| Result.CartTransaction.Command.Error == ECatDomainCommandError::AlreadyResolved);
-	if (!bOrderStanding)
-	{
-		Result.Delivery.Error = Result.CartTransaction.Command.Error;
-		return Result;
-	}
-	if (!DeliveryInventoryComponent)
-	{
-		Result.Delivery.Error = ECatDomainCommandError::DependencyUnavailable;
-		UE_LOG(LogCatfishing, Warning,
-			TEXT("Event=shop_cart_camp_inventory_grant_failed RequestId=%s Error=NoCampInventory"),
-			*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens));
-		return Result;
-	}
-
-	FCatInventoryReceiveBatch DeliveryBatch;
-	DeliveryBatch.DefinitionEntries.Reserve(Result.CartTransaction.Transactions.Num());
-	bool bAllDelivered = true;
-	for (const FCatShopTransactionRecord& Record : Result.CartTransaction.Transactions)
-	{
-		if (!Record.bPurchase || Record.DefinitionId.IsNone() || Record.PurchaseQuantity <= 0
-			|| (!Record.bDeliveryPending && !Record.bDeliveryConfirmed))
-		{
-			Result.Delivery.Error = ECatDomainCommandError::InvalidPhase;
-			return Result;
-		}
-		if (!AppendShopDeliveryEntryToInventoryBatch(Record.DefinitionId, Record.PurchaseQuantity, DeliveryBatch))
-		{
-			Result.Delivery.Error = ECatDomainCommandError::InvalidPayload;
-			return Result;
-		}
-		if (!Record.bDeliveryConfirmed)
-		{
-			bAllDelivered = false;
-		}
-	}
-	if (bAllDelivered)
-	{
-		Result.Delivery.Error = ECatDomainCommandError::AlreadyResolved;
-		return Result;
-	}
-
-	const FCatDomainCommandResult Grant = DeliveryInventoryComponent->GrantInventoryDefinitionBatchFromAuthority(
-		Command.Context.RequestId, Command.Context.StableNetId, DeliveryBatch);
-	const bool bDeliveryReady = Grant.bCommitted || Grant.Error == ECatDomainCommandError::AlreadyResolved;
-	if (!bDeliveryReady)
-	{
-		Result.Delivery = Grant;
-		Result.Delivery.RequestId = Command.Context.RequestId;
-		UE_LOG(LogCatfishing, Warning,
-			TEXT("Event=shop_cart_camp_inventory_grant_failed RequestId=%s LineCount=%d Error=%s"),
-			*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-			DeliveryBatch.DefinitionEntries.Num(),
-			*UEnum::GetValueAsString(Grant.Error));
-		return Result;
-	}
-	Result.Delivery = Grant;
-	for (FCatShopTransactionRecord& Record : Result.CartTransaction.Transactions)
-	{
-		if (Record.bDeliveryConfirmed)
-		{
-			continue;
-		}
-		FCatShopDeliveryConfirmationCommand Confirmation;
-		// 每条购买账本各用自己的 TransactionId 做确认请求号；公共仓库入库回执仍然是整车 RequestId。
-		Confirmation.Context.RequestId = Record.TransactionId;
-		Confirmation.Context.ExpectedRevision = Record.WalletRevision;
-		Confirmation.Context.StableNetId = Command.Context.StableNetId;
-		Confirmation.TransactionId = Record.TransactionId;
-		Confirmation.DeliveryReceiptId = Command.Context.RequestId;
-		const FCatShopTransactionResult Confirmed = Shop->ConfirmTransactionDelivery(Confirmation);
-		if (Confirmed.Transaction.TransactionId == Record.TransactionId)
-		{
-			Record = Confirmed.Transaction;
-		}
-		if (Confirmed.Command.Error != ECatDomainCommandError::None
-			&& Confirmed.Command.Error != ECatDomainCommandError::AlreadyResolved)
-		{
-			Result.Delivery.Error = Confirmed.Command.Error;
-			Result.Delivery.Revision = Confirmed.Command.Revision;
-			Result.Delivery.RequestId = Command.Context.RequestId;
-			UE_LOG(LogCatfishing, Warning,
-				TEXT("Event=shop_cart_delivery_confirmation_failed RequestId=%s TransactionId=%s Error=%s"),
-				*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-				*Record.TransactionId.ToString(EGuidFormats::DigitsWithHyphens),
-				*UEnum::GetValueAsString(Confirmed.Command.Error));
-			return Result;
-		}
-	}
-	Result.Delivery.Error = ECatDomainCommandError::None;
-	Result.Delivery.RequestId = Command.Context.RequestId;
 	return Result;
 }

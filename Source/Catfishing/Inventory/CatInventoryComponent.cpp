@@ -23,94 +23,6 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogCatInventory, Log, All);
 
-namespace
-{
-	// 商店批量发货需要稳定载荷签名；这里拒绝混入实例项，避免批量购买把运行实例来源混进商店语义。
-	// 1. 只接受定义发货项，实例发货仍走底层 ReceiveBatch。
-	// 2. 按稳定定义 ID 合并重复行，并确认每行定义、数量、运行配置和实例类都能被正式库存创建。
-	// 3. 生成只描述业务意图的签名；成功重放只校验原始载荷，不因当前格子后来变化而丢失首次回执。
-	bool BuildDefinitionGrantBatchPayloadSignature(const FCatInventoryReceiveBatch& ReceiveBatch,
-		const FString& IdempotencyPayloadContext, FString& OutPayloadSignature,
-		FCatInventoryReceiveBatch& OutNormalizedBatch)
-	{
-		OutPayloadSignature.Reset();
-		OutNormalizedBatch = FCatInventoryReceiveBatch();
-		if (ReceiveBatch.DefinitionEntries.IsEmpty() || !ReceiveBatch.InstanceEntries.IsEmpty())
-		{
-			return false;
-		}
-
-		struct FNormalizedDefinitionGrantEntry
-		{
-			// 合并后的静态定义资产；同一个 DefinitionId 必须对应同一对象，否则重放签名无法代表唯一物品目录。
-			UCatInventoryItemDefinition* Definition = nullptr;
-			// 本批次要生成的运行实例类型；容量预演、正式物化和重放签名都读取它，保证同一订单不会换类。
-			TSubclassOf<UCatInventoryItemInstance> InstanceClass;
-			// 同一稳定定义合并后的发货数量；容量预演和正式写入按它计算，溢出时整批拒绝。
-			int32 Count = 0;
-		};
-
-		TMap<FName, FNormalizedDefinitionGrantEntry> EntriesByDefinitionId;
-		for (const FCatInventoryDefinitionEntry& Entry : ReceiveBatch.DefinitionEntries)
-		{
-			UCatInventoryItemDefinition* Definition = Entry.ItemDefinition;
-			const FName DefinitionId = Definition != nullptr ? Definition->GetInventoryDefinitionId() : NAME_None;
-			const TSubclassOf<UCatInventoryItemInstance> ResolvedClass =
-				UCatInventoryItemDefinition::ResolveItemInstanceClass(Definition, Entry.ItemInstanceClass);
-			if (Definition == nullptr || DefinitionId.IsNone() || Entry.Count <= 0
-				|| !Definition->IsInventoryRuntimeDefinitionReady() || ResolvedClass == nullptr)
-			{
-				OutNormalizedBatch = FCatInventoryReceiveBatch();
-				return false;
-			}
-
-			FNormalizedDefinitionGrantEntry& Normalized = EntriesByDefinitionId.FindOrAdd(DefinitionId);
-			if (Normalized.Definition != nullptr
-				&& (Normalized.Definition != Definition || Normalized.InstanceClass.Get() != ResolvedClass.Get()))
-			{
-				OutNormalizedBatch = FCatInventoryReceiveBatch();
-				return false;
-			}
-			if (Entry.Count > MAX_int32 - Normalized.Count)
-			{
-				OutNormalizedBatch = FCatInventoryReceiveBatch();
-				return false;
-			}
-			Normalized.Definition = Definition;
-			Normalized.InstanceClass = ResolvedClass;
-			Normalized.Count += Entry.Count;
-		}
-
-		TArray<FName> DefinitionIds;
-		EntriesByDefinitionId.GetKeys(DefinitionIds);
-		DefinitionIds.Sort([](const FName& Left, const FName& Right)
-		{
-			return Left.ToString() < Right.ToString();
-		});
-		if (DefinitionIds.IsEmpty())
-		{
-			return false;
-		}
-
-		TArray<FString> Parts;
-		Parts.Reserve(DefinitionIds.Num());
-		OutNormalizedBatch.DefinitionEntries.Reserve(DefinitionIds.Num());
-		for (const FName& DefinitionId : DefinitionIds)
-		{
-			const FNormalizedDefinitionGrantEntry& Normalized = EntriesByDefinitionId.FindChecked(DefinitionId);
-			FCatInventoryDefinitionEntry& OutEntry = OutNormalizedBatch.DefinitionEntries.AddDefaulted_GetRef();
-			OutEntry.ItemDefinition = Normalized.Definition;
-			OutEntry.ItemInstanceClass = Normalized.InstanceClass;
-			OutEntry.Count = Normalized.Count;
-			Parts.Add(FString::Printf(TEXT("%s:%d:%s"),
-				*DefinitionId.ToString(), Normalized.Count, *GetPathNameSafe(Normalized.InstanceClass.Get())));
-		}
-		OutPayloadSignature = FString::Printf(TEXT("Context=%s|Entries=%s"),
-			*IdempotencyPayloadContext, *FString::Join(Parts, TEXT(",")));
-		return true;
-	}
-}
-
 // 空格 owner 构造流程：新空格立即知道自己属于哪个库存组件，复制回调和调试输出使用已绑定宿主。
 FCatInventoryEntry::FCatInventoryEntry(UCatInventoryComponent* InSlotOwnerComponent)
 	: SlotOwnerComponent(InSlotOwnerComponent)
@@ -954,17 +866,22 @@ bool UCatInventoryComponent::CanFullyAcceptInventoryBatch(const FCatInventoryRec
 	return SimulateAddInventoryBatch(ReceiveBatch, SimulatedSlots);
 }
 
-// 批次写入流程：
-// 1. 先要求 authority 和非空批次，再用容量预演保证正常路径不会半批失败。
-// 2. 逐项正式入库阶段暂不广播，只记录是否已经发生任何 Entries 变更。
-// 3. 预检后仍失败时恢复原有条目及传入实例的运行宿主；失败批次不留下部分物品，调用方可以保留世界物或重试。
-// 4. 全批成功且确有变更时只广播一次，避免一批收货拆成多次 UI 刷新。
-bool UCatInventoryComponent::TryAddInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch)
+// 将收货载荷、同步回调和通知开关原样交给内部入口，返回其权限、容量及提交判定；本层不另写状态或重复执行回调。
+bool UCatInventoryComponent::TryAddInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch,
+	const TFunction<bool()>& CommitTransaction, const bool bBroadcastChange)
 {
-	return TryAddInventoryBatchInternal(ReceiveBatch, true);
+	return TryAddInventoryBatchInternal(ReceiveBatch, bBroadcastChange, CommitTransaction);
 }
 
-bool UCatInventoryComponent::TryAddInventoryBatchInternal(const FCatInventoryReceiveBatch& ReceiveBatch, const bool bBroadcastChange)
+// 批次写入流程：
+// 1. 拒绝非 authority；空批次仅在无回调时成功，带回调的实例批次在任何写入前拒绝。
+//    实例合并可能转移世界载体，槽位快照不能恢复这类副作用，因此同步提交只允许定义项。
+// 2. 容量预演通过后保存条目和传入实例的运行宿主，先写定义项再写实例项，逐项写入均不广播。
+// 3. 任一项未完整写入即恢复所存宿主和条目、记录失败；这里不承诺恢复普通实例收货的世界载体转移。
+// 4. 全部入库后才同步调用提交回调；回调拒绝时恢复条目并返回 false，外部事务的恢复由回调负责。
+// 5. 成功且有变更时按开关广播一次并记录成功；写入后的回滚也按同一开关通知，预检拒绝不通知。
+bool UCatInventoryComponent::TryAddInventoryBatchInternal(const FCatInventoryReceiveBatch& ReceiveBatch,
+	const bool bBroadcastChange, const TFunction<bool()>& CommitTransaction)
 {
 	AActor* OwningActor = GetOwner();
 	if (OwningActor == nullptr || !OwningActor->HasAuthority())
@@ -974,7 +891,11 @@ bool UCatInventoryComponent::TryAddInventoryBatchInternal(const FCatInventoryRec
 
 	if (ReceiveBatch.IsEmpty())
 	{
-		return true;
+		return !CommitTransaction;
+	}
+	if (CommitTransaction && !ReceiveBatch.InstanceEntries.IsEmpty())
+	{
+		return false;
 	}
 
 	if (!CanFullyAcceptInventoryBatch(ReceiveBatch))
@@ -993,14 +914,14 @@ bool UCatInventoryComponent::TryAddInventoryBatchInternal(const FCatInventoryRec
 			PreviousRuntimeOwners.FindOrAdd(Entry.ItemInstance, Entry.ItemInstance->GetRuntimeOwnerActor());
 		}
 	}
-	// 先恢复传入实例宿主，再替换条目并广播，保证回调不会观察到已退回物品仍归本库存的中间状态。
-	const auto RollbackBatch = [this, &SavedEntries, &PreviousRuntimeOwners]()
+	// 先恢复传入实例宿主，再恢复条目；延迟通知的事务失败时也不广播，避免观察者看到未成交的收货。
+	const auto RollbackBatch = [this, &SavedEntries, &PreviousRuntimeOwners, bBroadcastChange]()
 	{
 		for (const TPair<UCatInventoryItemInstance*, AActor*>& Pair : PreviousRuntimeOwners)
 		{
 			Pair.Key->SetRuntimeOwnerActor(Pair.Value);
 		}
-		ReplaceInventoryEntriesFromAuthority(SavedEntries, SavedEntries.Num());
+		ReplaceInventoryEntriesFromAuthority(SavedEntries, SavedEntries.Num(), bBroadcastChange);
 	};
 	bool bAnyMutation = false;
 	for (const FCatInventoryDefinitionEntry& DefinitionEntry : ReceiveBatch.DefinitionEntries)
@@ -1031,6 +952,14 @@ bool UCatInventoryComponent::TryAddInventoryBatchInternal(const FCatInventoryRec
 				*GetNameSafe(OwningActor), InstanceEntry.Count, RemainingCount);
 			return false;
 		}
+	}
+
+	if (CommitTransaction && !CommitTransaction())
+	{
+		RollbackBatch();
+		UE_LOG(LogCatInventory, Warning, TEXT("Event=inventory_batch_commit_rejected Owner=%s Result=Restored"),
+			*GetNameSafe(OwningActor));
+		return false;
 	}
 
 	if (bAnyMutation && bBroadcastChange)
@@ -1115,147 +1044,6 @@ FCatDomainCommandResult UCatInventoryComponent::GrantResolvedInventoryDefinition
 	const FName DefinitionId = ItemDefinition != nullptr ? ItemDefinition->GetInventoryDefinitionId() : NAME_None;
 	return GrantInventoryDefinitionFromAuthorityInternal(
 		RequestId, DefinitionId, ItemDefinition, Count);
-}
-
-// 商店扣款前必须先得到库存侧的只读接收结论；这里把定义批次规整为稳定签名，避免重试被 UI 行顺序影响。
-// 1. 坏定义或实例项直接拒绝，保证预检只回答定义发货这一个语义。
-// 2. 已有同 RequestId 成功终态时只校验签名并放行重放，避免购物车重试在扣款后被当前格子变化挡住。
-// 3. 首次预检要求服务器正式库存仍可接收，再用同一个容量预演判断整批是否能完整放入。
-ECatDomainCommandError UCatInventoryComponent::ValidateInventoryDefinitionBatchGrantFromAuthority(
-	const FGuid RequestId, const FString& IdempotencyPayloadContext,
-	const FCatInventoryReceiveBatch& ReceiveBatch) const
-{
-	FString PayloadSignature;
-	FCatInventoryReceiveBatch NormalizedBatch;
-	if (!BuildDefinitionGrantBatchPayloadSignature(ReceiveBatch, IdempotencyPayloadContext,
-		PayloadSignature, NormalizedBatch))
-	{
-		return ECatDomainCommandError::InvalidPayload;
-	}
-
-	const FString Key = MakeTerminalKey(TEXT("GrantInventoryDefinitionBatch"), RequestId);
-	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
-	{
-		const FString* CachedPayload = TerminalPayloadByKey.Find(Key);
-		if (!CachedPayload || *CachedPayload != PayloadSignature)
-		{
-			return ECatDomainCommandError::InvalidPayload;
-		}
-		return Cached->Error == ECatDomainCommandError::None
-			? ECatDomainCommandError::None : Cached->Error;
-	}
-
-	const AActor* OwningActor = GetOwner();
-	if (!RequestId.IsValid() || OwningActor == nullptr || !OwningActor->HasAuthority())
-	{
-		return ECatDomainCommandError::InvalidPayload;
-	}
-	return CanFullyAcceptInventoryBatch(NormalizedBatch)
-		? ECatDomainCommandError::None : ECatDomainCommandError::CapacityExceeded;
-}
-
-// 购物车交付只由正式库存容量和成功终态缓存裁决整批定义发货，营地 Actor 不保存第二份入库状态。
-// 1. 先用载荷签名处理成功重放；同 RequestId 换身份上下文、定义或数量会被拒绝。
-// 2. 首次提交必须在服务器正式库存可接收时执行，并复用整批容量预演确认定义批次完整可接收。
-// 3. 写入前先把定义物化为实例批次，避免写入阶段再创建实例导致商店交付出现半批事实。
-// 4. 最后只调用正式库存批次入口写入并通知；成功终态进入缓存，失败不封死同一订单再次补交付的机会。
-FCatDomainCommandResult UCatInventoryComponent::GrantInventoryDefinitionBatchFromAuthority(
-	const FGuid RequestId, const FString& IdempotencyPayloadContext,
-	const FCatInventoryReceiveBatch& ReceiveBatch)
-{
-	FCatDomainCommandResult Result;
-	Result.RequestId = RequestId;
-
-	FString PayloadSignature;
-	FCatInventoryReceiveBatch NormalizedBatch;
-	if (!BuildDefinitionGrantBatchPayloadSignature(ReceiveBatch, IdempotencyPayloadContext,
-		PayloadSignature, NormalizedBatch))
-	{
-		Result.Error = ECatDomainCommandError::InvalidPayload;
-		return Result;
-	}
-
-	const FString Key = MakeTerminalKey(TEXT("GrantInventoryDefinitionBatch"), RequestId);
-	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
-	{
-		const FString* CachedPayload = TerminalPayloadByKey.Find(Key);
-		if (!CachedPayload || *CachedPayload != PayloadSignature)
-		{
-			Result.Error = ECatDomainCommandError::InvalidPayload;
-
-			return Result;
-		}
-		Result = *Cached;
-		MarkCommandReplayed(Result);
-		return Result;
-	}
-
-	const AActor* OwningActor = GetOwner();
-	if (!RequestId.IsValid() || OwningActor == nullptr || !OwningActor->HasAuthority())
-	{
-		Result.Error = ECatDomainCommandError::InvalidPayload;
-	}
-	else if (!CanFullyAcceptInventoryBatch(NormalizedBatch))
-	{
-		Result.Error = ECatDomainCommandError::CapacityExceeded;
-	}
-	else
-	{
-		FCatInventoryReceiveBatch MaterializedBatch;
-		for (const FCatInventoryDefinitionEntry& DefinitionEntry : NormalizedBatch.DefinitionEntries)
-		{
-			const int32 MaxStackCount = FMath::Max(1, GetMaxStackCountForDefinition(*DefinitionEntry.ItemDefinition));
-			int32 RemainingCount = DefinitionEntry.Count;
-			while (RemainingCount > 0)
-			{
-				const int32 EntryCount = MaxStackCount > 1 ? FMath::Min(RemainingCount, MaxStackCount) : 1;
-				UCatInventoryItemInstance* Instance = CreateInventoryItemInstance(
-					DefinitionEntry.ItemDefinition, DefinitionEntry.ItemInstanceClass);
-				if (Instance == nullptr)
-				{
-					Result.Error = ECatDomainCommandError::DependencyUnavailable;
-
-					UE_LOG(LogCatInventory, Error,
-						TEXT("Event=inventory_definition_batch_materialize_failed Owner=%s Request=%s Definition=%s Remaining=%d"),
-						*GetNameSafe(OwningActor), *RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-						*DefinitionEntry.ItemDefinition->GetInventoryDefinitionId().ToString(), RemainingCount);
-					return Result;
-				}
-
-				FCatInventoryInstanceEntry& InstanceEntry =
-					MaterializedBatch.InstanceEntries.AddDefaulted_GetRef();
-				InstanceEntry.ItemInstance = Instance;
-				InstanceEntry.Count = EntryCount;
-				RemainingCount -= EntryCount;
-			}
-		}
-
-		if (!CanFullyAcceptInventoryBatch(MaterializedBatch))
-		{
-			Result.Error = ECatDomainCommandError::CapacityExceeded;
-		}
-		else if (TryAddInventoryBatch(MaterializedBatch))
-		{
-			Result.bCommitted = true;
-			Result.Error = ECatDomainCommandError::None;
-		}
-		else
-		{
-			Result.Error = ECatDomainCommandError::DependencyUnavailable;
-		}
-	}
-
-	if (Result.bCommitted && Result.Error == ECatDomainCommandError::None)
-	{
-		TerminalCache.Add(Key, Result);
-		TerminalPayloadByKey.Add(Key, PayloadSignature);
-	}
-	UE_LOG(LogCatInventory, Log,
-		TEXT("Event=inventory_definition_batch_grant Owner=%s Request=%s Committed=%s Error=%s Definitions=%d"),
-		*GetNameSafe(OwningActor), *RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-		Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error),
-		NormalizedBatch.DefinitionEntries.Num());
-	return Result;
 }
 
 // 稳定定义发货提交共用流程：

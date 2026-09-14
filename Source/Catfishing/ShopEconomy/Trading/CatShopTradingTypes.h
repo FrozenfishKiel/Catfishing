@@ -52,7 +52,7 @@ struct FCatShopStockSnapshot
 	int64 Revision = 0;
 };
 
-/** 一条经济账本记录；金额、公款和库存事实不可回写，交付状态只由下游回执推进。 */
+/** 一条已完成的钱货交易记录；服务在成交后写入，查询和公开流水只读，不存在待收货状态。 */
 USTRUCT(BlueprintType)
 struct FCatShopTransactionRecord
 {
@@ -70,25 +70,13 @@ struct FCatShopTransactionRecord
 	UPROPERTY(BlueprintReadOnly)
 	FString StableNetId;
 
-	/** 这条记录是否来自购物车购买；交付确认只接受购买记录，由交易来源判断业务分支。 */
+	/** 这条记录是否来自已入库的购物车购买；公开流水据此选择购买展示，不用于再次发货。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bPurchase = false;
 
 	/** 这条记录是否来自售鱼入账；它用于公开流水展示，不授权任何库存或 Social 后续操作。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bFishSale = false;
-
-	/** 这条购买记录是否仍等待下游库存回执；售鱼记录和已确认购买都保持 false。 */
-	UPROPERTY(BlueprintReadOnly)
-	bool bDeliveryPending = false;
-
-	/** 下游领域是否已经确认交付完成；重复确认只读取这条事实，支付和发货只发生一次。 */
-	UPROPERTY(BlueprintReadOnly)
-	bool bDeliveryConfirmed = false;
-
-	/** 下游领域成功交付时返回的回执 ID；未交付或售鱼记录保持无效。 */
-	UPROPERTY(BlueprintReadOnly)
-	FGuid DeliveryReceiptId;
 
 	/** 购物车购买时的商店目录项；售鱼可保持 None。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -98,11 +86,11 @@ struct FCatShopTransactionRecord
 	UPROPERTY(BlueprintReadOnly)
 	FGuid ShopInventoryId;
 
-	/** 订单要交付的下游定义；售鱼可保持 None。 */
+	/** 本次购买实际入库的物品定义；经济服务写入供查询，售鱼保持 None。 */
 	UPROPERTY(BlueprintReadOnly)
 	FName DefinitionId = NAME_None;
 
-	/** 本订单成功后应发放给目标库存的数量；货架库存只扣一单，目标库存按这个数量接收入库。 */
+	/** 本次购买实际入库的物品件数；服务按单份数量乘以选购次数写入，展示和审计读取它。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 PurchaseQuantity = 0;
 
@@ -150,14 +138,6 @@ struct FCatShopPublicTransaction
 	/** 这条公开流水是否来自售鱼入账；表现层用它选择文案，不回写库存状态。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bFishSale = false;
-
-	/** 购买流水是否仍在等待下游回执；售鱼流水保持 false。 */
-	UPROPERTY(BlueprintReadOnly)
-	bool bDeliveryPending = false;
-
-	/** 购买流水是否已经收到下游回执；售鱼流水保持 false。 */
-	UPROPERTY(BlueprintReadOnly)
-	bool bDeliveryConfirmed = false;
 
 	/** 买的是哪一条目录项；售鱼保持 None。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -325,26 +305,6 @@ struct FCatShopFishSaleCommand
 	/** 本次协调器冻结的实物鱼行；服务完整重算一笔收入，任一行非法即整单拒绝，不自行访问鱼护或世界鱼。 */
 	UPROPERTY(BlueprintReadWrite)
 	TArray<FCatShopFishSaleLine> Fish;
-};
-
-/** 下游领域完成购买交付后的确认命令；它只推进账本状态，不重新扣公款或库存。 */
-USTRUCT(BlueprintType)
-struct FCatShopDeliveryConfirmationCommand
-{
-	GENERATED_BODY()
-
-	/** 确认请求的幂等 ID 与服务器身份；StableNetId 必须匹配原订单买家。 */
-	UPROPERTY(BlueprintReadWrite)
-	FCatDomainCommandContext Context;
-
-	/** 要确认的 Shop 账本 ID；客户端不能用 EntryId 或 DefinitionId 猜测待交付订单。 */
-	UPROPERTY(BlueprintReadWrite)
-	FGuid TransactionId;
-
-	/** 下游领域提交成功后生成的回执 ID；Shop 只保存它用于审计和重放恢复。 */
-	UPROPERTY(BlueprintReadWrite)
-	FGuid DeliveryReceiptId;
-
 };
 
 /** 经济命令的统一返回；包含公共终态、公款快照、库存快照和首次账本记录。 */
