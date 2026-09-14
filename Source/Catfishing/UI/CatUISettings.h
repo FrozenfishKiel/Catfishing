@@ -92,7 +92,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Lake|Run")
 	TSoftClassPtr<UCatDayTransitionWidget> DayTransitionWidgetClass;
 
-	/** 祭坛全员确认窗口的正式 WBP 软类引用；LocalPlayer 在 Waiting 或取消反馈期间加载，布局与静态 F8/F9 提示由资产维护。 */
+	/** 祭坛全员确认窗口的正式 WBP 软类引用；LocalPlayer 在等待或系统取消反馈时加载同一资产，具体操作提示由 Widget 按发起者身份渲染。 */
 	UPROPERTY(Config, EditAnywhere, Category="Lake|Run")
 	TSoftClassPtr<UCatAltarConfirmationWidget> AltarConfirmationWidgetClass;
 

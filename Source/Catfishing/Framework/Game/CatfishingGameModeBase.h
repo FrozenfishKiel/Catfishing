@@ -116,10 +116,10 @@ public:
 	bool DoesLastRunFlowResultMatch(ECatRunTransitionReason ExpectedReason) const;
 	/** 在现场交互合法时建立固定的 Active 玩家确认名单；发起者默认确认，单人会立即转入既有翻天。 */
 	bool BeginAltarConfirmation(ACatAltarActor* Altar, AController* Initiator, FGuid RequestId);
-	/** 接收一名玩家自己的远程确认或撤回；请求、名单、资格和截止时间不匹配时不改写公开快照。 */
+	/** 接收本人确认意图；发起者的撤回取消整轮，其他人只撤回本人。请求、名单、资格和截止时间不匹配时拒绝。 */
 	void SetAltarConfirmation(AController* Player, FGuid RequestId, bool bConfirmed);
-	/** 取消尚未正式进入翻天的确认请求；原因保留在公开快照中供客户端短暂展示。 */
-	void CancelAltarConfirmation(const FText& Reason);
+	/** 取消尚未正式翻天的请求且不扣供品；默认短暂展示原因，发起者主动取消传 false 立即清空快照并关闭全队窗口。 */
+	void CancelAltarConfirmation(const FText& Reason, bool bShowReason = true);
 	/** 祭坛销毁或退出时释放本祭坛的过渡；不撤销已提交 GAS，也不影响另一祭坛。 */
 	void CancelAltarDayTransition(ACatAltarActor* Altar, const FText& Error);
 	/** 供 owning client 在成像归档已收口后提交结算完成终态；本方法只发送 StateTree 事件，不在 C++ 选择目标 Phase。 */

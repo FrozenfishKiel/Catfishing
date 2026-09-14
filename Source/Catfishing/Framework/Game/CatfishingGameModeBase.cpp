@@ -1298,7 +1298,8 @@ bool ACatfishingGameModeBase::BeginAltarConfirmation(ACatAltarActor* Altar, ACon
 // 确认提交流程：
 // 1. 先核对等待状态、请求标识和服务器截止；迟到提交统一走超时取消，旧请求直接忽略。
 // 2. 再按 RPC 所属 Controller 找到同一 PlayerState 的固定名单项，倒地、距离和 Pawn 状态不参与资格重算。
-// 3. 同值重试不发布；真实变化写入一项确认值。全员完成时先标记 Accepted、清计时器，再唯一进入正式翻天。
+// 3. 发起者提交 false 代表终止整轮，立即清空公开请求；其余人的 false 只撤回本人确认。
+// 4. 同值重试不发布；真实变化写入一项确认值。全员完成时先标记 Accepted、清计时器，再唯一进入正式翻天。
 void ACatfishingGameModeBase::SetAltarConfirmation(AController* Player, FGuid RequestId, bool bConfirmed)
 {
 	FCatAltarConfirmationSnapshot& Snapshot = RunPublicState.AltarConfirmation;
@@ -1330,6 +1331,11 @@ void ACatfishingGameModeBase::SetAltarConfirmation(AController* Player, FGuid Re
 		{
 			return Entry.PlayerState == PlayerState;
 		});
+	if (Participant && !bConfirmed && Snapshot.Initiator == Player->PlayerState.Get())
+	{
+		CancelAltarConfirmation(NSLOCTEXT("Catfishing", "AltarConfirmationInitiatorCancelled", "发起者已取消本次献祭"), false);
+		return;
+	}
 	if (!Participant || Participant->bConfirmed == bConfirmed)
 	{
 		if (!Participant)
@@ -1364,8 +1370,10 @@ void ACatfishingGameModeBase::SetAltarConfirmation(AController* Player, FGuid Re
 	}
 }
 
-// 取消流程：只处理尚未正式开始 DayTransition 的等待或接受请求；同一句柄替换为两秒后的终态清理，保留原因供客户端展示再发布。
-void ACatfishingGameModeBase::CancelAltarConfirmation(const FText& Reason)
+// 取消流程：只处理尚未正式开始 DayTransition 的等待或接受请求，先停止服务器计时。
+// 超时等系统中止保留原因两秒；发起者主动取消直接清空快照与对象引用，让全队立即收起窗口，不再启动提示计时器。
+// 发布前保存关联 ID，清空状态后日志仍能还原同一轮取消；两种取消都不冻结、消费供品或翻天。
+void ACatfishingGameModeBase::CancelAltarConfirmation(const FText& Reason, const bool bShowReason)
 {
 	FCatAltarConfirmationSnapshot& Snapshot = RunPublicState.AltarConfirmation;
 	if (!HasAuthority() || (Snapshot.State != ECatAltarConfirmationState::Waiting
@@ -1373,16 +1381,24 @@ void ACatfishingGameModeBase::CancelAltarConfirmation(const FText& Reason)
 	{
 		return;
 	}
+	const FGuid CancelledRequestId = Snapshot.RequestId;
 	GetWorldTimerManager().ClearTimer(AltarConfirmationTimer);
-	Snapshot.State = ECatAltarConfirmationState::Cancelled;
-	Snapshot.DeadlineServerTimeSeconds = 0.0;
-	Snapshot.CancelReason = Reason;
-	GetWorldTimerManager().SetTimer(AltarConfirmationTimer, this, &ThisClass::HandleAltarConfirmationTimer, 2.0f, false);
+	if (bShowReason)
+	{
+		Snapshot.State = ECatAltarConfirmationState::Cancelled;
+		Snapshot.DeadlineServerTimeSeconds = 0.0;
+		Snapshot.CancelReason = Reason;
+		GetWorldTimerManager().SetTimer(AltarConfirmationTimer, this, &ThisClass::HandleAltarConfirmationTimer, 2.0f, false);
+	}
+	else
+	{
+		Snapshot = FCatAltarConfirmationSnapshot();
+	}
 	++RunPublicState.Revision;
 	RefreshEnvironmentAndPublish();
-	UE_LOG(LogCatRun, Warning, TEXT("Event=AltarConfirmationCancelled World=%s NetMode=%d Authority=1 LocalRole=%d RequestId=%s Reason=%s"),
+	UE_LOG(LogCatRun, Log, TEXT("Event=AltarConfirmationCancelled World=%s NetMode=%d Authority=1 LocalRole=%d RequestId=%s ShowReason=%d Reason=%s"),
 		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()),
-		*Snapshot.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *Reason.ToString());
+		*CancelledRequestId.ToString(EGuidFormats::DigitsWithHyphens), bShowReason, *Reason.ToString());
 }
 
 // 计时收口：取消提示保留两秒后清空终态和对象引用；等待中的回调或迟到输入复核名单与截止后取消。

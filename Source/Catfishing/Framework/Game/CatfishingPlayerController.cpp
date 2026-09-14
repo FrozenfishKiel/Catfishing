@@ -1201,7 +1201,7 @@ void ACatfishingPlayerController::NativeInputTagCanceled(const FGameplayTag Inpu
 
 // 祭坛确认输入流程：
 // 1. 只允许 owning client 从当前 GameState 快照读取等待中的有效请求，F8/F9 以目标布尔值表达意图而不计算人数。
-// 2. 正式翻天锁已建立时拒绝发送，避免 Accepted 到 DayTransition 复制之间的迟到输入制造第二条语义路径。
+// 2. 正式翻天锁已建立时拒绝发送；发起者没有再次确认操作，消费 F8 而不发 RPC，F9 仍交服务器裁决取消整轮。
 // 3. 找到请求后记录关联键并可靠发送；服务器仍以 RPC 所属 Controller 和 GameMode 的公开名单完成最终裁决。
 bool ACatfishingPlayerController::TrySetAltarConfirmationFromKey(const FKey& Key)
 {
@@ -1217,6 +1217,10 @@ bool ACatfishingPlayerController::TrySetAltarConfirmationFromKey(const FKey& Key
 	{
 		return false;
 	}
+	if (bConfirmed && Confirmation->Initiator == PlayerState.Get())
+	{
+		return true;
+	}
 	UE_LOG(LogCatRun, Log,
 		TEXT("Event=altar_confirmation_input_submitted RequestId=%s Confirmed=%d World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s"),
 		*Confirmation->RequestId.ToString(EGuidFormats::DigitsWithHyphens), bConfirmed, *GetNameSafe(GetWorld()),
@@ -1231,7 +1235,7 @@ void ACatfishingPlayerController::ConfirmAltarConfirmationFromInput()
 	TrySetAltarConfirmationFromKey(EKeys::F8);
 }
 
-// F9 输入流程：游戏视口没有 UMG 焦点时，直接把按键送入统一的撤回入口；服务器对重复的 false 保持幂等。
+// F9 输入流程：没有 UMG 焦点时送入同一入口；服务器识别发起者后取消整轮，其他人只撤回本人，迟到重复输入被等待态和请求 ID 拒绝。
 void ACatfishingPlayerController::RevokeAltarConfirmationFromInput()
 {
 	TrySetAltarConfirmationFromKey(EKeys::F9);

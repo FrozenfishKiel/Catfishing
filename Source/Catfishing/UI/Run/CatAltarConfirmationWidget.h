@@ -42,7 +42,7 @@ private:
 	/** 正式 WBP 的本人确认文本；从 owning Controller 的 PlayerState 在公开 Participants 中找到状态，提示 F8/F9 的下一步。 */
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UTextBlock> OwnConfirmationTextBlock;
-	/** 正式 WBP 的 F8/F9 静态提示文本；Waiting 时显示，服务器取消或接受后隐藏，避免展示已失效操作。 */
+	/** 同一正式 WBP 的操作提示；渲染时按服务器发起者身份写入仅取消或确认/撤回，结束后隐藏，不负责裁决权限。 */
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UTextBlock> InputHintsTextBlock;
 	/** 正式 WBP 的取消原因文本；只在服务器发布 Cancelled 时显示，本机两秒停留由 UI Subsystem 管理。 */

@@ -18,7 +18,7 @@ namespace CatAltarConfirmationPresentation
 }
 
 // 渲染流程：
-// 1. 直接读取公开 Participants 数组，统计确认数并找到 owning PlayerState 的当前确认态，不建立本地名单或计数真相。
+// 1. 直接读取公开 Participants 数组，统计确认数并找到 owning PlayerState 的当前确认态；按服务器 Initiator 区分取消整轮和撤回本人，不另建 WBP 或本地权限状态。
 // 2. Waiting 请求变化时重置视觉滑入和倒计时缓存；Cancelled 保留取消原因供 UI Subsystem 的两秒停留展示，Accepted/Idle 交给子系统收起。
 // 3. 窗口始终穿透鼠标且不可聚焦，F8/F9 继续由 PlayerController 与已有模态页面的预览键统一处理。
 void UCatAltarConfirmationWidget::RenderConfirmation(const FCatAltarConfirmationSnapshot& Confirmation)
@@ -34,6 +34,7 @@ void UCatAltarConfirmationWidget::RenderConfirmation(const FCatAltarConfirmation
 	DisplayDeadlineServerTimeSeconds = bWaiting ? Confirmation.DeadlineServerTimeSeconds : 0.0;
 
 	const APlayerState* LocalPlayerState = GetOwningPlayer() ? GetOwningPlayer()->PlayerState : nullptr;
+	const bool bLocalInitiator = LocalPlayerState && Confirmation.Initiator == LocalPlayerState;
 	int32 ConfirmedCount = 0;
 	bool bLocalConfirmed = false;
 	bool bLocalParticipant = false;
@@ -58,9 +59,14 @@ void UCatAltarConfirmationWidget::RenderConfirmation(const FCatAltarConfirmation
 		? NSLOCTEXT("CatAltarConfirmation", "Cancelled", "本次献祭已取消")
 		: (!bLocalParticipant
 		? NSLOCTEXT("CatAltarConfirmation", "AwaitingEligibility", "正在同步你的确认资格")
-		: (bLocalConfirmed
+		: (bLocalInitiator
+			? NSLOCTEXT("CatAltarConfirmation", "InitiatorWaiting", "你已发起献祭 · 等待队友确认")
+			: (bLocalConfirmed
 			? NSLOCTEXT("CatAltarConfirmation", "Confirmed", "你已确认 · 按 F9 撤回")
-			: NSLOCTEXT("CatAltarConfirmation", "Unconfirmed", "你尚未确认 · 按 F8 确认"))));
+			: NSLOCTEXT("CatAltarConfirmation", "Unconfirmed", "你尚未确认 · 按 F8 确认")))));
+	InputHintsTextBlock->SetText(bLocalInitiator
+		? NSLOCTEXT("CatAltarConfirmation", "InitiatorCancelHint", "F9 取消本次献祭")
+		: NSLOCTEXT("CatAltarConfirmation", "ParticipantHints", "F8 确认 · F9 撤回确认"));
 	InputHintsTextBlock->SetVisibility(bWaiting ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	CancelReasonTextBlock->SetText(Confirmation.State == ECatAltarConfirmationState::Cancelled
 		? Confirmation.CancelReason : FText::GetEmpty());

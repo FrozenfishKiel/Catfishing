@@ -103,7 +103,7 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerRequestInteraction(AActor* Target, FGuid RequestId);
 
-	/** 客户端只提交本人对当前祭坛确认请求的目标状态；服务器以 RPC 所属 Controller 识别玩家并由 GameMode 复核请求。 */
+	/** 客户端只提交本人意图；false 对发起者表示取消整轮，对其他人表示撤回。服务器按 RPC 所属 Controller 识别身份并复核。 */
 	UFUNCTION(Server, Reliable)
 	void ServerSetAltarConfirmation(FGuid RequestId, bool bConfirmed);
 
@@ -259,7 +259,7 @@ private:
 	void ClearDayTransition();
 	/** 游戏视口直接收到 F8 时复用统一确认提交入口，避免没有模态页面时缺少快捷键。 */
 	void ConfirmAltarConfirmationFromInput();
-	/** 游戏视口直接收到 F9 时复用统一撤回提交入口，重复按键仍由服务器按目标状态幂等处理。 */
+	/** 游戏视口收到 F9 时提交 false；服务器裁决发起者取消整轮或其他人撤回本人，重复按键不会恢复旧请求。 */
 	void RevokeAltarConfirmationFromInput();
 
 	/** 当前快照通知来源；调和时写入，清理时配对解绑，不强持有旧 World 的 GameState。 */

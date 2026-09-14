@@ -20,6 +20,7 @@
 #include "Framework/Game/CatfishingGameState.h"
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "GameFramework/PlayerState.h"
+#include "GameFramework/PlayerInput.h"
 #include "HAL/FileManager.h"
 #include "ImageUtils.h"
 #include "Input/Events.h"
@@ -95,7 +96,7 @@ namespace CatAltarConfirmationTests
 			if (ServerShopKiosk.IsValid()) ServerShopKiosk->Destroy();
 		}
 
-		/** 依序建立三端、进入正式夜晚、验证确认与撤回、覆盖生命周期和超时取消，最后经两名客户端 RPC 进入唯一翻天。 */
+		/** 建立三端并进入夜晚，先验证房主及远端发起者取消、窗口关闭和 F9 无截图绑定，再覆盖普通撤回、生命周期、超时与唯一翻天。 */
 		bool Update() override
 		{
 			if (StartedAtSeconds <= 0.0) StartedAtSeconds = FPlatformTime::Seconds();
@@ -129,6 +130,8 @@ namespace CatAltarConfirmationTests
 			case 12: return VerifyCommittedTransitionAndBeginSinglePlayerRequest();
 			case 13: return VerifySinglePlayerImmediatelyAccepted();
 			case 14: return VerifySinglePlayerTransitionCommitted();
+			case 15: return CancelFromInitiator();
+			case 16: return VerifyInitiatorCancellationClosesAllWindows();
 			default:
 				Test->AddError(TEXT("Formal altar confirmation reached an unknown state-machine stage."));
 				return true;
@@ -217,7 +220,64 @@ namespace CatAltarConfirmationTests
 			FirstRequestId = FGuid::NewGuid();
 			if (!Test->TestTrue(TEXT("host begins the first altar confirmation through the public GameMode entry"),
 				ServerMode->BeginAltarConfirmation(Altar.Get(), HostController.Get(), FirstRequestId))) return true;
-			Stage = 2;
+			Stage = InitiatorCancellationRounds < 2 ? 15 : 2;
+			return false;
+		}
+
+		/** 房主和远端依次作为发起者，核对同一个正式 WBP 只提供取消，再由该端本人输入入口发送 F9。 */
+		bool CancelFromInitiator()
+		{
+			WaitingFor = TEXT("initiator-only cancel UI and owning-client F9");
+			if (!IsWaitingSnapshotReplicated(*ClientOneController, FirstRequestId, 3)
+				|| !IsWaitingSnapshotReplicated(*ClientTwoController, FirstRequestId, 3)) return false;
+			ACatfishingPlayerController* Initiator = InitiatorCancellationRounds == 0 ? HostController.Get() : ClientOneController.Get();
+			UUserWidget* Widget = FindConfirmationWindow(*Initiator);
+			UTextBlock* Hints = Widget ? Cast<UTextBlock>(Widget->GetWidgetFromName(TEXT("InputHintsTextBlock"))) : nullptr;
+			if (!Hints) return false;
+			Test->TestFalse(TEXT("initiator has no confirm action in the shared WBP"), Hints->GetText().ToString().Contains(TEXT("F8")));
+			Test->TestTrue(TEXT("initiator only sees cancellation"), Hints->GetText().ToString().Contains(TEXT("取消")));
+			for (ACatfishingPlayerController* Controller : {HostController.Get(), ClientOneController.Get(), ClientTwoController.Get()})
+			{
+				if (!Controller->PlayerInput) return false;
+				Test->TestFalse(TEXT("effective player input has no F9 screenshot debug binding"),
+					Controller->PlayerInput->DebugExecBindings.ContainsByPredicate([](const FKeyBind& Binding)
+					{ return Binding.Key == EKeys::F9 && Binding.Command.Contains(TEXT("shot"), ESearchCase::IgnoreCase); }));
+			}
+			if (!Test->TestTrue(TEXT("initiator F9 submits cancel"), Initiator->TrySetAltarConfirmationFromKey(EKeys::F9))) return true;
+			InitiatorCancellationSentAtSeconds = FPlatformTime::Seconds();
+			Stage = 16;
+			return false;
+		}
+
+		/** 主动取消须在短网络缓冲内关闭全部窗口且不结算；迟到确认不能恢复旧轮，再用远端身份重复一次。 */
+		bool VerifyInitiatorCancellationClosesAllWindows()
+		{
+			WaitingFor = TEXT("initiator cancellation closes every endpoint without the two-second feedback delay");
+			bool bAllClosed = true;
+			for (ACatfishingPlayerController* Controller : {HostController.Get(), ClientOneController.Get(), ClientTwoController.Get()})
+			{
+				const ACatfishingGameState* State = Controller->GetWorld()->GetGameState<ACatfishingGameState>();
+				bAllClosed &= State && State->GetRunPublicState().AltarConfirmation.State == ECatAltarConfirmationState::Idle
+					&& !FindConfirmationWindow(*Controller);
+			}
+			if (!bAllClosed && FPlatformTime::Seconds() - InitiatorCancellationSentAtSeconds < 1.0) return false;
+			if (!Test->TestTrue(TEXT("initiator cancellation immediately ends the request and closes all UIs"), bAllClosed)) return true;
+			ServerMode->SetAltarConfirmation(ServerClientTwoController.Get(), FirstRequestId, true);
+			const FCatRunPublicState& Run = ServerMode->GetRunPublicState();
+			if (!Test->TestTrue(TEXT("late confirmation cannot restart cancelled request"), Run.AltarConfirmation.State == ECatAltarConfirmationState::Idle)
+				|| !Test->TestFalse(TEXT("initiator cancel does not start transition"), Run.DayTransition.bActive)
+				|| !Test->TestTrue(TEXT("initiator cancel keeps ground fish and current night"), OfferingFish.IsValid()
+					&& !OfferingFish->IsActorBeingDestroyed() && Run.Phase.Phase == ECatRunPhase::NormalNight)) return true;
+			++InitiatorCancellationRounds;
+			if (InitiatorCancellationRounds == 1)
+			{
+				ServerClientOneController->GetPawn()->SetActorLocation(HostController->GetPawn()->GetActorLocation(), false, nullptr, ETeleportType::TeleportPhysics);
+				FirstRequestId = FGuid::NewGuid();
+				if (!Test->TestTrue(TEXT("remote player can initiate the next round"),
+					ServerMode->BeginAltarConfirmation(Altar.Get(), ServerClientOneController.Get(), FirstRequestId))) return true;
+				Stage = 15;
+			}
+			else Stage = 1;
 			return false;
 		}
 
@@ -796,6 +856,10 @@ namespace CatAltarConfirmationTests
 		double TimeoutCancellationObservedAtSeconds = 0.0;
 		/** 当前状态机步骤；每步仅在前一条真实网络状态收敛后推进，避免本地调用冒充复制完成。 */
 		int32 Stage = 0;
+		/** 已验证主动取消的身份数；零为房主，一为远端，两者通过后进入原有撤回、超时和结算回归。 */
+		int32 InitiatorCancellationRounds = 0;
+		/** 主动取消输入的本机单调时钟秒数；给复制留一秒缓冲，同时拒绝把两秒原因停留误算成立即关闭。 */
+		double InitiatorCancellationSentAtSeconds = 0.0;
 		/** Automation 框架提供的断言接收者；所有异步阶段把失败写回同一测试实例，不跨线程或跨世界持有断言状态。 */
 		FAutomationTestBase* Test = nullptr;
 		/** 超时错误中展示的当前等待条件；帮助区分 PIE 装配、复制、业务 Timer 和 UI 资产失败。 */
