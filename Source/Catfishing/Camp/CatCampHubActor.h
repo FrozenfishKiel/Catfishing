@@ -14,7 +14,7 @@ class USceneComponent;
 /** 篝火公共回看请求；它只启动可跳过表现，不参与普通夜晚供品结算或 StateTree 转移。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatCampfirePlaybackRequested, FGuid);
 
-/** 玩法世界唯一固定营地宿主；同时承载玩家出生点语义、休息、救援落点、共享鱼缸引用和可选回看，不支持建造/装饰/搬迁。 */
+/** 玩法世界唯一固定营地宿主；同时承载玩家出生点语义、救援落点、共享鱼缸引用和可选回看，不支持建造/装饰/搬迁。 */
 UCLASS()
 class CATFISHING_API ACatCampHubActor : public APlayerStart
 {
@@ -26,9 +26,6 @@ public:
 
 	/** 按当前营地附近地面为 0 到 MaxCampSpawnPlayers-1 的玩家序号解析合法出生位置；超过容量会拒绝而不是循环复用，成功时返回的是 Pawn 根胶囊中心 Transform，失败时调用方必须保持无 Pawn。 */
 	bool TryResolvePlayerEntryTransform(int32 PreferredEntryIndex, const APawn* PawnToFit, FTransform& OutTransform) const;
-
-	/** 本人位于营地范围时请求快速休息；Character ConditionComponent 拥有最终身体写入。 */
-	FCatDomainCommandResult RequestRest(AController* RequestingController, FGuid RequestId);
 
 	/** 伙伴把倒地目标送到固定 RescuePoint；Teleport 成功后才提交 CarriedToCamp 事实。 */
 	FCatDomainCommandResult RescueToCamp(AController* HelpingController, ACatCharacter* TargetCharacter, FGuid RequestId);
@@ -50,7 +47,7 @@ public:
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastCampfirePlaybackRequested(FGuid RequestId);
 
-	/** 只读判断 Controller 当前 Character 是否位于固定营地交互范围；供需要营地位置前提的领域调用，不产生回看或休息副作用。 */
+	/** 只读判断 Controller 当前 Character 是否位于固定营地交互范围；供需要营地位置前提的领域调用，不产生回看副作用。 */
 	bool IsControllerInCamp(AController* Controller) const;
 
 	/** 篝火表现订阅入口；表现结束/跳过无需回写 Run。 */

@@ -7,7 +7,6 @@
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
-#include "Equipment/CatEquipmentSettings.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Bait.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Float.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
@@ -27,14 +26,10 @@ namespace CatRodDurabilityTests
 	// 耐久测试夹具流程：只替换本测试窗口内的正式库存目录和装备策略配置；所有实例、会话和磨损均经过正式公开入口。
 	struct FFixture
 	{
-		/** 装备运行策略默认对象；本测试只写 Profile 信任策略，不向它注册物品定义。 */
-		UCatEquipmentSettings* Settings = GetMutableDefault<UCatEquipmentSettings>();
 		/** 正式库存目录默认对象；本测试把临时装备定义注册到这里，验证路径与运行时一致。 */
 		UCatInventorySettings* InventorySettings = GetMutableDefault<UCatInventorySettings>();
 		/** 进入测试前的正式库存目录；析构时写回，防止本测试定义泄漏到后续用例。 */
 		TArray<FCatInventoryCatalogDefinition> SavedInventoryDefinitions = InventorySettings->Definitions;
-		/** 进入测试前的装配信任策略；本夹具只在测试窗口内启用服务器授予流程。 */
-		ECatDomainPolicy SavedTrustPolicy = Settings->ProfileLoadoutTrustPolicy;
 		/** 进入测试前的玩家背包容量；测试需要固定容量，结束后恢复项目默认对象。 */
 		int32 SavedCapacity = InventorySettings->PlayerInventorySlotCapacity;
 		/** 进入测试前的数量堆叠容量；测试需要固定堆叠上限，结束后恢复项目默认对象。 */
@@ -50,11 +45,10 @@ namespace CatRodDurabilityTests
 		/** 测试鱼竿实例的稳定 ID；后续磨损、跨会话和换竿断言都对齐这同一件物品。 */
 		FGuid RodId;
 
-		// 夹具恢复流程：测试结束时恢复正式库存目录、装备策略和容量配置；测试创建的运行对象交给 WorldWrapper 清理。
+		// 夹具恢复流程：测试结束时恢复正式库存目录和容量配置；测试创建的运行对象交给 WorldWrapper 清理。
 		~FFixture()
 		{
 			InventorySettings->Definitions = SavedInventoryDefinitions;
-			Settings->ProfileLoadoutTrustPolicy = SavedTrustPolicy;
 			InventorySettings->PlayerInventorySlotCapacity = SavedCapacity;
 			InventorySettings->DefaultQuantityStackCapacity = SavedStackCapacity;
 		}
@@ -74,11 +68,10 @@ namespace CatRodDurabilityTests
 			return Definition;
 		}
 
-		// 夹具初始化流程：先替换正式库存目录和必要装备策略，再创建 authority World、角色、PlayerState 和真实组件，最后通过公开授予入口拿到可部署鱼竿。
+		// 夹具初始化流程：先替换正式库存目录和容量配置，再创建 authority World、角色、PlayerState 和真实组件，最后通过公开授予入口拿到可部署鱼竿。
 		bool Initialize(FAutomationTestBase& Test)
 		{
 			InventorySettings->Definitions.Reset();
-			Settings->ProfileLoadoutTrustPolicy = ECatDomainPolicy::Enabled;
 			InventorySettings->PlayerInventorySlotCapacity = 12;
 			InventorySettings->DefaultQuantityStackCapacity = 20;
 			UCatEquipmentDefinition* Rod =

@@ -3,8 +3,6 @@
 #include "Tests/AutomationEditorCommon.h"
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
-#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
-#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "Character/CatCharacter.h"
 #include "Character/Animation/CatForceReactionComponent.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
@@ -132,16 +130,15 @@ namespace CatCuteNetwork
 				UAnimMontage* Source=LoadObject<UAnimMontage>(nullptr,TEXT("/Game/Animalia/Cat/AM_Attack_Agressive_Legs_01-IP_Montage"));
 				for (ACatCharacter* Cat : {ServerCat,ClientCat}) Test->TestTrue(TEXT("multicast plays mapped CuteCat montage on both endpoints"),
 					Cat->GetMesh()->GetAnimInstance()->Montage_IsPlaying(Cast<UAnimMontage>(Cat->FindComponentByClass<UCatPhysicsPrototypeVisualComponent>()->ResolveAnimationAsset(Source))));
-				ServerCat->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(),115);
 				Test->AddExpectedMessage(TEXT("Event=character_downed"),ELogVerbosity::Warning);
-				Test->TestTrue(TEXT("real condition authority accepts downed transition"),CatIsAcceptedDomainCommandResult(ServerCat->GetConditionComponent()->RequestFieldSelfRecovery(ServerCat->GetController(),FGuid::NewGuid())));
+				Test->TestTrue(TEXT("authority sets downed transition"),ServerCat->GetConditionComponent()->SetDownedFromAuthority(true));
 				Stage=5; StageAt=Now;
 			}
 			else if (Stage==5 && Now-StageAt>8) {
 				Test->TestTrue(TEXT("downed state reaches client"),ClientCat->GetConditionComponent()->GetSnapshot().bDowned);
 				for (ACatCharacter* Cat : {ServerCat,ClientCat}) Test->TestEqual(TEXT("both consumers reach lying pose"),Cat->FindComponentByClass<UCatConditionPresentationComponent>()->GetObservedPosePhase(),FName(TEXT("DownedPose")));
 				Test->TestTrue(TEXT("retargeted lying pose visibly lowers the client head"),CV->GetVisualMesh()->GetBoneLocationByName(TEXT("Head_001"),EBoneSpaces::WorldSpace).Z<StandingHead-3);
-				Test->TestTrue(TEXT("real condition authority accepts recovery"),CatIsAcceptedDomainCommandResult(ServerCat->GetConditionComponent()->RequestFieldSelfRecovery(ServerCat->GetController(),FGuid::NewGuid())));
+				Test->TestTrue(TEXT("authority clears downed transition"),ServerCat->GetConditionComponent()->SetDownedFromAuthority(false));
 				Stage=6; StageAt=Now;
 			}
 			else if (Stage==6 && Now-StageAt>8) {

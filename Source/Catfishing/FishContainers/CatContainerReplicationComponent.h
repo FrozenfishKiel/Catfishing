@@ -103,7 +103,7 @@ private:
 	UFUNCTION()
 	void OnRep_ContainerMetadata();
 
-	/** 由复制元数据与 FastArray 组合的本机只读事实；组件自身不持有偷鱼窗口或终态缓存。 */
+	/** 由复制元数据与 FastArray 组合的本机只读事实；组件只供消费者读取，不持有事务终态缓存。 */
 	UPROPERTY(Transient)
 	FCatContainerSnapshot Snapshot;
 

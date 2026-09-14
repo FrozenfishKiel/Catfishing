@@ -8,22 +8,6 @@
 class ACatCampHubActor;
 class ACatCharacter;
 
-/** 营地休息请求载荷；它只携带目标营地和请求键，恢复规则仍由 Camp/Condition 判断。 */
-UCLASS()
-class CATFISHING_API UCatBodyActionRequestCampRest : public UObject
-{
-	GENERATED_BODY()
-
-public:
-	/** 玩家想使用的固定营地；Ability 提交时只作为候选对象，真实距离和状态由营地服务重读。 */
-	UPROPERTY(Transient)
-	TObjectPtr<ACatCampHubActor> Camp;
-
-	/** 本次休息命令的幂等键；结果回送用它关联 UI pending 状态，不作为恢复权限。 */
-	UPROPERTY(Transient)
-	FGuid RequestId;
-};
-
 /** 篝火回看请求载荷；它只把目标营地和请求键带过 GAS 前摇，CapturePlan 与表现仍归 Camp。 */
 UCLASS()
 class CATFISHING_API UCatBodyActionRequestCampfirePlayback : public UObject
@@ -58,39 +42,6 @@ public:
 	/** 本次救援命令的幂等键；公共领域结果用它回送给发起者。 */
 	UPROPERTY(Transient)
 	FGuid RequestId;
-};
-
-/** 营地休息身体动作 Ability；它自己拥有事件校验、前摇窗口、提交和取消收尾，不把流程交给共享父类。 */
-UCLASS()
-class CATFISHING_API UCatGA_BodyActionCampRest : public UGameplayAbility
-{
-	GENERATED_BODY()
-
-public:
-	/** 建立休息 Ability 的网络策略、资产标签和 GameplayEvent 触发器；这条能力只响应营地休息事件。 */
-	UCatGA_BodyActionCampRest();
-
-protected:
-	/** 激活休息动作：校验休息事件与载荷，启动角色表现，并在可取消前摇后提交 Camp 休息请求。 */
-	virtual void ActivateAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
-		const FGameplayAbilityActivationInfo ActivationInfo, const FGameplayEventData* TriggerEventData) override;
-	/** 结束休息动作：取消时停止已启动的角色表现，然后清除本 Ability 冻结的请求状态。 */
-	virtual void EndAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
-		const FGameplayAbilityActivationInfo ActivationInfo, const bool bReplicateEndAbility,
-		const bool bWasCancelled) override;
-
-private:
-	/** 前摇结束后提交休息请求；它只调用 Camp 休息入口，并根据领域结果决定正常结束还是取消。 */
-	UFUNCTION()
-	void CommitCampRestAfterWindow();
-
-	/** 当前休息动作冻结的请求对象；由激活阶段写入，提交或取消收尾时清空。 */
-	UPROPERTY(Transient)
-	TObjectPtr<UCatBodyActionRequestCampRest> ActiveRequest;
-
-	/** 当前休息动作冻结的表现事件标签；开始和取消停止表现都读取同一标签，避免配置变化造成错停。 */
-	UPROPERTY(Transient)
-	FGameplayTag ActivePresentationEventTag;
 };
 
 /** 篝火回看身体动作 Ability；它自己拥有事件校验、前摇窗口、提交和取消收尾，不把流程交给共享父类。 */

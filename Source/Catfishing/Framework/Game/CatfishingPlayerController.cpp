@@ -47,7 +47,6 @@
 #include "Profile/CatProfileSubsystem.h"
 #include "UI/CatLocalPlayerUISubsystem.h"
 #include "ShopEconomy/Trading/CatShopTradeController.h"
-#include "Social/CatSocialService.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 
 // 构造流程：创建 Controller 负责的输入与命令路由组件；不读取 Pawn、World 或玩家身份，避免类默认对象阶段产生运行时依赖。
@@ -260,13 +259,11 @@ void ACatfishingPlayerController::SetPawn(APawn* InPawn)
 	ReconcileDayTransition();
 }
 
-// 本地启动流程：父类完成 Actor 生命周期后，幂等安装本 Controller 的玩法输入层；
-// 如果本机 durable Profile 已可读，再把装备解锁摘要投影给服务器；最后消费翻天快照，缺失时由 Tick 补齐。
+// 本地启动流程：父类完成 Actor 生命周期后，幂等安装本 Controller 的玩法输入层；最后消费翻天快照，缺失时由 Tick 补齐。
 void ACatfishingPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
 	ApplyInputMappingContext();
-	PublishProfileEquipmentUnlocksIfAvailable();
 	ReconcileDayTransition();
 }
 
@@ -445,22 +442,6 @@ void ACatfishingPlayerController::ApplyInputMappingContext()
 	InputSubsystem->AddMappingContext(DefaultMappingContext, InputMappingPriority);
 	AppliedInputSubsystem = InputSubsystem;
 	AppliedMappingContext = DefaultMappingContext;
-}
-
-// Profile 解锁发布流程：只在 owning client 有 LocalPlayer Profile 时复制 UnlockIds 并走服务器 RPC；Profile 不可用时保持服务器 fail-closed 授权。
-void ACatfishingPlayerController::PublishProfileEquipmentUnlocksIfAvailable()
-{
-	if (!IsLocalController())
-	{
-		return;
-	}
-	ULocalPlayer* LocalPlayer = GetLocalPlayer();
-	UCatProfileSubsystem* Profile = LocalPlayer ? LocalPlayer->GetSubsystem<UCatProfileSubsystem>() : nullptr;
-	TArray<FName> UnlockIds;
-	if (Profile && Profile->GetEquipmentUnlockSnapshot(UnlockIds))
-	{
-		ServerPublishEquipmentUnlocks(UnlockIds);
-	}
 }
 
 // Mapping Context 移除流程：使用安装时保存的同一子系统和资产成对清理，World teardown 下弱引用失效也安全。
@@ -688,10 +669,6 @@ void ACatfishingPlayerController::ClientReceiveProfileGrant_Implementation(const
 	if (Result.bAckAllowed)
 	{
 		ServerAcknowledgeProfileGrant(Grant.GrantId);
-		if (Grant.Kind == ECatProfileGrantKind::Unlock)
-		{
-			PublishProfileEquipmentUnlocksIfAvailable();
-		}
 		if (Grant.Kind == ECatProfileGrantKind::FishRecorded || Grant.Kind == ECatProfileGrantKind::FishSilhouette)
 		{
 			TArray<FCatFishCollectionRecord> Records;
@@ -715,25 +692,12 @@ void ACatfishingPlayerController::ServerAcknowledgeProfileGrant_Implementation(c
 			if (Service->TryGetAcknowledgedGrant(GrantId, AcknowledgedGrant)
 				&& AcknowledgedGrant.Kind == ECatProfileGrantKind::Unlock)
 			{
-				if (ACatfishingPlayerState* CatPlayerState = GetPlayerState<ACatfishingPlayerState>())
-				{
-					CatPlayerState->AuthorizeEquipmentUnlockFromProfileGrant(AcknowledgedGrant);
-				}
 			}
 			if (ACatfishingGameModeBase* GameMode = GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>())
 			{
 				GameMode->NotifyHostExitGrantAckProgress();
 			}
 		}
-	}
-}
-
-// 装备解锁摘要 RPC 流程：服务器只把 owning client 提交的 durable Profile 摘要写到当前 PlayerState；非法摘要保留原授权，不回写 Profile 或生成 Grant。
-void ACatfishingPlayerController::ServerPublishEquipmentUnlocks_Implementation(const TArray<FName>& UnlockIds)
-{
-	if (ACatfishingPlayerState* CatPlayerState = GetPlayerState<ACatfishingPlayerState>())
-	{
-		CatPlayerState->SetAuthorizedEquipmentUnlocksFromAuthority(UnlockIds);
 	}
 }
 
@@ -761,18 +725,6 @@ void ACatfishingPlayerController::ServerReportImprintCaptureResult_Implementatio
 	if (UCatRunImprintService* Service = GetWorld() ? GetWorld()->GetSubsystem<UCatRunImprintService>() : nullptr)
 	{
 		Service->ReportCaptureResult(this, CapturePlanId, bSucceeded, ImprintId);
-	}
-}
-
-// 营地休息 RPC 路由流程：只把固定营地和 RequestId 投给 BodyAction Ability；没有正式 Ability 接管时回送依赖错误。
-void ACatfishingPlayerController::ServerRequestCampRest_Implementation(ACatCampHubActor* Camp, const FGuid RequestId)
-{
-	if (!CampBodyActionCommandComponent || !CampBodyActionCommandComponent->SubmitCampRest(Camp, RequestId))
-	{
-		FCatDomainCommandResult Result;
-		Result.RequestId = RequestId;
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-		DeliverCampCommandResultToOwningClient(Result);
 	}
 }
 
@@ -1155,25 +1107,6 @@ void ACatfishingPlayerController::ServerPickUpFishGuard_Implementation(ACatFishG
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 草药 RPC 路由流程：Controller 只定位目标 Character 的 ConditionComponent 并转交请求；正式扣草药、刷新装备读模型和恢复身体都由 ConditionComponent 按服务器事实提交。
-void ACatfishingPlayerController::ServerUseHerbOnCharacter_Implementation(ACatCharacter* TargetCharacter,
-	const FGuid RequestId, const FGuid HerbItemInstanceId)
-{
-	FCatDomainCommandResult Result;
-	Result.RequestId = RequestId;
-	UCatConditionComponent* TargetConditions = TargetCharacter && TargetCharacter->GetWorld() == GetWorld()
-		? TargetCharacter->GetConditionComponent() : nullptr;
-	if (TargetConditions)
-	{
-		Result = TargetConditions->UseHerbOnCharacterFromAuthority(this, RequestId, HerbItemInstanceId);
-	}
-	else
-	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-	}
-	DeliverCampCommandResultToOwningClient(Result);
-}
-
 // 公共领域回执投递流程：单机或 listen server 本地玩家没有远端连接可回送时，直接复用 Client 实现刷新本机缓存；远端玩家保持可靠 RPC 语义。
 void ACatfishingPlayerController::DeliverCampCommandResultToOwningClient(const FCatDomainCommandResult& Result)
 {
@@ -1183,52 +1116,6 @@ void ACatfishingPlayerController::DeliverCampCommandResultToOwningClient(const F
 		return;
 	}
 	ClientReceiveCampCommandResult(Result);
-}
-
-// 偷鱼开始 RPC 路由流程：偷鱼是 Social 持有同一鱼物品实例的短协议，不进入 BodyAction；Controller 只清客户端身份并转交 Social。
-void ACatfishingPlayerController::ServerBeginTheft_Implementation(FCatTheftCommand Command)
-{
-	FCatTheftResult Result;
-	Result.Command.RequestId = Command.Context.RequestId;
-	if (!CanForwardGameplayCommand())
-	{
-		Result.Command.Error = ECatDomainCommandError::CommandsClosed;
-	}
-	else if (UCatSocialService* Social = GetWorld() ? GetWorld()->GetSubsystem<UCatSocialService>() : nullptr)
-	{
-		Command.Context.StableNetId.Reset();
-		Result = Social->BeginTheft(this, Command);
-	}
-	else
-	{
-		Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
-	}
-	ClientReceiveTheftResult(Result);
-}
-
-// 偷鱼结果客户端流程：可靠接收服务器完整终态并整体替换本机读模型；ProtocolId 和身体终态由此到达 UI，客户端不能据缓存修改权威事实。
-void ACatfishingPlayerController::ClientReceiveTheftResult_Implementation(const FCatTheftResult& Result)
-{
-	LastTheftResult = Result;
-}
-
-// 偷鱼结果读取流程：返回最近一次 Begin/Catch/到期消费的本机副本供界面取得 ProtocolId、阶段和身体终态；服务器授权仍重读当前事实。
-FCatTheftResult ACatfishingPlayerController::GetLastTheftResult() const
-{
-	return LastTheftResult;
-}
-
-// 偷鱼追回 RPC 路由流程：追回只按服务器 ProtocolId 进入 Social，不走 BodyAction，也不接受客户端重建 escrow。
-void ACatfishingPlayerController::ServerCatchTheft_Implementation(const FGuid TheftProtocolId)
-{
-	if (!CanForwardGameplayCommand())
-	{
-		return;
-	}
-	if (UCatSocialService* Social = GetWorld() ? GetWorld()->GetSubsystem<UCatSocialService>() : nullptr)
-	{
-		ClientReceiveTheftResult(Social->CatchTheft(this, TheftProtocolId));
-	}
 }
 
 // 手动求助 RPC 路由流程：只把 RequestId 和求助类型投给 Social BodyAction；Ability 未接管时回送依赖错误，不发布信号。

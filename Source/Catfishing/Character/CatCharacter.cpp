@@ -23,7 +23,6 @@
 #include "Condition/CatConditionComponent.h"
 #include "Condition/CatConditionPresentationComponent.h"
 #include "Equipment/CatEquipmentComponent.h"
-#include "Equipment/CatEquipmentSettings.h"
 #include "Growth/CatGrowthComponent.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Fishing/Presentation/CatFishingCameraComponent.h"

@@ -3,17 +3,6 @@
 #include "AbilitySystem/BodyAction/Camp/CatCampBodyActionAbilities.h"
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 
-bool UCatCampBodyActionCommandComponent::SubmitCampRest(ACatCampHubActor* Camp, const FGuid RequestId) const
-{
-	// 休息载荷流程：组件创建休息专用请求并投给 ASC；Controller 只提交休息意图。
-	// Submit 方法保持 const，是因为它不写组件状态；NewObject 需要非 const Outer 只是为了让瞬时载荷挂在组件生命周期下等待 GameplayEvent 消费。
-	UCatBodyActionRequestCampRest* Payload = NewObject<UCatBodyActionRequestCampRest>(
-		const_cast<UCatCampBodyActionCommandComponent*>(this));
-	Payload->Camp = Camp;
-	Payload->RequestId = RequestId;
-	return SubmitPayload(Payload, CatFishingAbilityTags::AbilityEvent_Body_CampRest);
-}
-
 bool UCatCampBodyActionCommandComponent::SubmitCampfirePlayback(ACatCampHubActor* Camp,
 	const FGuid RequestId) const
 {

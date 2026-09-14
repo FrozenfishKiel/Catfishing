@@ -83,7 +83,7 @@ class CATFISHING_API ACatfishingGameModeBase : public AGameModeBase
 public:
 	/** 建立 Lake 原生宿主装配；身份注册表属于 GameMode 实例，不进入类默认对象或客户端。 */
 	ACatfishingGameModeBase();
-	/** 身份解除或身体销毁前的 authority 协调入口：释放本人的主控与抓握、托管仍部署的资源，再取消 Social；可重复调用，不依赖 GameMode 已完成 Run 启动。 */
+	/** 身份解除或身体销毁前的 authority 协调入口：释放本人的主控与抓握并托管仍部署的资源；可重复调用，不依赖 GameMode 已完成 Run 启动。 */
 	static void HandleCharacterUnavailable(ACatCharacter* Character);
 	/** 建立 Run 并验证依赖，先完成 Save 共享世界和已有 Pawn 恢复再启动 StateTree 与检查点；任何恢复失败保持 StartupFailed。 */
 	virtual void StartPlay() override;

@@ -5,8 +5,6 @@
 #include "Animation/AnimInstance.h"
 #include "Condition/CatConditionComponent.h"
 #include "Condition/CatConditionPresentationComponent.h"
-#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
-#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "Character/CatCharacter.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Character/Physics/CatPhysicsPrototypeVisualComponent.h"
@@ -234,10 +232,9 @@ namespace CatPhysicalCharacterAnimationNetwork
 					MaximumSourceRootZ, MaximumVisibleRootZ, MaximumVisibleRootOffsetCm, ClientVisual->GetVisualMesh()->BoneSpaceTransforms[0].GetTranslation().Z));
                 StandingHeadZ = ClientVisual->GetVisualMesh()->GetBoneLocationByName(TEXT("RigHead"), EBoneSpaces::WorldSpace).Z;
                 SupportedHeightZ = ServerCat->GetActorLocation().Z;
-                ServerCat->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(), 115);
                 Test->AddExpectedMessage(TEXT("Event=character_downed"), ELogVerbosity::Warning);
-                if (!Test->TestTrue(TEXT("authority evaluates the real downed threshold"), CatIsAcceptedDomainCommandResult(
-                    ServerCat->GetConditionComponent()->RequestFieldSelfRecovery(ServerCat->GetController(), FGuid::NewGuid())))) return true;
+                if (!Test->TestTrue(TEXT("authority sets the downed state"),
+                    ServerCat->GetConditionComponent()->SetDownedFromAuthority(true))) return true;
                 Stage = 3;
                 StageStarted = WorldNow;
             }
@@ -254,8 +251,8 @@ namespace CatPhysicalCharacterAnimationNetwork
                 if (FApp::CanEverRender()) Capture(Client, TEXT("formal-cmc-downed-animation"));
                 Test->AddInfo(FString::Printf(TEXT("Event=cmc_condition_network_downed HeadStandingZ=%.3f HeadLyingZ=%.3f ServerZ=%.3f ClientZ=%.3f"),
                     StandingHeadZ, HeadZ, ServerCat->GetActorLocation().Z, ClientCat->GetActorLocation().Z));
-                if (!Test->TestTrue(TEXT("authority recovery clears the actual downed state"), CatIsAcceptedDomainCommandResult(
-                    ServerCat->GetConditionComponent()->RequestFieldSelfRecovery(ServerCat->GetController(), FGuid::NewGuid())))) return true;
+                if (!Test->TestTrue(TEXT("authority clears the downed state"),
+                    ServerCat->GetConditionComponent()->SetDownedFromAuthority(false))) return true;
                 Stage = 4;
                 StageStarted = WorldNow;
             }

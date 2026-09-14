@@ -39,7 +39,6 @@
 #include "GameFramework/PlayerState.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
-#include "Equipment/CatEquipmentSettings.h"
 #include "FishContainers/CatFishContainerService.h"
 #include "FishContainers/CatFishPickupSettings.h"
 #include "Items/Fish/CatFishPickupActor.h"

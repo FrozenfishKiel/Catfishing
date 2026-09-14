@@ -165,21 +165,6 @@ bool ACatCampHubActor::TryResolvePlayerEntryTransform(const int32 PreferredEntry
 	return false;
 }
 
-// 休息流程：现取本人 Character 并验证固定范围；随后只调用 Condition 的 CampRest 写口，营地不保存第二份身体数值。
-FCatDomainCommandResult ACatCampHubActor::RequestRest(AController* RequestingController, const FGuid RequestId)
-{
-	ACatCharacter* Character = ResolveCharacterInCamp(RequestingController);
-	UCatConditionComponent* Conditions = Character ? Character->GetConditionComponent() : nullptr;
-	if (Conditions)
-	{
-		return Conditions->RequestCampRest(RequestingController, RequestId, true);
-	}
-	FCatDomainCommandResult Result;
-	Result.RequestId = RequestId;
-	Result.Error = ECatDomainCommandError::PolicyUndecided;
-	return Result;
-}
-
 // 救援流程：先用救援者身份与 RequestId 重放成功终态，再从两个 Character 读服务器位置并要求救援者可行动、目标已倒地、距离不超营地显式交互范围；TeleportTo 成功后才提交 CarriedToCamp。
 FCatDomainCommandResult ACatCampHubActor::RescueToCamp(AController* HelpingController, ACatCharacter* TargetCharacter,
 	const FGuid RequestId)

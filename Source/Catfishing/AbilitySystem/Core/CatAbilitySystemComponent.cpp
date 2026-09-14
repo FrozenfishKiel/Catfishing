@@ -3,7 +3,6 @@
 #include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "AbilitySystem/Effects/CatFishingStaminaEffect.h"
-#include "AbilitySystem/Effects/CatPoisonEffect.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "AbilitySystemBlueprintLibrary.h"
 #include "Abilities/GameplayAbility.h"
@@ -268,7 +267,7 @@ void UCatAbilitySystemComponent::RevokeConfiguredDefaultAbilitySet()
 // Character 初始属性播种流程：
 // 1. 先要求已建立 Owner/Avatar 的 authority ASC，且本组件尚未成功播种；ActorInfo 未就绪、客户端调用或重占有都不触碰属性基值。
 // 2. 再按 Character 传入的 CatDefinitionId 读取完整配置；配置缺失、未就绪或数值非法时只记录原有诊断并返回 false，不把半套数值写入 ASC。
-// 3. 配置完整后一次写入 Poison、FishingStrength 与 MaxFightStamina 的基值，确保这些身体数值只通过 GAS 边界进入 AttributeSet。
+// 3. 配置完整后一次写入 FishingStrength 与 MaxFightStamina 的基值，确保这些身体数值只通过 GAS 边界进入 AttributeSet。
 // 4. 最后沿用现有会话体力初始化入口按新上限回满 FightStamina；全部成功才清掉可能排队的重置请求并记录一次性状态，失败会保留后续 ActorInfo 刷新时的重试机会。
 bool UCatAbilitySystemComponent::InitializeCharacterAttributesFromDefinition(const FName CatDefinitionId)
 {
@@ -279,10 +278,9 @@ bool UCatAbilitySystemComponent::InitializeCharacterAttributesFromDefinition(con
 	}
 
 	const UCatAbilitySettings* Settings = GetDefault<UCatAbilitySettings>();
-	float Poison = 0.0f;
 	float FishingStrength = 0.0f;
 	float MaxFightStamina = 0.0f;
-	if (!Settings || !Settings->TryGetInitialAttributesForCharacter(CatDefinitionId, Poison, FishingStrength,
+	if (!Settings || !Settings->TryGetInitialAttributesForCharacter(CatDefinitionId, FishingStrength,
 		MaxFightStamina))
 	{
 		if (!CatDefinitionId.IsNone())
@@ -294,7 +292,6 @@ bool UCatAbilitySystemComponent::InitializeCharacterAttributesFromDefinition(con
 		return false;
 	}
 
-	SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(), Poison);
 	SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), FishingStrength);
 	SetNumericAttributeBase(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute(), MaxFightStamina);
 	if (!InitializeFishingStaminaForSession())
@@ -359,46 +356,6 @@ bool UCatAbilitySystemComponent::EnsureFishingStaminaReadyForNewSession()
 	return GetOwnerActor() && GetAvatarActor()
 		&& FMath::IsFinite(Maximum) && Maximum > 0.0f
 		&& FMath::IsFinite(Current) && Current > 0.0f;
-}
-
-bool UCatAbilitySystemComponent::ApplyPoisonDelta(const float Delta)
-{
-	// Poison 提交流程：先拒绝非 authority、缺 ActorInfo 和非法数值；再读取当前 Poison，把负向恢复夹到 0。
-	// 夹完没有实际变化仍算成功，因为恢复命令的事务已在上层扣除库存/休息入口完成，不能因已为 0 而变成重试口。
-	// 有真实变化时只通过 UCatGE_PoisonDelta 的 SetByCaller 提交，Condition/Growth 不直接写 AttributeSet。
-	if (!FMath::IsFinite(Delta) || !GetOwnerActor() || !GetAvatarActor() || !IsOwnerActorAuthoritative())
-	{
-		return false;
-	}
-	const float CurrentPoison = GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute());
-	if (!FMath::IsFinite(CurrentPoison))
-	{
-		return false;
-	}
-	const float TargetPoison = Delta < 0.0f ? FMath::Max(0.0f, CurrentPoison + Delta) : CurrentPoison + Delta;
-	if (!FMath::IsFinite(TargetPoison))
-	{
-		return false;
-	}
-	const float ClampedDelta = TargetPoison - CurrentPoison;
-	if (FMath::IsNearlyZero(ClampedDelta))
-	{
-		return true;
-	}
-	const FGameplayEffectSpecHandle Spec = MakeOutgoingSpec(UCatGE_PoisonDelta::StaticClass(), 1.0f, MakeEffectContext());
-	if (!Spec.IsValid())
-	{
-		return false;
-	}
-	Spec.Data->SetSetByCallerMagnitude(UCatGE_PoisonDelta::GetPoisonDeltaTag(), ClampedDelta);
-	return ApplyGameplayEffectSpecToSelf(*Spec.Data.Get()).WasSuccessfullyApplied();
-}
-
-bool UCatAbilitySystemComponent::IsPoisonAtLeast(const float Threshold) const
-{
-	// 阈值读取流程：非法阈值直接关闭裁决；合法阈值只读取当前 ASC Poison，不暴露 AttributeSet 写口给 Condition。
-	return FMath::IsFinite(Threshold)
-		&& GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute()) >= Threshold;
 }
 
 void UCatAbilitySystemComponent::InitAbilityActorInfo(AActor* InOwnerActor, AActor* InAvatarActor)

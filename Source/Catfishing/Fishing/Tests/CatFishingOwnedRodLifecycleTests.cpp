@@ -21,7 +21,6 @@
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatFishingResourceCustodian.h"
 #include "Equipment/CatEquipmentDefinition.h"
-#include "Equipment/CatEquipmentSettings.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingService.h"
@@ -58,7 +57,6 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 	// 仅注入入场身份/测试岸线；装备、正式 Actor/StateTree 和会话事务均走生产入口。
 	for (int32 ExitScenario = 0; ExitScenario < 4; ++ExitScenario)
 	{
-		UCatEquipmentSettings* EquipmentSettings = GetMutableDefault<UCatEquipmentSettings>();
 		FTestWorldWrapper Wrapper;
 		if (!TestTrue(TEXT("creates owned-rod authority world"), Wrapper.CreateTestWorld(EWorldType::Game))) return false;
 		Wrapper.ForwardErrorMessages(this);

@@ -5,7 +5,7 @@
   "delivery_mode": "single_atomic_module",
   "status": "blocked",
   "checked_on": "2026-08-25",
-  "purpose": "Centralize the non-fish formal content inputs that still block DeliveryHarnessAssets, without splitting presentation, unlocks, imprint admission, growth Buffs, fatigue presentation, or yellow-stamina presentation into separately closable tasks.",
+  "purpose": "Centralize the non-fish formal content inputs that still block DeliveryHarnessAssets, without splitting presentation, expression unlocks, imprint admission, growth Buffs, fatigue presentation, or yellow-stamina presentation into separately closable tasks. Gameplay equipment unlock gates, TheftCaught as a mandatory imprint, poison/FoodSafety, herb recovery, and pure detox rest are superseded by the 2026-09-14 user decision and must not be reintroduced as current blockers.",
   "sources": {
     "gap_list": {
       "kind": "local_markdown",
@@ -15,7 +15,7 @@
     "technical_plan": {
       "kind": "local_markdown",
       "path": "Docs/Architecture/项目技术方案.md",
-      "available_fact": "The technical plan records the same product/content boundaries: unlock milestones, imprint admission, Buff choices, fatigue presentation, yellow-stamina boundaries, BodyAction formal GameplayCue/final player-visible presentation resources, and broader player-visible presentation resources remain open inputs rather than engineering facts; BodyAction formal Montage assets/config are now generated and load-verified."
+      "available_fact": "The technical plan records the same product/content boundaries after the 2026-09-14 cleanup: expression unlock milestones, imprint admission, Buff choices, fatigue presentation, yellow-stamina boundaries, BodyAction formal GameplayCue/final player-visible presentation resources, and broader player-visible presentation resources remain open inputs rather than engineering facts; BodyAction formal Montage assets/config are now generated and load-verified. Poison/FoodSafety, herb recovery, pure detox rest, TheftCaught mandatory imprint, and gameplay equipment unlock gates are no longer current requirements."
     },
     "release_handoff": {
       "kind": "local_json",
@@ -42,8 +42,8 @@
       "wiki_node_token": "EPi4wjG5IigRTwkH8stcGWoUnUh",
       "document_id": "MK7Ad0bF6oBoTXxv2VRcfLhRn6f",
       "revision": 43,
-      "available_fact": "The live imprint album source confirms TheftCaught as a must-enter imprint event for both involved players and lists candidate trigger families for fishing, social, fish-album, character/state, environment, equipment/items, camp, and self-photo moments.",
-      "blocking_fact": "Except for explicitly fixed entries such as TheftCaught, most triggers are still candidate/C4/C7-dependent entries rather than a frozen permanent Imprint admission list."
+      "available_fact": "The live imprint album source historically confirmed TheftCaught as a must-enter imprint event for both involved players and lists candidate trigger families for fishing, social, fish-album, character/state, environment, equipment/items, camp, and self-photo moments.",
+      "blocking_fact": "The 2026-09-14 user decision deletes the theft protocol and TheftCaught mandatory imprint from current gates. The remaining blocker is the formal permanent Imprint admission list for retained non-theft events."
     },
     "equipment_unlock_context": {
       "kind": "lark_docx_set",
@@ -56,7 +56,7 @@
         25
       ],
       "available_fact": "The equipment sources describe unlock as shop shelving or ceremony context and show that the earlier cumulative-30-fish rod unlock was removed in favor of public-fund purchase.",
-      "blocking_fact": "No live source read in this pass provides concrete world, growth, or album milestone to formal equipment UnlockId mappings."
+      "blocking_fact": "The 2026-09-14 user decision removes gameplay equipment unlock gates from current requirements. Expression/appearance unlock content still needs formal milestone mapping when it is in scope."
     }
   },
   "content_groups": {
@@ -89,15 +89,15 @@
         "FormalProgressGrowthContentClosed"
       ],
       "required_facts": [
-        "Concrete world, growth, or album milestones that produce each formal equipment UnlockId.",
-        "Full imprint admission list beyond TheftCaught, including which run events can create permanent Imprint grants.",
+        "Concrete world, growth, or album milestones that produce each formal expression/appearance UnlockId.",
+        "Full retained imprint admission list, excluding the deleted TheftCaught theft protocol event, including which run events can create permanent Imprint grants.",
         "Formal growth Buff choices, numeric effects, and player-facing copy for PendingChoiceCount consumption; the current 升级效果 source narrows this but still needs formal acceptance or playtest freeze.",
         "Formal light, medium, and heavy fatigue presentation triggers now that fatigue is no longer a gameplay number.",
         "Formal yellow-stamina shield presentation and consumption boundary."
       ],
       "blocking_gaps": [
-        "UnlockIdMilestoneRulesOpen",
-        "ImprintAdmissionListBeyondTheftCaughtOpen",
+        "ExpressionUnlockIdMilestoneRulesOpen",
+        "ImprintAdmissionListOpen",
         "GrowthBuffChoicesValuesAndCopyOpen",
         "FatiguePresentationTriggersOpen",
         "YellowStaminaPresentationAndConsumptionBoundaryOpen"
@@ -105,7 +105,8 @@
       "do_not_do": [
         "Do not mark DataWorldProfileAlbum formally complete from engineering Profile or Collection automation alone.",
         "Do not mark CharacterGrowthCondition formally complete from ASC and Growth automation while Buff, fatigue, or yellow-stamina content is still open.",
-        "Do not split UnlockId, imprint admission, Buff, fatigue, and yellow-stamina decisions into separate DeliveryHarnessAssets subtasks."
+        "Do not split expression UnlockId, imprint admission, Buff, fatigue, and yellow-stamina decisions into separate DeliveryHarnessAssets subtasks.",
+        "Do not reintroduce gameplay equipment unlock gates, TheftCaught mandatory imprint, poison/FoodSafety, herb recovery, or pure detox rest as current blockers."
       ]
     }
   },

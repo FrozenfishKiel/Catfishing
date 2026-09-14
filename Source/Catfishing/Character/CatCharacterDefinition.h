@@ -5,7 +5,7 @@
 #include "CatCharacterDefinition.generated.h"
 
 /**
- * 猫种类运行定义：按种类差异化初始中毒值与搏斗数值（规格 4.2 三方力量中的"猫"侧）。
+ * 猫种类运行定义：按种类差异化搏斗数值（规格 4.2 三方力量中的"猫"侧）。
  * 数值只在 Character 属性播种时被读取并写入 ASC；会话、HUD 和调试面板运行中只读 ASC，运行中改资产不影响已开始的搏斗。
  * Character 的 CatDefinitionId 为 None 时读取 CatAbilitySettings 的正式默认猫种 ID；两者都为 None 才回退全局初值。
  */
@@ -25,10 +25,6 @@ public:
 	/** 表现用显示名；不参与任何数值裁决。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Identity")
 	FText DisplayName;
-
-	/** 初始 Poison；负值表示 Unset。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Attributes", meta = (ClampMin = "-1.0"))
-	float InitialPoison = -1.0f;
 
 	/** 猫力量（规格 4.2：与鱼力量/竿强度比较的钓力）；必须为正。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fight", meta = (ClampMin = "-1.0"))

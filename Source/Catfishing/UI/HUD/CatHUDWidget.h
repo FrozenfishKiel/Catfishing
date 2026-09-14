@@ -39,10 +39,6 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	FText DayText;
 
-	/** 当前猫中毒值；来源是 Character ASC，HUD 只展示，不据此裁决倒地。 */
-	UPROPERTY(BlueprintReadOnly)
-	float Poison = 0.0f;
-
 	/** 当前钓鱼力量；来源是 Character ASC，HUD 只展示，不作为 Fishing 命令参数。 */
 	UPROPERTY(BlueprintReadOnly)
 	float FishingStrength = 0.0f;

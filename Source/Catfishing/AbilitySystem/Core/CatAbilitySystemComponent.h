@@ -76,12 +76,6 @@ public:
 	bool HasPendingFishingStaminaReset() const { return bPendingFishingStaminaReset; }
 #endif
 
-	/** authority 通过正式 GameplayEffect 修改 Poison；负向恢复会夹到 0，避免调用方直接写属性基值。 */
-	bool ApplyPoisonDelta(float Delta);
-
-	/** 读取 Poison 是否达到给定阈值；Condition 用它裁决 Downed，但不直接知道 AttributeSet 字段。 */
-	bool IsPoisonAtLeast(float Threshold) const;
-
 	/** 建立或刷新 GAS Owner/Avatar；若存在待处理体力重置，会在 ActorInfo 恢复后补做一次。 */
 	virtual void InitAbilityActorInfo(AActor* InOwnerActor, AActor* InAvatarActor) override;
 

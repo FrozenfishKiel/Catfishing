@@ -37,7 +37,7 @@ void UCatContainerReplicationComponent::EndPlay(const EEndPlayReason::Type EndPl
 	Super::EndPlay(EndPlayReason);
 }
 
-// authority 发布流程：验证 Owner 权威后替换 ID、类型、Revision 和容量元数据，再把每个鱼槽连同 SlotIndex 写入 FastArray；全部字段一致后广播只读变化并 ForceNetUpdate，偷鱼窗口等私有事实不进入复制。
+// authority 发布流程：验证 Owner 权威后替换 ID、类型、Revision 和容量元数据，再把每个鱼槽连同 SlotIndex 写入 FastArray；全部字段一致后广播只读变化并 ForceNetUpdate，服务私有事务缓存不进入复制。
 void UCatContainerReplicationComponent::SetSnapshotFromAuthority(const FCatContainerSnapshot& NewSnapshot)
 {
 	AActor* Owner = GetOwner();

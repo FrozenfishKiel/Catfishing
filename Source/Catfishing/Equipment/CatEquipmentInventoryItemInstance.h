@@ -37,7 +37,7 @@ public:
 	/** 读取这份装备实例是否需要 Use 后进入 held entry；鱼竿等部署物通过定义配置声明这项事实。 */
 	virtual bool KeepsInventoryInstanceWhileUsed() const override;
 
-	/** 读取这份装备实例是否需要 Use 后扣减数量；窝料、草药和修理材料通过定义配置声明这项事实。 */
+	/** 读取这份装备实例是否需要 Use 后扣减数量；耗材由定义配置声明这项事实。 */
 	virtual bool ConsumesInventoryQuantityOnUse() const override;
 
 	/** 装备实例只读声明自己可作为库存 Use 候选；真正的选择、权限和版本仍在结构化提交时复核。 */

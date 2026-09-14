@@ -98,7 +98,7 @@ public:
 	static FCatDomainCommandResult MoveItemBetweenInventoryHostsFromAuthority(ACatCharacter* ControlledCharacter,
 		FGuid RequestId, AActor* SourceInventoryHost, int32 SourceSlotIndex, AActor* TargetInventoryHost, int32 TargetSlotIndex);
 
-	/** 使用某个可触达 Actor 正式库存中的一格物品；鱼、草药和装备类效果都由物品实例自己裁决。 */
+	/** 使用某个可触达 Actor 正式库存中的一格物品；食用和装备等具体效果由物品实例自己裁决。 */
 	static FCatDomainCommandResult UseItemFromInventoryHostFromAuthority(ACatCharacter* ControlledCharacter,
 		FGuid RequestId, AActor* SourceInventoryHost, int32 SourceSlotIndex);
 

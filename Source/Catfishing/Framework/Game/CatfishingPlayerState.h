@@ -2,28 +2,21 @@
 
 #include "CoreMinimal.h"
 #include "Collection/CatImprintTypes.h"
-#include "Framework/Core/CatProfileContracts.h"
 #include "GameFramework/PlayerState.h"
 #include "CatfishingPlayerState.generated.h"
 
-/** Lake 玩家身份与个人局状态宿主；复用 APlayerState::UniqueId，只增加公开鱼图鉴摘要和本局装备解锁投影。 */
+/** Lake 玩家身份与个人局状态宿主；复用 APlayerState::UniqueId，只增加公开鱼图鉴摘要。 */
 UCLASS()
 class CATFISHING_API ACatfishingPlayerState : public APlayerState
 {
 	GENERATED_BODY()
 public:
-	/** 注册公开鱼图鉴摘要和装备解锁投影复制；StableNetId 继续复用 APlayerState::UniqueId。 */
+	/** 注册公开鱼图鉴摘要复制；StableNetId 继续复用 APlayerState::UniqueId。 */
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	/** 仅服务器接收 owning client 提交的公开鱼图鉴摘要；严格校验后整体复制给局内其他玩家查看。 */
 	bool SetPublicFishCollectionFromAuthority(const TArray<FCatFishCollectionRecord>& Records);
 	/** 提供局内玩家可见的鱼图鉴摘要；相册、Journal 和解锁被排除，避免 PlayerState 成为第二份 Profile。 */
 	const TArray<FCatFishCollectionRecord>& GetPublicFishCollection() const;
-	/** 服务器接收 owning client 从 durable Profile 汇总出的装备解锁摘要；格式非法时保留失效授权并 fail-closed。 */
-	bool SetAuthorizedEquipmentUnlocksFromAuthority(const TArray<FName>& UnlockIds);
-	/** 服务器在某份 Unlock Grant 已经 durable ACK 后追加本局授权；它不接受客户端直接指定 Grant 内容。 */
-	bool AuthorizeEquipmentUnlockFromProfileGrant(const FCatProfileGrant& Grant);
-	/** 查询服务器是否持有指定装备解锁的可信证明；None 视为 starter，非空必须来自本局授权快照。 */
-	bool HasServerAuthorizedEquipmentUnlock(FName UnlockId) const;
 protected:
 	/** 玩家状态进入 World 后记录继承 UniqueId 是否有效；原始值是否输出由 StableNetIdExposure 策略控制。 */
 	virtual void BeginPlay() override;
@@ -32,7 +25,4 @@ private:
 	UPROPERTY(Replicated)
 	TArray<FCatFishCollectionRecord> PublicFishCollection;
 
-	/** 服务器当前认可并复制的装备解锁 ID 摘要；Profile Grant ACK 或 owning client durable Profile 摘要写入，Equipment 装配只读它。 */
-	UPROPERTY(Replicated)
-	TArray<FName> AuthorizedEquipmentUnlockIds;
 };

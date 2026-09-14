@@ -4,18 +4,12 @@
 #include "Framework/Core/CatDomainCommandTypes.h"
 #include "CatConditionTypes.generated.h"
 
-/** 倒地后的恢复方式；它描述服务器已接受的路径，不包含动画或数值公式。 */
+/** 倒地后的恢复方式；它描述服务器已接受的客观救援路径，不包含动画或数值公式。 */
 UENUM(BlueprintType)
 enum class ECatRecoveryMode : uint8
 {
 	/** 当前没有恢复动作。 */
 	None,
-	/** 单人可用的野外缓慢休息/爬行自救路径。 */
-	FieldSelfRecovery,
-	/** 固定营地的快速休息路径。 */
-	CampRest,
-	/** 自己或伙伴消耗草药的恢复路径。 */
-	Herb,
 	/** 伙伴搬运到固定营地救援点。 */
 	CarriedToCamp
 };
@@ -36,7 +30,7 @@ enum class ECatWaterExposureUpdate : uint8
 	DangerousEntered
 };
 
-/** Character 局内身体离散状态的复制读模型；Poison/Fishing 数值只在 ASC AttributeSet，吃鱼成长只在 Growth。 */
+/** Character 局内身体离散状态的复制读模型；保存表现、交互资格和救援需要的客观状态。 */
 USTRUCT(BlueprintType)
 struct FCatConditionSnapshot
 {
@@ -54,7 +48,7 @@ struct FCatConditionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	ECatWaterExposureState WaterExposure = ECatWaterExposureState::Dry;
 
-	/** 猫是否因正式 Poison 阈值进入可恢复倒地；项目不存在死亡终态。 */
+	/** 猫当前是否处于倒地状态；Condition 写入，交互、身体表现和救援入口读取。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bDowned = false;
 

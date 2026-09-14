@@ -622,8 +622,8 @@ APawn* ACatfishingGameModeBase::SpawnDefaultPawnFor_Implementation(AController* 
 
 // Character 不可用收口流程：
 // 1. 先拒绝非 authority、空 Character 或无 World，避免客户端和销毁尾声改写服务器领域服务。
-// 2. 在同一 authority World 内先终止 Fishing 的半场会话，再取消 Social 的偷鱼追回；顺序保证 Social 返还不会观察到仍活动的钓鱼操作。
-// 3. 最后记录两项服务是否存在，缺服务时保持幂等降级，不影响随后原有的条件化存档捕获。
+// 2. 在同一 authority World 内退出角色的钓鱼操作，再保全装备关闭前的钓鱼资源。
+// 3. 最后记录服务可用性和资源保全结果，缺服务时保持幂等降级，不影响随后原有的条件化存档捕获。
 void ACatfishingGameModeBase::HandleCharacterUnavailable(ACatCharacter* Character)
 {
 	UWorld* World = Character ? Character->GetWorld() : nullptr;
@@ -641,16 +641,11 @@ void ACatfishingGameModeBase::HandleCharacterUnavailable(ACatCharacter* Characte
 		Fishing->ReleaseFishingOperatorForCharacter(Character);
 		bResourcesPreserved = Fishing->PreserveFishingResourcesForEquipmentShutdown(Character->GetEquipmentComponent());
 	}
-	UCatSocialService* Social = World->GetSubsystem<UCatSocialService>();
-	if (Social)
-	{
-		Social->CancelTheftsForCharacter(Character);
-	}
 	UE_LOG(LogCatRun, Log,
-		TEXT("Event=character_unavailable_cleanup Character=%s PlayerId=%d World=%s NetMode=%d Authority=true LocalRole=%d FishingAvailable=%s SocialAvailable=%s ResourcesPreserved=%s Result=CleanupRequested"),
+		TEXT("Event=character_unavailable_cleanup Character=%s PlayerId=%d World=%s NetMode=%d Authority=true LocalRole=%d FishingAvailable=%s ResourcesPreserved=%s Result=CleanupRequested"),
 		*GetNameSafe(Character), DepartingPlayerId, *GetNameSafe(World), static_cast<int32>(World->GetNetMode()),
 		static_cast<int32>(Character->GetLocalRole()), Fishing ? TEXT("true") : TEXT("false"),
-		Social ? TEXT("true") : TEXT("false"), bResourcesPreserved ? TEXT("true") : TEXT("false"));
+		bResourcesPreserved ? TEXT("true") : TEXT("false"));
 }
 
 // Logout 流程：先对精确 Active 连接完成或复核末次持久化捕获，再移除准入记录与 Pawn 通知；失效连接不能覆盖新连接的存档，之后继续原有重连 TTL。
@@ -1868,13 +1863,7 @@ FCatRunTeardownResult ACatfishingGameModeBase::RequestRunTeardown(const FCatRunT
 		return Result;
 	}
 	Fishing->CloseCommandsAndTerminateAll();
-	const bool bSocialResolved = Social->CloseCommandsAndResolveAll();
-	if (!bSocialResolved)
-	{
-		Result.Status = ECatRunTeardownStatus::Failed;
-		Result.Error = ECatRunCommandError::TeardownFailed;
-		return Result;
-	}
+	Social->CloseCommands();
 	// 先完成最终 Grant 重投，再发送远端退出 RPC；同一 Controller 上的 Reliable RPC 顺序保证 Grant 在 Destroy 通知之前到达。
 	const bool bGrantAcksComplete = ImprintService->PrepareForRunTeardown();
 

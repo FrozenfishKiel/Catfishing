@@ -8,17 +8,17 @@
 
 bool UCatAbilitySet::IsRuntimeReady() const
 {
-	// 默认 AbilitySet 门禁流程：六个 Fishing 输入 Ability 与六个保留 BodyAction Ability 必须完整出现；
-	// BodyAction 只承担 Camp/Social 表现和可取消前摇，库存、供品结算、偷鱼事务和 Wet 反馈不能通过 Ability 授予进入运行时。
-	if (GrantedAbilities.Num() != 12)
+	// 默认 AbilitySet 门禁流程：六个 Fishing 输入 Ability 与当前保留的 BodyAction Ability 必须完整出现；
+	// BodyAction 只承担 Camp/Social 表现和可取消前摇，库存、供品结算和 Wet 反馈不能通过 Ability 授予进入运行时。
+	if (GrantedAbilities.Num() != 11)
 	{
 		return false;
 	}
-	// 这些集合只在就绪门禁内做局部校验：能力类和输入 Tag 去重，BodyAction 还要精确命中六个专用事件 Ability。
+	// 这些集合只在就绪门禁内做局部校验：能力类和输入 Tag 去重，BodyAction 还要精确命中当前专用事件 Ability。
 	TSet<TSubclassOf<UGameplayAbility>> SeenAbilities;
 	TSet<FGameplayTag> SeenInputTags;
 	TSet<TSubclassOf<UGameplayAbility>> ExpectedBodyActionAbilities = {
-		UCatGA_BodyActionCampRest::StaticClass(), UCatGA_BodyActionCampfirePlayback::StaticClass(),
+		UCatGA_BodyActionCampfirePlayback::StaticClass(),
 		UCatGA_BodyActionRescueCharacterToCamp::StaticClass(),
 		UCatGA_BodyActionRequestManualHelp::StaticClass(), UCatGA_BodyActionRequestMischief::StaticClass(),
 		UCatGA_BodyActionPlaceProtectionSign::StaticClass() };

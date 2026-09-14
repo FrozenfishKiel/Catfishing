@@ -40,7 +40,6 @@ void UCatSurvivalAttributeSet::GetLifetimeReplicatedProps(TArray<FLifetimeProper
 	DOREPLIFETIME_CONDITION_NOTIFY(UCatSurvivalAttributeSet, FishingStrength, COND_None, REPNOTIFY_Always);
 	DOREPLIFETIME_CONDITION_NOTIFY(UCatSurvivalAttributeSet, FightStamina, COND_None, REPNOTIFY_Always);
 	DOREPLIFETIME_CONDITION_NOTIFY(UCatSurvivalAttributeSet, MaxFightStamina, COND_None, REPNOTIFY_Always);
-	DOREPLIFETIME_CONDITION_NOTIFY(UCatSurvivalAttributeSet, Poison, COND_None, REPNOTIFY_Always);
 }
 
 // 基础值变化流程：配置播种或 GE 覆盖属性前统一清理坏数值；当前体力读取已经存在的 MaxFightStamina，所以上层必须先写上限再回满体力。
@@ -55,7 +54,7 @@ void UCatSurvivalAttributeSet::PreAttributeBaseChange(const FGameplayAttribute& 
 	{
 		NewValue = ClampMaxFightStaminaValue(NewValue);
 	}
-	else if (Attribute == GetFishingStrengthAttribute() || Attribute == GetPoisonAttribute())
+	else if (Attribute == GetFishingStrengthAttribute())
 	{
 		NewValue = ClampSurvivalNonNegativeValue(NewValue);
 	}
@@ -73,7 +72,7 @@ void UCatSurvivalAttributeSet::PreAttributeChange(const FGameplayAttribute& Attr
 	{
 		NewValue = ClampMaxFightStaminaValue(NewValue);
 	}
-	else if (Attribute == GetFishingStrengthAttribute() || Attribute == GetPoisonAttribute())
+	else if (Attribute == GetFishingStrengthAttribute())
 	{
 		NewValue = ClampSurvivalNonNegativeValue(NewValue);
 	}
@@ -114,10 +113,4 @@ void UCatSurvivalAttributeSet::OnRep_FightStamina(const FGameplayAttributeData& 
 void UCatSurvivalAttributeSet::OnRep_MaxFightStamina(const FGameplayAttributeData& OldMaxFightStamina)
 {
 	GAMEPLAYATTRIBUTE_REPNOTIFY(UCatSurvivalAttributeSet, MaxFightStamina, OldMaxFightStamina);
-}
-
-// Poison 复制通知流程：使用标准 RepNotify 更新中毒累积的客户端读模型；客户端不自行判断倒地、恢复或死亡。
-void UCatSurvivalAttributeSet::OnRep_Poison(const FGameplayAttributeData& OldPoison)
-{
-	GAMEPLAYATTRIBUTE_REPNOTIFY(UCatSurvivalAttributeSet, Poison, OldPoison);
 }

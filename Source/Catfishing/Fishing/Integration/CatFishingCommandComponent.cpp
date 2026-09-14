@@ -10,7 +10,6 @@
 #include "Environment/CatChumPlacementService.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
-#include "Equipment/CatEquipmentSettings.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/Integration/CatFishingAimLibrary.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"

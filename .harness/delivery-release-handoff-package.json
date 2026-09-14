@@ -54,7 +54,7 @@
     "DataWorldProfileAlbum": {
       "title": "Data / World / Profile / Album——长期进度与相册闭环",
       "closure_status": "engineering_complete",
-      "status_basis": "Static, Build, Automation, and comment review prove the engineering loop; formal fish/bite/fight runtime assets are now supplied by the agent-authored provisional formal table, while concrete UnlockId milestones and full imprint admission remain product/content blockers.",
+      "status_basis": "Static, Build, Automation, and comment review prove the engineering loop; formal fish/bite/fight runtime assets are now supplied by the agent-authored provisional formal table, while concrete expression UnlockId milestones and full retained imprint admission remain product/content blockers. Gameplay equipment unlock gates and TheftCaught mandatory imprint are superseded by the 2026-09-14 user decision.",
       "evidence_roots": [
         "Saved/Automation/DataWorldProfileAlbum"
       ]
@@ -72,7 +72,7 @@
     "RunEnvironmentSocial": {
       "title": "Run / Environment / Social——局阶段、环境与协作边界闭环",
       "closure_status": "runtime_evidence_passed",
-      "status_basis": "Static, Build, module Automation, Lake map anchoring, Runtime, reconnect fail-closed whitelist proof, and Controller player-entry contract machine evidence now pass for the current Run, Environment, Social, GameMode, and Fishing command-component evidence batches. Command-intent phase gates, Controller Social wide-gate entrypoints, Controller Chum narrow-gate fail-closed receipt, theft owning-client result cache, legacy Fishing direct-entry fail-closed receipts, Social positive runtime enablement, success settlement policy, NaturalEvent anchoring, and reconnect admission whitelist fail-closed boundaries have machine evidence; the module remains open because necessary human or multi-client behavior evidence is not complete.",
+      "status_basis": "Static, Build, module Automation, Lake map anchoring, Runtime, reconnect fail-closed whitelist proof, and Controller player-entry contract machine evidence now pass for the current Run, Environment, Social, GameMode, and Fishing command-component evidence batches. Command-intent phase gates, Controller Social wide-gate entrypoints, Controller Chum narrow-gate fail-closed receipt, historical theft result-cache evidence now retained only as superseded evidence, legacy Fishing direct-entry fail-closed receipts, Social positive runtime enablement, success settlement policy, NaturalEvent anchoring, and reconnect admission whitelist fail-closed boundaries have machine evidence; the module remains open because necessary human or multi-client behavior evidence is not complete.",
       "evidence_roots": [
         "Source/Catfishing/Run",
         "Source/Catfishing/Environment",
@@ -115,12 +115,12 @@
     {
       "blocker_id": "FormalProgressGrowthContentOpen",
       "source": ".harness/formal-non-fish-content-input-package.json",
-      "summary": "Live context now confirms TheftCaught as an imprint event and provides a snapshot growth-Buff catalog, but concrete UnlockId milestones, full imprint admission beyond fixed entries, playtest-frozen growth content, fatigue presentation triggers, and yellow-stamina presentation/consumption rules are not frozen for formal content closure."
+      "summary": "Historical live context confirmed TheftCaught as an imprint event and provided a snapshot growth-Buff catalog, but the 2026-09-14 user decision deletes the theft protocol and TheftCaught mandatory imprint from current gates. Concrete expression UnlockId milestones, the retained imprint admission list, playtest-frozen growth content, fatigue presentation triggers, and yellow-stamina presentation/consumption rules are not frozen for formal content closure."
     },
     {
       "blocker_id": "RunEnvironmentSocialModuleOpen",
       "source": ".codex/state/run-environment-social-behavior-evidence.json",
-      "summary": "Run / Environment / Social now has Static, Build, Automation, Lake map anchoring, Runtime evidence, reconnect fail-closed whitelist proof, and Controller player-entry contract machine proof. It remains open until one module-level human or multi-client behavior evidence item covers RunFlow, Environment, WaterQuery/Chum, Social protection/help/mischief, stealing, and reconnect fail-closed boundaries together."
+      "summary": "Run / Environment / Social now has Static, Build, Automation, Lake map anchoring, Runtime evidence, reconnect fail-closed whitelist proof, and Controller player-entry contract machine proof. It remains open until one module-level human or multi-client behavior evidence item covers RunFlow, Environment, WaterQuery/Chum, Social protection/help/mischief, objective fish-taking boundaries, and reconnect fail-closed boundaries together."
     }
   ],
   "evidence_contracts": [
@@ -411,6 +411,7 @@
       "module_key": "RunEnvironmentSocial",
       "check_kind": "automation_report",
       "path": "Saved/Automation/RunEnvironmentSocial/20260825-163741/Social/Report/index.json",
+      "superseded_name_note": "The TheftMischief expected test name is retained only to verify the historical Automation report. It must not be used as a current theft protocol requirement after the 2026-09-14 user decision.",
       "expected_tests": [
         "Catfishing.Unit.Social.Settings.TheftMischiefAndManualHelpHaveIndependentGates",
         "Catfishing.Unit.Social.Service.EmptyTeardownAndMissingIdentityCommandsFailClosed",
@@ -452,7 +453,7 @@
       "requirement_id": "FormalProgressGrowthContentClosed",
       "current_status": "blocked",
       "blocked_by": "FormalProgressGrowthContentOpen",
-      "proof_when_satisfied": "UnlockId milestone rules, imprint admission list, growth Buff choices, visual fatigue triggers, and yellow-stamina presentation/consumption boundaries are frozen as formal product/content inputs."
+      "proof_when_satisfied": "Expression UnlockId milestone rules, retained imprint admission list, growth Buff choices, visual fatigue triggers, and yellow-stamina presentation/consumption boundaries are frozen as formal product/content inputs. Gameplay equipment unlock gates, TheftCaught mandatory imprint, poison/FoodSafety, herb recovery, and pure detox rest are not part of this closure after the 2026-09-14 user decision."
     },
     {
       "requirement_id": "EquipmentShopFreshEvidence",
@@ -464,7 +465,7 @@
       "requirement_id": "RunEnvironmentSocialClosed",
       "current_status": "blocked",
       "blocked_by": "RunEnvironmentSocialModuleOpen",
-      "proof_when_satisfied": "RunEnvironmentSocial has its own module-level Static, Build, Automation, Runtime, reconnect fail-closed proof, and one module-level human or multi-client behavior evidence item in .codex/state/run-environment-social-behavior-evidence.json proving RunFlow, Environment, WaterQuery/Chum, Social protection/help/mischief, stealing boundaries, and reconnect fail-closed boundaries as one atomic closure; Scripts/verify_run_environment_social.ps1 -Mode BehaviorEvidence must output RUN_ENVIRONMENT_SOCIAL_BEHAVIOR_EVIDENCE_PASS."
+      "proof_when_satisfied": "RunEnvironmentSocial has its own module-level Static, Build, Automation, Runtime, reconnect fail-closed proof, and one module-level human or multi-client behavior evidence item in .codex/state/run-environment-social-behavior-evidence.json proving RunFlow, Environment, WaterQuery/Chum, Social protection/help/mischief, objective fish-taking boundaries, and reconnect fail-closed boundaries as one atomic closure; Scripts/verify_run_environment_social.ps1 -Mode BehaviorEvidence must output RUN_ENVIRONMENT_SOCIAL_BEHAVIOR_EVIDENCE_PASS."
     }
   ],
   "remaining_input_contracts": [
@@ -478,7 +479,7 @@
       "authority_source": ".harness/formal-fish-asset-input-package.json",
       "required_facts": [
         "Fish table revision 580 is the base row source for the 16 generated fish definitions.",
-        "Codex filled provisional rarity, bait preference, BodyClass, bite personality, fight personality, food safety, experience, and poison values under user authorization.",
+        "Codex historically filled provisional rarity, bait preference, BodyClass, bite personality, fight personality, food safety, experience, and poison values under user authorization; the 2026-09-14 user decision supersedes food safety and poison as current required fields, leaving EatingExperience as the retained growth input.",
         "Generated UE assets include 16 UCatFishDefinition assets, 4 UCatBitePersonalityDefinition assets, and 4 UCatFightPersonalityDefinition assets under /Game/Catfishing/Data/Fish.",
         "Config/DefaultGame.ini references the generated formal fish, bite, and fight assets and no longer references DA_Fish_Test01, DA_Bite_Test01, or DA_Fight_Test01.",
         "Runtime fit compromises are documented in .harness/formal-fish-asset-input-package.json, including StinkyFish positive sacrifice and LakeGiantShadow non-edible fallback."
@@ -513,8 +514,8 @@
       ],
       "authority_source": ".harness/formal-non-fish-content-input-package.json",
       "required_facts": [
-        "Concrete world, growth, or album milestones that produce each formal equipment UnlockId.",
-        "Full imprint admission list beyond TheftCaught, including which run events can create permanent Imprint grants.",
+        "Concrete world, growth, or album milestones that produce each formal expression/appearance UnlockId.",
+        "Full retained imprint admission list, excluding the deleted TheftCaught theft protocol event, including which run events can create permanent Imprint grants.",
         "Formal growth Buff choices, numeric effects, and player-facing copy for PendingChoiceCount consumption; the current 升级效果 source is available but still marked snapshot pending playtest.",
         "Formal light, medium, and heavy fatigue presentation triggers now that fatigue is no longer a gameplay number.",
         "Formal yellow-stamina shield presentation and consumption boundary."
@@ -522,7 +523,8 @@
       "do_not_do": [
         "Do not mark DataWorldProfileAlbum formally complete from engineering Profile/Collection automation alone.",
         "Do not mark CharacterGrowthCondition formally complete from ASC/Growth automation while Buff, fatigue, or yellow-stamina content is still open.",
-        "Do not split UnlockId, imprint admission, Buff, fatigue, and yellow-stamina decisions into separate DeliveryHarnessAssets subtasks."
+        "Do not split expression UnlockId, imprint admission, Buff, fatigue, and yellow-stamina decisions into separate DeliveryHarnessAssets subtasks.",
+        "Do not reintroduce gameplay equipment unlock gates, TheftCaught mandatory imprint, poison/FoodSafety, herb recovery, or pure detox rest as current blockers."
       ]
     }
   ],

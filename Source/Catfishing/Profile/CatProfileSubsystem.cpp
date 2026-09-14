@@ -120,7 +120,7 @@ bool UCatProfileSubsystem::ReceiveCapturePlan(const FCatCapturePlan& Plan)
 	return true;
 }
 
-// 装备选择流程：先验证 Request/槽位/正式定义及解锁资格，暂存变更前值后写新选择并同步保存；保存失败恢复失效内存，绝不把局内耐久或数量带进 Profile。
+// 装备选择流程：先验证 Request、槽位和正式定义，暂存变更前值后写新选择并同步保存；保存失败恢复失效内存，绝不把局内耐久、数量或所有权带进 Profile。
 FCatDomainCommandResult UCatProfileSubsystem::SetEquipmentSelection(const FGuid RequestId, const FName SlotId,
 	const FName EquipmentDefinitionId)
 {
@@ -128,8 +128,7 @@ FCatDomainCommandResult UCatProfileSubsystem::SetEquipmentSelection(const FGuid 
 	Result.RequestId = RequestId;
 	UCatEquipmentDefinition* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(EquipmentDefinitionId);
 	if (!bPersistenceReady || !CurrentProfile || !RequestId.IsValid() || SlotId.IsNone() || !Definition
-		|| Definition->LoadoutSlotId != SlotId
-		|| (!Definition->RequiredUnlockId.IsNone() && !CurrentProfile->UnlockIds.Contains(Definition->RequiredUnlockId)))
+		|| Definition->LoadoutSlotId != SlotId)
 	{
 		Result.Error = ECatDomainCommandError::PermissionDenied;
 		return Result;
@@ -179,18 +178,6 @@ bool UCatProfileSubsystem::GetFishCollectionSnapshot(TArray<FCatFishCollectionRe
 		return false;
 	}
 	OutRecords = CurrentProfile->FishCollection;
-	return true;
-}
-
-// 装备解锁摘要读取流程：先清输出，只在 durable Profile 可用时复制 UnlockIds；调用方只能把它作为本人 PlayerState 的运行期授权投影。
-bool UCatProfileSubsystem::GetEquipmentUnlockSnapshot(TArray<FName>& OutUnlockIds) const
-{
-	OutUnlockIds.Reset();
-	if (!bPersistenceReady || !CurrentProfile)
-	{
-		return false;
-	}
-	OutUnlockIds = CurrentProfile->UnlockIds;
 	return true;
 }
 

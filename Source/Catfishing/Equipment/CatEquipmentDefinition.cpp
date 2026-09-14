@@ -6,7 +6,6 @@
 #include "Equipment/Fragments/CatEquipmentFragment_Scoop.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Chum.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
-#include "Equipment/CatEquipmentSettings.h"
 #include "Inventory/CatInventorySettings.h"
 
 namespace

@@ -285,7 +285,7 @@ FCatDomainCommandResult UCatInventoryStatics::MoveItemBetweenInventoryHostsFromA
 // Actor 库存使用流程：
 // 1. 先重读 Character、World、RequestId 和来源宿主，客户端提交的 Actor 只作为候选。
 // 2. 再把宿主解析成正式 InventoryComponent；玩家自己直接用随身库存，其它世界库存必须通过触达规则。
-// 3. 正式 Use 只调用 Source InventoryComponent，具体鱼、草药或装备效果由 ItemInstance 按当前槽位事实裁决。
+// 3. 正式 Use 只调用 Source InventoryComponent，具体食用或装备效果由 ItemInstance 按当前槽位事实裁决。
 // 4. 当前玩家随身库存参与时刷新 Equipment 读模型，失败只记录诊断，不回滚已经提交的库存事实。
 FCatDomainCommandResult UCatInventoryStatics::UseItemFromInventoryHostFromAuthority(
 	ACatCharacter* ControlledCharacter, const FGuid RequestId, AActor* SourceInventoryHost,

@@ -383,7 +383,7 @@ public:
 	/** 只读取得某个槽位条目；越界时返回空指针，调用方不得保存为可写引用。 */
 	const FCatInventoryEntry* GetInventoryEntryAtSlot(int32 SlotIndex) const;
 
-	/** Use 预检交给实例语义决定；默认使用拥有者 Pawn，库存核心不认识 GAS、装备、草药或窝料目标。 */
+	/** Use 预检交给实例语义决定；默认使用拥有者 Pawn，库存核心不认识 GAS、装备或窝料目标。 */
 	bool CanUseItemAtSlot(int32 SlotIndex, APawn* UserPawn = nullptr) const;
 
 	/** 服务器用结构化上下文使用指定槽位；库存组件先裁决 RequestId、当前槽位和物品实例，再把真实效果交给实例侧流程。 */

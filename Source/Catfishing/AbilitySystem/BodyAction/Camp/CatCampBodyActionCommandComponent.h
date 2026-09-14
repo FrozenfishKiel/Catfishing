@@ -14,9 +14,6 @@ class CATFISHING_API UCatCampBodyActionCommandComponent : public UCatBodyActionC
 	GENERATED_BODY()
 
 public:
-	/** 提交营地休息身体动作请求；返回值只表示是否有正式 Ability 接管该 GameplayEvent。 */
-	bool SubmitCampRest(ACatCampHubActor* Camp, FGuid RequestId) const;
-
 	/** 提交篝火回看身体动作请求；CapturePlan 与结算夜规则仍由 Camp 入口裁决。 */
 	bool SubmitCampfirePlayback(ACatCampHubActor* Camp, FGuid RequestId) const;
 

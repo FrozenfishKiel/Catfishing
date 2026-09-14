@@ -76,10 +76,6 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Loadout")
 	FName LoadoutSlotId = NAME_None;
 
-	/** 使用该定义需要的 Profile UnlockId；None 表示正式 starter 可用，不代表全定义免费。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Loadout")
-	FName RequiredUnlockId = NAME_None;
-
 	/** 玩家可见名称；库存格和商店表现读取它，空名称时显示稳定 ID。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation")
 	FText DisplayName;

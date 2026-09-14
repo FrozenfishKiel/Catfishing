@@ -934,7 +934,7 @@ FCatSaveResult UCatSaveSubsystem::MakeResult(const bool bAccepted, const FText& 
 // 运行载荷采集流程：
 // 1. 只接受 authority GameMode、唯一营地和已恢复的玩法 World，客户端或前端 World 不会写磁盘。
 // 2. 世界槽只保留一个本机玩家快照；若有在线本机 Controller 就现场采样，否则沿用退出捕获已经写入内存的快照。
-// 3. 最后导出已提交世界鱼与真实 Run 展示元数据；偷鱼窗口、Profile 和 Run 状态机都不会进入载荷。
+// 3. 最后导出已提交世界鱼与真实 Run 展示元数据；Profile 和 Run 状态机都不会进入载荷。
 bool UCatSaveSubsystem::BuildActiveRunSaveGame(UCatRunSaveGame& OutSaveGame, FText& OutFailure) const
 {
 	OutFailure = FText::GetEmpty();

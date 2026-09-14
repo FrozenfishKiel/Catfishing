@@ -7,13 +7,12 @@
 #include "CatConditionComponent.generated.h"
 
 class AController;
-class UCatAbilitySystemComponent;
 class UCatFishDefinition;
 
 /** Condition 完整快照发生提交或复制变化的本机通知；订阅者必须重新读取 GetSnapshot，不使用增量载荷拼状态。 */
 DECLARE_MULTICAST_DELEGATE(FCatConditionSnapshotChanged);
 
-/** Character 局内离散身体状态组件；ASC 拥有数值，本组件只裁决 Wet/Downed/恢复生命周期，Wet 不代表玩家技能或 BodyAction 入口。 */
+/** Character 局内离散身体状态组件；维护 Wet、危险水域和倒地救援事实，向交互与表现消费者发布快照。 */
 UCLASS(ClassGroup = (Catfishing), meta = (BlueprintSpawnableComponent))
 class CATFISHING_API UCatConditionComponent : public UActorComponent
 {
@@ -36,27 +35,14 @@ public:
 	ECatWaterExposureUpdate UpdateWaterExposureFromAuthority(const FCatWaterRegionHandle& WaterRegion,
 		double DeltaSeconds, double& OutImmersionDepthCentimeters);
 
-	/** 在实物鱼被不可逆移除前只读校验食用定义、ASC 与倒地阈值；返回 None 才允许上层提交库存事务。 */
+	/** 在实物鱼被不可逆移除前只读校验食用定义和成长入口；返回 None 才允许上层提交库存事务。 */
 	ECatDomainCommandError ValidateFishConsumption(const UCatFishDefinition* FishDefinition) const;
 
-	/** 在草药库存被不可逆扣除前只读校验施药者距离、ASC、倒地阈值与正式恢复数值；返回 None 才允许上层提交库存事务。 */
-	ECatDomainCommandError ValidateHerbRecovery(AController* HelpingController) const;
-
-	/** 服务器消费施药者正式库存中的指定草药实例，并在扣药成功后把恢复事实提交给本组件所属 Character。 */
-	FCatDomainCommandResult UseHerbOnCharacterFromAuthority(AController* HelpingController, FGuid RequestId,
-		FGuid HerbItemInstanceId);
-
-	/** 实物鱼消费提交后读取 FishDefinition 食用字段，增加可选 Poison、推进成长经验，并重新裁决倒地。 */
+	/** 实物鱼消费提交后推进成长经验，并按请求标识重放首次结果，避免重试重复授予成长。 */
 	FCatDomainCommandResult ConsumeCommittedFish(FGuid RequestId, const UCatFishDefinition* FishDefinition);
 
-	/** 单人可用的野外休息入口；按显式较慢数值恢复 Poison，不要求其他玩家。 */
-	FCatDomainCommandResult RequestFieldSelfRecovery(AController* RequestingController, FGuid RequestId);
-
-	/** 固定营地休息入口；只允许 Camp actor 传入已到达事实并按营地恢复值处理。 */
-	FCatDomainCommandResult RequestCampRest(AController* RequestingController, FGuid RequestId, bool bAtCamp);
-
-	/** 草药恢复入口；允许本人或伙伴调用，但库存消费必须在上层先完成，组件只处理身体事实且缓存同 RequestId 的首次终态。 */
-	FCatDomainCommandResult ApplyCommittedHerbRecovery(AController* HelpingController, FGuid RequestId);
+	/** 服务器开发验证入口设置离散倒地状态；首次倒地会收口进行中的钓鱼，重复同值不会重复发布。 */
+	bool SetDownedFromAuthority(bool bNewDowned);
 
 	/** 搬运完成入口；要求目标已倒地且服务器已把 Character 放到固定营地救援点，随后记录恢复方式；同 RequestId 只提交一次。 */
 	FCatDomainCommandResult CompleteCarryToCamp(AController* HelpingController, FGuid RequestId, bool bAtCampRescuePoint);
@@ -69,15 +55,6 @@ private:
 	UFUNCTION()
 	void OnRep_Snapshot();
 
-	/** 校验 Recovery 配置并对 Poison 应用非负减量；随后按阈值更新 Downed/RecoveryMode。 */
-	FCatDomainCommandResult ApplyRecovery(FGuid RequestId, ECatRecoveryMode Mode, double PoisonRelief);
-
-	/** 通过项目 ASC 读取 Poison 阈值结果并更新 Downed；首次倒地会终止该 Character 的 FishingSession。 */
-	void EvaluateDownedFromAttributes(ECatRecoveryMode RecoveryMode);
-
-	/** 定位 Owner Character 的项目 ASC 供阈值读取与 GE 提交；Owner 类型不匹配时返回空，避免创建平行身体属性源。 */
-	UCatAbilitySystemComponent* ResolveAbilitySystem() const;
-
 	/** 构造操作+RequestId 的局内幂等键；身份由上层 Controller 权限另行验证。 */
 	static FString MakeTerminalKey(const TCHAR* Operation, FGuid RequestId);
 
@@ -88,11 +65,8 @@ private:
 	UPROPERTY(ReplicatedUsing = OnRep_Snapshot)
 	FCatConditionSnapshot Snapshot;
 
-	/** 本组件处理的身体命令和草药扣库存命令的首次完整终态；防止网络重试重复扣实物、重复吃鱼或重复恢复。 */
+	/** 本组件处理的身体命令首次完整终态；防止网络重试重复吃鱼或重复记录救援结果。 */
 	TMap<FString, FCatDomainCommandResult> TerminalCache;
-
-	/** 需要比对载荷的终态请求签名；草药扣库存流程用它拒绝同 RequestId 换目标或换药。 */
-	TMap<FString, FString> TerminalPayloadByKey;
 
 	/** 当前脚点持续处在危险水深中的确认时长，单位为 World 秒；水域暴露更新写入它，用来给危险水域进入判定提供滞回前的累计证据。 */
 	double DangerousWaterBuildUpSeconds = 0.0;

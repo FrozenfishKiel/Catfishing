@@ -22,7 +22,6 @@
 #include "Environment/Tests/CatWaterTestFixtures.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
-#include "Equipment/CatEquipmentSettings.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingSession.h"
@@ -220,7 +219,6 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 	// 执行树、受力、最终水面落位、ASC 付款及 Session 发布，不手工提交 Step 或余额。
 	UCatInventorySettings* EquipmentSettings = GetMutableDefault<UCatInventorySettings>();
 	TGuardValue<TArray<FCatInventoryCatalogDefinition>> SavedDefinitions(EquipmentSettings->Definitions, {});
-	TGuardValue<ECatDomainPolicy> SavedTrust(GetMutableDefault<UCatEquipmentSettings>()->ProfileLoadoutTrustPolicy, ECatDomainPolicy::Enabled);
 	TGuardValue<int32> SavedSlots(EquipmentSettings->PlayerInventorySlotCapacity, 12);
 	TGuardValue<int32> SavedStacks(EquipmentSettings->DefaultQuantityStackCapacity, 20);
 	TArray<TStrongObjectPtr<UCatEquipmentDefinition>> Definitions;

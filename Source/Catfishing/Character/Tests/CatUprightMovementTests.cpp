@@ -123,15 +123,13 @@ bool FCatUprightCMCConditionPoseTest::RunTest(const FString& Parameters)
 	if (!Visual || !Visual->GetVisualMesh() || !Presentation) return false;
 	const double StandingHead=Visual->GetVisualMesh()->GetBoneLocationByName(TEXT("RigHead"),EBoneSpaces::WorldSpace).Z;
 	const double CapsuleHeight=Cat->GetActorLocation().Z;
-	Cat->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(),115);
-	AddExpectedMessage(TEXT("Event=character_downed"),ELogVerbosity::Warning);
-	TestTrue(TEXT("real Condition command evaluates the poison threshold"),CatIsAcceptedDomainCommandResult(Cat->GetConditionComponent()->RequestFieldSelfRecovery(Controller,FGuid::NewGuid())));
+	TestTrue(TEXT("authority sets downed condition"),Cat->GetConditionComponent()->SetDownedFromAuthority(true));
 	Scene.Step(600);
 	TestTrue(TEXT("authoritative condition remains downed"),Cat->GetConditionComponent()->GetSnapshot().bDowned);
 	TestEqual(TEXT("authored transition reaches its lying pose"),Presentation->GetObservedPosePhase(),FName(TEXT("DownedPose")));
 	const double LyingHead=Visual->GetVisualMesh()->GetBoneLocationByName(TEXT("RigHead"),EBoneSpaces::WorldSpace).Z;
 	TestTrue(TEXT("actual formal mesh lies down while the collision stays supported"),LyingHead<StandingHead-3 && FMath::Abs(Cat->GetActorLocation().Z-CapsuleHeight)<.5);
-	TestTrue(TEXT("real recovery command clears downed state"),CatIsAcceptedDomainCommandResult(Cat->GetConditionComponent()->RequestFieldSelfRecovery(Controller,FGuid::NewGuid())));
+	TestTrue(TEXT("authority clears downed condition"),Cat->GetConditionComponent()->SetDownedFromAuthority(false));
 	Scene.Step(600);
 	TestEqual(TEXT("authored get-up returns to locomotion"),Presentation->GetObservedPosePhase(),FName(TEXT("Locomotion")));
 	TestTrue(TEXT("recovery restores walking without a physical flip"),Cat->GetPhysicalBodyComponent()->IsLocomotionEnabled() && Cat->GetActorUpVector().Z>.99999);

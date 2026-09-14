@@ -8,7 +8,6 @@
 #include "Environment/Tests/CatWaterTestFixtures.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Chum.h"
-#include "Equipment/CatEquipmentSettings.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/CatFishingService.h"

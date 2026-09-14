@@ -1,11 +1,6 @@
 #include "Condition/CatConditionSettings.h"
 
-// 阈值检查流程：要求总 gate 与 Poison 有限正值；未裁时 ConditionComponent 仍复制 Wet，但不会从数值推导倒地。
-bool UCatConditionSettings::HasDownedThresholds() const
-{
-	return bEnableConditionRuntime && FMath::IsFinite(PoisonDownedThreshold) && PoisonDownedThreshold > 0.0;
-}
-
+// 水域阈值检查流程：要求总 gate、有限水深和进入/退出滞回关系同时成立；不满足时 Condition 不发布湿身或危险水域变化。
 bool UCatConditionSettings::HasWaterExposureThresholds() const
 {
 	return bEnableConditionRuntime

@@ -221,7 +221,7 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Abilities", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatAbilitySystemComponent> AbilitySystemComponent;
 
-	/** 猫身体唯一 Survival 属性集；构造期显式交给 ASC 持有 Poison、FishingStrength、FightStamina 和 MaxFightStamina。 */
+	/** 猫身体唯一 Survival 属性集；构造期显式交给 ASC 持有 FishingStrength、FightStamina 和 MaxFightStamina。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Survival", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatSurvivalAttributeSet> SurvivalAttributes;
 

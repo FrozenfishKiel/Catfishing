@@ -55,8 +55,6 @@ bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InContro
 	{
 		BoundFishingCommand = CatController->GetFishingCommandComponent();
 	}
-	PoisonChangedHandle = AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetPoisonAttribute())
-		.AddUObject(this, &ThisClass::HandleAttributeChanged);
 	FishingStrengthChangedHandle = AbilitySystem->GetGameplayAttributeValueChangeDelegate(
 		UCatSurvivalAttributeSet::GetFishingStrengthAttribute()).AddUObject(this, &ThisClass::HandleAttributeChanged);
 	FightStaminaChangedHandle = AbilitySystem->GetGameplayAttributeValueChangeDelegate(
@@ -93,7 +91,6 @@ void UCatHUDModel::Unbind()
 	ClearRunGameStateBinding();
 	if (UAbilitySystemComponent* AbilitySystem = BoundAbilitySystem.Get())
 	{
-		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetPoisonAttribute()).Remove(PoisonChangedHandle);
 		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetFishingStrengthAttribute()).Remove(FishingStrengthChangedHandle);
 		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetFightStaminaAttribute()).Remove(FightStaminaChangedHandle);
 		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute()).Remove(MaxFightStaminaChangedHandle);
@@ -115,7 +112,6 @@ void UCatHUDModel::Unbind()
 		FishingViewBridge->OnViewStateChanged.Remove(FishingViewChangedHandle);
 		FishingViewBridge->UnbindSession();
 	}
-	PoisonChangedHandle.Reset();
 	FishingStrengthChangedHandle.Reset();
 	FightStaminaChangedHandle.Reset();
 	MaxFightStaminaChangedHandle.Reset();
@@ -174,7 +170,6 @@ void UCatHUDModel::Refresh()
 	NewState.DayText = FText::FromString(FString::Printf(TEXT("第 %d 天"), NewState.DayIndex));
 	if (const UAbilitySystemComponent* AbilitySystem = BoundAbilitySystem.Get())
 	{
-		NewState.Poison = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute());
 		NewState.FishingStrength = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
 		NewState.FightStamina = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
 		NewState.FightStaminaMaximum = AbilitySystem->GetNumericAttribute(
@@ -308,8 +303,7 @@ void UCatHUDModel::Refresh()
 			: FText::FromString(TEXT("鱼状态：未进入遛鱼"));
 		break;
 	}
-	NewState.CatStatusText = FText::FromString(FString::Printf(TEXT("猫状态：中毒 %.0f | 钓鱼力量 %.0f | 搏斗体力 %.0f | 成长总经验 %d，当前槽 %d，待选 %d"),
-		NewState.Poison,
+	NewState.CatStatusText = FText::FromString(FString::Printf(TEXT("猫状态：钓鱼力量 %.0f | 搏斗体力 %.0f | 成长总经验 %d，当前槽 %d，待选 %d"),
 		NewState.FishingStrength,
 		NewState.FightStamina,
 		NewState.Growth.TotalExperience,

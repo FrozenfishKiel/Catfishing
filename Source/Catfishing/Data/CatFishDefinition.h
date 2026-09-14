@@ -21,18 +21,6 @@ enum class ECatFishBodyClass : uint8
 	Giant
 };
 
-/** FishDefinition 的食用安全结论；猫状态只消费该结论，不按名字猜有毒鱼。 */
-UENUM(BlueprintType)
-enum class ECatFishFoodSafety : uint8
-{
-	/** 食用结论或数值尚未配置，进食命令必须 fail-closed。 */
-	Unset,
-	/** 可直接食用且不会增加 Poison。 */
-	Safe,
-	/** 可直接食用但会增加 Poison；具体倒地阈值由 Character 设置拥有。 */
-	Toxic
-};
-
 /** 鱼种运行定义的最小 SSOT 接缝；同时也是鱼物品静态定义，实物鱼进入鱼护、鱼缸和商店时不再走第二套容器物品表。 */
 UCLASS(BlueprintType)
 class CATFISHING_API UCatFishDefinition : public UCatInventoryItemDefinition
@@ -166,17 +154,9 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Preference")
 	TArray<FCatBaitWeightMultiplier> BaitWeightMultipliers;
 
-	/** 食用安全结论；Unset 时不能通过吃鱼链修改身体状态。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use")
-	ECatFishFoodSafety FoodSafety = ECatFishFoodSafety::Unset;
-
 	/** 直接食用后授予的局内成长经验；值来自当前鱼表体重档，0 表示吃鱼成长收益未裁。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use", meta = (ClampMin = "0.0"))
 	double EatingExperience = 0.0;
-
-	/** Toxic 鱼直接食用后增加 Poison 的正值；Safe 必须保持 0。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use", meta = (ClampMin = "0.0"))
-	double PoisonIncrease = 0.0;
 
 	/** 该鱼是否允许在共享鱼缸展示；Camp 只消费该用途，不推导观赏价值。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use")

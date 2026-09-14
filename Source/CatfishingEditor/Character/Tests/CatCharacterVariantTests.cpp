@@ -71,7 +71,6 @@ bool FCatCharacterVariantContract::RunTest(const FString& Parameters)
 				TEXT("/Game/Animalia/Cat/AM_Hit_ChestL_Heavy-IP_Montage"), TEXT("/Game/Animalia/Cat/AM_Death_01-IP_Montage"),
 				TEXT("/Game/Animalia/Cat/AM_Action_Scratching-IP_Montage"),
 				TEXT("/Game/Animalia/Cat/AM_Attack_Left-IP_Montage"),
-				TEXT("/Game/Catfishing/Animation/BodyAction/AM_BodyAction_CampRest"),
 				TEXT("/Game/Catfishing/Animation/BodyAction/AM_BodyAction_CampfirePlayback"),
 				TEXT("/Game/Catfishing/Animation/BodyAction/AM_BodyAction_RequestManualHelp"),
 				TEXT("/Game/Catfishing/Animation/BodyAction/AM_BodyAction_RequestMischief"),

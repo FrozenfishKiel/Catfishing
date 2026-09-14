@@ -75,10 +75,6 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerAcknowledgeProfileGrant(FGuid GrantId);
 
-	/** owning client 把 durable Profile 中的装备解锁摘要提交给服务器；服务器只把它作为本 PlayerState 的本局授权投影。 */
-	UFUNCTION(Server, Reliable)
-	void ServerPublishEquipmentUnlocks(const TArray<FName>& UnlockIds);
-
 	/** 服务器向 owning client 投递独立 CapturePlan；本 RPC 不表示图片或 Grant 已成功。 */
 	UFUNCTION(Client, Reliable)
 	void ClientReceiveImprintCapturePlan(const FCatCapturePlan& Plan);
@@ -106,10 +102,6 @@ public:
 	/** 权威交互转发；服务器检查玩法 gate 和通用接口后，在目标 Actor 上重新调用同一 Interact 虚函数。 */
 	UFUNCTION(Server, Reliable)
 	void ServerRequestInteraction(AActor* Target, FGuid RequestId);
-
-	/** 由 owning client 发起固定营地休息请求；把位置和身体裁决交给 Camp/Condition，完成后通过 ClientReceiveCampCommandResult 回送领域结果。 */
-	UFUNCTION(Server, Reliable)
-	void ServerRequestCampRest(ACatCampHubActor* Camp, FGuid RequestId);
 
 	/** 由 owning client 发起固定营地篝火回看请求；Camp 在结算夜全员在场且 CapturePlan 建立成功后触发表现 multicast，并通过 ClientReceiveCampCommandResult 回送领域结果。 */
 	UFUNCTION(Server, Reliable)
@@ -179,27 +171,6 @@ public:
 	/** 请求服务器释放当前嘴叼的原Actor；服务器自行查携带对象，空嘴无副作用。 */
 	UFUNCTION(Server, Reliable)
 	void ServerDropCarriedItem();
-
-	/** 消费本人指定草药实例的一份数量后恢复目标 Character；Condition 恢复链按当前宿主事实校验请求，库存提交成功前不会修改身体。 */
-	UFUNCTION(Server, Reliable)
-	void ServerUseHerbOnCharacter(ACatCharacter* TargetCharacter, FGuid RequestId,
-		FGuid HerbItemInstanceId);
-
-	/** 开始一条鱼的偷取与追回窗口；Social 覆盖客户端身份并保证每个小偷最多一条。 */
-	UFUNCTION(Server, Reliable)
-	void ServerBeginTheft(FCatTheftCommand Command);
-
-	/** 服务器把 Begin/Catch/到期消费的首次或重放结果发回 owning client；ProtocolId 和身体终态只能通过权威结果取得。 */
-	UFUNCTION(Client, Reliable)
-	void ClientReceiveTheftResult(const FCatTheftResult& Result);
-
-	/** 提供本机最近收到的偷鱼协议结果供 UI 读取；它不授权客户端直接访问 Social、库存或身体写口。 */
-	UFUNCTION(BlueprintPure, Category = "Catfishing|Social")
-	FCatTheftResult GetLastTheftResult() const;
-
-	/** 在进食窗口内按服务器返回的 ProtocolId 追回；Social 按权威主人、状态、距离与共享缸策略授权。 */
-	UFUNCTION(Server, Reliable)
-	void ServerCatchTheft(FGuid TheftProtocolId);
 
 	/** 手动发布普通钓鱼或倒地求助；普通信号不会升级为全局任务。 */
 	UFUNCTION(Server, Reliable)
@@ -304,8 +275,6 @@ private:
 
 	/** 幂等安装当前配置的玩法 Mapping Context；BeginPlay/输入初始化均可安全调用。 */
 	void ApplyInputMappingContext();
-	/** owning client 读取本地 durable Profile 的 UnlockIds 并提交服务器投影；本方法不生成或修改任何永久 Grant。 */
-	void PublishProfileEquipmentUnlocksIfAvailable();
 	/** 移除本 Controller 安装的玩法 Mapping Context，并清空弱绑定记录。 */
 	void RemoveInputMappingContext();
 	/** 翻天期间拒绝视角操作；其他时候把二维输入写入 Controller 的 Yaw/Pitch。 */
@@ -371,10 +340,6 @@ private:
 	bool CanForwardGameplayCommand() const;
 	/** 查询 Fishing/玩家打窝专用 gate；它复用身份与 teardown 判断，但额外要求 Run 处于 DayActive、允许钓鱼且当前猫没有倒地。 */
 	bool CanForwardFishingCommand() const;
-
-	/** owning client 最近收到的 Social 协议读模型；由可靠结果 RPC 整体替换，不复制回服务器或作为权限/身体事实。 */
-	UPROPERTY(Transient)
-	FCatTheftResult LastTheftResult;
 
 	/** owning client 最近收到的公共领域命令读模型；可靠 Client RPC 整体写入，UI 只读且不会触发第二次领域操作。 */
 	UPROPERTY(Transient)

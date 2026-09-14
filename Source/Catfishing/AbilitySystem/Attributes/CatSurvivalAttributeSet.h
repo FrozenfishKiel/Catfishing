@@ -4,7 +4,7 @@
 #include "AbilitySystem/Attributes/CatAttributeSet.h"
 #include "CatSurvivalAttributeSet.generated.h"
 
-/** Character-owned ASC 的唯一局内数值属性集；只复制当前需求仍为玩法真相的 Poison、FishingStrength、FightStamina 和它的上限。 */
+/** Character-owned ASC 的唯一局内数值属性集；只复制当前仍为玩法真相的 FishingStrength、FightStamina 和其上限。 */
 UCLASS()
 class CATFISHING_API UCatSurvivalAttributeSet : public UCatAttributeSet
 {
@@ -38,11 +38,6 @@ public:
 	FGameplayAttributeData MaxFightStamina;
 	ATTRIBUTE_ACCESSORS_BASIC(UCatSurvivalAttributeSet, MaxFightStamina)
 
-	/** Poison 代表当前猫身体的局内中毒累积；来源只读 FishDefinition，局末随 Character 销毁且不会造成死亡。 */
-	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_Poison, Category = "Catfishing|Survival")
-	FGameplayAttributeData Poison;
-	ATTRIBUTE_ACCESSORS_BASIC(UCatSurvivalAttributeSet, Poison)
-
 protected:
 	/** FishingStrength 到达客户端时交给 GAS 标准预测收敛；不在此计算协作加成。 */
 	UFUNCTION()
@@ -55,10 +50,6 @@ protected:
 	/** MaxFightStamina 到达客户端时交给 GAS 标准预测收敛；HUD 与会话投影读取复制后的属性值。 */
 	UFUNCTION()
 	void OnRep_MaxFightStamina(const FGameplayAttributeData& OldMaxFightStamina);
-
-	/** Poison 到达客户端时交给 GAS 标准预测收敛；倒地与表现由服务器 ConditionComponent 单独裁决。 */
-	UFUNCTION()
-	void OnRep_Poison(const FGameplayAttributeData& OldPoison);
 
 private:
 	/** 仅用于客户端复制诊断限频；不参与体力、恢复或复制裁决。 */

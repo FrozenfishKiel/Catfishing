@@ -32,7 +32,6 @@ namespace CatFishingAbilityTags
 	 * PlayerController 只投递这些事件，专用 Ability 再回到原领域服务；Wet 反馈不进入玩家技能或 BodyAction 标签集合。
 	 * 新增动作必须新增专用请求和 Ability，而不是补业务枚举。
 	 */
-	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Body_CampRest);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Body_CampfirePlayback);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Body_RescueCharacterToCamp);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Body_RequestManualHelp);

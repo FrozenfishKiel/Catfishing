@@ -67,8 +67,8 @@
       "doc_token": "KH9bdBX6QoOMxRxo23KcyMQFnxb",
       "revision": 43,
       "updated_at_utc": "2026-08-21T07:52:17Z",
-      "available_fact": "Effect families, yellow stamina, poison, no-effect fish, giant sacrifice blessing, and reconciliation notes are documented.",
-      "agent_decision": "Codex mapped puffer, electric eel, and pike to Toxic fish definitions with positive PoisonIncrease, and kept non-toxic rows Safe with midpoint experience values. Special buff presentation/effect execution remains owned by the non-fish content package."
+      "available_fact": "Effect families, yellow stamina, poison, no-effect fish, giant sacrifice blessing, and reconciliation notes were documented in the historical source read.",
+      "agent_decision": "Historical 2026-08-25 asset generation mapped puffer, electric eel, and pike to Toxic fish definitions with positive PoisonIncrease, and kept non-toxic rows Safe with midpoint experience values. The 2026-09-14 user decision supersedes that poison/FoodSafety requirement for current gates: fish assets now only need EatingExperience for the retained growth path; special buff presentation/effect execution remains owned by the non-fish content package."
     },
     "art_resource_sheet": {
       "kind": "lark_sheet",
@@ -99,9 +99,7 @@
     "FightPersonalityId",
     "ChumPreference",
     "BaitWeightMultipliers",
-    "FoodSafety",
     "EatingExperience",
-    "PoisonIncrease",
     "bTankDisplayEligible",
     "bEnableRuntimeDefinition"
   ],
@@ -141,7 +139,7 @@
     "FishStrength uses the fish table's maximum weight multiplied by strength coefficient K.",
     "TimeOfDay and Weather are intentionally broad for this provisional table so the current lake runtime can select every fish in normal daytime weather states.",
     "StinkyFish uses SacrificeContribution=1 instead of the design note -1 because UCatFishDefinition::IsRuntimeDefinitionReady currently rejects non-positive sacrifice values.",
-    "LakeGiantShadow uses Safe/EatingExperience=1 with bTankDisplayEligible=false because the current FoodSafety enum has no NonEdible value; its actual giant blessing/effect remains a later presentation/effect-content concern.",
+    "Historical generated assets used Safe/EatingExperience=1 for LakeGiantShadow because the then-current FoodSafety enum had no NonEdible value. After the 2026-09-14 user decision, FoodSafety and poison fields are not current required fields; its actual giant blessing/effect remains a later presentation/effect-content concern.",
     "CaptureImprintEventId stays None for all generated fish so data readiness does not invent missing imprint event assets."
   ],
   "evidence": {

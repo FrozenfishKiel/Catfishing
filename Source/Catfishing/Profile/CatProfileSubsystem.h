@@ -33,7 +33,7 @@ public:
 	/** 接收服务器 CapturePlan；只有计划完整且外部桥已接入时才广播并返回 true，否则返回 false 让 Controller 明确回报失败终态。 */
 	bool ReceiveCapturePlan(const FCatCapturePlan& Plan);
 
-	/** 本地选择一个已解锁或正式 starter 的功能装备；验证槽位/定义后 durable 保存，不写 Character 运行态。 */
+	/** 本地记录一个功能装备选择；验证槽位和正式定义后 durable 保存，不写 Character 运行态或装备所有权。 */
 	FCatDomainCommandResult SetEquipmentSelection(FGuid RequestId, FName SlotId, FName EquipmentDefinitionId);
 
 	/** 读取某个稳定槽位的跨局选择；不存在时返回 false 且输出 None。 */
@@ -41,9 +41,6 @@ public:
 
 	/** 复制本地鱼图鉴公开快照供“互看图鉴”；不包含相册、隐藏印记、Journal、解锁或装备选择。 */
 	bool GetFishCollectionSnapshot(TArray<FCatFishCollectionRecord>& OutRecords) const;
-
-	/** 复制本地 durable 装备解锁摘要；只给 owning Controller 上报本 PlayerState 的运行期授权投影。 */
-	bool GetEquipmentUnlockSnapshot(TArray<FName>& OutUnlockIds) const;
 
 	/** 只在本地相册切换本人隐藏状态并 durable 保存；不产生服务器全局撤下或修改其他玩家副本。 */
 	FCatDomainCommandResult SetImprintHidden(FGuid RequestId, FGuid ImprintId, bool bHidden);

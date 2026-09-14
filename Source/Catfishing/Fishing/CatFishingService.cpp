@@ -23,7 +23,6 @@
 #include "Environment/CatWaterQuerySubsystem.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
-#include "Equipment/CatEquipmentSettings.h"
 #include "Equipment/CatFishingResourceCustodian.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingHookActor.h"

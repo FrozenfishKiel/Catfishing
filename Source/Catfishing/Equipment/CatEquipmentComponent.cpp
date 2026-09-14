@@ -7,8 +7,6 @@
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Equipment/CatEquipmentDefinition.h"
-#include "Equipment/CatEquipmentSettings.h"
-#include "GameFramework/Pawn.h"
 #include "Engine/World.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
@@ -211,7 +209,7 @@ bool UCatEquipmentComponent::RestoreSnapshotFromAuthority(const FCatEquipmentLoa
 
 // 当前钓鱼选择配置流程：
 // 1. 先用 RequestId 返回既有终态；部署中的当前鱼竿可继续作为选择上下文，但不能切到另一根鱼竿。
-// 2. 每次提交都必须通过正式库存目录、authority、Revision、定义运行能力、实例身份和 Profile 解锁证明。
+// 2. 每次提交都必须通过正式库存目录、authority、Revision、定义运行能力和实例身份；拥有实例是唯一的玩法装备准入事实。
 // 3. 正式角色从 InventoryComponent 精确解析钓具实例；部署中的当前鱼竿只读库存 held entry。
 // 4. 同一套定义和实例选择直接返回 AlreadyResolved；不同选择会切换当前钓鱼选择，并从鱼竿实例读取耐久。
 // 5. 成功时只写钓鱼选择、实例身份和当前鱼竿运行态，并发布给当前读模型消费者。
@@ -223,7 +221,7 @@ FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(co
 {
 	// 钓具配置提交流程：
 	// 1. RequestId 命中终态缓存时直接返回首次结果，避免重放请求重新选择或推进 Revision。
-	// 2. 再校验服务器权威、定义运行能力、解锁权限和版本；任一失败只写错误码，不改变当前选择和库存状态。
+	// 2. 再校验服务器权威、定义运行能力、版本和库存实例；任一失败只写错误码，不改变当前选择和库存状态。
 	// 3. 当前选中鱼竿正在部署时，只从正式库存 held entry 确认同一实例；没有正式库存时不启用部署 Use。
 	// 4. 所有候选装备都必须带具体实例 ID，再解析成正式库存里的占用槽位并写入 Snapshot。
 	FCatDomainCommandResult Result;
@@ -235,7 +233,6 @@ FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(co
 		MarkCommandReplayed(Result);
 		return Result;
 	}
-	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
 	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
 	UCatEquipmentDefinition* Rod = InventorySettings
 		? InventorySettings->FindRuntimeDefinition<UCatEquipmentDefinition>(RodDefinitionId) : nullptr;
@@ -245,13 +242,7 @@ FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(co
 		? InventorySettings->FindRuntimeDefinition<UCatEquipmentDefinition>(FloatDefinitionId) : nullptr;
 	UCatEquipmentDefinition* Scoop = !ScoopNetDefinitionId.IsNone() && InventorySettings
 		? InventorySettings->FindRuntimeDefinition<UCatEquipmentDefinition>(ScoopNetDefinitionId) : nullptr;
-	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
-	const ACatfishingPlayerState* PlayerState = OwnerPawn ? OwnerPawn->GetPlayerState<ACatfishingPlayerState>() : nullptr;
-	if (!Settings || Settings->ProfileLoadoutTrustPolicy != ECatDomainPolicy::Enabled)
-	{
-		Result.Error = ECatDomainCommandError::PolicyUndecided;
-	}
-	else if (!GetOwner() || !GetOwner()->HasAuthority() || !RequestId.IsValid() || !Rod || !Bait || !Float
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !RequestId.IsValid() || !Rod || !Bait || !Float
 		|| (!ScoopNetDefinitionId.IsNone() && !Scoop))
 	{
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
@@ -270,13 +261,6 @@ FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(co
 		|| !Float->CanServeFishingFloat() || (Scoop && !Scoop->CanServeScoopNet()))
 	{
 		Result.Error = ECatDomainCommandError::InvalidPayload;
-	}
-	else if (!PlayerState || !PlayerState->HasServerAuthorizedEquipmentUnlock(Rod->RequiredUnlockId)
-		|| !PlayerState->HasServerAuthorizedEquipmentUnlock(Bait->RequiredUnlockId)
-		|| !PlayerState->HasServerAuthorizedEquipmentUnlock(Float->RequiredUnlockId)
-		|| (Scoop && !PlayerState->HasServerAuthorizedEquipmentUnlock(Scoop->RequiredUnlockId)))
-	{
-		Result.Error = ECatDomainCommandError::PermissionDenied;
 	}
 	else
 	{

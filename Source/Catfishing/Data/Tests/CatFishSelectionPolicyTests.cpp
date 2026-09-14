@@ -67,7 +67,6 @@ namespace CatFishSelectionPolicyTestsPrivate
 		Definition->FishFightStamina = 5.0;
 		Definition->BitePersonalityId = TEXT("TestBite");
 		Definition->FightPersonalityId = TEXT("TestFight");
-		Definition->FoodSafety = ECatFishFoodSafety::Safe;
 		Definition->EatingExperience = 1.0;
 		return Definition;
 	}

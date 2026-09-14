@@ -23,7 +23,6 @@
 #include "Data/CatFishDefinition.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
-#include "Equipment/CatEquipmentSettings.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
