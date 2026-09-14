@@ -155,6 +155,7 @@ protected:
 private:
 	friend class FCatRunFishCollectionHandoffTest;
 	friend class FCatFishingPhysicalGripGraphTest;
+	friend class FCatFishingOperatorRunnerIntegrationTest;
 	friend class FCatFishingPhysicalCouplingTest;
 	friend class FCatFishingCMCStabilityTest;
 	friend class FCatFishingFormalPhysicalRunnerTest;

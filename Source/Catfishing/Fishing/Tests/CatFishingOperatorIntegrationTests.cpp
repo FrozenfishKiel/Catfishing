@@ -4,6 +4,8 @@
 #include "Tests/AutomationCommon.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Physics/CatPhysicalEffortComponent.h"
+#include "AbilitySystem/Effects/CatFightStaminaRegenEffect.h"
 #include "Character/CatCharacter.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Components/BoxComponent.h"
@@ -188,8 +190,10 @@ bool FCatFishingOperatorRunnerIntegrationTest::RunTest(const FString& Parameters
 	World->TimeSeconds += 0.05;
 	if (!Runner->UpdateOperatorIntentAndProperties()) return false;
 	const auto Blocked = FCatFishingFightSimulator::Step(Runner->Config, Runner->State, Constraint, FVector::ForwardVector);
-	TestTrue(TEXT("the next full blocked interval retains the primary support bill"), Blocked.bSucceeded && Runner->ApplyOperatorStaminaChanges(Blocked)
-		&& Runner->LastOperatorStaminaDrain > 0.09);
+	// 墓碑（2026-09-14）：旧 >0.09 断言仍按未完成位移计费；现行 W 已是固定 1.5 点/秒。
+	// 本轮不改该玩法公式，只验证 50ms 的实际 ASC 回执为 0.075 点（钓鱼规则 §4.4）。
+	TestTrue(TEXT("the next interval reaches the authoritative writer"),Blocked.bSucceeded && Runner->ApplyOperatorStaminaChanges(Blocked));
+	TestEqual(TEXT("50 ms forward intention costs 0.075 stamina even when blocked"),Runner->LastOperatorStaminaDrain,0.075,1e-5);
 	Movement->SetMoveIntent(FVector::ZeroVector);
 	World->TimeSeconds += 0.05;
 	Movement->GetBody()->SetWorldLocation(Movement->GetBody()->GetComponentLocation() + FVector(10, 0, 0), false, nullptr, ETeleportType::TeleportPhysics);
@@ -233,6 +237,97 @@ bool FCatFishingOperatorRunnerIntegrationTest::RunTest(const FString& Parameters
 		if (LoadCase<3) TestEqual(TEXT("one primary ASC writer blocks recovery for applied or cancelling loads"), Runner->LastOperatorStaminaDrain, 0.0);
 		else TestTrue(TEXT("the primary retains normal unloaded slack recovery"), Runner->LastOperatorStaminaDrain<0);
 	}
+
+	// 2026-09-14 裁决②④⑥：生产读取/冻结/写口/真实持竿的完整黄色体力消费者回归。
+	Runner->OperatorState.bSlackHeld = false;
+	Runner->OperatorState.bPullHeld = true;
+	Movement->SetMoveIntent(FVector::ZeroVector);
+	ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(),1.0f);
+	ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute(),80.0f);
+	TestTrue(TEXT("entry binding accepts a total larger than the green maximum"), Runner->BindPrimaryOperatorFromAuthority(Player,true,false,0));
+	TestTrue(TEXT("yellow-inclusive snapshot freezes successfully"), Runner->UpdateOperatorIntentAndProperties());
+	TestEqual(TEXT("snapshot contains green plus yellow"),Runner->State.CatStamina,81.0);
+	TestEqual(TEXT("snapshot capacity includes current yellow, not just green maximum"),Runner->Config.CatStaminaMaximum,140.0);
+	FCatFightStepResult CrossPoolBill;
+	CrossPoolBill.CatReelStaminaDrain = 2.0;
+	TestTrue(TEXT("one production bill crosses green into yellow"),Runner->ApplyOperatorStaminaChanges(CrossPoolBill));
+	TestEqual(TEXT("green is consumed first"),ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()),0.0f);
+	TestEqual(TEXT("overflow is paid by yellow"),ASC->GetYellowFightStamina(),79.0f);
+	TestEqual(TEXT("actual receipt includes both pools"),Runner->LastOperatorStaminaDrain,2.0);
+	TestEqual(TEXT("session publishes total balance"),Session->GetSnapshot().CombinedFightStamina,79.0);
+	TestEqual(TEXT("session publishes remaining total capacity"),Session->GetSnapshot().CombinedFightStaminaMaximum,139.0);
+	TestFalse(TEXT("cross-pool charge is not replayable"),Runner->ApplyOperatorStaminaChanges(CrossPoolBill));
+	TestTrue(TEXT("yellow-only snapshot retains full strength"),Runner->UpdateOperatorIntentAndProperties()
+		&& Runner->Config.PrimaryOperatorCatStrength==100.0);
+	auto* PhysicalRod = Rod->GetPhysicalRodComponent();
+	PhysicalRod->UpdatePrimaryMotorBudget();
+	TestEqual(TEXT("yellow-only primary motor gets the full force budget"),Movement->CaptureDriveSample().MaxForce,10000.0);
+	Rod->CarrierConstraintState.bFightActive = true;
+	Rod->CarrierConstraintState.CatTorqueCapacityStrengthMeters = 100.0;
+	FCatFishingRodRotationInput Rotation;
+	TestTrue(TEXT("yellow-only controlled rotation keeps its torque"),PhysicalRod->BuildControlledRotationInput(Rotation) && Rotation.CatTorqueCapacity==100.0);
+	FString StableId;
+	ACatCharacter* CapableCharacter = nullptr;
+	double CapabilityStrength=0,CapabilityStamina=0;
+	TestTrue(TEXT("selection and group capability accept yellow-only stamina"),UCatFishingService::TryGetFightCapability(Controller,StableId,CapableCharacter,CapabilityStrength,CapabilityStamina)
+		&& CapabilityStrength==100.0 && CapabilityStamina==79.0);
+	// Equal total but different segments must invalidate a frozen bill.
+	ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(),1.0f);
+	ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute(),78.0f);
+	TestFalse(TEXT("same total cannot hide changed frozen segments"),Runner->ApplyOperatorStaminaChanges(CrossPoolBill));
+	TestEqual(TEXT("rejected freeze does not spend"),ASC->GetTotalFightStamina(),79.0);
+	Runner->OperatorState.bSlackHeld = true;
+	Runner->OperatorState.bPullHeld = false;
+	Runner->UpdateOperatorIntentAndProperties();
+	FCatFightStepResult RecoveryStep;
+	RecoveryStep.bSlackRecoveryActive = true;
+	TestTrue(TEXT("slack recovery works even with total above green maximum"),Runner->ApplyOperatorStaminaChanges(RecoveryStep));
+	TestTrue(TEXT("recovery writes green"),ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute())>1.0f);
+	TestEqual(TEXT("recovery cannot recreate yellow"),ASC->GetYellowFightStamina(),78.0f);
+	Runner->OperatorState.bSlackHeld = false;
+	Runner->UpdateOperatorIntentAndProperties();
+	CrossPoolBill.CatReelStaminaDrain = 1000;
+	TestTrue(TEXT("drain caps at total balance"),Runner->ApplyOperatorStaminaChanges(CrossPoolBill));
+	TestEqual(TEXT("both segments exhausted"),ASC->GetTotalFightStamina(),0.0);
+	Runner->UpdateOperatorIntentAndProperties();
+	TestTrue(TEXT("only dual zero invokes the exhausted-cat escape policy"),FCatFishingFightSimulator::ShouldEscapeExhaustedCat(Runner->Config,Runner->State,true));
+	PhysicalRod->UpdatePrimaryMotorBudget();
+	TestEqual(TEXT("dual-zero primary motor is zero"),Movement->CaptureDriveSample().MaxForce,0.0);
+	TestTrue(TEXT("dual-zero rod torque is zero"),PhysicalRod->BuildControlledRotationInput(Rotation) && Rotation.CatTorqueCapacity==0.0);
+	PhysicalRod->ReleasePrimaryHold(Player,TEXT("ZeroTakeoverFixture"));
+	TestTrue(TEXT("zero-stamina cat can physically retake an unattended rod"),HoldAndAuthorize());
+	ECatFishingCommandError HandoffError;
+	auto* Service = World->GetSubsystem<UCatFishingService>();
+	Session->Snapshot.HandoffRequestedByPlayerState = nullptr;
+	TestFalse(TEXT("zero stamina does not bypass the consent handshake"),Service->CanAcceptHandoffTakeover(Session,Rod,Controller,HandoffError));
+	Session->Snapshot.HandoffRequestedByPlayerState = Player;
+	TestTrue(TEXT("a valid consent request has no stamina threshold"),Service->CanAcceptHandoffTakeover(Session,Rod,Controller,HandoffError)
+		&& HandoffError==ECatFishingCommandError::None);
+	Session->Snapshot.HandoffRequestedByPlayerState = Deployer;
+	TestFalse(TEXT("a stale request from a former operator remains invalid"),Service->CanAcceptHandoffTakeover(Session,Rod,Controller,HandoffError));
+	Session->Snapshot.HandoffRequestedByPlayerState = nullptr;
+	Session->Snapshot.FishingSessionId = FGuid::NewGuid();
+	Session->Snapshot.RodActor = Rod;
+	Session->Snapshot.FisherPlayerState = Player;
+	Session->Snapshot.Phase = ECatFishingPhase::Waiting;
+	Session->FightRunner = Runner;
+	Service->Sessions.Add(Session->Snapshot.FishingSessionId,Session);
+	Runner->bRunning = false;
+	PhysicalRod->UpdatePrimaryMotorBudget();
+	FCatBodyDriveSample WaitingDrive = Movement->CaptureDriveSample();
+	WaitingDrive.bUnderLoad = false;
+	TestTrue(TEXT("waiting fixture still owns the fishing motor"),WaitingDrive.bFishing);
+	auto* Effort = Cat->FindComponentByClass<UCatPhysicalEffortComponent>();
+	FGameplayEffectQuery RegenQuery;
+	RegenQuery.EffectDefinition = UCatGE_FightStaminaRegen::StaticClass();
+	Effort->SettleMovementFromAuthority(WaitingDrive,FVector::ZeroVector,FVector::ZeroVector,0.05,true);
+	TestEqual(TEXT("holding a waiting rod starts the natural recovery GE"),ASC->GetActiveEffects(RegenQuery).Num(),1);
+	Session->Snapshot.Phase = ECatFishingPhase::HookedFight;
+	Runner->bRunning = true;
+	Effort->SettleMovementFromAuthority(WaitingDrive,FVector::ZeroVector,FVector::ZeroVector,0.05,true);
+	TestEqual(TEXT("a running fight removes natural recovery and retains one writer"),ASC->GetActiveEffects(RegenQuery).Num(),0);
+	Runner->bRunning = false;
+	Service->Sessions.Remove(Session->Snapshot.FishingSessionId);
 	return !HasAnyErrors();
 }
 #endif

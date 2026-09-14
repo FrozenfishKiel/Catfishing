@@ -58,6 +58,7 @@ struct CATFISHING_API FCatFightSimulationConfig
 	double DisplayTensionNewtons = 50.0;
 	/** 转矩模型的玩法杆长；来自鱼竿定义，不读取 Mesh 或锚点间距。 */
 	double RodPhysicsLengthCentimeters = 200.0;
+	/** 总容量（点）＝主控绿段恢复上限＋当前黄段；每步重采样，不作为黄色恢复上限。 */
 	double CatStaminaMaximum = 0.0;
 	/** 猫线性正功使用标准力量与已完成主动距离；受阻支撑独立按时间收费。 */
 	double CatStaminaCostPerStrengthCentimeter = 0.002;
@@ -155,6 +156,7 @@ struct CATFISHING_API FCatFightSimulationState
 {
 	bool bOperatorPresent = true;
 	bool bFishExhausted = false;
+	/** 主控总可用体力（点）＝绿＋黄；双段耗尽才触发猫强拖终局策略。 */
 	double CatStamina = 0.0;
 	double FishStamina = 0.0;
 	/** 行为层已平滑的实际主动出力，范围[0,1]；零出力仍保留活鱼惯性。 */

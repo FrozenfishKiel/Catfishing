@@ -397,6 +397,19 @@ bool FCatPerfectHookReductionRarityTierTest::RunTest(const FString& Parameters)
 	Settings->CommonPerfectFishStrengthMultiplier = 0.8;
 	TestEqual(TEXT("稀有档清单为空时最高档也按普通鱼取"),
 		Settings->ResolvePerfectHookReduction(*TopTierFish).FishStrengthMultiplier, 0.8, UE_DOUBLE_SMALL_NUMBER);
+	// 2026-09-14 裁决⑤：读正式资产和正式配置，避免用测试 ID 自证配置已接通。
+	const auto* FormalSettings = GetDefault<UCatFishCatalogSettings>();
+	for (const TCHAR* Name : {TEXT("ForestLongtail"),TEXT("SilvermoonTrout"),TEXT("Blackfish"),TEXT("Pike"),TEXT("LakeGiantShadow")})
+	{
+		const FString Path = FString::Printf(TEXT("/Game/Catfishing/Data/Fish/Fish_%s.Fish_%s"),Name,Name);
+		const auto* Fish = LoadObject<UCatFishDefinition>(nullptr,*Path);
+		if (!TestNotNull(*Path,Fish)) return false;
+		const bool bTop = FString(Name)!=TEXT("LakeGiantShadow");
+		if (bTop) TestEqual(TEXT("四条珍稀的实际 ID 是 Rare"),Fish->RarityTierId,FName(TEXT("Rare")));
+		const auto Reduction = FormalSettings->ResolvePerfectHookReduction(*Fish);
+		TestEqual(*FString::Printf(TEXT("%s 正式完美力量系数"),Name),Reduction.FishStrengthMultiplier,bTop ? 0.85 : 0.8,1e-8);
+		TestEqual(*FString::Printf(TEXT("%s 正式完美体力系数"),Name),Reduction.FishStaminaMultiplier,bTop ? 0.9 : 0.85,1e-8);
+	}
 	return !HasAnyErrors();
 }
 

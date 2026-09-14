@@ -197,10 +197,10 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	double CombinedFishingStrength = 0.0;
 
-	/** 当前服务器认定的合法参与者 FightStamina 合计；与人数和力量一起描述当下协作可达性。 */
+	/** 旧反射字段保留为当前主控绿＋黄余额（点）；由服务器投影，不是共享池（09-13 裁决②）。 */
 	UPROPERTY(BlueprintReadOnly)
 	double CombinedFightStamina = 0.0;
-	/** 当前成员各自体力上限之和；只读展示，不是可转移的公共余额。 */
+	/** 当前主控绿段恢复上限＋剩余黄段（点）；只读总容量，黄色不可自然恢复。 */
 	UPROPERTY(BlueprintReadOnly)
 	double CombinedFightStaminaMaximum = 0.0;
 

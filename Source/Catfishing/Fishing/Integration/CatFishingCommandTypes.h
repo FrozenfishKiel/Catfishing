@@ -42,8 +42,7 @@ enum class ECatFishingCommandError : uint8
 	ScoopMouthOccupied, ScoopNotOnShore,
 	/** 这一竿当前没有挂着换人请求：替补按了接手，但主钓手根本没发起过（或已取消）。 */
 	HandoffNotRequested,
-	/** 替补体力没恢复到门槛（多人钓鱼附篇 §2.4：50% 以上才能接手）；这是拒绝接手，不是拒绝操作鱼竿。 */
-	HandoffStaminaTooLow
+	// 墓碑（2026-09-14）：删除 HandoffStaminaTooLow；设计修改记录 2026-09-13 裁决④取消体力准入。
 };
 
 USTRUCT(BlueprintType)

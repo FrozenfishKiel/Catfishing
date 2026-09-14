@@ -191,13 +191,8 @@ public:
 	/** 服务器权威近岸目标允许抢抄的最大距离，单位厘米；0 表示 Unset，不从客户端命中位置推导。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (ClampMin = "0"))
 	double ScoopReachCentimeters = 0.0;
-	/**
-	 * 换人接手的体力门槛，取体力上限的比例（多人钓鱼附篇 §2.4「体力恢复到 50% 以上的替补才能接手」，
-	 * 快照以参数页为准）。它只挡「从别人手里接过一根有人的竿」，不挡拾起无人值守的竿、也不挡帮忙抓竿出力。
-	 * 0 表示门槛未配置：接手放行并记一次 Warning——少一道闸好过因为没配一个数把换人整条链判死。
-	 */
-	UPROPERTY(Config, EditAnywhere, Category="Tuning", meta=(ClampMin="0.0", ClampMax="1.0"))
-	double HandoffMinimumStaminaFraction = 0.0;
+	// 墓碑（2026-09-14）：HandoffMinimumStaminaFraction 已删除；
+	// Knowledge/Design/设计修改记录.md 2026-09-13 裁决④，双方同意的握手不设体力准入。
 
 	/** 每次真实挥网尝试的冷却秒数；GAS 做预测表现，服务器命令层用同一个值做最终限流。 */
 	UPROPERTY(Config, EditAnywhere, Category="Scoop", meta=(ClampMin="0", Units="s"))

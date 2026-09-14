@@ -67,6 +67,19 @@ bool FCatRunMorningTargetRecoveryTest::RunTest(const FString& Parameters)
 		const int64 Revision = Mode->RunPublicState.Revision;
 		Mode->HandlePendingMorningTargetRefresh();
 		TestEqual(TEXT("重复回调不二次结算或推进版本"), Mode->RunPublicState.Revision, Revision);
+		if (!bAlreadyPresented)
+		{
+			float FormalSeconds = 0;
+			FCatRunDailyOfferingTuning Tuning;
+			TestTrue(TEXT("正式配置白天为600秒"),GetDefault<UCatRunSettings>()->TryGetDayParameters(DayIndex,FormalSeconds,Tuning) && FormalSeconds==600.0f);
+			TestTrue(TEXT("现有调试入口缩短当前剩余时间"),Mode->ApplyDebugDayLengthSeconds(0.25));
+			TestEqual(TEXT("截止时刻相对执行时刻重设"),Mode->RunPublicState.Phase.DeadlineServerTimeSeconds,double(World->GetTimeSeconds())+0.25);
+			for (int32 Tick=0;Tick<60;++Tick) Wrapper.TickTestWorld(1.0f/60.0f);
+			TestFalse(TEXT("自然定时器关闭新咬钩"),State->GetRunPublicState().Phase.bNewFishingBitesAllowed);
+			TestTrue(TEXT("正式StateTree自然离开白天"),State->GetRunPublicState().Phase.Phase!=ECatRunPhase::DayActive);
+			GetDefault<UCatRunSettings>()->TryGetDayParameters(DayIndex,FormalSeconds,Tuning);
+			TestEqual(TEXT("调试入口不改正式配置"),FormalSeconds,600.0f);
+		}
 		Mode->ClearDayDeadline();
 		TestFalse(TEXT("离开当日清理待补算状态"), Mode->bMorningTargetNeedsPlayerCountReconciliation);
 	}

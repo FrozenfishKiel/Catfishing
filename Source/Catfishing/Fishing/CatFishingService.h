@@ -42,7 +42,7 @@ public:
 	 * 换人握手的唯一入口（多人钓鱼附篇 §2.4）。同一个键按发起者的身份分派：
 	 * 主钓手按＝挂出换人请求、再按＝取消；岸上替补按＝接手最近一根挂着请求的竿。
 	 * 请求无时限挂起、没有超时出口，挂着期间这一竿没有任何特殊状态。
-	 * 接手要过体力门槛（CatFishingSettings::HandoffMinimumStaminaFraction，设计值 50%）；
+	 * 墓碑（2026-09-14）：删除接手体力门槛；Knowledge/Design/设计修改记录.md 2026-09-13 裁决④；
 	 * 接手瞬间完成，鱼与竿的状态完全继承，猫体力各是各的，图鉴归属仍在原始上钩者身上（会话冻结的 CatchFisher 不动）。
 	 */
 	FCatFishingCommandResult SubmitFishingHandoff(AController* Controller, const FCatRodCommandContext& Context);
@@ -147,6 +147,7 @@ public:
 private:
 	friend class FCatFishingBiteTimingWorldTest;
 	friend class FCatFishingPhysicalGripGraphTest;
+	friend class FCatFishingOperatorRunnerIntegrationTest;
 	friend class FCatFishingPhysicalCouplingTest;
 	friend class FCatFishingCMCStabilityTest;
 	friend class FCatFishingFormalPhysicalRunnerTest;

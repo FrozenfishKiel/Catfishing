@@ -152,7 +152,8 @@ public:
 
 	/**
 	 * 取「稀有鱼」完美系数的稀有度档 ID 清单；不在清单里的档一律按「普通鱼」取（钓鱼规则 §3.4 末句）。
-	 * 鱼册五档 普通／少见／稀有／珍稀／事件，最高一档＝珍稀；清单为空时全部按普通鱼取。
+	 * 墓碑（2026-09-14）：五档含事件的旧口径退役（设计修改记录 2026-09-13 裁决⑤）。
+	 * 现行四档最高为珍稀，实际资产 ID 为 Rare；巨影按普通系数，清单为空时也全部按普通鱼取。
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Perfect Hook")
 	TArray<FName> RarePerfectHookRarityTierIds;

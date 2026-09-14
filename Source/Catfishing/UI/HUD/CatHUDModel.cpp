@@ -341,16 +341,15 @@ void UCatHUDModel::Refresh()
 		&& NewState.LastFishingCommandResult.Error == ECatFishingCommandError::None;
 	NewState.BitePromptText = FText::FromString(TEXT("鱼儿咬钩啦！提竿"));
 	NewState.HookSuccessFeedbackText = FText::FromString(TEXT("提竿成功！"));
-	NewState.CatStaminaText = NewState.FightStaminaMaximum > 0.0f
-			? FText::FromString(FString::Printf(TEXT("玩家体力 %.0f / %.0f"),
-				NewState.FightStamina, NewState.FightStaminaMaximum))
-			: FText::FromString(FString::Printf(TEXT("玩家体力 %.0f"), NewState.FightStamina));
+	// 墓碑（2026-09-14）：删除绿零即濒死的口径；Knowledge/Design/设计修改记录.md
+	// 2026-09-13 裁决②。绿黄渲染字段保持原义，提示和文本使用总量，不重复计算黄条。
+	const float TotalStamina = NewState.FightStamina + NewState.YellowFightStamina;
+	const float TotalCapacity = NewState.FightStaminaMaximum + NewState.YellowFightStamina;
+	NewState.CatStaminaText = FText::FromString(FString::Printf(TEXT("玩家体力 %.0f / %.0f"), TotalStamina, TotalCapacity));
 	NewState.bShowPersonalStamina = NewState.FightStaminaMaximum > 0
-		&& NewState.FightStamina < NewState.FightStaminaMaximum;
-	// 濒死强提示（ui 表第 23 行）：只看本人体力比例，不看是不是主钓手——体力是跨竿资源，
-	// 抓、推、爬与搏斗花同一条（2026-09-11 裁决④），所以提示条件也不绑钓鱼会话。
-	NewState.bNearDeath = NewState.FightStaminaMaximum > 0.0f
-		&& NewState.NormalizedFightStamina <= CatHUDFightStaminaLimits::NearDeathStaminaFraction;
+		&& (NewState.FightStamina < NewState.FightStaminaMaximum || NewState.YellowFightStamina > 0);
+	NewState.bNearDeath = TotalCapacity > 0.0f
+		&& TotalStamina / TotalCapacity <= CatHUDFightStaminaLimits::NearDeathStaminaFraction;
 	NewState.NearDeathText = FText::FromString(TEXT("体力见底了！"));
 	// 竿耐久（ui 表第 17 行）：值来自 Equipment 复制的钓鱼选择读模型，上限来自鱼竿定义片段。
 	if (const UCatEquipmentComponent* Equipment = BoundEquipment.Get())
@@ -575,10 +574,12 @@ void UCatHUDModel::RefreshTeammateProjection(FCatHUDViewState& NewState)
 		}
 		if (const UAbilitySystemComponent* TeammateAbilitySystem = TeammateCharacter->GetAbilitySystemComponent())
 		{
+			const float TeammateYellow = TeammateAbilitySystem->GetNumericAttribute(
+				UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute());
 			const float TeammateStamina = TeammateAbilitySystem->GetNumericAttribute(
-				UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+				UCatSurvivalAttributeSet::GetFightStaminaAttribute()) + TeammateYellow;
 			const float TeammateMaximum = TeammateAbilitySystem->GetNumericAttribute(
-				UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+				UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute()) + TeammateYellow;
 			Teammate.bHasStamina = FMath::IsFinite(TeammateMaximum) && TeammateMaximum > 0.0f
 				&& FMath::IsFinite(TeammateStamina);
 			if (Teammate.bHasStamina)
@@ -593,7 +594,7 @@ void UCatHUDModel::RefreshTeammateProjection(FCatHUDViewState& NewState)
 			Teammate.bDowned = TeammateCondition->GetSnapshot().bDowned;
 		}
 		Teammate.MovementStatusText = Teammate.bDowned ? FText::FromString(TEXT("倒地"))
-			: Teammate.bExhausted ? FText::FromString(TEXT("力竭"))
+			: Teammate.bExhausted ? FText::FromString(TEXT("体力耗尽"))
 			: Teammate.MoveDirection != ECatHUDMoveDirection::None ? FText::FromString(TEXT("移动中"))
 			: FText::FromString(TEXT("静止"));
 	}

@@ -38,12 +38,12 @@ public:
 	FGameplayAttributeData FishingStrength;
 	ATTRIBUTE_ACCESSORS_BASIC(UCatSurvivalAttributeSet, FishingStrength)
 
-	/** FightStamina 代表一次搏斗内的短周期体力；它不是疲惫演出，也不进入跨局 Profile。 */
+	/** FightStamina 仅代表绿色体力（点）；总可用体力另加 YellowFightStamina，不进入跨局 Profile。 */
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_FightStamina, Category = "Catfishing|Fishing")
 	FGameplayAttributeData FightStamina;
 	ATTRIBUTE_ACCESSORS_BASIC(UCatSurvivalAttributeSet, FightStamina)
 
-	/** MaxFightStamina 代表当前猫本次搏斗允许恢复到的体力上限；角色播种写入，ASC、会话模拟和 HUD 只读取这份真相。 */
+	/** MaxFightStamina 代表绿色体力的恢复上限（点）；总容量另加当前黄段，不把黄色纳入可恢复上限。 */
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_MaxFightStamina, Category = "Catfishing|Fishing")
 	FGameplayAttributeData MaxFightStamina;
 	ATTRIBUTE_ACCESSORS_BASIC(UCatSurvivalAttributeSet, MaxFightStamina)

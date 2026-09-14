@@ -700,7 +700,7 @@ FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller,
 	if (Rod->IsUsingPhysicalRod())
 	{
 		// 换人接手是「竿上已有主控」这道拒绝的**唯一**例外（多人钓鱼附篇 §2.4）：
-		// 主钓手得先挂出换人请求，接手者还得过体力门槛，两条都成立才让他接过一根有人的竿。
+		// 主钓手得先挂出换人请求，接手者确认后才能接过一根有人的竿（09-13 裁决④）。
 		// 没有请求就抢不走——这不是「谁先按谁得」的抢竿，是一次双方同意的交接。
 		ECatFishingCommandError HandoffError = ECatFishingCommandError::HandoffNotRequested;
 		const bool bHandoffTakeover = Rod->GetPresentationState().OperatorPlayerState
@@ -709,8 +709,7 @@ FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller,
 		if (Rod->GetPresentationState().OperatorPlayerState && !Rod->IsPrimaryOperator(PlayerState)
 			&& !bHandoffTakeover)
 		{
-			Result.Error = HandoffError == ECatFishingCommandError::HandoffStaminaTooLow
-				? HandoffError : ECatFishingCommandError::RodOccupied;
+			Result.Error = ECatFishingCommandError::RodOccupied;
 			UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_rod_operate_rejected RequestId=%s RodActorId=%s Reason=AlreadyControlled Handoff=%s World=%s %s"),
 				*Command.Context.RequestId.ToString(), *Command.Context.RodActorId.ToString(),
 				*UEnum::GetValueAsString(HandoffError), *GetNameSafe(World),
@@ -1424,7 +1423,8 @@ ACatFishingRodActor* UCatFishingService::FindNearestRodAwaitingHandoff(const FVe
 }
 
 // 接手资格流程：先要求这根竿上真的挂着请求、请求人仍是当前主控（他中途被换掉或自己取消了，牌子就不算数），
-// 再查替补的体力门槛。门槛读 CatFishingSettings，设计值 50%（多人钓鱼附篇 §2.4，快照以参数页为准）。
+// 墓碑（2026-09-14）：删除 50% 体力准入；Knowledge/Design/设计修改记录.md 2026-09-13 裁决④⑥。
+// 保留握手及接手者依赖就绪检查，双段零体力也允许接手。
 bool UCatFishingService::CanAcceptHandoffTakeover(const ACatFishingSession* Session, const ACatFishingRodActor* Rod,
 	const AController* Controller, ECatFishingCommandError& OutError) const
 {
@@ -1435,29 +1435,10 @@ bool UCatFishingService::CanAcceptHandoffTakeover(const ACatFishingSession* Sess
 		return false;
 	}
 	const ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
-	const UAbilitySystemComponent* ASC = Character ? Character->GetAbilitySystemComponent() : nullptr;
+	const UCatAbilitySystemComponent* ASC = Character ? Character->GetCatAbilitySystemComponent() : nullptr;
 	if (!ASC)
 	{
 		OutError = ECatFishingCommandError::DependencyUnavailable;
-		return false;
-	}
-	const double Fraction = GetDefault<UCatFishingSettings>()->HandoffMinimumStaminaFraction;
-	if (!FMath::IsFinite(Fraction) || Fraction <= 0.0)
-	{
-		// 门槛未配置：放行并记一次 Warning。这条链的价值在「能换人」，不在「有门槛」——
-		// 少一个数就把整条换人判死，是本分支已经交过四次学费的写法。
-		UE_LOG(LogCatFishing, Warning,
-			TEXT("Event=fishing_handoff_stamina_gate_unconfigured SessionId=%s Reason=HandoffMinimumStaminaFractionUnset Result=Allowed"),
-			*Session->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens));
-		OutError = ECatFishingCommandError::None;
-		return true;
-	}
-	const double Stamina = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
-	const double StaminaMaximum = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
-	if (!FMath::IsFinite(Stamina) || !FMath::IsFinite(StaminaMaximum) || StaminaMaximum <= 0.0
-		|| Stamina < StaminaMaximum * Fraction)
-	{
-		OutError = ECatFishingCommandError::HandoffStaminaTooLow;
 		return false;
 	}
 	OutError = ECatFishingCommandError::None;
@@ -1841,7 +1822,7 @@ bool UCatFishingService::TryGetFightCapability(const AController* Controller, FS
 	const ACatfishingGameModeBase* GameMode = World ? World->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
 	ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
 	const UCatConditionComponent* Conditions = Character ? Character->GetConditionComponent() : nullptr;
-	const UAbilitySystemComponent* ASC = Character ? Character->GetAbilitySystemComponent() : nullptr;
+	const UCatAbilitySystemComponent* ASC = Character ? Character->GetCatAbilitySystemComponent() : nullptr;
 	const FString StableNetId = ResolveStableNetId(Controller);
 	if (!World || !GameMode || !Character || !Conditions || !ASC || StableNetId.IsEmpty()
 		|| !GameMode->CanAcceptGameplayCommand(Controller) || Conditions->GetSnapshot().bDowned)
@@ -1849,7 +1830,8 @@ bool UCatFishingService::TryGetFightCapability(const AController* Controller, FS
 		return false;
 	}
 	const double Strength = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
-	const double FightStamina = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+	// 墓碑（2026-09-14）：合力/抽鱼能力不再只认绿段；设计修改记录 2026-09-13 裁决②。
+	const double FightStamina = ASC->GetTotalFightStamina();
 	if (!FMath::IsFinite(Strength) || Strength <= 0.0
 		|| !FMath::IsFinite(FightStamina) || FightStamina <= 0.0)
 	{

@@ -84,6 +84,11 @@ public:
 	/** 读取当前黄色体力存量；主动查看面板与体力条黄段渲染都读这一份。 */
 	float GetYellowFightStamina() const;
 
+	/** 可出力、可扣费的总体力（点）＝绿段＋黄段；不改变两段的属性或写入契约。 */
+	double GetTotalFightStamina() const;
+	/** 当前总容量（点）＝绿段恢复上限＋当前黄段；黄色不会自然恢复，不是新的持久化上限。 */
+	double GetTotalFightStaminaCapacity() const;
+
 	/*
 	 * 墓碑（2026-09-12）：这里原有 ApplyPoisonDelta / IsPoisonAtLeast 两个写读口，
 	 * 服务的是「跨鱼累加 Poison、到阈值倒地、休息/草药按点数清毒」的渐进中毒模型。

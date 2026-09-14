@@ -144,8 +144,12 @@ private:
 	FCatFightOperatorRuntime OperatorState;
 	TArray<FCatFightOperatorMovementSample> FrozenOperatorMovementSamples;
 	TWeakObjectPtr<UCatAbilitySystemComponent> FrozenOperatorAbilitySystem;
-	double FrozenOperatorStamina = 0.0;
-	double FrozenOperatorStaminaMaximum = 0.0;
+	// 每步冻结的体力点数；总容量＝绿上限＋当前黄段，恢复只使用绿上限。
+	double FrozenOperatorTotalStamina = 0.0;
+	double FrozenOperatorTotalCapacity = 0.0;
+	double FrozenOperatorGreenStamina = 0.0;
+	double FrozenOperatorYellowStamina = 0.0;
+	double FrozenOperatorGreenMaximum = 0.0;
 	bool bFrozenOperatorUnderLoad = false;
 	double OperatorSupportAlignment = 1.0;
 	double LastOperatorStaminaDrain = 0.0;

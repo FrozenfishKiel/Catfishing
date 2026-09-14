@@ -224,7 +224,7 @@ bool UCatAbilitySystemComponent::ApplyFishingStaminaDelta(const float Delta)
 		// 调用方不该按失败重试。
 		// 2026-09-13 修：原来写的是 FMath::IsNearlyZero(GreenDelta)，容差 1e-4。绿段余额极小
 		// （例如 1e-9）时 GreenDelta 是非零的、确实欠着绿段，却被当成「绿段已空」提前返回成功，
-		// 于是这笔钱谁都没扣：绿段余额不变，而 CatFishingFightRunner 按「FrozenOperatorStamina > 0」
+		// 于是这笔钱谁都没扣：绿段余额不变，而 当时的 CatFishingFightRunner 按「FrozenOperatorStamina > 0」
 		// 保留满力量，主控就一直是满力。Runner.PrimaryOperatorStrengthAndCostsIgnorePhysicalHelpers
 		// 抓的正是这个（4319c31 加绿/黄分流时引入，99ff6ef 没有这个分支）。
 		// GreenDelta = -Min(CurrentGreen, -Delta)：CurrentGreen 为 0 时它恰好是 ±0，所以精确比较
@@ -434,6 +434,22 @@ bool UCatAbilitySystemComponent::ClearYellowFightStaminaFromAuthority()
 }
 
 // 黄色体力读取流程：只读当前护盾存量，供主动查看面板与体力条黄段渲染使用。
+// 墓碑（2026-09-14）：消费者不再把绿段当完整余额；依据 Knowledge/Design/设计修改记录.md
+// 2026-09-13 裁决②、数值成长 §4。写口仍为 ApplyFishingStaminaDelta，按绿→黄扣，正向只回绿。
+double UCatAbilitySystemComponent::GetTotalFightStamina() const
+{
+	return double(GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()))
+		+ double(GetNumericAttribute(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute()));
+}
+
+double UCatAbilitySystemComponent::GetTotalFightStaminaCapacity() const
+{
+	const double GreenMaximum = GetNumericAttribute(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+	// 黄色存量不能掩盖尚未播种的绿段上限；调用方仍按非正/非有限容量拒绝未就绪属性。
+	if (!FMath::IsFinite(GreenMaximum) || GreenMaximum <= 0.0) return GreenMaximum;
+	return GreenMaximum + double(GetNumericAttribute(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute()));
+}
+
 float UCatAbilitySystemComponent::GetYellowFightStamina() const
 {
 	const float Current = GetNumericAttribute(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute());

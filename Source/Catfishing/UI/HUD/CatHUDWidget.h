@@ -126,6 +126,7 @@ struct FCatHUDTeammateState
 
 	/** 体力归零＝力竭；头顶体力条按多人附篇 §4.3 变灰。 */
 	UPROPERTY(BlueprintReadOnly)
+	// 兼容 Blueprint 的只读余额提示：绿＋黄为零，不是持续力竭状态（09-13 裁决②⑥）。
 	bool bExhausted = false;
 
 	/** 体力不高于濒死阈值；ui 表第 23 行的换人濒死强提示读它。 */

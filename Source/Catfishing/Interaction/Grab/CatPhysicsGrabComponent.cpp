@@ -1,5 +1,4 @@
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
-#include "AbilitySystem/Physics/CatPhysicalEffortComponent.h"
 
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Interaction/Grab/CatLightPropComponent.h"
@@ -306,13 +305,8 @@ void UCatPhysicsGrabComponent::UpdateHand(const bool bLeft, const FVector& Aim)
 
 void UCatPhysicsGrabComponent::TryLatch(const bool bLeft, const FHitResult& Hit)
 {
-	if (const auto* Effort = GetOwner()->FindComponentByClass<UCatPhysicalEffortComponent>())
-		if (!Effort->CanGripFromAuthority())
-		{
-			bLatchedUntilRelease[bLeft ? 0 : 1] = true;
-			LogGrip(bLeft, TEXT("physics_grip_rejected"), TEXT("PhysicalEffortUnavailable"));
-			return;
-		}
+	// 墓碑（2026-09-14）：删除 CanGripFromAuthority 的力竭门；
+	// Knowledge/Design/设计修改记录.md 2026-09-13 裁决⑥。零体力仍可抓，力量预算另由余额裁决。
 	UPrimitiveComponent* Target = Hit.GetComponent();
 	if (!IsReachSurface(Target, Hit.BoneName, bLeft)) return;
 	const UCatPhysicalBodyComponent* PhysicalBody = GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>();

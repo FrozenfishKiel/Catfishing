@@ -12,7 +12,7 @@ namespace
 		return FMath::IsFinite(Value) ? FMath::Max(0.0f, Value) : 0.0f;
 	}
 
-	// 体力上限规整流程：MaxFightStamina 是搏斗恢复和模拟的硬上限，不能低于 1，避免后续除法和会话配置出现无意义零上限。
+	// 体力上限规整流程：MaxFightStamina 是绿段恢复的硬上限；模拟总容量另加当前黄段，不能低于 1，避免后续除法和会话配置出现无意义零上限。
 	float ClampMaxFightStaminaValue(const float Value)
 	{
 		return FMath::IsFinite(Value) ? FMath::Max(1.0f, Value) : 1.0f;
@@ -107,7 +107,7 @@ void UCatSurvivalAttributeSet::OnRep_FightStamina(const FGameplayAttributeData& 
 	if (const auto* ASC = GetOwningAbilitySystemComponent())
 		if (AActor* Avatar = ASC->GetAvatarActor())
 			if (auto* Effort = Avatar->FindComponentByClass<UCatPhysicalEffortComponent>())
-				Effort->ObserveStaminaFromReplication(OldFightStamina.GetCurrentValue());
+				Effort->ObserveStaminaFromReplication(double(OldFightStamina.GetCurrentValue()) + GetYellowFightStamina());
 }
 
 // MaxFightStamina 复制通知流程：使用标准 RepNotify 更新搏斗体力上限；显示层和接力会话都只观察 ASC 的同一份上限。
@@ -120,4 +120,9 @@ void UCatSurvivalAttributeSet::OnRep_MaxFightStamina(const FGameplayAttributeDat
 void UCatSurvivalAttributeSet::OnRep_YellowFightStamina(const FGameplayAttributeData& OldYellowFightStamina)
 {
 	GAMEPLAYATTRIBUTE_REPNOTIFY(UCatSurvivalAttributeSet, YellowFightStamina, OldYellowFightStamina);
+	// 裁决②：绿段归零后仍需观察黄段消费；不引入第二份复制余额。
+	if (const auto* ASC = GetOwningAbilitySystemComponent())
+		if (AActor* Avatar = ASC->GetAvatarActor())
+			if (auto* Effort = Avatar->FindComponentByClass<UCatPhysicalEffortComponent>())
+				Effort->ObserveStaminaFromReplication(double(GetFightStamina()) + OldYellowFightStamina.GetCurrentValue());
 }

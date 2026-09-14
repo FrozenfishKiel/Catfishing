@@ -445,12 +445,13 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 	{
 		if (const UAbilitySystemComponent* AbilitySystem = AbilityInterface->GetAbilitySystemComponent())
 		{
+			const double YellowStamina = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute());
 			const double CurrentStamina = AbilitySystem->GetNumericAttribute(
-				UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+				UCatSurvivalAttributeSet::GetFightStaminaAttribute()) + YellowStamina;
 			const double Strength = AbilitySystem->GetNumericAttribute(
 				UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
 			const double MaximumStamina = AbilitySystem->GetNumericAttribute(
-				UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+				UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute()) + YellowStamina;
 			CatLine = MaximumStamina > 0.0
 				? FString::Printf(TEXT("CAT   Stamina %.1f / %.1f  Strength %.1f"),
 					CurrentStamina, MaximumStamina, Strength)

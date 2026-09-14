@@ -5,12 +5,14 @@
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "AbilitySystem/Effects/CatFightStaminaRegenEffect.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
+#include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingSettings.h"
+#include "Fishing/CatFishingService.h"
+#include "Fishing/CatFishingSession.h"
 #include "Fishing/Config/CatFishingFightBalanceDefinition.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerState.h"
-#include "Net/UnrealNetwork.h"
 
 UCatPhysicalEffortComponent::UCatPhysicalEffortComponent()
 {
@@ -22,18 +24,15 @@ double UCatPhysicalEffortComponent::GetMaximumForceKgCmS2() const
 	const auto* ASC = GetOwner()->FindComponentByClass<UCatAbilitySystemComponent>();
 	const auto* Settings = GetDefault<UCatPhysicalEffortSettings>();
 	const auto* Balance = GetDefault<UCatFishingSettings>()->LoadFightBalanceDefinition();
-	if (!ASC || !Settings->IsValid() || !Balance || bExhausted) return 0;
-	const double Stamina = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+	if (!ASC || !Settings->IsValid() || !Balance) return 0;
+	const double Stamina = ASC->GetTotalFightStamina();
 	const double Strength = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
 	const double Force = Strength * Balance->ForcePerStrengthNewtons * 100.0;
 	return FMath::IsFinite(Stamina) && Stamina > 0 && FMath::IsFinite(Force) && Force > 0 ? Force : 0;
 }
 
-bool UCatPhysicalEffortComponent::CanGripFromAuthority() const
-{
-	return !bExhausted;
-}
-
+// 墓碑（2026-09-14）：删除持续力竭、抓握准入及耗尽自动松手；
+// Knowledge/Design/设计修改记录.md 2026-09-13 裁决⑥：双段归零只使出力为零，不禁止抓握。
 void UCatPhysicalEffortComponent::SettleMovementFromAuthority(const FCatBodyDriveSample& Drive,
 	const FVector& IntendedDisplacement, const FVector& ActualDisplacement, double Seconds, bool bGrounded)
 {
@@ -41,18 +40,36 @@ void UCatPhysicalEffortComponent::SettleMovementFromAuthority(const FCatBodyDriv
 	LastResult = {};
 	if (!GetOwner()->HasAuthority() || !FMath::IsFinite(Seconds) || Seconds <= 0) return;
 	// The primary's runner is the sole writer of its movement + rod bill, including slack recovery.
-	// 搏斗中一律不恢复（钓鱼规则 §6.2）：进搏斗就摘掉周期回体 GE，放线回体仍只由 Runner 结算。
-	if (Drive.bFishing)
+	// 墓碑（2026-09-14）：Drive.bFishing 只是持竿电机标记，不能让空竿/等咬钩停回体。
+	// 搏斗中不自然恢复；真实主控竿已发布的搏斗状态不依赖 Service 注册或 Runner 查询成功。
+	const auto* Pawn = Cast<APawn>(GetOwner());
+	auto* Fishing = Drive.bFishing && GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
+	const auto* Rod = Fishing && Pawn ? Fishing->FindRodOperatedBy(Pawn->GetPlayerState()) : nullptr;
+	if (Drive.bFishing && Pawn)
+		if (const auto* Grab = GetOwner()->FindComponentByClass<UCatPhysicsGrabComponent>())
+			for (const bool bLeft : {true, false})
+			{
+				const auto* HeldRod = Cast<ACatFishingRodActor>(Grab->GetGripTarget(bLeft));
+				if (Grab->IsGripping(bLeft) && IsValid(HeldRod)
+					&& HeldRod->IsPrimaryOperator(Pawn->GetPlayerState())
+					&& HeldRod->GetHolderPawnFromAuthority() == Pawn)
+				{
+					Rod = HeldRod;
+					break;
+				}
+			}
+	const auto* Session = Rod && Fishing ? Fishing->FindActiveSessionByRod(Rod) : nullptr;
+	if ((Rod && Rod->GetCarrierConstraintState().bFightActive) || (Session && Session->IsFightRunnerRunning()))
 	{
-		IdleSeconds = 0; bWasConnected = false; bRecoveryBlockedByLoad = false;
+		bWasConnected = false; bRecoveryBlockedByLoad = false;
 		SetNaturalRecoveryActive(false);
 		return;
 	}
 	auto* ASC = GetOwner()->FindComponentByClass<UCatAbilitySystemComponent>();
 	const auto* Settings = GetDefault<UCatPhysicalEffortSettings>();
 	if (!ASC || !ASC->GetAvatarActor() || !Settings->IsValid()) return;
-	const double Before = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
-	const double Maximum = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+	const double Before = ASC->GetTotalFightStamina();
+	const double Maximum = ASC->GetTotalFightStaminaCapacity();
 	if (!FMath::IsFinite(Before) || !FMath::IsFinite(Maximum) || Maximum <= 0 || Before < 0 || Before > Maximum)
 	{
 		if (GetWorld()->GetTimeSeconds() >= NextLogSeconds)
@@ -65,37 +82,31 @@ void UCatPhysicalEffortComponent::SettleMovementFromAuthority(const FCatBodyDriv
 		bWasConnected = Drive.bCooperative;
 		LogState(TEXT("physical_effort_connection"), bWasConnected ? TEXT("Connected") : TEXT("Released"));
 	}
-	if (Drive.bCooperative && Before <= 0) { bRecoveryPending = true; SetExhausted(true); }
 	FCatIntentMotionInput Input;
-	const bool bActive = Drive.bCooperative && Drive.bLocomotion && bGrounded && !bExhausted && Drive.MaxForce > 0;
+	const bool bActive = Drive.bCooperative && Drive.bLocomotion && bGrounded && Drive.MaxForce > 0;
 	Input.IntendedDisplacementCentimeters = bActive ? IntendedDisplacement : FVector::ZeroVector;
 	Input.ActualDisplacementCentimeters = ActualDisplacement;
 	Input.StaminaPerUnfulfilledMeter = Settings->StaminaPerUnfulfilledMeter;
 	if (!FCatIntentMotionModel::ComputeDrain(Input, LastResult))
 	{ LogState(TEXT("physical_effort_rejected"), TEXT("InvalidMotion")); return; }
 	const bool bExerting = bActive && !IntendedDisplacement.IsNearlyZero();
-	if (bExerting) bRecoveryPending = true;
 	if (Drive.bUnderLoad != bRecoveryBlockedByLoad)
 	{
 		bRecoveryBlockedByLoad = Drive.bUnderLoad;
 		LogState(TEXT("physical_effort_recovery_gate"), Drive.bUnderLoad ? TEXT("Loaded") : TEXT("Unloaded"));
 	}
-	const bool bCanRest = !bExerting && !Drive.bUnderLoad && Drive.bLocomotion;
-	if (!bCanRest) IdleSeconds = 0; else IdleSeconds += Seconds;
+	const bool bCanRest = !bExerting && !Drive.bUnderLoad;
 	// 恢复不再按帧写属性：本组件只裁决「此刻该不该恢复」，5 点/秒的速率和写口都在周期 GE 上。
 	const double Requested = FMath::Min(Before, LastResult.StaminaDrain);
 	if (Requested != 0 && !ASC->ApplyFishingStaminaDelta(static_cast<float>(-Requested)))
 	{ LogState(TEXT("physical_effort_rejected"), TEXT("AbilityWriteFailed")); return; }
 	if (GetOwner()->IsActorBeingDestroyed() || !IsValid(ASC)) return;
-	const double After = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+	const double After = ASC->GetTotalFightStamina();
 	LastPaid = Before - After;
-	if (LastPaid > 0 && After <= 0) { IdleSeconds = 0; SetExhausted(true); }
-	else if (bExhausted && After >= Maximum * Settings->ExhaustionResumeRatio) SetExhausted(false);
-	if (After >= Maximum) bRecoveryPending = false;
-	// 三道闸门（bCooperative 起手、bRecoveryPending、连续静止满 RecoveryDelaySeconds）设计里都没有，
-	// 2026-09-11 明确仍未裁，这里原样保留，只是从「算一笔恢复」改成「开关同一条恢复通道」。
-	const bool bRecovering = bRecoveryPending && bCanRest && After < Maximum
-		&& IdleSeconds >= Settings->RecoveryDelaySeconds;
+	// 墓碑（2026-09-14）：删除 bCooperative 起手、bRecoveryPending、IdleSeconds／RecoveryDelaySeconds
+	// 和 ExhaustionResumeRatio 三道恢复闸及再入比例。Knowledge/Design/设计修改记录.md
+	// 2026-09-13 裁决⑥：搏斗外不出力就按 5 点/秒回绿，无姿势或静止等待；bUnderLoad 保留。
+	const bool bRecovering = bCanRest && After < Maximum;
 	SetNaturalRecoveryActive(bRecovering);
 	if (Requested != 0 && GetWorld()->GetTimeSeconds() >= NextLogSeconds)
 	{
@@ -104,14 +115,7 @@ void UCatPhysicalEffortComponent::SettleMovementFromAuthority(const FCatBodyDriv
 	}
 }
 
-// 统一出力池的扣体回执：钓鱼搏斗把体力扣在 Runner 的写口上，本组件看不到那笔账，
-// 所以由 Runner 扣成后回调一次，武装与抓握同一条恢复闸；三道闸门本身不在这里改。
-void UCatPhysicalEffortComponent::NotifyStaminaSpentFromAuthority()
-{
-	if (!GetOwner() || !GetOwner()->HasAuthority()) return;
-	bRecoveryPending = true;
-}
-
+// 墓碑（2026-09-14）：裁决⑥取消「先花过才恢复」，NotifyStaminaSpentFromAuthority 回执随之退役。
 // 周期回体开关流程：
 // 1. 只有 authority 持有这条通道；速率非正或不该恢复时摘掉已有效果并让句柄失效。
 // 2. 已挂着就不重复提交，避免每帧开关制造新的 ActiveGameplayEffect 和复制流量。
@@ -154,17 +158,6 @@ void UCatPhysicalEffortComponent::EndPlay(const EEndPlayReason::Type EndPlayReas
 	Super::EndPlay(EndPlayReason);
 }
 
-void UCatPhysicalEffortComponent::SetExhausted(bool bValue)
-{
-	if (bExhausted == bValue) return;
-	bExhausted = bValue;
-	if (bValue)
-		if (auto* Grab = GetOwner()->FindComponentByClass<UCatPhysicsGrabComponent>())
-			Grab->ReleaseAllFromAuthority(TEXT("PhysicalEffortExhausted"));
-	GetOwner()->ForceNetUpdate();
-	LogState(TEXT("physical_effort_state"), bValue ? TEXT("Exhausted") : TEXT("Ready"));
-}
-
 void UCatPhysicalEffortComponent::LogState(FName Event, FName Result) const
 {
 	const auto* Body = GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>();
@@ -172,32 +165,21 @@ void UCatPhysicalEffortComponent::LogState(FName Event, FName Result) const
 	const auto* Player = Pawn ? Pawn->GetPlayerState() : nullptr;
 	const auto* ASC = GetOwner()->FindComponentByClass<UCatAbilitySystemComponent>();
 	const FString Record = FString::Printf(
-		TEXT("Event=%s World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s PlayerId=%d BodyId=%s Step=%llu ForceBudgetUE=%.3f IntendedCm=%.6f ProgressCm=%.6f MissingCm=%.6f Paid=%.6f Stamina=%.6f Exhausted=%d Loaded=%d RestSeconds=%.3f Result=%s"),
+		TEXT("Event=%s World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s PlayerId=%d BodyId=%s Step=%llu ForceBudgetUE=%.3f IntendedCm=%.6f ProgressCm=%.6f MissingCm=%.6f Paid=%.6f TotalStamina=%.6f Loaded=%d Result=%s"),
 		*Event.ToString(), *GetNameSafe(GetWorld()), int32(GetOwner()->GetNetMode()), GetOwner()->HasAuthority(), int32(GetOwner()->GetLocalRole()),
 		*GetNameSafe(GetOwner()), Player ? Player->GetPlayerId() : INDEX_NONE, Body ? *Body->GetBodyId().ToString() : TEXT("None"), SettlementSequence,
 		GetMaximumForceKgCmS2(), LastResult.IntendedDistanceCentimeters, LastResult.ActualProgressCentimeters,
-		LastResult.UnfulfilledDistanceCentimeters, LastPaid, ASC ? ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()) : 0,
-		bExhausted, bRecoveryBlockedByLoad, IdleSeconds, *Result.ToString());
+		LastResult.UnfulfilledDistanceCentimeters, LastPaid, ASC ? ASC->GetTotalFightStamina() : 0,
+		bRecoveryBlockedByLoad, *Result.ToString());
 	if (Event == TEXT("physical_effort_rejected")) { UE_LOG(LogCatPhysicsGrab, Warning, TEXT("%s"), *Record); }
 	else { UE_LOG(LogCatPhysicsGrab, Log, TEXT("%s"), *Record); }
 }
 
-void UCatPhysicalEffortComponent::OnRep_Exhausted()
-{
-	LogState(TEXT("physical_effort_observed"), bExhausted ? TEXT("Exhausted") : TEXT("Ready"));
-}
-
-void UCatPhysicalEffortComponent::ObserveStaminaFromReplication(float PreviousStamina)
+void UCatPhysicalEffortComponent::ObserveStaminaFromReplication(double PreviousTotalStamina)
 {
 	if (!GetOwner() || GetOwner()->HasAuthority() || !GetWorld() || GetWorld()->GetTimeSeconds() < NextLogSeconds) return;
 	NextLogSeconds = GetWorld()->GetTimeSeconds() + 1;
 	const auto* ASC = GetOwner()->FindComponentByClass<UCatAbilitySystemComponent>();
-	LastPaid = ASC ? PreviousStamina - ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()) : 0;
+	LastPaid = ASC ? PreviousTotalStamina - ASC->GetTotalFightStamina() : 0;
 	LogState(TEXT("physical_effort_stamina_observed"), TEXT("ReplicatedPersonalBalance"));
-}
-
-void UCatPhysicalEffortComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
-{
-	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-	DOREPLIFETIME(UCatPhysicalEffortComponent, bExhausted);
 }
