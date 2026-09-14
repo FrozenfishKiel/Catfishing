@@ -19,6 +19,7 @@
 #include "ShopEconomy/CatShopEconomySettings.h"
 #include "UI/CatUISettings.h"
 #include "Framework/Game/CatGameplayTypes.h"
+#include "Framework/Game/CatFrontendGameMode.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"
@@ -222,6 +223,7 @@ void UCatOnlineSubsystem::Deinitialize()
 		GEngine->OnNetworkFailure().Remove(NetworkFailureHandle);
 	}
 	NetworkFailureHandle.Reset();
+	FrontendListener.Stop(TEXT("Deinitialize"), ActiveRequestId, OperationEpoch);
 	FCoreUObjectDelegates::PreLoadMapWithContext.Remove(PreLoadMapHandle);
 	PreLoadMapHandle.Reset();
 	FCoreUObjectDelegates::PostLoadMapWithWorld.Remove(PostLoadMapHandle);
@@ -1554,6 +1556,10 @@ FCatOnlineResult UCatOnlineSubsystem::RequestCreateSession()
 	{
 		return RejectRequest(ECatOnlineError::InvalidState);
 	}
+	if (!GetWorld() || !GetWorld()->GetAuthGameMode<ACatFrontendGameMode>())
+	{
+		return RejectRequest(ECatOnlineError::InvalidState);
+	}
 	const UCatOnlineSettings* Settings = GetDefault<UCatOnlineSettings>();
 	if (Settings->SessionAccess == ECatSessionAccessPolicy::Undecided)
 	{
@@ -1605,6 +1611,15 @@ FCatOnlineResult UCatOnlineSubsystem::RequestCreateSession()
 	{
 		SessionState = ECatOnlineSessionState::NoSession;
 		FinishOperationFailure(ECatOnlineError::SessionCompatibilityMismatch);
+		Result.bAccepted = false;
+		Result.Error = LastError;
+		return Result;
+	}
+	// 监听失败时不发布平台房间；CreateSession 使用已经就绪的驱动端口建立连接信息。
+	if (!FrontendListener.Start(GetWorld(), ActiveRequestId, OperationEpoch))
+	{
+		SessionState = ECatOnlineSessionState::NoSession;
+		FinishOperationFailure(ECatOnlineError::FrontendListenFailed);
 		Result.bAccepted = false;
 		Result.Error = LastError;
 		return Result;
@@ -2126,6 +2141,7 @@ bool UCatOnlineSubsystem::BeginDestroySession(const ECatOnlineError FailureAfter
 	{
 		SessionState = ECatOnlineSessionState::NoSession;
 		SessionRole = ECatOnlineSessionRole::None;
+		FrontendListener.Stop(TEXT("SessionAlreadyAbsent"), ActiveRequestId, OperationEpoch);
 		if (FailureAfterDestroy != ECatOnlineError::None)
 		{
 			if (WorldState == ECatOnlineWorldState::Lake)
@@ -2174,13 +2190,13 @@ bool UCatOnlineSubsystem::BeginDestroySession(const ECatOnlineError FailureAfter
 	return bRequestQueued || !bStillAwaitingCompletion;
 }
 
-// Host 旅行流程：只在已完成预载的 Host Start 内执行；此时绝不提前发布可连接信号，只提交 GameplayMap?listen，目标 World 已生成 GameNetDriver 后由 PostLoadMap 写 Steam Lobby ready。
+// Host 旅行流程：开房时已建立 Frontend Listen；这里只在预载成功后提交 GameplayMap?listen。旧驱动由 UE 切图销毁，玩法 World 真正就绪后才发布 CAT_GAME_READY。
 bool UCatOnlineSubsystem::BeginHostTravelToGameplayMap()
 {
 	UWorld* World = GetWorld();
 	if (!World || World->GetNetMode() == NM_Client || GameplayMapPackage.IsEmpty()
 		|| ActiveOperation != ECatOnlineOperation::Start || OperationRole != ECatOnlineSessionRole::Host
-		|| !OperationSessionInterface.IsValid())
+		|| !OperationSessionInterface.IsValid() || !FrontendListener.IsListening(World))
 	{
 		return false;
 	}
@@ -2263,6 +2279,7 @@ bool UCatOnlineSubsystem::BeginTravelToFrontend()
 {
 	if (WorldState == ECatOnlineWorldState::Frontend)
 	{
+		FrontendListener.Stop(TEXT("ReturnedToFrontend"), ActiveRequestId, OperationEpoch);
 		FrontendPreloadRequestId = INDEX_NONE;
 		PreloadedFrontendWorld = nullptr;
 		StopMapPreloadProgressTracking();
@@ -2499,6 +2516,7 @@ void UCatOnlineSubsystem::HandleDestroySessionComplete(const FName SessionName, 
 
 	SessionState = ECatOnlineSessionState::NoSession;
 	SessionRole = ECatOnlineSessionRole::None;
+	FrontendListener.Stop(TEXT("SessionDestroyed"), ActiveRequestId, OperationEpoch);
 	if (DeferredFailureAfterDestroy != ECatOnlineError::None)
 	{
 		const ECatOnlineError Failure = DeferredFailureAfterDestroy;
@@ -2904,6 +2922,11 @@ void UCatOnlineSubsystem::HandleNetworkFailure(UWorld* FailureWorld, UNetDriver*
 	{
 		return;
 	}
+	if (FrontendListener.IsChangingDriver())
+	{
+		// 精确归属过滤后，Listen 的同步失败只由返回值收口，不能在 InitListen 栈内再次 Destroy。
+		return;
+	}
 
 	// NetworkFailure 已经替代 PostLoadMap 成为本次引擎等待的终点；清掉 LoadMap 观测，避免失败后的补偿继续被显示成正在切图。
 	bIsEngineLoadMapPending = false;
@@ -3050,6 +3073,10 @@ void UCatOnlineSubsystem::FinishOperationSuccess()
 // 其他情况撤销释放许可并解绑所有等待，清操作和预载、使 epoch 失效；Start 失败或已经回到 Frontend 的 Leave 失败都会释放玩法预热资源，不按本地时间安排重试。
 void UCatOnlineSubsystem::FinishOperationFailure(const ECatOnlineError Error)
 {
+	if (ActiveOperation == ECatOnlineOperation::Create && SessionRole == ECatOnlineSessionRole::None)
+	{
+		FrontendListener.Stop(TEXT("CreateFailed"), ActiveRequestId, OperationEpoch);
+	}
 	if (ActiveOperation == ECatOnlineOperation::Leave && bReleaseActiveRunOnFrontend
 		&& WorldState == ECatOnlineWorldState::Frontend && SessionState == ECatOnlineSessionState::NoSession
 		&& SessionRole == ECatOnlineSessionRole::None)

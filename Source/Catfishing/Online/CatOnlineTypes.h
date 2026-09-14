@@ -109,7 +109,7 @@ enum class ECatOnlineSessionRole : uint8
 {
 	/** 当前没有已确认的会话角色。 */
 	None,
-	/** 当前进程创建了 NamedSession，并以 Listen Server 承载 Lake。 */
+	/** 当前进程创建了 NamedSession，并从 Frontend 开始以 Listen Server 承载房主 World。 */
 	Host,
 	/** 当前进程加入了远端 NamedSession。 */
 	Client
@@ -188,7 +188,9 @@ enum class ECatOnlineError : uint8
 	JoinTargetTimedOut,
 	SessionFull,
 	RoomMembersNotReady,
-	RoomReadinessUnavailable
+	RoomReadinessUnavailable,
+	/** 创建房间前无法在当前 Frontend World 启动 UE Listen，平台会话未发布。 */
+	FrontendListenFailed
 };
 
 /** 对 UI 暴露的搜索句柄；Value 只在当前 GameInstance 的 Online 子系统内部可解析。 */

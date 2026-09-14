@@ -10,6 +10,7 @@
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "UObject/UObjectGlobals.h"
 #include "Online/CatSteamJoinLink.h"
+#include "Online/CatFrontendListener.h"
 #include "CatOnlineSubsystem.generated.h"
 
 class APlayerController;
@@ -40,7 +41,7 @@ public:
 	/** 先让所有 epoch 失效并成对解绑，再清除 opaque 结果和非 UObject 平台引用，保证迟到回调无副作用。 */
 	virtual void Deinitialize() override;
 
-	/** 在 Frontend 提交 CreateSession；成功后确立 Host 房间并留在 Frontend，只有后续 Host Start 才能触发玩法预载与 Listen 旅行。 */
+	/** 在 Frontend 原地启动 UE Listen 后提交 CreateSession；失败释放本次监听，成功留在房间，Host Start 另行预载并切换玩法图。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Online")
 	FCatOnlineResult RequestCreateSession();
 
@@ -88,7 +89,9 @@ public:
 	FCatOnlineSnapshotChanged OnSnapshotChanged;
 
 private:
+	FCatFrontendListener FrontendListener;
 	friend class FCatOnlinePreloadLifetimeTest;
+	friend class FCatFrontendListenLifecycleTest;
 	void HandleFindJoinFriendComplete(int32 LocalUserNum, bool bSuccess, const TArray<FOnlineSessionSearchResult>& Results, uint64 Epoch);
 	void FailJoinResolution(ECatOnlineError Error);
 	TUniquePtr<FCatSteamJoinLink> JoinLink;
@@ -292,7 +295,7 @@ private:
 	/** 本地 NamedSession 事实；仅平台 Session 请求与回调写入。 */
 	ECatOnlineSessionState SessionState = ECatOnlineSessionState::NoSession;
 
-	/** 当前运输事实；Initialize 按初始 World 建立基线，之后仅由旅行提交、PostLoadMap、TravelFailure 和 NetworkFailure 写入。 */
+	/** 当前地图运输事实；前台监听本身不伪装为客户端连接完成，旅行提交、PostLoadMap 和失败事件写入。 */
 	ECatOnlineTransportState TransportState = ECatOnlineTransportState::Idle;
 
 	/** 当前唯一复合操作；BeginOperation 写入，Finish/Deinitialize 清空；请求入口据此拒绝并发，平台操作与 Run teardown 回调再和 OperationEpoch 联合校验。 */

@@ -61,6 +61,9 @@ public:
 			break;
 		case 4:
 			if (Snapshot.ActiveOperation != ECatOnlineOperation::None) { return false; }
+			if (!Test->TestEqual(TEXT("Create completes in the frontend"), Snapshot.WorldState, ECatOnlineWorldState::Frontend)
+				|| !Test->TestEqual(TEXT("Create already starts the listen server"), Game->GetWorld()->GetNetMode(), NM_ListenServer)
+				|| !Test->TestNotNull(TEXT("Frontend listen driver exists before Start"), Game->GetWorld()->GetNetDriver())) { return true; }
 			// Create 完成与 Steam 成员投影到达可能相隔一次 Lobby 轮询，等待真实成员而非绕过准备门。
 			if (Snapshot.RoomMembers.IsEmpty()) { return false; }
 			if (!Test->TestTrue(TEXT("Start through production frontend entry"), Online->RequestStartHostedGame().bAccepted)) { return true; }
@@ -109,6 +112,7 @@ public:
 			if (Snapshot.ActiveOperation != ECatOnlineOperation::None) { return false; }
 			if (!Test->TestEqual(TEXT("Returned to frontend"), Snapshot.WorldState, ECatOnlineWorldState::Frontend)) { return true; }
 			Test->TestEqual(TEXT("Session destroyed on exit"), Snapshot.SessionState, ECatOnlineSessionState::NoSession);
+			Test->TestNull(TEXT("Returning to the menu releases the listen driver"), Game->GetWorld()->GetNetDriver());
 			Test->TestTrue(TEXT("Active test save released"), Save->GetActiveSlotId().IsNone());
 			if (!Test->TestTrue(TEXT("Delete only the newly created test slot"), Save->RequestDeleteSlot(SlotId).bAccepted)) { return true; }
 			Phase = 9;

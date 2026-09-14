@@ -12,6 +12,8 @@ namespace CatFrontendRoomModelText
 	{
 		switch (Error)
 		{
+		case ECatOnlineError::FrontendListenFailed:
+			return FText::FromString(TEXT("无法启动房主监听服务，请确认 Steam 已登录后重试。"));
 		case ECatOnlineError::RoomMembersNotReady:
 			return FText::FromString(TEXT("等待其他队员准备后，房主即可开始。"));
 		case ECatOnlineError::RoomReadinessUnavailable:
