@@ -1092,7 +1092,7 @@ bool UCatEquipmentComponent::GetFishingRodDurability(const FGuid FishingSessionI
 // 1. 先要求 authority、会话记录与正式库存都在；缺任一项都不动库存事实。
 // 2. 按 Begin 冻结的实例 ID 解析当前实例并确认它**真的已断**——没断的竿绝不在这里消失。
 // 3. 按它此刻所在的位置移除：正在部署走 held entry 退役，已经在可见格就清那一格。
-// 4. 最后把指向它的钓具选择清空并重新校正，让自动改选按「库存里已经没有这根竿」跑。
+// 4. 最后把指向它的钓具选择清空并重新校正，保持未选竿，等待玩家主动取竿。
 bool UCatEquipmentComponent::RetireBrokenFishingRodFromAuthority(const FGuid FishingSessionId)
 {
 	if (!GetOwner() || !GetOwner()->HasAuthority())
@@ -1600,24 +1600,8 @@ void UCatEquipmentComponent::ReconcileLoadoutSelectionsWithInventory(
 	FCatInventoryEntry PreferredRodSlot;
 	const bool bHasPreferredRodSlot = bPreferredRod
 		&& TryResolveSelectionInventorySlot(PreferredDefinitionId, FGuid(), PreferredRodSlot);
-	FCatInventoryEntry FirstUsableRodSlot;
-	bool bHasFirstUsableRodSlot = false;
-	for (const FCatInventoryEntry& Slot : VisibleSlots)
-	{
-		const UCatEquipmentDefinition* SlotDefinition = InventorySettings != nullptr
-			? InventorySettings->FindRuntimeDefinition<UCatEquipmentDefinition>(Slot.Instance->GetItemDefinitionId()) : nullptr;
-		if (!(Slot.Instance != nullptr && Slot.StackCount > 0)
-			|| SlotDefinition == nullptr || !SlotDefinition->CanServeFishingRod())
-		{
-			continue;
-		}
-		if (!bHasFirstUsableRodSlot && IsSlotUsableRod(Slot))
-		{
-			FirstUsableRodSlot = Slot;
-			bHasFirstUsableRodSlot = true;
-		}
-	}
-
+	// 墓碑（2026-09-14，T35，商店 §3.1.2）：库存校正不再扫描备用竿自动替换断竿。
+	// 只有明确入库/选择传来的 PreferredDefinition 可以建立新选择。
 	FCatInventoryEntry SelectedStoredRod;
 	const bool bSelectedStoredRodMatches =
 		TryFindInventorySlotByInstanceId(Snapshot.RodItemInstanceId, SelectedStoredRod)
@@ -1638,11 +1622,6 @@ void UCatEquipmentComponent::ReconcileLoadoutSelectionsWithInventory(
 	if (bHasPreferredRodSlot && IsSlotUsableRod(PreferredRodSlot))
 	{
 		ReplacementRodSlot = PreferredRodSlot;
-		bHasReplacementRodSlot = true;
-	}
-	else if (bHasFirstUsableRodSlot)
-	{
-		ReplacementRodSlot = FirstUsableRodSlot;
 		bHasReplacementRodSlot = true;
 	}
 	const bool bShouldReplaceRod = (bSelectedRodBrokenOrInvalid || bSelectedRodMissing)

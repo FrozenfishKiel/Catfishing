@@ -62,15 +62,12 @@ public:
 		ACatFishGuardActor* Guard, const TArray<FGuid>& FishInstanceIds, FGuid RequestId);
 
 private:
-	/**
-	 * 声明：按同一条链跑完整个购物车，实际卖货对象是来源摊位库存，收货对象是营地公共仓库。
-	 * 实现：先取本 World 的经济服务、来源摊位库存和营地收货库存；再用整车报价得到每行 DefinitionId + DeliveryQuantity，
-	 *       并把公共仓库能否整批接收问在扣钱之前。任一不成立就直接返回，此时公款、商店库存和账本一个字都没动。
-	 *       前提都成立才提交整车购买，并只在订单确实成立时继续；随后用同一个购物车 RequestId 把整批物品
-	 *       一次加入营地收货库存，成交与入库在同一次调用里走完，账本不写「待交付」态。
-	 *       重放走公共仓库自己的幂等键：首次返回 committed，重试返回 AlreadyResolved，两者都算已交付。
-	 * 边界：前置 gate 是这条链处理交付失败的主要手段，因为扣钱那一步不可逆而商店根本没有退款写口。
-	 */
+	friend class FCatShopCartAtomicTest;
+	friend class FCatShopInventoryDeliveryReplayTest;
+#if WITH_DEV_AUTOMATION_TESTS
+	int32 FailDeliveryStepForTest = INDEX_NONE;
+#endif
+	/** 静默准备全部交付后扣款；任一失败同步恢复收货方，服务恢复货架；终态重放不补货。 */
 	FCatShopOrderResult RunCartOrder(const FCatShopCartCommand& Command,
 		UCatShopInventoryComponent* ShopInventory, ACatCampInventoryActor* DeliveryInventory);
 

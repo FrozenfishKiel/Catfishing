@@ -66,6 +66,8 @@ class CATFISHING_API ACatfishingGameModeBase : public AGameModeBase
 {
 	GENERATED_BODY()
 	friend class FCatTerminalSaveQueueTestCommand;
+	friend class FCatShopWorldCheckpointTest;
+	friend class FCatShopSettlementTest;
 	friend class FCatRunTransientCleanupTest;
 	friend class FCatFishingSlackAimCommandRoutingTest;
 	friend class FCatFishingSlackAimRodContinuityTest;
@@ -83,6 +85,8 @@ class CATFISHING_API ACatfishingGameModeBase : public AGameModeBase
 	friend class FCatFishingOwnedRodLifecycleTest;
 	friend class FCatFishingGroupNetworkTest;
 public:
+	/** Save 在 StateTree 启动前恢复未完成世界进度；不选择联机玩家档案归属。 */
+	bool RestoreWorldProgressFromSave(int32 Progress, int32 SavedDay);
 	/** 建立 Lake 原生宿主装配；身份注册表属于 GameMode 实例，不进入类默认对象或客户端。 */
 	ACatfishingGameModeBase();
 	/** 身份解除或身体销毁前的 authority 协调入口：释放本人的主控与抓握、托管仍部署的资源，再取消 Social；可重复调用，不依赖 GameMode 已完成 Run 启动。 */

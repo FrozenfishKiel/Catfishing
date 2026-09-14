@@ -12,6 +12,7 @@
 #include "ShopEconomy/CatShopEconomyService.h"
 #include "ShopEconomy/CatShopInventoryComponent.h"
 #include "ShopEconomy/CatShopKioskActor.h"
+#include "ShopEconomy/Trading/CatShopTradeController.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatShopInventoryDeliveryReplayTest,
 	"Catfishing.Unit.ShopEconomy.CartPurchaseDeliversOnPaymentAndReplaysWithoutDuplicatePaymentOrItems",
@@ -80,30 +81,30 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 	if (!TestEqual(TEXT("扣款前整批库存预检通过"),
 		Inventory->ValidateInventoryDefinitionBatchGrantFromAuthority(Command.Context.RequestId,
 			Command.Context.StableNetId, Batch), ECatDomainCommandError::None)) return false;
+	auto* Trading = World->GetSubsystem<UCatShopTradeController>();
 	const FDateTime BeforePurchaseUtc = FDateTime::UtcNow();
-	const FCatShopCartTransactionResult Purchase = Shop->PurchaseCatalogCart(Command, Shelf);
+	const auto Order = Trading->RunCartOrder(Command, Shelf, Camp);
+	const FCatShopCartTransactionResult Purchase = Order.CartTransaction;
 	if (!TestTrue(TEXT("真实购买产生一笔成交账本"), Purchase.Command.bCommitted
 		&& Purchase.Transactions.Num() == 1 && Purchase.Transactions[0].bPurchase)) return false;
 	TestTrue(TEXT("账本留下可回看的提交时刻"), Purchase.Transactions[0].CommittedAtUtc >= BeforePurchaseUtc);
-	const FCatDomainCommandResult Grant = Inventory->GrantInventoryDefinitionBatchFromAuthority(
-		Command.Context.RequestId, Command.Context.StableNetId, Batch);
+	// 墓碑（T31，商店 §3.1.2）：删除先支付、后独立发货的夹具；断言改读同一车的实物回执。
+	const FCatDomainCommandResult Grant = Order.Delivery;
 	if (!TestTrue(TEXT("实际物品已进入公共库存"), Grant.bCommitted)) return false;
 	TestEqual(TEXT("购买只扣一次商品价格"), Shop->GetWalletSnapshot().Balance,
 		WalletBefore.Balance - Selected.UnitPrice);
 	TestEqual(TEXT("公共库存收到目录规定数量"),
 		Inventory->CountVisibleInventoryQuantityByDefinitionId(Selected.DefinitionId),
 		QuantityBefore + Selected.PurchaseQuantity);
-	TestEqual(TEXT("购买重放取回首次终态"), Shop->PurchaseCatalogCart(Command, Shelf).Command.Error,
+	TestEqual(TEXT("购买重放取回首次终态"), Trading->RunCartOrder(Command, Shelf, Camp).CartTransaction.Command.Error,
 		ECatDomainCommandError::AlreadyResolved);
-	TestTrue(TEXT("发货重放保留成功提交事实"), CatIsAcceptedDomainCommandResult(
-		Inventory->GrantInventoryDefinitionBatchFromAuthority(Command.Context.RequestId,
-			Command.Context.StableNetId, Batch)));
+	TestTrue(TEXT("发货重放保留成功提交事实"), CatIsAcceptedDomainCommandResult(Trading->RunCartOrder(Command, Shelf, Camp).Delivery));
 	TestEqual(TEXT("重放不再次扣款"), Shop->GetWalletSnapshot().Balance,
 		WalletBefore.Balance - Selected.UnitPrice);
 	TestEqual(TEXT("重放不再次发货"), Inventory->CountVisibleInventoryQuantityByDefinitionId(Selected.DefinitionId),
 		QuantityBefore + Selected.PurchaseQuantity);
 	TestEqual(TEXT("重放不增加交易记录"), Shop->GetTransactionLedgerSnapshot().Num(), 1);
-	const auto SecondPurchase = Shop->PurchaseCatalogCart(SecondCommand, Shelf);
+	const auto SecondPurchase = Trading->RunCartOrder(SecondCommand, Shelf, Camp).CartTransaction;
 	TestTrue(TEXT("另一笔旧视图请求按当前余额成交"), SecondPurchase.Command.bCommitted);
 	TestEqual(TEXT("两笔按实际商品价格顺序扣款"), Shop->GetWalletSnapshot().Balance, WalletBefore.Balance - Selected.UnitPrice * 2);
 	TestEqual(TEXT("钱包版本仍对齐回执供 HUD 与日志读取"), SecondPurchase.Command.Revision, Shop->GetWalletSnapshot().Revision);
@@ -113,7 +114,7 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 	State->GetRunAbilitySystemComponentFromAuthority()->SetNumericAttributeBase(UCatEconomyAttributeSet::GetTeamWalletBalanceAttribute(), 0.0f);
 	SecondCommand.Context.RequestId = FGuid::NewGuid();
 	const int32 LedgerCount = Shop->GetTransactionLedgerSnapshot().Num();
-	const auto Insufficient = Shop->PurchaseCatalogCart(SecondCommand, Shelf);
+	const auto Insufficient = Trading->RunCartOrder(SecondCommand, Shelf, Camp).CartTransaction;
 	TestFalse(TEXT("余额不足不能成交"), Insufficient.Command.bCommitted);
 	TestEqual(TEXT("货架不限量时明确按余额不足拒绝"), Insufficient.Command.Error, ECatDomainCommandError::CapacityExceeded);
 	TestEqual(TEXT("拒绝后公款保持零"), Shop->GetWalletSnapshot().Balance, 0);

@@ -96,10 +96,12 @@ public:
 
 	/**
 	 * 本局这口缸已经买到第几档容量；0 是初始档，每买一档 +1。
-	 * 它只活在本局 World 里、不进存档——「随局清空」讲的就是这件事。
+	 * 未完成局断点保留本局档位，新局从初始档重新开始。
 	 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|FishContainers")
 	int32 GetCapacityTier() const;
+	/** Save 在开放玩法前恢复档位；空缸恢复不生成购买回执。 */
+	bool RestoreCapacityTierFromAuthority(int32 Tier);
 
 	/**
 	 * 声明：只回答「这一档升级现在能不能买」，不改任何状态；商店在扣钱之前问它。
@@ -119,9 +121,9 @@ public:
 	 * 声明：把鱼缸推进到指定容量档，并按新档位扩容正式鱼库存；成功后返回 true。
 	 * 实现：复用 CanApplyCapacityUpgradeFromAuthority 的同一套前置，再写档位与槽位数，最后刷新只读摘要。
 	 * 边界：只缩不扩的方向不做——容量只升不降；档位不连续或配置缺失时整笔拒绝，不部分生效。
-	 *      幂等键是购物车 RequestId：同一个号重复提交只在第一次真的升档，之后直接返回成功。
+	 *      幂等键是车内升级子项身份；两档使用不同子项号，同一子项重放不再升档。
 	 */
-	bool ApplyCapacityUpgradeFromAuthority(int32 TargetTier, const FGuid& RequestId);
+	bool ApplyCapacityUpgradeFromAuthority(int32 TargetTier, const FGuid& RequestId, bool bPublish = true);
 
 protected:
 	/** authority 入场时按编辑器容量补齐正式库存，再显式发布只读摘要；客户端等待库存与摘要各自复制。 */
@@ -131,6 +133,7 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	friend class UCatShopTradeController;
 	/** 库存任一次本地变化后把通知转成蓝图可订阅的形式；本函数不读写库存，只转发。 */
 	void HandleFishInventoryChanged();
 

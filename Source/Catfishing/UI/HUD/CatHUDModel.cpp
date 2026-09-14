@@ -1,5 +1,7 @@
 #include "UI/HUD/CatHUDModel.h"
 
+#include "FishContainers/CatFishContainerSettings.h"
+
 #include "AbilitySystemComponent.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "Character/CatCharacter.h"
@@ -44,10 +46,14 @@ namespace
 	 */
 	constexpr double CatHUDPurchaseBroadcastSeedGraceSeconds = 1.0;
 
-	// 商品名解析流程：公开流水只带 DefinitionId 和 EntryId，摊位目录里的展示名覆盖属于商店页那份绑定，
-	// HUD 够不到也不该为一条播报去绑摊位；所以按库存定义的展示名解析，缺定义时退成 ID 本身。
+	// 商品名解析流程：实物读取库存定义；设施没有库存定义，按同一升级配置输出目标容量。
+	// 摊位的展示覆盖仍由商店页绑定；其他缺配定义保留 ID，方便内容交付核对。
 	FText MakePurchaseItemNameText(const FName DefinitionId, const FName EntryId)
 	{
+		const auto* Containers = GetDefault<UCatFishContainerSettings>();
+		const int32 Tier = Containers->FindSharedFishTankUpgradeTierByDefinitionId(DefinitionId);
+		if (Tier != INDEX_NONE)
+			return FText::FromString(FString::Printf(TEXT("鱼缸容量升级至 %d 条"), Containers->GetSharedFishTankCapacityForTier(Tier)));
 		const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
 		const UCatInventoryItemDefinition* Definition =
 			(InventorySettings && !DefinitionId.IsNone()) ? InventorySettings->FindRuntimeDefinition(DefinitionId) : nullptr;
@@ -780,112 +786,52 @@ void UCatHUDModel::HandleShopEconomySnapshotChanged()
 	Refresh();
 }
 
-// 全场购买广播归并流程：
-// 1. 商店 §7 定「一车一条」，但公开流水是一车一种商品一行；账本按提交顺序追加，同一车的行连续、
-//    同操作者、同摊位，所以把这样一段连续行合成一条广播。整车 ID 不在复制 DTO 里，这是本机能拿到的最近事实。
-// 2. 同一车的后续行可能分批复制到本机，所以已播报的车按整车 ID 原地更新，不追加第二条。
-// 3. 接线后一个短窗口内看到的车只记不播：中途进局的玩家第一次复制会一次性拿到整本流水，那是历史不是事件。
+// 服务器按 CartId 提供一条完整成交事实；相邻同买家订单保持独立，售鱼同样发布收入。
 void UCatHUDModel::RefreshPurchaseBroadcasts()
 {
 	const ACatfishingGameState* RunGameState = BoundRunGameState.Get();
-	if (!RunGameState)
-	{
-		return;
-	}
-	const FCatShopPublicEconomySnapshot& Economy = RunGameState->GetShopEconomySnapshot();
+	if (!RunGameState) return;
+	const auto& Economy = RunGameState->GetShopEconomySnapshot();
 	const double ServerNowSeconds = RunGameState->GetServerWorldTimeSeconds();
 	if (!bHasPurchaseBroadcastSeedTime)
 	{
 		PurchaseBroadcastSeedServerTime = ServerNowSeconds;
 		bHasPurchaseBroadcastSeedTime = true;
 	}
-	const bool bSeedOnly =
-		ServerNowSeconds - PurchaseBroadcastSeedServerTime <= CatHUDPurchaseBroadcastSeedGraceSeconds;
-	for (int32 CartFirstIndex = 0; CartFirstIndex < Economy.Transactions.Num(); )
+	const bool bSeedOnly = ServerNowSeconds - PurchaseBroadcastSeedServerTime <= CatHUDPurchaseBroadcastSeedGraceSeconds;
+	for (const auto& Cart : Economy.Transactions)
 	{
-		const FCatShopPublicTransaction& CartFirst = Economy.Transactions[CartFirstIndex];
-		if (!CartFirst.bPurchase)
-		{
-			++CartFirstIndex;
-			continue;
-		}
-		int32 CartLastIndex = CartFirstIndex;
-		while (CartLastIndex + 1 < Economy.Transactions.Num())
-		{
-			const FCatShopPublicTransaction& Next = Economy.Transactions[CartLastIndex + 1];
-			if (!Next.bPurchase || Next.ActorPlayerState != CartFirst.ActorPlayerState
-				|| Next.ShopInventoryId != CartFirst.ShopInventoryId)
-			{
-				break;
-			}
-			++CartLastIndex;
-		}
-		const FGuid CartId = CartFirst.TransactionId;
-		const int32 EntryCount = CartLastIndex - CartFirstIndex + 1;
-		int32 ItemCount = 0;
-		int32 SpentCoins = 0;
-		for (int32 Index = CartFirstIndex; Index <= CartLastIndex; ++Index)
-		{
-			const FCatShopPublicTransaction& Line = Economy.Transactions[Index];
-			ItemCount += FMath::Max(0, Line.PurchaseQuantity);
-			SpentCoins += FMath::Max(0, -Line.WalletDelta);
-		}
-		CartFirstIndex = CartLastIndex + 1;
-
-		FCatHUDPurchaseBroadcast* Existing = PurchaseBroadcasts.FindByPredicate(
-			[&CartId](const FCatHUDPurchaseBroadcast& Candidate) { return Candidate.CartId == CartId; });
-		if (!Existing && AnnouncedPurchaseCartIds.Contains(CartId))
-		{
-			// 已经播过、又已经被后来的车挤出队列：不补播，也不重排。
-			continue;
-		}
-		if (Existing && Existing->EntryCount == EntryCount && Existing->ItemCount == ItemCount
-			&& Existing->SpentCoins == SpentCoins)
-		{
-			continue;
-		}
+		const FGuid CartId = Cart.CartId.IsValid() ? Cart.CartId : Cart.TransactionId;
+		if ((!Cart.bPurchase && !Cart.bFishSale) || AnnouncedPurchaseCartIds.Contains(CartId)) continue;
+		AnnouncedPurchaseCartIds.Add(CartId);
+		if (bSeedOnly) continue;
 		FCatHUDPurchaseBroadcast Broadcast;
 		Broadcast.CartId = CartId;
-		Broadcast.EntryCount = EntryCount;
-		Broadcast.ItemCount = ItemCount;
-		Broadcast.SpentCoins = SpentCoins;
-		Broadcast.AnnouncedServerTime = Existing ? Existing->AnnouncedServerTime : ServerNowSeconds;
-		const APlayerState* Buyer = CartFirst.ActorPlayerState;
-		// 操作者留空说明这只猫已经离局或还没进 Active；服务端刻意不挑人顶替，这里也只写一个中性称呼。
-		const FString BuyerName = Buyer ? Buyer->GetPlayerName() : FString();
-		Broadcast.BuyerNameText = !BuyerName.IsEmpty()
-			? FText::FromString(BuyerName)
+		Broadcast.EntryCount = Cart.Items.Num();
+		Broadcast.SpentCoins = FMath::Max(0, -Cart.WalletDelta);
+		Broadcast.AnnouncedServerTime = ServerNowSeconds;
+		Broadcast.BuyerNameText = Cart.ActorPlayerState ? FText::FromString(Cart.ActorPlayerState->GetPlayerName())
 			: FText::FromString(TEXT("某只猫"));
-		const FText FirstItemNameText = MakePurchaseItemNameText(CartFirst.DefinitionId, CartFirst.EntryId);
-		Broadcast.ItemsText = EntryCount > 1
-			? FText::FromString(FString::Printf(TEXT("%s 等 %d 样"), *FirstItemNameText.ToString(), EntryCount))
-			: FirstItemNameText;
-		Broadcast.BroadcastText = FText::FromString(FString::Printf(TEXT("%s 买了 %s，花掉公款 %d"),
-			*Broadcast.BuyerNameText.ToString(), *Broadcast.ItemsText.ToString(), Broadcast.SpentCoins));
-		AnnouncedPurchaseCartIds.Add(CartId);
-		if (bSeedOnly)
+		TArray<FString> Names;
+		for (const auto& Item : Cart.Items)
 		{
-			continue;
+			Broadcast.ItemCount += Item.Quantity;
+			Names.Add(FString::Printf(TEXT("%s ×%d"), *MakePurchaseItemNameText(Item.DefinitionId, NAME_None).ToString(), Item.Quantity));
 		}
-		if (Existing)
-		{
-			*Existing = MoveTemp(Broadcast);
-			continue;
-		}
-		UE_LOG(LogCatUI, Log,
-			TEXT("Event=ui_hud_purchase_broadcast World=%s NetMode=%d CartId=%s Buyer=%s Entries=%d Items=%d Spent=%d Balance=%d WalletRevision=%lld Result=ViewStateApplied"),
-			*GetNameSafe(RunGameState->GetWorld()),
-			RunGameState->GetWorld() ? static_cast<int32>(RunGameState->GetWorld()->GetNetMode()) : INDEX_NONE,
-			*CartId.ToString(), *Broadcast.BuyerNameText.ToString(),
-			Broadcast.EntryCount, Broadcast.ItemCount, Broadcast.SpentCoins,
-			Economy.Balance, Economy.WalletRevision);
+		// 旧复制结构或尚未迁移的 Blueprint 消费者保留首项字段；新服务总是提供完整 Items。
+		if (Names.IsEmpty()) Names.Add(MakePurchaseItemNameText(Cart.DefinitionId, Cart.EntryId).ToString());
+		Broadcast.ItemsText = FText::FromString(FString::Join(Names, TEXT("、")));
+		Broadcast.BroadcastText = FText::FromString(Cart.bFishSale
+			? FString::Printf(TEXT("%s 卖出 %s，公款收入 %d%s"), *Broadcast.BuyerNameText.ToString(), *Broadcast.ItemsText.ToString(),
+				Cart.WalletDelta, Cart.bContainsGiantFish ? TEXT("，巨物进账！") : TEXT(""))
+			: FString::Printf(TEXT("%s 买了 %s，花掉公款 %d"), *Broadcast.BuyerNameText.ToString(), *Broadcast.ItemsText.ToString(), Broadcast.SpentCoins));
+		UE_LOG(LogCatUI, Log, TEXT("Event=ui_hud_economy_broadcast World=%s NetMode=%d CartId=%s Player=%s Items=%d WalletDelta=%d Giant=%d"),
+			*GetNameSafe(RunGameState->GetWorld()), RunGameState->GetNetMode(), *CartId.ToString(),
+			*GetNameSafe(Cart.ActorPlayerState), Broadcast.ItemCount, Cart.WalletDelta, Cart.bContainsGiantFish);
 		PurchaseBroadcasts.Add(MoveTemp(Broadcast));
 	}
 	if (PurchaseBroadcasts.Num() > CatHUDPurchaseBroadcastLimits::MaxKeptEntries)
-	{
-		PurchaseBroadcasts.RemoveAt(0,
-			PurchaseBroadcasts.Num() - CatHUDPurchaseBroadcastLimits::MaxKeptEntries);
-	}
+		PurchaseBroadcasts.RemoveAt(0, PurchaseBroadcasts.Num() - CatHUDPurchaseBroadcastLimits::MaxKeptEntries);
 }
 
 // 全场购买广播收口流程：换 GameState、换 World 或解绑时清空本局播报记录；它不读也不写商店账本。

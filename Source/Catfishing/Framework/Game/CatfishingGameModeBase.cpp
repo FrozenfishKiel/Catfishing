@@ -140,6 +140,21 @@ ACatfishingGameModeBase::ACatfishingGameModeBase()
 
 // 启动流程：先执行引擎启动、建立 NotStarted 快照并订阅商店变化；验证 authority、运行配置、环境和 StateTree 后，恢复 Save 共享世界与已经生成的 Pawn。
 // 任何依赖或恢复失败都保持 StartupFailed；全部通过才开放命令、启动 StateTree 并安排定期检查点。
+bool ACatfishingGameModeBase::RestoreWorldProgressFromSave(const int32 Progress, const int32 SavedDay)
+{
+	if (!HasAuthority() || RunPublicState.Phase.Phase != ECatRunPhase::NotStarted
+		|| Progress <= 0 || Progress >= 100 || SavedDay < 1) return false;
+	auto* State = GetWorld()->GetGameState<ACatfishingGameState>();
+	auto* ASC = State ? State->GetRunAbilitySystemComponentFromAuthority() : nullptr;
+	if (!ASC) return false;
+	ASC->SetNumericAttributeBase(UCatRunAttributeSet::GetWorldProgressAttribute(), float(Progress));
+	RunPublicState.WorldProgress = Progress;
+	RunPublicState.Phase.DayIndex = SavedDay - 1;
+	UE_LOG(LogCatRun, Log, TEXT("Event=run_progress_restored World=%s NetMode=%d Authority=1 LocalRole=%d Progress=%d Day=%d"),
+		*GetNameSafe(GetWorld()), GetNetMode(), GetLocalRole(), Progress, SavedDay);
+	return true;
+}
+
 void ACatfishingGameModeBase::StartPlay()
 {
 	Super::StartPlay();
@@ -990,8 +1005,10 @@ ECatRunCommandError ACatfishingGameModeBase::PreviewRunOfferingSettlement(const 
 }
 
 // 阶段进入流程：先要求 authority、有效 Run 与正在启动/运行的唯一 StateTree，并在写公开 Phase 前拒绝未裁策略、白天参数或 Run ASC/GE 每日目标初始化失败。通过后统一清掉上一白天计时与公开截止并复位玩法开关：DayActive 递增天数、从 AttributeSet 投影每日目标和上一晚结果、只开启 fishing；NormalNight 打开 offering；两种 settlement 写对应终局原因；Ending/Ended/NotStarted 关闭新命令。最后只递增一次 Revision、保存 StateTree 可读结果并刷新 Environment/GameState 组合快照；非 Shipping 跳天加速只在正式阶段已发布后续交正式命令，C++ 始终不选择下一条转移边。
-FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(const ECatRunPhase NewPhase, const ECatRunTransitionReason Reason)
+FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(const ECatRunPhase RequestedPhase, const ECatRunTransitionReason Reason)
 {
+	// 墓碑（T34，局与进程 §失败）：旧资产的失败结算夜入口只兼容接入 Ending，不开放结算夜。
+	const ECatRunPhase NewPhase = RequestedPhase == ECatRunPhase::FailureSettlementNight ? ECatRunPhase::Ending : RequestedPhase;
 	FCatRunTransitionResult Result;
 	Result.PreviousPhase = RunPublicState.Phase.Phase;
 	Result.CurrentPhase = RunPublicState.Phase.Phase;
@@ -2848,6 +2865,8 @@ void ACatfishingGameModeBase::CloseShopForSettlementNight()
 	if (UCatShopEconomyService* Shop = GetWorld() ? GetWorld()->GetSubsystem<UCatShopEconomyService>() : nullptr)
 	{
 		Shop->CloseCommands();
+		if (RunPublicState.EndReason == ECatRunEndReason::Success) Shop->ConvertSettlementLeftoversToDriedFish();
+		else if (RunPublicState.EndReason == ECatRunEndReason::WorldProgressDepleted) Shop->ClearFailedRunResourcesFromAuthority();
 	}
 }
 

@@ -6,6 +6,7 @@
 
 #include "Async/Async.h"
 #include "Camp/CatCampInventoryActor.h"
+#include "Camp/CatCampHubActor.h"
 #include "Character/CatCharacter.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Engine/GameInstance.h"
@@ -25,6 +26,12 @@
 #include "Inventory/CatFishInventoryItemInstance.h"
 #include "Inventory/CatInventorySettings.h"
 #include "FishContainers/CatFishContainerService.h"
+#include "FishContainers/CatFishTankActor.h"
+#include "FishContainers/CatFishGuardActor.h"
+#include "FishContainers/CatFishContainerSettings.h"
+#include "Inventory/CatFishOnlyInventoryComponent.h"
+#include "Inventory/CatFishGuardInventoryItemInstance.h"
+#include "ShopEconomy/CatShopEconomyService.h"
 #include "Kismet/GameplayStatics.h"
 #include "Logging/CatLog.h"
 #include "Run/CatRunSettings.h"
@@ -156,7 +163,7 @@ namespace
 			if (!bOccupied)
 			{
 				if (!Slot.DefinitionId.IsNone() || Slot.ItemInstanceId.IsValid() || Slot.Quantity != 0
-					|| Slot.RodDurability != 0.0 || Slot.bRodBroken
+					|| Slot.RodDurability != 0.0 || Slot.bRodBroken || !Slot.FishGuardHostName.IsNone()
 					|| Slot.FishSessionId.IsValid() || Slot.FishWeightKilograms != 0.0 || !Slot.FishOwnerStableNetId.IsEmpty())
 				{
 					OutFailure = FText::FromString(TEXT("存档随身库存空格包含残留数据。"));
@@ -191,6 +198,9 @@ namespace
 			}
 			const TSubclassOf<UCatInventoryItemInstance> InstanceClass =
 				UCatInventoryItemDefinition::ResolveItemInstanceClass(InventoryDefinition);
+			if (!Slot.FishGuardHostName.IsNone() && (!InstanceClass
+				|| !InstanceClass->IsChildOf(UCatFishGuardInventoryItemInstance::StaticClass())))
+			{ OutFailure = FText::FromString(TEXT("非鱼护物品含有鱼护载体关联。")); return false; }
 			if (!InstanceClass)
 			{
 				OutFailure = FText::FromString(TEXT("存档物品定义没有可恢复的实例类型。"));
@@ -237,6 +247,8 @@ namespace
 				Saved.FishOwnerStableNetId = Fish->GetFishOwnerStableNetId();
 			}
 			Saved.DefinitionId = Entry.Instance->GetItemDefinitionId();
+			if (const auto* Guard = Cast<UCatFishGuardInventoryItemInstance>(Entry.Instance))
+				if (const auto* Host = Guard->GetWorldActor()) Saved.FishGuardHostName = Host->GetFName();
 			Saved.ItemInstanceId = Entry.Instance->GetItemInstanceId();
 			Saved.Quantity = Entry.StackCount;
 			if (const UCatEquipmentInventoryItemInstance* Equipment = Cast<UCatEquipmentInventoryItemInstance>(Entry.Instance))
@@ -295,6 +307,15 @@ namespace
 					OutFailure = FText::FromString(TEXT("库存鱼的身份、重量或捕获来源无效。"));
 					return false;
 				}
+			}
+			if (!Slot.FishGuardHostName.IsNone())
+			{
+				ACatFishGuardActor* Guard = nullptr;
+				for (TActorIterator<ACatFishGuardActor> It(Owner->GetWorld()); It; ++It)
+					if (It->GetFName() == Slot.FishGuardHostName) { Guard = *It; break; }
+				if (!Guard || !Guard->InitializeFromInventoryFromAuthority(Instance, Slot.Quantity))
+				{ OutFailure = FText::FromString(TEXT("存档鱼护载体关联无效。")); return false; }
+				Instance->SetRuntimeOwnerActor(Owner);
 			}
 			Entry.Instance = Instance;
 			Entry.StackCount = Slot.Quantity;
@@ -795,6 +816,120 @@ FName UCatSaveSubsystem::GetActiveSlotId() const
 // 1. 先确认 GameMode、营地与鱼容器服务都属于 authority World；新局只要求真实宿主可导出当前状态。
 // 2. 有世界载荷时先导出营地当前状态，再提交营地和世界鱼容器；鱼容器服务异常时只尝试还原营地并阻止进入玩法。
 // 3. 成功后保留玩家载荷等待 Pawn 生成时恢复，同时开始统计本 World 的实际玩法时长。
+namespace
+{
+	UCatInventoryComponent* GetSavedHostInventory(AActor* Host)
+	{
+		if (auto* Camp = Cast<ACatCampInventoryActor>(Host)) return Camp->GetInventoryComponent();
+		if (auto* Tank = Cast<ACatFishTankActor>(Host)) return Tank->GetFishInventoryComponent();
+		if (auto* Guard = Cast<ACatFishGuardActor>(Host)) return Guard->GetFishInventoryComponent();
+		return nullptr;
+	}
+
+	bool ValidateWorldInventory(const FCatSavedWorldInventory& Saved, FText& Failure)
+	{
+		UClass* Class = Saved.HostClass.LoadSynchronous();
+		const bool bTank = Class && Class->IsChildOf(ACatFishTankActor::StaticClass());
+		if (!Class || (!bTank && !Class->IsChildOf(ACatFishGuardActor::StaticClass())
+			&& !Class->IsChildOf(ACatCampInventoryActor::StaticClass())) || Saved.HostName.IsNone()
+			|| !Saved.HostTransform.IsValid() || Saved.HostTransform.GetScale3D().GetMin() <= 0.0
+			|| Saved.Capacity <= 0 || Saved.InventorySlots.Num() > Saved.Capacity
+			|| uint8(Saved.TeamStorageRole) > uint8(ECatTeamStorageRole::SupplyStore)
+			|| (bTank ? (Saved.CapacityTier < 0 || GetDefault<UCatFishContainerSettings>()->GetSharedFishTankCapacityForTier(Saved.CapacityTier) != Saved.Capacity)
+				: Saved.CapacityTier != INDEX_NONE))
+		{
+			Failure = FText::FromString(TEXT("世界库存宿主、角色、容量或鱼缸档位无效。"));
+			return false;
+		}
+		return ValidateSavedInventorySlots(Saved.InventorySlots, Failure);
+	}
+}
+
+bool UCatSaveSubsystem::CaptureWorldInventories(UWorld& World,
+	TArray<FCatSavedWorldInventory>& OutInventories, FText& OutFailure) const
+{
+	OutInventories.Reset();
+	if (World.GetNetMode() == NM_Client) return false;
+	for (TActorIterator<AActor> It(&World); It; ++It)
+	{
+		AActor* Host = *It;
+		UCatInventoryComponent* Inventory = GetSavedHostInventory(Host);
+		if (!Inventory) continue;
+		FCatSavedWorldInventory Saved;
+		Saved.HostName = Host->GetFName();
+		Saved.HostClass = Host->GetClass();
+		Saved.HostTransform = Host->GetActorTransform();
+		Saved.bRuntimeCreated = !Host->IsNetStartupActor();
+		Saved.Capacity = Inventory->GetInventorySlotCount();
+		Saved.TeamStorageRole = Inventory->GetTeamStorageRole();
+		if (const auto* Tank = Cast<ACatFishTankActor>(Host)) Saved.CapacityTier = Tank->GetCapacityTier();
+		TArray<FCatInventoryEntry> Entries;
+		if (!Inventory->ExportInventorySlotsFromAuthority(Entries, Saved.Capacity, OutFailure)
+			|| !WriteSavedInventorySlots(Entries, Saved.InventorySlots, OutFailure)
+			|| !ValidateWorldInventory(Saved, OutFailure)) return false;
+		OutInventories.Add(MoveTemp(Saved));
+	}
+	UE_LOG(LogCatRun, Log, TEXT("Event=persistence_inventories_exported World=%s NetMode=%d Authority=1 Hosts=%d"),
+		*World.GetName(), World.GetNetMode(), OutInventories.Num());
+	return true;
+}
+
+bool UCatSaveSubsystem::RestoreWorldInventories(UWorld& World,
+	const TArray<FCatSavedWorldInventory>& Inventories, FText& OutFailure) const
+{
+	if (World.GetNetMode() == NM_Client) return false;
+	TSet<FName> Names;
+	TSet<FGuid> Ids;
+	for (const auto& Saved : Inventories)
+	{
+		if (Names.Contains(Saved.HostName) || !ValidateWorldInventory(Saved, OutFailure)) return false;
+		Names.Add(Saved.HostName);
+		for (const auto& Slot : Saved.InventorySlots)
+		{
+			if (!Slot.ItemInstanceId.IsValid()) continue;
+			if (Ids.Contains(Slot.ItemInstanceId)) return false;
+			Ids.Add(Slot.ItemInstanceId);
+		}
+	}
+	// 全部磁盘数据先预检；分两遍准备宿主与库存，鱼护关联不依赖遍历顺序。
+	TMap<FName, AActor*> Hosts;
+	for (const auto& Saved : Inventories)
+	{
+		AActor* Host = nullptr;
+		for (TActorIterator<AActor> It(&World); It; ++It)
+			if (It->GetFName() == Saved.HostName) { Host = *It; break; }
+		if (Host && Host->GetClass() != Saved.HostClass.Get()) return false;
+		if (!Host)
+		{
+			if (!Saved.bRuntimeCreated) return false;
+			FActorSpawnParameters Spawn;
+			Spawn.Name = Saved.HostName;
+			Spawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+			Host = World.SpawnActor<AActor>(Saved.HostClass.Get(), Saved.HostTransform, Spawn);
+		}
+		// 地图原有鱼护也可能已被玩家挪动；不能只给新生成的宿主恢复位置。
+		if (Host && Host->IsA<ACatFishGuardActor>() && !Host->GetActorTransform().Equals(Saved.HostTransform)
+			&& !Host->SetActorTransform(Saved.HostTransform, false, nullptr, ETeleportType::TeleportPhysics)) return false;
+		auto* Inventory = GetSavedHostInventory(Host);
+		if (!Inventory || !Inventory->RestoreTeamStorageRoleFromAuthority(Saved.TeamStorageRole)) return false;
+		if (auto* Tank = Cast<ACatFishTankActor>(Host))
+			if (!Tank->RestoreCapacityTierFromAuthority(Saved.CapacityTier)) return false;
+		Hosts.Add(Saved.HostName, Host);
+	}
+	for (const auto& Saved : Inventories)
+	{
+		AActor* Host = Hosts.FindChecked(Saved.HostName);
+		auto* Inventory = GetSavedHostInventory(Host);
+		TArray<FCatInventoryEntry> Entries;
+		if (!PrepareInventoryEntriesFromSave(Saved.InventorySlots, *Inventory, Entries, OutFailure)
+			|| !Inventory->RestoreInventorySlotsFromAuthority(Entries, Saved.Capacity, OutFailure)) return false;
+		UE_LOG(LogCatRun, Log, TEXT("Event=persistence_inventory_restored World=%s NetMode=%d Authority=1 LocalRole=%d Host=%s Role=%d Capacity=%d Tier=%d Slots=%d"),
+			*World.GetName(), World.GetNetMode(), Host->GetLocalRole(), *Host->GetName(), uint8(Saved.TeamStorageRole),
+			Saved.Capacity, Saved.CapacityTier, Saved.InventorySlots.Num());
+	}
+	return true;
+}
+
 bool UCatSaveSubsystem::RestoreWorldAfterHostsReady(ACatfishingGameModeBase& GameMode)
 {
 	if (!HasLoadedRunForTravel() || !GameMode.HasAuthority() || GameMode.GetWorld() != GetGameInstance()->GetWorld())
@@ -802,39 +937,61 @@ bool UCatSaveSubsystem::RestoreWorldAfterHostsReady(ACatfishingGameModeBase& Gam
 		return true;
 	}
 	UWorld* World = GameMode.GetWorld();
-	ACatCampInventoryActor* CampInventory = nullptr;
-	for (TActorIterator<ACatCampInventoryActor> It(World); It; ++It)
+	FText CheckpointFailure;
+	if (!PendingRestoreSaveGame->bHasWorldSnapshot || PendingRestoreSaveGame->bHasInventoryCheckpoint)
 	{
-		if (CampInventory)
+		if (!PendingRestoreSaveGame->bHasWorldSnapshot)
 		{
-			RejectPendingRestore(FText::FromString(TEXT("当前地图存在多个营地公共仓库，不能安全恢复世界槽。")));
-			return false;
+			TArray<FCatSavedWorldInventory> Initial;
+			if (!CaptureWorldInventories(*World, Initial, CheckpointFailure))
+			{ RejectPendingRestore(CheckpointFailure); return false; }
 		}
-		CampInventory = *It;
+		else
+		{
+			auto* Shop = World->GetSubsystem<UCatShopEconomyService>();
+			auto* State = World->GetGameState<ACatfishingGameState>();
+			if (!ValidateLoadedRunSaveGame(*PendingRestoreSaveGame, ActiveSlotId, CheckpointFailure)
+				|| !RestoreWorldInventories(*World, PendingRestoreSaveGame->WorldInventories, CheckpointFailure)
+				|| !Shop || !Shop->RestoreWalletFromAuthority(PendingRestoreSaveGame->TeamWalletBalance)
+				|| !GameMode.RestoreWorldProgressFromSave(PendingRestoreSaveGame->WorldProgress, PendingRestoreSaveGame->DayIndex)
+				|| !State || !State->GetRunFishCollection()->RestoreCapturesFromAuthority(PendingRestoreSaveGame->RunFishCollectionCaptures))
+			{
+				RejectPendingRestore(CheckpointFailure.IsEmpty() ? FText::FromString(TEXT("世界断点恢复失败，未开放玩法。")) : CheckpointFailure);
+				return false;
+			}
+		}
+		bWorldRestoreApplied = true;
+		bLoadedRunForTravel = false;
+		ActiveRunBasePlayedDurationSeconds = PendingRestoreSaveGame->PlayedDurationSeconds;
+		ActiveRunStartedWorldSeconds = World->GetTimeSeconds();
+		UE_LOG(LogCatRun, Log, TEXT("Event=persistence_checkpoint_restored Slot=%s World=%s NetMode=%d Authority=1 Hosts=%d WorldProgress=%d Wallet=%d"),
+			*ActiveSlotId.ToString(), *World->GetName(), World->GetNetMode(), PendingRestoreSaveGame->WorldInventories.Num(),
+			GameMode.GetRunPublicState().WorldProgress, PendingRestoreSaveGame->TeamWalletBalance);
+		return true;
+	}
+	// 旧 v6 单仓/旧服务快照的兼容读取；新保存不再生产这两个旧载荷。
+	ACatCampInventoryActor* CampInventory = nullptr;
+	// 旧文件没有宿主名：沿原 CampHub.PublicInventory 绑定定位原仓，新公共架／公库不参与猜测。
+	for (TActorIterator<ACatCampHubActor> It(World); It; ++It)
+	{
+		auto* Bound = It->ResolvePublicInventoryForShopOrder();
+		if (!Bound) continue;
+		if (CampInventory && CampInventory != Bound)
+		{ RejectPendingRestore(FText::FromString(TEXT("旧档公共仓库绑定不唯一。"))); return false; }
+		CampInventory = Bound;
+	}
+	if (!CampInventory)
+	{
+		for (TActorIterator<ACatCampInventoryActor> It(World); It; ++It)
+		{
+			if (CampInventory)
+			{ RejectPendingRestore(FText::FromString(TEXT("旧档缺少 CampHub.PublicInventory 迁移绑定。"))); return false; }
+			CampInventory = *It;
+		}
 	}
 	UCatFishContainerService* FishContainers = World ? World->GetSubsystem<UCatFishContainerService>() : nullptr;
 	const TArray<FCatSavedRunInventorySlot>& SavedCampInventory = PendingRestoreSaveGame->CampInventory.InventorySlots;
 	FText Failure;
-	if (!PendingRestoreSaveGame->bHasWorldSnapshot)
-	{
-		// 新局没有要覆盖的世界内容；验证真实宿主可采样即可，沿用关卡初始仓库和全部初始箱子。
-		TArray<FCatPersistentContainerSnapshot> InitialContainers;
-		TArray<FCatInventoryEntry> InitialCampInventorySlots;
-		if (!CampInventory || !FishContainers
-			|| !CampInventory->ExportInventorySlotsFromAuthority(InitialCampInventorySlots, Failure)
-			|| !FishContainers->ExportPersistedWorldFishContainers(InitialContainers, Failure))
-		{
-			RejectPendingRestore(Failure.IsEmpty() ? FText::FromString(TEXT("新局营地或容器尚未就绪。")) : Failure);
-			return false;
-		}
-		bWorldRestoreApplied = true;
-		bLoadedRunForTravel = false;
-		ActiveRunStartedWorldSeconds = World->GetTimeSeconds();
-		ActiveRunBasePlayedDurationSeconds = 0.0;
-		UE_LOG(LogCatRun, Log, TEXT("Event=persistence_new_world_ready Slot=%s World=%s Containers=%d"),
-			*ActiveSlotId.ToString(), *GetNameSafe(World), InitialContainers.Num());
-		return true;
-	}
 	if (!CampInventory || !FishContainers)
 	{
 		RejectPendingRestore(Failure.IsEmpty() ? FText::FromString(TEXT("营地或世界鱼容器尚未就绪。")) : Failure);
@@ -1050,9 +1207,9 @@ FCatSaveResult UCatSaveSubsystem::MakeResult(const bool bAccepted, const FText& 
 }
 
 // 运行载荷采集流程：
-// 1. 只接受 authority GameMode、唯一营地和已恢复的玩法 World，客户端或前端 World 不会写磁盘。
+// 1. 只接受 authority GameMode 和已恢复的玩法 World；多仓按宿主身份导出，客户端或前端不写磁盘。
 // 2. 世界槽只保留一个本机玩家快照；若有在线本机 Controller 就现场采样，否则沿用退出捕获已经写入内存的快照。
-// 3. 最后导出已提交世界鱼与真实 Run 展示元数据，并读取终局原因把「已完结」写进载荷；Profile 与 Run 状态机本身都不会进入载荷。
+// 3. 最后导出已提交世界鱼与真实 Run 展示元数据，并读取终局原因把「已完结」写进载荷；Profile 不进入世界载荷，Run 世界进度与公款由各自权威恢复入口消费。
 bool UCatSaveSubsystem::BuildActiveRunSaveGame(UCatRunSaveGame& OutSaveGame, FText& OutFailure) const
 {
 	OutFailure = FText::GetEmpty();
@@ -1068,22 +1225,11 @@ bool UCatSaveSubsystem::BuildActiveRunSaveGame(UCatRunSaveGame& OutSaveGame, FTe
 		OutFailure = PlayerCaptureFailure;
 		return false;
 	}
-	ACatCampInventoryActor* CampInventory = nullptr;
-	for (TActorIterator<ACatCampInventoryActor> It(World); It; ++It)
-	{
-		if (CampInventory)
-		{
-			OutFailure = FText::FromString(TEXT("当前地图存在多个营地公共仓库。"));
-			return false;
-		}
-		CampInventory = *It;
-	}
-	UCatFishContainerService* FishContainers = World->GetSubsystem<UCatFishContainerService>();
-	if (!CampInventory || !FishContainers)
-	{
-		OutFailure = FText::FromString(TEXT("营地或鱼容器服务未就绪。"));
-		return false;
-	}
+	if (!CaptureWorldInventories(*World, OutSaveGame.WorldInventories, OutFailure)) return false;
+	const auto* Shop = World->GetSubsystem<UCatShopEconomyService>();
+	if (!Shop || !Shop->ExportWalletFromAuthority(OutSaveGame.TeamWalletBalance))
+	{ OutFailure = FText::FromString(TEXT("公款尚未就绪。")); return false; }
+	OutSaveGame.bHasInventoryCheckpoint = true;
 	OutSaveGame.bHasPlayerSnapshot = PendingRestoreSaveGame->bHasPlayerSnapshot;
 	OutSaveGame.PlayerSnapshot = PendingRestoreSaveGame->PlayerSnapshot;
 	OutSaveGame.WorldFishContainers.Reset();
@@ -1105,15 +1251,6 @@ bool UCatSaveSubsystem::BuildActiveRunSaveGame(UCatRunSaveGame& OutSaveGame, FTe
 		OutSaveGame.DisplayName = Summary->DisplayName;
 	}
 	OutSaveGame.LastSavedAt = FDateTime::UtcNow();
-	TArray<FCatInventoryEntry> CampInventorySlots;
-	if (!CampInventory->ExportInventorySlotsFromAuthority(CampInventorySlots, OutFailure))
-	{
-		return false;
-	}
-	if (!WriteSavedInventorySlots(CampInventorySlots, OutSaveGame.CampInventory.InventorySlots, OutFailure))
-	{
-		return false;
-	}
 	APlayerController* ControllerToSave = nullptr;
 	for (TActorIterator<APlayerController> It(World); It; ++It)
 	{
@@ -1159,10 +1296,6 @@ bool UCatSaveSubsystem::BuildActiveRunSaveGame(UCatRunSaveGame& OutSaveGame, FTe
 		OutFailure = FText::FromString(TEXT("本机玩家快照尚未写入，不能覆盖世界存档。"));
 		return false;
 	}
-	if (!FishContainers->ExportPersistedWorldFishContainers(OutSaveGame.WorldFishContainers, OutFailure))
-	{
-		return false;
-	}
 	const FCatRunPublicState& RunPublicState = GameMode->GetRunPublicState();
 	OutSaveGame.DayIndex = RunPublicState.Phase.DayIndex;
 	OutSaveGame.LocationName = FPackageName::GetShortName(World->GetMapName());
@@ -1172,42 +1305,26 @@ bool UCatSaveSubsystem::BuildActiveRunSaveGame(UCatRunSaveGame& OutSaveGame, FTe
 	OutSaveGame.DailyOfferingTarget = RunPublicState.DailyOfferingTarget;
 	OutSaveGame.WorldProgress = RunPublicState.WorldProgress;
 	OutSaveGame.LastWorldProgressDelta = RunPublicState.LastWorldProgressDelta;
-	// 加载页要给的第三个量：缸内可献点数。就地按已经导出的容器快照折算，不另开一条读鱼缸的路。
-	// 档位换算未裁（RunSettings 还是 Undecided）时保持 INDEX_NONE——宁可写「未记录」，也不写一个算错的 0。
+	// 摘要与恢复共读正式鱼库存，不再从未注册现行鱼缸的旧服务推导点数。
 	OutSaveGame.TankOfferingPoints = INDEX_NONE;
-	if (const UCatRunSettings* RunSettings = GetDefault<UCatRunSettings>())
+	int64 TankPoints = 0;
+	bool bHasTank = false;
+	bool bPointsValid = true;
+	for (const auto& Inventory : OutSaveGame.WorldInventories)
 	{
-		int32 TankOfferingPoints = 0;
-		bool bTankPointsResolvable = false;
-		for (const FCatPersistentContainerSnapshot& Container : OutSaveGame.WorldFishContainers)
+		if (Inventory.CapacityTier == INDEX_NONE) continue;
+		bHasTank = true;
+		for (const auto& Fish : Inventory.InventorySlots)
 		{
-			if (Container.Kind != ECatContainerKind::SharedFishTank)
-			{
-				continue;
-			}
-			bTankPointsResolvable = true;
-			for (const FCatFishInstance& Fish : Container.Fish)
-			{
-				ECatOfferingWeightClass WeightClass = ECatOfferingWeightClass::Small;
-				int32 OfferingPoints = 0;
-				if (RunSettings->TryClassifyOfferingWeight(Fish.WeightKilograms, WeightClass, OfferingPoints))
-				{
-					TankOfferingPoints += OfferingPoints;
-				}
-				else
-				{
-					// 有一条鱼折算不出来就整份作废：半份点数比没有点数更容易骗人。
-					bTankPointsResolvable = false;
-					break;
-				}
-			}
-			if (!bTankPointsResolvable)
-			{
-				break;
-			}
+			if (!Fish.ItemInstanceId.IsValid()) continue;
+			ECatOfferingWeightClass WeightClass;
+			int32 Points = 0;
+			if (!GetDefault<UCatRunSettings>()->TryClassifyOfferingWeight(Fish.FishWeightKilograms, WeightClass, Points))
+			{ bPointsValid = false; break; }
+			TankPoints += Points;
 		}
-		OutSaveGame.TankOfferingPoints = bTankPointsResolvable ? TankOfferingPoints : INDEX_NONE;
 	}
+	if (bHasTank && bPointsValid && TankPoints <= MAX_int32) OutSaveGame.TankOfferingPoints = int32(TankPoints);
 	// 终局只认两个原因：进度归零＝团灭、Success＝毕业。房主退出（HostExit）是可续的局中断点，不是终局；
 	// StartupFailed 与 None 同理。标记只增不减，终局那一夜之后的任何一次写盘都不会把槽变回「可继续」。
 	const bool bTerminalRun = RunPublicState.EndReason == ECatRunEndReason::WorldProgressDepleted
@@ -1247,7 +1364,8 @@ bool UCatSaveSubsystem::ValidateLoadedRunSaveGame(const UCatRunSaveGame& SaveGam
 	}
 	// 墓碑（2026-09-14，T33；局与进程.md:103）：首个完整快照之前也可能终局；空槽允许仅持有完成位，仍禁止半套世界/玩家数据。
 	if (!SaveGame.bHasWorldSnapshot && (SaveGame.bHasPlayerSnapshot || !SaveGame.WorldFishContainers.IsEmpty()
-		|| !SaveGame.CampInventory.InventorySlots.IsEmpty() || !SaveGame.RunFishCollectionCaptures.IsEmpty()))
+		|| !SaveGame.CampInventory.InventorySlots.IsEmpty() || !SaveGame.RunFishCollectionCaptures.IsEmpty()
+		|| SaveGame.bHasInventoryCheckpoint || !SaveGame.WorldInventories.IsEmpty()))
 	{
 		OutFailure = FText::FromString(TEXT("没有完整世界快照的槽夹带世界或玩家数据，不能按新局进入。"));
 		return false;
@@ -1287,6 +1405,42 @@ bool UCatSaveSubsystem::ValidateLoadedRunSaveGame(const UCatRunSaveGame& SaveGam
 			}
 		}
 	}
+	if (SaveGame.bHasInventoryCheckpoint)
+	{
+		if (SaveGame.TeamWalletBalance < 0 || SaveGame.TeamWalletBalance > 16777216
+			|| !SaveGame.CampInventory.InventorySlots.IsEmpty() || !SaveGame.WorldFishContainers.IsEmpty()) return false;
+		TSet<FName> Names;
+		for (const auto& Saved : SaveGame.WorldInventories)
+		{
+			if (Names.Contains(Saved.HostName) || !ValidateWorldInventory(Saved, OutFailure)) return false;
+			Names.Add(Saved.HostName);
+			for (const auto& Slot : Saved.InventorySlots)
+			{
+				if (!Slot.ItemInstanceId.IsValid()) continue;
+				if (SeenItemInstanceIds.Contains(Slot.ItemInstanceId))
+				{ OutFailure = FText::FromString(TEXT("世界库存与玩家之间有重复物品身份。")); return false; }
+				SeenItemInstanceIds.Add(Slot.ItemInstanceId);
+			}
+		}
+		TSet<FName> ClaimedGuards;
+		const auto ValidateGuardLinks = [&](const TArray<FCatSavedRunInventorySlot>& Slots)
+		{
+			for (const auto& Slot : Slots)
+			{
+				if (Slot.FishGuardHostName.IsNone()) continue;
+				const auto* Host = SaveGame.WorldInventories.FindByPredicate(
+					[&](const auto& Candidate) { return Candidate.HostName == Slot.FishGuardHostName; });
+				if (!Host || !Host->HostClass.Get()->IsChildOf(ACatFishGuardActor::StaticClass())
+					|| ClaimedGuards.Contains(Slot.FishGuardHostName)) return false;
+				ClaimedGuards.Add(Slot.FishGuardHostName);
+			}
+			return true;
+		};
+		if (!ValidateGuardLinks(SaveGame.PlayerSnapshot.InventorySlots)) return false;
+		for (const auto& Host : SaveGame.WorldInventories)
+			if (!ValidateGuardLinks(Host.InventorySlots)) return false;
+	}
+	else if (!SaveGame.WorldInventories.IsEmpty()) return false;
 	const TArray<FCatSavedRunInventorySlot>& SavedCampInventory = SaveGame.CampInventory.InventorySlots;
 	if (!ValidateSavedInventorySlots(SavedCampInventory, OutFailure))
 	{

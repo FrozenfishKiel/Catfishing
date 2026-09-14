@@ -27,6 +27,10 @@ class CATFISHING_API UCatShopEconomyService : public UWorldSubsystem
 	GENERATED_BODY()
 
 public:
+	/** 世界断点启动时恢复唯一 ASC 公款；已发生交易后不能覆盖。 */
+	bool RestoreWalletFromAuthority(int32 Balance);
+	bool AreCommandsOpen() const { return bCommandsOpen; }
+	bool ExportWalletFromAuthority(int32& OutBalance) const { return TryGetTeamWalletBalance(OutBalance); }
 	/** 仅在 authority Game World 创建；客户端 UI 以后只能读复制/查询结果，不持有第二份公款。 */
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
 
@@ -85,7 +89,8 @@ public:
 
 	/** 玩家支付购物车时提交一整车指定摊位目录项；返回整单公款终态、库存快照和每个 EntryId 对应的成交账本。 */
 	FCatShopCartTransactionResult PurchaseCatalogCart(const FCatShopCartCommand& Command,
-		UCatShopInventoryComponent* ShopInventory);
+		UCatShopInventoryComponent* ShopInventory,
+		TFunctionRef<bool(TFunctionRef<bool()>)> CommitDeliveryAndPayment);
 
 	/** 按鱼种收购表和实际千克重量估一条鱼的收入；UI 与服务器预检复用同一纯算式，缺表或缺行返回 false。 */
 	bool TryAppraiseFishSale(FName FishDefinitionId, double WeightKilograms, int32& OutSaleValue) const;
@@ -135,25 +140,13 @@ public:
 	/** 当前货架由 Catalog 刷新成功后的本机广播；订阅方据此重建 ShopEconomySnapshot。 */
 	FCatShopInventoryRefreshed OnShopInventoryRefreshed;
 
-	/**
-	 * 商人猫收摊：购物车支付和售鱼入账这些写口停止受理新命令，清晨换货架与每日进货也一并停下；
-	 * 公款、库存和账本查询照常可读，既有 RequestId 重放仍返回首次终态。
-	 * 新命令拿到的错误码不一定是 CommandsClosed：购买与售鱼两条链都把配置/策略未裁的 PolicyUndecided 排在命令门之前，
-	 * 所以配置缺失时收摊后返回的是 PolicyUndecided。两者都是拒绝，判断"商店关没关"不要只认 CommandsClosed。
-	 * 它同时是最后一个夜晚"买卖冻结、只剩吃鱼与篝火"的表达和 World teardown 的收口；调用点是 Run 进入两种
-	 * 结算夜时的 GameMode 相位切换和 World teardown 的 Deinitialize，两者重复调用不产生第二次副作用。
-	 * 收摊那一下还会把剩余公款换成小鱼干（见 ConvertSettlementLeftoversToDriedFish），换完再关门。
-	 */
+	/** 仅冻结营业门；重放仍读终态，不执行毕业兑换。 */
 	void CloseCommands();
-
-	/**
-	 * 声明：收摊时把剩余公款换成小鱼干放进营地公库，给猫猫们在篝火旁娱乐（商店册 §3.1.2）。返回实际兑出的条数。
-	 * 实现：按 Settings 的兑换率整除余额，扣掉对应公款，再把小鱼干发进营地公共仓库（有公库角色时进公库）。
-	 * 边界：小鱼干道具还没有资产、或兑换率没裁时**跳过并记一行 Log**——这条玩法此刻没有载体，
-	 *       不是配置错误，所以不能 fail-closed 把收摊本身挡住。资产一挂上、两个值一填就能跑。
-	 *       一局只兑一次：CloseCommands 的幂等由 bCommandsOpen 守，已经关门的重复调用不会再兑。
-	 */
+	/** 毕业专属：按完整商品配置原价折算装备与公款，整除小鱼干售价，余数丢弃；一局只提交一次。 */
 	int32 ConvertSettlementLeftoversToDriedFish();
+	/** 失败专属：清世界资源和公款，不产出小鱼干。 */
+	void ClearFailedRunResourcesFromAuthority();
+	bool TryGetOriginalItemPrice(FName DefinitionId, int32& OutPrice) const;
 
 #if !UE_BUILD_SHIPPING
 	/** 开发期救援入口：只在人工 ForceNextDay 需要从失败结算夜回到白天前重新打开商店写口；它不清公款、账本、货架或幂等缓存，后续日进货仍由 AdvanceShopDay 按正式天数处理。 */
@@ -161,6 +154,12 @@ public:
 #endif
 
 private:
+	friend class FCatShopCartAtomicTest;
+#if WITH_DEV_AUTOMATION_TESTS
+	bool FailPaymentForTest = false;
+#endif
+	int32 FinalizeRunResourcesFromAuthority(bool bGraduation);
+	bool bSettlementResourcesFinalized = false;
 	/** 一个摊位库存组件和服务订阅它货架变化时拿到的委托句柄；注销或 World 退出时用它成对解绑。 */
 	struct FRegisteredShopInventorySubscription
 	{

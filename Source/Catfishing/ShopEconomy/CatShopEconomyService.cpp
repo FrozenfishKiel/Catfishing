@@ -5,7 +5,16 @@
 #include "AbilitySystem/Executions/CatShopEconomyTransactionExecutionCalculation.h"
 #include "AbilitySystemComponent.h"
 #include "Camp/CatCampInventoryActor.h"
+#include "Framework/Game/CatfishingGameModeBase.h"
+#include "Inventory/CatFishInventoryItemInstance.h"
+#include "Inventory/CatFishGuardInventoryItemInstance.h"
+#include "Inventory/CatFishOnlyInventoryComponent.h"
+#include "FishContainers/CatFishGuardActor.h"
+#include "Items/CatItem.h"
+#include "Items/Fish/CatFishPickupActor.h"
+#include "Fishing/Actors/CatFishingRodActor.h"
 #include "Engine/DataTable.h"
+#include "Data/CatFishDefinition.h"
 #include "EngineUtils.h"
 #include "Framework/Game/CatfishingGameState.h"
 #include "Inventory/CatInventoryComponent.h"
@@ -262,6 +271,7 @@ bool UCatShopEconomyService::ResolveCatalogCartForAuthority(const FCatShopCartCo
 			OutError = ECatDomainCommandError::CapacityExceeded;
 			OutResolved = FCatShopResolvedCart();
 			OutResolved.Wallet = GetWalletSnapshot();
+			OutResolved.FailureReason = TEXT("OutOfStock");
 			return false;
 		}
 		const int64 DeliveryQuantity = static_cast<int64>(Entry.PurchaseQuantity) * Line.CartCount;
@@ -287,22 +297,17 @@ bool UCatShopEconomyService::ResolveCatalogCartForAuthority(const FCatShopCartCo
 		OutError = ECatDomainCommandError::CapacityExceeded;
 		OutResolved = FCatShopResolvedCart();
 		OutResolved.Wallet = GetWalletSnapshot();
+		OutResolved.FailureReason = TEXT("InsufficientFunds");
 		return false;
 	}
 	OutResolved.TotalPrice = static_cast<int32>(TotalPrice);
 	return true;
 }
 
-// 整车购买流程：
-// 1. 先用身份、CartPurchase 和 RequestId 查询幂等终态；成功订单重放时重读账本/库存，把货架数字带回最新值。
-//    若首次终态是拒绝，重放必须返回首次错误，不能把一次失败请求伪装成已经结算。
-// 2. 首次命令复用整车报价判据，然后让摊位库存整批扣减；扣库存失败时公款和账本保持不变。
-// 3. 库存扣完后一次扣总价，并为每个 EntryId 写一条成交账本，免费商品也以 0 元购买行进入同一入库链。
-//    账本同时留下提交 UTC 时刻与当时的商店天序号，供 Playtest 按天回看；它没有待交付中间态，
-//    发货由订单链在同一次调用里紧接着做（商店册 §2 核心循环第 4 条「购买物进入团队装备库」）。
-// 提交守卫覆盖库存、GAS、账本及广播，期间嵌套购买或售鱼直接拒绝且不缓存，避免回调抢先复用尚未完成的请求。
+// 整车提交：货架先保留原状态，协调器静默准备全部实物再付款；成功才追加账本和整车广播。
+// 拒绝由协调器恢复实物、本服务下的货架组件恢复库存；重放读取首次完整终态。
 FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const FCatShopCartCommand& Command,
-	UCatShopInventoryComponent* ShopInventory)
+	UCatShopInventoryComponent* ShopInventory, TFunctionRef<bool(TFunctionRef<bool()>)> CommitDeliveryAndPayment)
 {
 	FCatShopCartTransactionResult Result;
 	Result.Command.RequestId = Command.Context.RequestId;
@@ -337,6 +342,9 @@ FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const 
 		Result = *Cached;
 		RefreshCartReplayResultFromLedger(Result);
 		Result.Command.bCommitted = false;
+		Result.Command.bTerminalReplay = true;
+		Result.Command.bReplayedTerminalCommitted = Cached->Command.bCommitted;
+		Result.Command.ReplayedTerminalError = Cached->Command.Error;
 		if (Cached->Command.Error == ECatDomainCommandError::None && !Result.Transactions.IsEmpty())
 		{
 			Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
@@ -349,21 +357,31 @@ FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const 
 	if (!ResolveCatalogCartForAuthority(Command, ShopInventory, ResolvedCart, Rejection))
 	{
 		Result.Command.Error = Rejection;
+		Result.Command.FailureReason = ResolvedCart.FailureReason;
 		Result.Command.Revision = WalletRevision;
 		Result.Wallet = GetWalletSnapshot();
 		CacheCartTerminalResult(CacheKey, PayloadSignature, Result);
 		return Result;
 	}
 	int32 WalletDelta = -ResolvedCart.TotalPrice;
+	bool bPaymentAttempted = false;
 	// 货架持有原状态直到GE确认；拒绝扣款不会消耗限量商品，公开通知仍留到双方与账本全部提交之后。
 	if (!ShopInventory->ConsumeCatalogEntriesFromAuthority(ResolvedCart.Command.Lines, Result.Stocks, [&]()
 		{
-			return TryApplyTeamWalletTransaction(WalletDelta, Command.Context.RequestId);
+			return CommitDeliveryAndPayment([&]()
+			{
+				bPaymentAttempted = true;
+				return TryApplyTeamWalletTransaction(WalletDelta, Command.Context.RequestId);
+			});
 		}))
 	{
 		Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
+		Result.Command.FailureReason = bPaymentAttempted ? TEXT("PaymentRejected") : TEXT("DeliveryRejected");
 		Result.Command.Revision = WalletRevision;
 		Result.Wallet = GetWalletSnapshot();
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=shop_cart_rejected CartId=%s RequestId=%s World=%s NetMode=%d Authority=1 Result=%s"),
+			*FGuid::NewDeterministicGuid(CacheKey).ToString(), *Command.Context.RequestId.ToString(),
+			*GetNameSafe(GetWorld()), GetWorld()->GetNetMode(), *Result.Command.FailureReason.ToString());
 		CacheCartTerminalResult(CacheKey, PayloadSignature, Result);
 		return Result;
 	}
@@ -379,6 +397,8 @@ FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const 
 		FCatShopTransactionRecord& Record = TransactionLedger.AddDefaulted_GetRef();
 		Record.TransactionId = FGuid::NewGuid();
 		Record.RequestId = Command.Context.RequestId;
+		Record.CartId = FGuid::NewDeterministicGuid(CacheKey);
+		Record.Items.Add({Line.Entry.DefinitionId, Line.DeliveryQuantity});
 		Record.StableNetId = Command.Context.StableNetId;
 		Record.bPurchase = true;
 		Record.CommittedAtUtc = CommittedAtUtc;
@@ -404,10 +424,13 @@ FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const 
 	Result.Command.Revision = WalletRevision;
 	Result.Wallet = GetWalletSnapshot();
 	CacheCartTerminalResult(CacheKey, PayloadSignature, Result);
-	for (const FCatShopTransactionRecord& Record : Result.Transactions)
-	{
-		OnPublicTransactionCommitted.Broadcast(MakePublicTransaction(Record));
-	}
+	FCatShopPublicTransaction Cart = MakePublicTransaction(Result.Transactions[0]);
+	Cart.Items.Reset();
+	Cart.WalletDelta = -ResolvedCart.TotalPrice;
+	for (const auto& Record : Result.Transactions) Cart.Items.Append(Record.Items);
+	UE_LOG(LogCatfishing, Log, TEXT("Event=shop_cart_committed CartId=%s RequestId=%s World=%s NetMode=%d Authority=1 Items=%d Spent=%d Balance=%d"),
+		*Cart.CartId.ToString(), *Command.Context.RequestId.ToString(), *GetNameSafe(GetWorld()), GetWorld()->GetNetMode(), Cart.Items.Num(), ResolvedCart.TotalPrice, Result.Wallet.Balance);
+	OnPublicTransactionCommitted.Broadcast(Cart);
 	return Result;
 }
 
@@ -567,6 +590,13 @@ FCatShopTransactionResult UCatShopEconomyService::ApplyFishSale(const FCatShopFi
 	Record.RequestId = Command.Context.RequestId;
 	Record.StableNetId = Command.Context.StableNetId;
 	Record.bFishSale = true;
+	Record.CartId = FGuid::NewDeterministicGuid(CacheKey);
+	for (const auto& Fish : Command.Fish)
+	{
+		Record.Items.Add({Fish.FishDefinitionId, 1});
+		const auto* Definition = Cast<UCatFishDefinition>(GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(Fish.FishDefinitionId));
+		Record.bContainsGiantFish |= Definition && Definition->BodyClass == ECatFishBodyClass::Giant;
+	}
 	Record.CommittedAtUtc = FDateTime::UtcNow();
 	Record.ShopDayIndex = CurrentShopDayIndex;
 	Record.FishInstanceId = Command.Fish[0].FishInstanceId;
@@ -660,6 +690,7 @@ FCatShopPublicEconomySnapshot UCatShopEconomyService::BuildPublicSnapshot(
 	Snapshot.WalletRevision = WalletSnapshot.Revision;
 	Snapshot.Balance = WalletSnapshot.Balance;
 	Snapshot.ShopDayIndex = CurrentShopDayIndex;
+	Snapshot.bCommandsOpen = bCommandsOpen;
 	for (const TWeakObjectPtr<UCatShopInventoryComponent>& InventoryPtr : RegisteredShopInventories)
 	{
 		if (const UCatShopInventoryComponent* Inventory = InventoryPtr.Get())
@@ -677,133 +708,259 @@ FCatShopPublicEconomySnapshot UCatShopEconomyService::BuildPublicSnapshot(
 			// 与其挑一个场内玩家顶上，不如让表现层显示未知操作者。
 			PublicTransaction.ActorPlayerState = ResolveActorPlayerState(Record.StableNetId);
 		}
-		Snapshot.Transactions.Add(MoveTemp(PublicTransaction));
+		FCatShopPublicTransaction* Cart = Snapshot.Transactions.FindByPredicate(
+			[&](const auto& Existing) { return Existing.CartId == PublicTransaction.CartId; });
+		if (Cart)
+		{
+			Cart->Items.Append(PublicTransaction.Items);
+			Cart->WalletDelta += PublicTransaction.WalletDelta;
+			Cart->bContainsGiantFish |= PublicTransaction.bContainsGiantFish;
+		}
+		else Snapshot.Transactions.Add(MoveTemp(PublicTransaction));
 	}
 	return Snapshot;
 }
 
-// 关闭流程：只把新命令 gate 置否，不清公款、库存、账本和 TerminalCache；因此收摊后查询仍读得到本局经济事实，网络重试
-// 也仍能拿回首次终态，而四个写口和每日进货都会在各自 gate 处停下。这里不需要第二个“冻结但未 teardown”的中间态，冻结与
-// 收口本来就是同一件事，差别只在调用时机。
+// 关门只改变营业门；普通退出和失败不得借它兑换毕业资源。
 void UCatShopEconomyService::CloseCommands()
 {
-	if (!bCommandsOpen)
-	{
-		return; // 已经收过摊；重复调用不再兑一次小鱼干，也不做第二次副作用。
-	}
-	// 顺序是先兑后关：兑换要走扣公款这条写口，而写口本身受命令门约束。
-	ConvertSettlementLeftoversToDriedFish();
+	if (!bCommandsOpen) return;
 	bCommandsOpen = false;
+	OnShopInventoryRefreshed.Broadcast();
 }
 
-// 收摊兑换流程：
-// 1. 先确认这条玩法有载体——小鱼干的稳定 ID 和兑换率都配齐、且稳定 ID 能在库存目录里解析到可运行定义。
-//    任一项缺失只记一行 Log 并返回 0：小鱼干道具还没有资产是已知的资产缺口，不能因此把收摊挡住。
-// 2. 读当前公款，按兑换率整除得到条数，再按上限夹一次；零条直接返回。
-// 3. 先扣公款再发货。扣款走和购买同一条 GE 写口；发货失败时把刚扣的钱补回去，不留「钱扣了、货没到」。
+bool UCatShopEconomyService::TryGetOriginalItemPrice(const FName DefinitionId, int32& OutPrice) const
+{
+	OutPrice = INDEX_NONE;
+	const auto* Settings = GetDefault<UCatShopEconomySettings>();
+	const auto* Table = Settings ? Settings->DefaultShopCatalogTable.LoadSynchronous() : nullptr;
+	if (!Table || Table->GetRowStruct() != FCatShopCatalogTableRow::StaticStruct()) return false;
+	// 原价来自完整商品配置，不从当日抽中的货架或最后一次成交反推。
+	for (const auto& Pair : Table->GetRowMap())
+	{
+		const auto* Row = reinterpret_cast<const FCatShopCatalogTableRow*>(Pair.Value);
+		if (Row->DefinitionId != DefinitionId) continue;
+		if (Row->UnitPrice < 0 || Row->PurchaseQuantity <= 0 || Row->UnitPrice % Row->PurchaseQuantity != 0) return false;
+		const int32 Price = Row->UnitPrice / Row->PurchaseQuantity;
+		if (OutPrice != INDEX_NONE && OutPrice != Price) return false;
+		OutPrice = Price;
+	}
+	return OutPrice != INDEX_NONE;
+}
+
+// 收摊只由毕业出口进入；失败调用独立清理入口。余额、装备与兑换物在同一同步提交中切换。
 int32 UCatShopEconomyService::ConvertSettlementLeftoversToDriedFish()
 {
-	const UCatShopEconomySettings* Settings = GetDefault<UCatShopEconomySettings>();
-	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
-	UCatInventoryItemDefinition* DriedFish = Settings && InventorySettings
-		&& !Settings->SettlementDriedFishDefinitionId.IsNone()
-		? InventorySettings->FindRuntimeDefinition(Settings->SettlementDriedFishDefinitionId) : nullptr;
-	const int32 CoinCost = Settings ? Settings->SettlementDriedFishCoinCost : 0;
-	if (bTearingDown)
-	{
-		return 0;
-	}
-	if (!bRuntimeReady || DriedFish == nullptr || CoinCost <= 0
-		|| !DriedFish->IsInventoryRuntimeDefinitionReady())
-	{
-		UE_LOG(LogCatfishing, Log,
-			TEXT("Event=shop_settlement_dried_fish_skipped DefinitionId=%s CoinCost=%d Resolved=%s Reason=NoRuntimeCarrier"),
-			Settings ? *Settings->SettlementDriedFishDefinitionId.ToString() : TEXT("None"), CoinCost,
-			DriedFish ? TEXT("true") : TEXT("false"));
-		return 0;
-	}
+	return FinalizeRunResourcesFromAuthority(true);
+}
 
-	int32 Balance = 0;
-	if (!TryGetTeamWalletBalance(Balance) || Balance < CoinCost)
-	{
-		return 0;
-	}
-	int32 Count = Balance / CoinCost;
-	if (Settings->SettlementDriedFishMaxCount > 0)
-	{
-		Count = FMath::Min(Count, Settings->SettlementDriedFishMaxCount);
-	}
-	if (Count <= 0)
-	{
-		return 0;
-	}
+void UCatShopEconomyService::ClearFailedRunResourcesFromAuthority()
+{
+	FinalizeRunResourcesFromAuthority(false);
+}
 
-	// 收货去处：有公库角色就进公库，否则退回唯一的营地公共仓库；两个都没有就没地方放，整笔不做。
-	UWorld* World = GetWorld();
+int32 UCatShopEconomyService::FinalizeRunResourcesFromAuthority(const bool bGraduation)
+{
+	auto* World = GetWorld();
+	const auto* Mode = World ? World->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
+	if (!Mode || bTearingDown || bTransactionInProgress || bSettlementResourcesFinalized) return 0;
+	const auto Reason = Mode->GetRunPublicState().EndReason;
+	if ((bGraduation && Reason != ECatRunEndReason::Success)
+		|| (!bGraduation && Reason != ECatRunEndReason::WorldProgressDepleted)) return 0;
+	CloseCommands();
+	TGuardValue<bool> TransactionGuard(bTransactionInProgress, true);
+	const auto* Settings = GetDefault<UCatShopEconomySettings>();
+	auto* DriedFish = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(Settings->SettlementDriedFishDefinitionId);
+	int32 CoinCost = 0, Balance = 0;
+	const auto Reject = [&](const TCHAR* Failure)
+	{
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=shop_settlement_rejected World=%s NetMode=%d Authority=1 Graduation=%d Result=%s"),
+			*GetNameSafe(World), World->GetNetMode(), bGraduation, Failure);
+		return 0;
+	};
+	if (!TryGetTeamWalletBalance(Balance)) return Reject(TEXT("WalletUnavailable"));
+	if (bGraduation && (!DriedFish || !DriedFish->IsInventoryRuntimeDefinitionReady()
+		|| !TryGetOriginalItemPrice(Settings->SettlementDriedFishDefinitionId, CoinCost) || CoinCost <= 0))
+		return Reject(TEXT("DriedFishDefinitionOrCatalogPriceMissing"));
+
+	TMap<UCatInventoryComponent*, TArray<FCatInventoryEntry>> Before, After, Held;
+	TSet<FGuid> PricedIds;
+	TSet<AActor*> RemoveActors;
+	int64 EquipmentCoins = 0;
+	int32 EquipmentCount = 0;
+	const auto PriceDefinition = [&](UCatInventoryItemDefinition* Definition, int32 Count)
+	{
+		if (!bGraduation) return true;
+		if (!Definition || Count <= 0) return false;
+		if (!bGraduation || Definition->IsA<UCatFishDefinition>()) return true;
+		int32 Price = 0;
+		if (!TryGetOriginalItemPrice(Definition->GetInventoryDefinitionId(), Price)) return false;
+		const int64 AddedValue = int64(Price) * Count;
+		if (EquipmentCoins > MAX_int64 - AddedValue) return false;
+		EquipmentCoins += AddedValue;
+		EquipmentCount += Count;
+		return true;
+	};
+	const auto PriceInstance = [&](UCatInventoryItemInstance* Instance, int32 Count)
+	{
+		if (!Instance || Count <= 0) return false;
+		if (PricedIds.Contains(Instance->GetItemInstanceId())) return true;
+		PricedIds.Add(Instance->GetItemInstanceId());
+		if (!PriceDefinition(Instance->GetItemDefinition(), Count)) return false;
+		if ((!bGraduation || !Instance->IsA<UCatFishInventoryItemInstance>()) && Instance->GetWorldActor())
+			RemoveActors.Add(Instance->GetWorldActor());
+		return true;
+	};
+	UCatInventoryComponent* Target = nullptr;
 	UCatInventoryComponent* Fallback = nullptr;
-	UCatInventoryComponent* SupplyStore = nullptr;
-	if (World != nullptr)
+	int32 Camps = 0, Stores = 0;
+	for (TActorIterator<AActor> It(World); It; ++It)
 	{
-		for (TActorIterator<ACatCampInventoryActor> It(World); It; ++It)
+		if (!It->HasAuthority()) continue;
+		TInlineComponentArray<UCatInventoryComponent*> Inventories(*It);
+		for (auto* Inventory : Inventories)
 		{
-			ACatCampInventoryActor* CampInventory = *It;
-			UCatInventoryComponent* Inventory = IsValid(CampInventory) && CampInventory->HasAuthority()
-				? CampInventory->GetInventoryComponent() : nullptr;
-			if (Inventory == nullptr)
+			Before.Add(Inventory, Inventory->GetInventoryEntries());
+			auto& Remaining = After.Add(Inventory, Inventory->GetInventoryEntries());
+			for (auto& Entry : Remaining)
 			{
-				continue;
+				if (!Entry.Instance || Entry.StackCount <= 0) continue;
+				if (!PriceInstance(Entry.Instance, Entry.StackCount)) return Reject(TEXT("EquipmentOriginalPriceMissing"));
+				if (!bGraduation || !Entry.Instance->IsA<UCatFishInventoryItemInstance>()) Entry = FCatInventoryEntry(Inventory);
 			}
-			Fallback = Fallback != nullptr ? Fallback : Inventory;
-			if (Inventory->GetTeamStorageRole() == ECatTeamStorageRole::SupplyStore && SupplyStore == nullptr)
+			auto& HeldEntries = Held.Add(Inventory);
+			Inventory->AppendHeldInventoryEntriesFromAuthority(HeldEntries);
+			for (const auto& Entry : HeldEntries)
+				if (!PriceInstance(Entry.Instance, Entry.StackCount)) return Reject(TEXT("HeldEquipmentOriginalPriceMissing"));
+			if (It->IsA<ACatCampInventoryActor>())
 			{
-				SupplyStore = Inventory;
+				++Camps;
+				Fallback = Inventory;
+				if (Inventory->GetTeamStorageRole() == ECatTeamStorageRole::SupplyStore) { ++Stores; Target = Inventory; }
 			}
 		}
 	}
-	UCatInventoryComponent* Target = SupplyStore != nullptr ? SupplyStore : Fallback;
-	if (Target == nullptr)
+	if (bGraduation && Stores > 1) return Reject(TEXT("SupplyStoreAmbiguous"));
+	if (!Target && Camps == 1) Target = Fallback;
+	for (TActorIterator<ACatItem> It(World); It; ++It)
 	{
-		UE_LOG(LogCatfishing, Warning,
-			TEXT("Event=shop_settlement_dried_fish_skipped Count=%d Reason=NoCampInventory"), Count);
-		return 0;
+		if (!It->IsAwaitingPickup()) continue;
+		const auto Batch = It->GetPickupInventory();
+		for (const auto& Entry : Batch.DefinitionEntries)
+			if (!PriceDefinition(Entry.ItemDefinition, Entry.Count)) return Reject(TEXT("WorldEquipmentOriginalPriceMissing"));
+		for (const auto& Entry : Batch.InstanceEntries)
+			if (!PriceInstance(Entry.ItemInstance, Entry.Count)) return Reject(TEXT("WorldEquipmentOriginalPriceMissing"));
+		RemoveActors.Add(*It);
 	}
-
-	const FGuid RequestId = FGuid::NewGuid();
-	FCatInventoryReceiveBatch Batch;
-	FCatInventoryDefinitionEntry& Entry = Batch.DefinitionEntries.AddDefaulted_GetRef();
-	Entry.ItemDefinition = DriedFish;
-	Entry.Count = Count;
-	if (Target->ValidateInventoryDefinitionBatchGrantFromAuthority(RequestId, FString(), Batch)
-		!= ECatDomainCommandError::None)
+	// 部署鱼竿由 Fishing 的实例 ID 关联 held 库存，不保证使用通用 WorldActor 引用。
+	for (TActorIterator<ACatFishingRodActor> It(World); It; ++It)
 	{
-		UE_LOG(LogCatfishing, Warning,
-			TEXT("Event=shop_settlement_dried_fish_skipped Count=%d Reason=CampInventoryCannotAccept"), Count);
-		return 0;
+		const auto& Rod = It->GetPresentationState();
+		if (Rod.ItemInstanceId.IsValid() && !PricedIds.Contains(Rod.ItemInstanceId))
+		{
+			if (!PriceDefinition(GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(Rod.RodDefinitionId), 1))
+				return Reject(TEXT("DeployedRodOriginalPriceMissing"));
+			PricedIds.Add(Rod.ItemInstanceId);
+		}
+		RemoveActors.Add(*It);
 	}
-
-	int32 SpendDelta = -CoinCost * Count;
-	if (!TryApplyTeamWalletTransaction(SpendDelta, RequestId))
+	// 地面鱼护的壳也属于剩余装备；护内鱼不折钱，提交前准备保留原身份的地面载体。
+	for (TActorIterator<ACatFishGuardActor> It(World); It; ++It)
 	{
-		UE_LOG(LogCatfishing, Warning,
-			TEXT("Event=shop_settlement_dried_fish_skipped Count=%d Reason=WalletSpendRejected"), Count);
-		return 0;
+		if (!RemoveActors.Contains(*It))
+		{
+			if (It->GuardItem)
+			{
+				if (!PriceInstance(It->GuardItem, 1)) return Reject(TEXT("GuardOriginalPriceMissing"));
+			}
+			else if (!PriceDefinition(It->GuardDefinition.LoadSynchronous(), 1)) return Reject(TEXT("GuardOriginalPriceMissing"));
+			RemoveActors.Add(*It);
+		}
 	}
-	const FCatDomainCommandResult Grant = Target->GrantInventoryDefinitionBatchFromAuthority(
-		RequestId, FString(), Batch);
-	if (!CatIsAcceptedDomainCommandResult(Grant))
+	if (EquipmentCoins > MAX_int64 - Balance) return Reject(TEXT("EquipmentValueOverflow"));
+	const int64 TotalCoins = int64(Balance) + EquipmentCoins;
+	const int64 Count64 = bGraduation ? TotalCoins / CoinCost : 0;
+	if (Count64 > MAX_int32 || (bGraduation && !Target)) return Reject(TEXT("DriedFishDeliveryUnavailable"));
+	const int32 Count = int32(Count64);
+	struct FPreservedFish { UCatFishInventoryItemInstance* Item; ACatFishPickupActor* Actor; AActor* OldActor; };
+	TArray<FPreservedFish> PreservedFish;
+	const auto CancelPreparedFish = [&]()
 	{
-		// 货没进去就把钱退回来；退款用另一个 RequestId，避免撞上刚才那笔的幂等键。
-		int32 RefundDelta = CoinCost * Count;
-		const bool bRefunded = TryApplyTeamWalletTransaction(RefundDelta, FGuid::NewGuid());
-		UE_LOG(LogCatfishing, Warning,
-			TEXT("Event=shop_settlement_dried_fish_failed Count=%d Error=%s Refunded=%s"),
-			Count, *UEnum::GetValueAsString(Grant.Error), bRefunded ? TEXT("true") : TEXT("false"));
-		return 0;
+		for (auto& Fish : PreservedFish) Fish.Actor->Destroy();
+	};
+	if (bGraduation)
+	{
+		for (AActor* Actor : RemoveActors)
+		{
+			auto* Guard = Cast<ACatFishGuardActor>(Actor);
+			if (!Guard) continue;
+			auto* Inventory = Guard->GetFishInventoryComponent();
+			auto& Entries = After.FindChecked(Inventory);
+			for (auto& Entry : Entries)
+			{
+				auto* Fish = Cast<UCatFishInventoryItemInstance>(Entry.Instance);
+				if (!Fish || Entry.StackCount <= 0) continue;
+				FActorSpawnParameters Spawn;
+				Spawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+				auto* Pickup = World->SpawnActor<ACatFishPickupActor>(Guard->GetActorLocation(), Guard->GetActorRotation(), Spawn);
+				if (!Pickup || !Pickup->InitializeFromInventoryForCarryFromAuthority(Fish, 1))
+				{
+					if (Pickup) Pickup->Destroy();
+					CancelPreparedFish();
+					return Reject(TEXT("GuardFishPreservationFailed"));
+				}
+				Pickup->SetActorHiddenInGame(true);
+				Pickup->SetActorEnableCollision(false);
+				PreservedFish.Add({Fish, Pickup, Fish->GetWorldActor()});
+				Entry = FCatInventoryEntry(Inventory);
+			}
+		}
 	}
-
-	UE_LOG(LogCatfishing, Log,
-		TEXT("Event=shop_settlement_dried_fish_granted Count=%d CoinCost=%d Spent=%d Target=%s"),
-		Count, CoinCost, CoinCost * Count, *GetNameSafe(Target->GetOwner()));
+	const auto Rollback = [&]()
+	{
+		for (const auto& Pair : Before) verify(Pair.Key->ReplaceInventoryEntriesFromAuthority(Pair.Value, Pair.Value.Num(), false));
+		CancelPreparedFish();
+	};
+	for (const auto& Pair : After)
+	{
+		if (!Pair.Key->ReplaceInventoryEntriesFromAuthority(Pair.Value, Pair.Value.Num(), false))
+		{ Rollback(); return Reject(TEXT("ResourcePreparationFailed")); }
+	}
+	if (Count > 0)
+	{
+		FCatInventoryReceiveBatch Batch;
+		auto& Entry = Batch.DefinitionEntries.AddDefaulted_GetRef();
+		Entry.ItemDefinition = DriedFish;
+		Entry.Count = Count;
+		if (!Target->TryAddInventoryBatchInternal(Batch, false))
+		{ Rollback(); return Reject(TEXT("DriedFishDeliveryCapacity")); }
+	}
+	int32 Delta = -Balance;
+	if (!TryApplyTeamWalletTransaction(Delta, FGuid::NewGuid()))
+	{ Rollback(); return Reject(TEXT("WalletClearRejected")); }
+	// 后续只做已验证身份的退役与通知，不再调用可拒绝的付款/交付写口。
+	bSettlementResourcesFinalized = true;
+	++WalletRevision;
+	for (const auto& Pair : Held)
+		for (const auto& Entry : Pair.Value)
+			if (!bGraduation || !Entry.Instance->IsA<UCatFishInventoryItemInstance>())
+				verify(Pair.Key->RetireHeldInventoryEntryFromAuthority(Entry.Instance->GetItemInstanceId()));
+	for (auto& Fish : PreservedFish)
+	{
+		Fish.Item->SetWorldActor(Fish.Actor);
+		Fish.Item->SetRuntimeOwnerActor(Fish.Actor);
+		Fish.Actor->SetActorHiddenInGame(false);
+		Fish.Actor->SetActorEnableCollision(true);
+		if (Fish.OldActor && Fish.OldActor != Fish.Actor) Fish.OldActor->Destroy();
+	}
+	if (!bGraduation)
+		for (TActorIterator<ACatFishPickupActor> It(World); It; ++It) RemoveActors.Add(*It);
+	for (AActor* Actor : RemoveActors) if (IsValid(Actor)) Actor->Destroy();
+	for (const auto& Pair : Before) if (IsValid(Pair.Key) && !Pair.Key->GetOwner()->IsActorBeingDestroyed()) Pair.Key->BroadcastInventoryChange();
+	OnShopInventoryRefreshed.Broadcast();
+	UE_LOG(LogCatfishing, Log, TEXT("Event=shop_settlement_resources_finalized World=%s NetMode=%d Authority=1 Graduation=%d WalletBefore=%d Equipment=%d EquipmentCoins=%lld UnitPrice=%d DriedFish=%d Discarded=%lld WalletAfter=0"),
+		*GetNameSafe(World), World->GetNetMode(), bGraduation, Balance, EquipmentCount, EquipmentCoins, CoinCost, Count,
+		bGraduation ? TotalCoins % CoinCost : int64(0));
 	return Count;
 }
 
@@ -848,6 +1005,32 @@ void UCatShopEconomyService::LoadRuntimeEconomyFromSettings()
 
 // 余额读取流程：先确认 GameState ASC 的 Owner/Avatar 已初始化且持有经济属性，再比较基础值和当前值并检查 double 整数边界。
 // 尚未就绪、存在临时余额修饰或金额非法都返回 false 和零输出；合法时直接投影唯一 GAS 余额，不重算也不缓存起始资金。
+bool UCatShopEconomyService::RestoreWalletFromAuthority(const int32 Balance)
+{
+	int32 Previous = 0;
+	if (Balance < 0 || Balance > 16777216 || bTransactionInProgress || !TransactionLedger.IsEmpty()
+		|| !TryGetTeamWalletBalance(Previous)) return false;
+	// 存档恢复不是交易收入；只在尚无交易的启动断点写回唯一 ASC 基础值。
+	auto* GameState = GetWorld()->GetGameState<ACatfishingGameState>();
+	auto* ASC = GameState ? GameState->GetRunAbilitySystemComponentFromAuthority() : nullptr;
+	if (!ASC) return false;
+	TGuardValue<bool> RestoreGuard(bTransactionInProgress, true);
+	ASC->SetNumericAttributeBase(UCatEconomyAttributeSet::GetTeamWalletBalanceAttribute(), static_cast<float>(Balance));
+	int32 Restored = 0;
+	if (!TryGetTeamWalletBalance(Restored) || Restored != Balance)
+	{
+		ASC->SetNumericAttributeBase(UCatEconomyAttributeSet::GetTeamWalletBalanceAttribute(), static_cast<float>(Previous));
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=shop_wallet_restore_rejected World=%s NetMode=%d Authority=1 Result=ReadbackMismatch"),
+			*GetNameSafe(GetWorld()), GetWorld()->GetNetMode());
+		return false;
+	}
+	++WalletRevision;
+	UE_LOG(LogCatfishing, Log, TEXT("Event=shop_wallet_restored World=%s NetMode=%d Authority=1 Balance=%d Revision=%lld"),
+		*GetNameSafe(GetWorld()), GetWorld()->GetNetMode(), Balance, WalletRevision);
+	OnShopInventoryRefreshed.Broadcast();
+	return true;
+}
+
 bool UCatShopEconomyService::TryGetTeamWalletBalance(int32& OutBalance) const
 {
 	OutBalance = 0;
@@ -879,6 +1062,9 @@ bool UCatShopEconomyService::TryGetTeamWalletBalance(int32& OutBalance) const
 bool UCatShopEconomyService::TryApplyTeamWalletTransaction(int32& InOutDelta, const FGuid& RequestId,
 	const FCatShopFishSaleCommand* FishSale)
 {
+#if WITH_DEV_AUTOMATION_TESTS
+	if (FailPaymentForTest) return false;
+#endif
 	int32 CurrentBalance = 0;
 	if (!TryGetTeamWalletBalance(CurrentBalance))
 	{
@@ -920,6 +1106,8 @@ bool UCatShopEconomyService::TryApplyTeamWalletTransaction(int32& InOutDelta, co
 		&& AppliedBalance == NextBalance;
 	if (!bSucceeded)
 	{
+		// GE 回调异常不得留下半次扣款；恢复唯一 ASC 的原基础值，外层同步恢复实物和货架。
+		ASC->SetNumericAttributeBase(UCatEconomyAttributeSet::GetTeamWalletBalanceAttribute(), static_cast<float>(CurrentBalance));
 		UE_LOG(LogCatfishing, Warning, TEXT("Event=WalletTransactionRejected RequestId=%s World=%s NetMode=%d Authority=1 Actor=%s LocalRole=%d Result=ExecutionOrBalanceMismatch Applied=%d Executed=%d BalanceApplied=%d BalanceReadable=%d Before=%d Delta=%d After=%d"),
 			*RequestId.ToString(), *GetNameSafe(World), static_cast<int32>(World->GetNetMode()), *GameState->GetName(),
 			static_cast<int32>(GameState->GetLocalRole()), bApplied, Source->bExecuted, Source->bBalanceApplied, bBalanceReadable,
@@ -990,6 +1178,9 @@ FCatShopPublicTransaction UCatShopEconomyService::MakePublicTransaction(const FC
 {
 	FCatShopPublicTransaction Public;
 	Public.TransactionId = Record.TransactionId;
+	Public.CartId = Record.CartId;
+	Public.Items = Record.Items;
+	Public.bContainsGiantFish = Record.bContainsGiantFish;
 	Public.bPurchase = Record.bPurchase;
 	Public.bFishSale = Record.bFishSale;
 	Public.EntryId = Record.EntryId;

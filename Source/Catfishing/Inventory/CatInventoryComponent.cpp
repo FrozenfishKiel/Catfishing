@@ -905,6 +905,17 @@ bool UCatInventoryComponent::ExportInventorySlotsFromAuthority(TArray<FCatInvent
 // 1. Save 已按磁盘 DTO 创建并恢复实例；库存先拒绝损坏 entry、未就绪定义、非法数量和重复实例。
 // 2. 目标容量可能尚未初始化出格子，因此只临时补齐内存中的空 entry 供槽位规则读取，不广播半份恢复状态。
 // 3. 验证失败会移除临时空 entry；全部通过后才一次性替换正式格子，避免部分恢复覆盖现有库存。
+bool UCatInventoryComponent::RestoreTeamStorageRoleFromAuthority(const ECatTeamStorageRole Role)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || uint8(Role) > uint8(ECatTeamStorageRole::SupplyStore)) return false;
+	if (TeamStorageRole == Role) return true;
+	for (const FCatInventoryEntry& Entry : InventoryList.Entries)
+		if (Entry.Instance) return false;
+	if (!ActiveHeldItemEntries.IsEmpty()) return false;
+	TeamStorageRole = Role;
+	return true;
+}
+
 bool UCatInventoryComponent::RestoreInventorySlotsFromAuthority(const TArray<FCatInventoryEntry>& RestoredSlots,
 	const int32 MinimumSlotCount, FText& OutFailure)
 {
@@ -1049,13 +1060,13 @@ bool UCatInventoryComponent::TryAddInventoryBatchInternal(const FCatInventoryRec
 		}
 	}
 	// 先恢复传入实例宿主，再替换条目并广播，保证回调不会观察到已退回物品仍归本库存的中间状态。
-	const auto RollbackBatch = [this, &SavedEntries, &PreviousRuntimeOwners]()
+	const auto RollbackBatch = [this, &SavedEntries, &PreviousRuntimeOwners, bBroadcastChange]()
 	{
 		for (const TPair<UCatInventoryItemInstance*, AActor*>& Pair : PreviousRuntimeOwners)
 		{
 			Pair.Key->SetRuntimeOwnerActor(Pair.Value);
 		}
-		ReplaceInventoryEntriesFromAuthority(SavedEntries, SavedEntries.Num());
+		ReplaceInventoryEntriesFromAuthority(SavedEntries, SavedEntries.Num(), bBroadcastChange);
 	};
 	bool bAnyMutation = false;
 	for (const FCatInventoryDefinitionEntry& DefinitionEntry : ReceiveBatch.DefinitionEntries)

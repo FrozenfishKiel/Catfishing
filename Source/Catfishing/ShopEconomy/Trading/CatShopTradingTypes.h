@@ -53,10 +53,22 @@ struct FCatShopStockSnapshot
 };
 
 /** 一条经济账本记录；金额、公款和库存事实不可回写，购买成交即入库，账本不保留待交付中间态。 */
+/** 一车或一次售鱼包含的全部商品；数量单位是件／条。 */
+USTRUCT(BlueprintType)
+struct FCatShopPublicItem
+{
+	GENERATED_BODY()
+	UPROPERTY(BlueprintReadOnly) FName DefinitionId;
+	UPROPERTY(BlueprintReadOnly) int32 Quantity = 0;
+};
+
 USTRUCT(BlueprintType)
 struct FCatShopTransactionRecord
 {
 	GENERATED_BODY()
+	UPROPERTY(BlueprintReadOnly) FGuid CartId;
+	UPROPERTY(BlueprintReadOnly) TArray<FCatShopPublicItem> Items;
+	UPROPERTY(BlueprintReadOnly) bool bContainsGiantFish = false;
 
 	/** ShopEconomy 为首次提交分配的账本 ID；重复请求返回同一条记录。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -133,6 +145,9 @@ USTRUCT(BlueprintType)
 struct FCatShopPublicTransaction
 {
 	GENERATED_BODY()
+	UPROPERTY(BlueprintReadOnly) FGuid CartId;
+	UPROPERTY(BlueprintReadOnly) TArray<FCatShopPublicItem> Items;
+	UPROPERTY(BlueprintReadOnly) bool bContainsGiantFish = false;
 
 	/** 对应账本记录的稳定 ID；客户端拿它去重，不用它反查服务器账本。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -186,6 +201,10 @@ USTRUCT(BlueprintType)
 struct FCatShopPublicEconomySnapshot
 {
 	GENERATED_BODY()
+	/** 权威营业门的复制投影；初始未知时保持不可交互。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bCommandsOpen = false;
+
 
 	/** 当前公款余额版本；客户端用它判断手上的快照是不是最新的。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -284,6 +303,7 @@ struct FCatShopResolvedCartLine
 /** 服务器对购物车的只读报价结果；交易控制器用它在扣钱前先询问营地公共仓库能否整批接收。 */
 struct FCatShopResolvedCart
 {
+	FName FailureReason;
 	/** 通过服务器归一化后的购物车命令；重复 EntryId 已合并，行顺序只用于稳定提交。 */
 	FCatShopCartCommand Command;
 

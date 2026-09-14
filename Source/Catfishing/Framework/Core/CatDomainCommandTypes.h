@@ -70,6 +70,9 @@ USTRUCT(BlueprintType)
 struct FCatDomainCommandResult
 {
 	GENERATED_BODY()
+	/** 可操作的拒绝原因；保留原 Error 分类用于跨系统契约。 */
+	UPROPERTY(BlueprintReadOnly)
+	FName FailureReason;
 
 	/** 本次是否发生了首次不可逆写入；缓存重放和同步拒绝都为 false。 */
 	UPROPERTY(BlueprintReadOnly)

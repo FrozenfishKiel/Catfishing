@@ -86,6 +86,23 @@ int32 ACatFishTankActor::GetCapacityTier() const
 	return CapacityTier;
 }
 
+bool ACatFishTankActor::RestoreCapacityTierFromAuthority(const int32 Tier)
+{
+	const auto* Settings = GetDefault<UCatFishContainerSettings>();
+	const int32 Capacity = Settings ? Settings->GetSharedFishTankCapacityForTier(Tier) : 0;
+	if (!HasAuthority() || !FishInventory || Tier < 0 || Capacity <= 0) return false;
+	for (int32 Index = Capacity; Index < FishInventory->GetInventoryEntries().Num(); ++Index)
+		if (FishInventory->GetInventoryEntries()[Index].Instance) return false;
+	CapacityTier = Tier;
+	FishInventory->SetInventorySlotCountFromAuthority(Capacity);
+	CommittedUpgradeRequestIds.Reset();
+	if (WorldInfo) WorldInfo->RefreshSummary();
+	ForceNetUpdate();
+	UE_LOG(LogCatFishContainers, Log, TEXT("Event=fish_tank_capacity_restored World=%s NetMode=%d Authority=1 LocalRole=%d Tank=%s Tier=%d Capacity=%d"),
+		*GetNameSafe(GetWorld()), GetNetMode(), GetLocalRole(), *GetName(), Tier, Capacity);
+	return true;
+}
+
 // 容量解析流程：优先按「设置里的初始档 + 已购档」取容量；设置没给出正容量时回退到编辑器容量并记一条 Warning。
 // 这条回退是刻意的：鱼缸在容量档位落地之前就在跑，没配置就把缸判成 0 格等于让整局收不了鱼。
 int32 ACatFishTankActor::ResolveSlotCapacityForCurrentTier() const
@@ -158,7 +175,7 @@ bool ACatFishTankActor::CanApplyCapacityUpgradeSequenceFromAuthority(
 }
 
 // 升级提交流程：复用同一套前置，再写档位与正式库存槽位数，最后刷新只读摘要；容量只升不降，失败不部分生效。
-bool ACatFishTankActor::ApplyCapacityUpgradeFromAuthority(const int32 TargetTier, const FGuid& RequestId)
+bool ACatFishTankActor::ApplyCapacityUpgradeFromAuthority(const int32 TargetTier, const FGuid& RequestId, const bool bPublish)
 {
 	if (!CanApplyCapacityUpgradeFromAuthority(TargetTier, RequestId))
 	{
@@ -180,6 +197,14 @@ bool ACatFishTankActor::ApplyCapacityUpgradeFromAuthority(const int32 TargetTier
 	if (RequestId.IsValid())
 	{
 		CommittedUpgradeRequestIds.Add(RequestId);
+	}
+	if (!bPublish)
+	{
+		TArray<FCatInventoryEntry> Entries = FishInventory->GetInventoryEntries();
+		Entries.SetNum(NewCapacity);
+		FishInventory->NumSlots = NewCapacity;
+		verify(FishInventory->ReplaceInventoryEntriesFromAuthority(Entries, NewCapacity, false));
+		return true;
 	}
 	FishInventory->SetInventorySlotCountFromAuthority(NewCapacity);
 	if (WorldInfo)

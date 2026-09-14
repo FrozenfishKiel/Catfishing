@@ -72,6 +72,7 @@ public:
 	FCatShopInventoryComponentChanged OnInventoryIdentityChanged;
 
 private:
+	friend class FCatShopCartAtomicTest;
 	/** 客户端收到摊位库存稳定身份后广播本地刷新通知；不修改任何货架库存。 */
 	UFUNCTION()
 	void OnRep_ShopInventoryId();

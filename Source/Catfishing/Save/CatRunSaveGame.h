@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Collection/CatRunFishCollectionTypes.h"
 #include "FishContainers/CatFishContainerTypes.h"
+#include "Inventory/CatInventoryComponent.h"
 #include "GameFramework/SaveGame.h"
 #include "CatRunSaveGame.generated.h"
 
@@ -43,6 +44,9 @@ struct FCatSavedRunInventorySlot
 	/** 鱼的捕获者稳定标识；仅在本机磁盘与服务器恢复链使用，不写日志或复制给其他玩家。 */
 	UPROPERTY(SaveGame)
 	FString FishOwnerStableNetId;
+	/** 鱼护实例引用的世界容器；先重建容器，再恢复库存实例的双向关联。 */
+	UPROPERTY(SaveGame)
+	FName FishGuardHostName;
 };
 
 /** 磁盘中的玩家钓具选择载荷；随身库存由玩家运行状态单独保存。 */
@@ -107,6 +111,30 @@ struct FCatSavedCampInventory
 	GENERATED_BODY()
 
 	/** 营地内已提交库存格；保存前和恢复前均由 Camp 按容量与定义核验。 */
+	UPROPERTY(SaveGame)
+	TArray<FCatSavedRunInventorySlot> InventorySlots;
+};
+
+/** 现行公共仓库、鱼护与鱼缸的磁盘事实；宿主名在同一关卡内稳定，动态宿主保留类与位置。 */
+USTRUCT()
+struct FCatSavedWorldInventory
+{
+	GENERATED_BODY()
+	UPROPERTY(SaveGame)
+	FName HostName;
+	UPROPERTY(SaveGame)
+	TSoftClassPtr<AActor> HostClass;
+	UPROPERTY(SaveGame)
+	FTransform HostTransform = FTransform::Identity;
+	UPROPERTY(SaveGame)
+	bool bRuntimeCreated = false;
+	UPROPERTY(SaveGame)
+	ECatTeamStorageRole TeamStorageRole = ECatTeamStorageRole::Unspecified;
+	UPROPERTY(SaveGame)
+	int32 Capacity = 0;
+	/** 仅鱼缸使用，其他宿主为 INDEX_NONE。 */
+	UPROPERTY(SaveGame)
+	int32 CapacityTier = INDEX_NONE;
 	UPROPERTY(SaveGame)
 	TArray<FCatSavedRunInventorySlot> InventorySlots;
 };
@@ -260,7 +288,7 @@ public:
 	UPROPERTY(SaveGame)
 	double PlayedDurationSeconds = 0.0;
 
-	/** 写盘时权威 Run 已公开的天数；只给前端摘要或全局遮罩展示，不恢复 Run 的阶段或时钟。 */
+	/** 写盘时权威 Run 的天数；新断点恢复同一天数，当前阶段／时钟仍沿原启动契约。 */
 	UPROPERTY(SaveGame)
 	int32 DayIndex = 0;
 
@@ -276,7 +304,7 @@ public:
 	UPROPERTY(SaveGame)
 	int32 DailyOfferingTarget = 0;
 
-	/** 写盘时权威 Run 公共世界进度；它不成为第二份 Run 真相，也不在恢复时写回 GameMode。 */
+	/** 写盘时权威 Run 世界进度；新断点在开放玩法前恢复唯一 Run ASC，再发布 GameMode 投影。 */
 	UPROPERTY(SaveGame)
 	int32 WorldProgress = 10;
 
@@ -304,9 +332,17 @@ public:
 	UPROPERTY(SaveGame)
 	FCatSavedPlayerRunState PlayerSnapshot;
 
-	/** 当前世界唯一共享营地仓库的已提交内容；多营地或无营地时保存与恢复都拒绝。 */
+	/** 旧 v6 单仓载荷，只为已有文件读取保留；新写入使用 WorldInventories。 */
 	UPROPERTY(SaveGame)
 	FCatSavedCampInventory CampInventory;
+
+	/** 加法迁移标记；旧档没有公款与现行鱼库存，不能把默认零值当成已保存事实。 */
+	UPROPERTY(SaveGame)
+	bool bHasInventoryCheckpoint = false;
+	UPROPERTY(SaveGame)
+	TArray<FCatSavedWorldInventory> WorldInventories;
+	UPROPERTY(SaveGame)
+	int32 TeamWalletBalance = 0;
 
 	/** 世界鱼容器的已提交鱼；每项用关卡稳定键重新关联，而非运行期随机 GUID。 */
 	UPROPERTY(SaveGame)

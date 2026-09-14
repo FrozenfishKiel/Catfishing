@@ -451,11 +451,16 @@ public:
 
 	/** 读取这份库存在团队装备库里声明的角色；商店交付按它把竿漂与消耗品分到两个去处。 */
 	ECatTeamStorageRole GetTeamStorageRole() const { return TeamStorageRole; }
+	/** 仅权威恢复空仓的角色；已有库存不能在运行时改投递规则。 */
+	bool RestoreTeamStorageRoleFromAuthority(ECatTeamStorageRole Role);
 
 protected:
 	friend class ACatFishPickupActor;
 	friend class ACatFishGuardActor;
+	friend class ACatFishTankActor;
 	friend class UCatEquipmentComponent;
+	friend class UCatShopTradeController;
+	friend class UCatShopEconomyService;
 	/** Internal mutation lets the fishing coordinator establish its record before notifying observers. */
 	bool ConsumeItemAtSlotInternal(int32 SlotIndex, int32 ConsumeCount, bool bBroadcastChange);
 	/** 真咬换饵：扣当前一份并退旧预留；失败恢复原实例／格子，成功由 Equipment 发布。 */

@@ -68,6 +68,7 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	friend class UCatShopEconomyService;
 	/** 归属复制后同步碰撞；只有服务器裁决隐藏，客户端保留引擎收到的附着结果，避免复制顺序改变表现。 */
 	UFUNCTION()
 	void OnRep_InventoryOwner();

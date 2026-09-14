@@ -22,6 +22,7 @@ class CATFISHING_API UCatSaveSubsystem : public UGameInstanceSubsystem
 	GENERATED_BODY()
 	friend class FCatPhysicalCharacterSaveRestoreConsumerTest;
 	friend class FCatTerminalSaveQueueTestCommand;
+	friend class FCatShopWorldCheckpointTest;
 public:
 	/** 初始化槽摘要缓存与恢复状态；磁盘文件仍由 RefreshSlotSummaries 读取，避免前端把未扫描目录当成空档。 */
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
@@ -84,6 +85,8 @@ public:
 	bool CapturePlayerBeforeLogout(AController& Controller, ACatCharacter* DepartingCharacter = nullptr);
 
 private:
+	bool CaptureWorldInventories(UWorld& World, TArray<FCatSavedWorldInventory>& OutInventories, FText& OutFailure) const;
+	bool RestoreWorldInventories(UWorld& World, const TArray<FCatSavedWorldInventory>& Inventories, FText& OutFailure) const;
 	FCatSaveResult EnqueueRunSave(FName SlotId, UCatRunSaveGame* Payload);
 	bool TickSaveQueue(float DeltaSeconds);
 	void StartNextRunSave();

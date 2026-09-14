@@ -814,9 +814,9 @@ void ACatfishingPlayerController::ClientReceiveCampCommandResult_Implementation(
 	const FCatDomainCommandResult& Result)
 {
 	const FString Event = FString::Printf(
-		TEXT("Event=inventory_command_received RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Committed=%d Replay=%d Error=%s"),
+		TEXT("Event=inventory_command_received RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Committed=%d Replay=%d Error=%s FailureReason=%s"),
 		*Result.RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(),
-		Result.bCommitted, Result.bTerminalReplay, *UEnum::GetValueAsString(Result.Error));
+		Result.bCommitted, Result.bTerminalReplay, *UEnum::GetValueAsString(Result.Error), *Result.FailureReason.ToString());
 	if (CatIsAcceptedDomainCommandResult(Result)) { UE_LOG(LogCatfishing, Log, TEXT("%s"), *Event); }
 	else { UE_LOG(LogCatfishing, Warning, TEXT("%s"), *Event); }
 	LastCampCommandResult = Result;
@@ -1086,10 +1086,10 @@ void ACatfishingPlayerController::ServerSubmitShopCartAtKiosk_Implementation(ACa
 	}
 	DeliveryResult.RequestId = RequestId;
 	const FString CartEvent = FString::Printf(
-		TEXT("Event=shop_cart_result RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Shop=%s Committed=%d Replay=%d Error=%s"),
+		TEXT("Event=shop_cart_result RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Shop=%s Committed=%d Replay=%d Error=%s FailureReason=%s"),
 		*RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(),
 		*GetName(), *GetNameSafe(ShopKiosk), DeliveryResult.bCommitted, DeliveryResult.bTerminalReplay,
-		*UEnum::GetValueAsString(DeliveryResult.Error));
+		*UEnum::GetValueAsString(DeliveryResult.Error), *DeliveryResult.FailureReason.ToString());
 	if (CatIsAcceptedDomainCommandResult(DeliveryResult)) { UE_LOG(LogCatfishing, Log, TEXT("%s"), *CartEvent); }
 	else { UE_LOG(LogCatfishing, Warning, TEXT("%s"), *CartEvent); }
 	DeliverCampCommandResultToOwningClient(DeliveryResult);
