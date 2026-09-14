@@ -132,6 +132,7 @@ private:
 
 	/** FightStamina 属性变化解绑句柄。 */
 	FDelegateHandle FightStaminaChangedHandle;
+	FDelegateHandle YellowFightStaminaChangedHandle;
 
 	/** MaxFightStamina 属性变化解绑句柄；上限变化时 HUD 必须重算体力文本和进度条比例。 */
 	FDelegateHandle MaxFightStaminaChangedHandle;

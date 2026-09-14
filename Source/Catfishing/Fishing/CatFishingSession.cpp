@@ -122,19 +122,6 @@ FCatFishingPhaseResult ACatFishingSession::EnterPhaseFromStateTree(const ECatFis
 			return Result;
 		}
 	}
-	if (NewPhase == ECatFishingPhase::HookedFight && !bFightStaminaInitialized)
-	{
-		// 首次进入搏斗时才初始化钓手的搏斗体力池（幂等标记 bFightStaminaInitialized 防止重复阶段事件补满体力）。
-		UCatAbilitySystemComponent* AbilitySystem = FisherCharacter.IsValid()
-			? FisherCharacter->GetCatAbilitySystemComponent() : nullptr;
-		if (!AbilitySystem || !AbilitySystem->InitializeFishingStaminaForSession())
-		{
-			Result.Error = ECatDomainCommandError::DependencyUnavailable;
-			return Result;
-		}
-		bFightStaminaInitialized = true;
-		StaminaOwner = FisherCharacter; // 本场只负责主控自己的恢复域。
-	}
 	if (NewPhase == ECatFishingPhase::ExhaustedReel
 		&& (!FightRunner || !FightRunner->SetFishExhaustedFromAuthority()))
 	{
@@ -185,7 +172,7 @@ bool ACatFishingSession::ResumePrimaryControlFromAuthority(AController* NewFishe
 	UCatAbilitySystemComponent* NewASC = NewCharacter ? NewCharacter->GetCatAbilitySystemComponent() : nullptr;
 	const ACatfishingGameModeBase* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
 	double NewStrength = NewASC ? NewASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute()) : 0.0;
-	double NewStamina = NewASC ? NewASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()) : 0.0;
+	double NewStamina = NewASC ? NewASC->GetTotalFightStamina() : 0.0;
 	// 控制资格与出力分离：原主控零体力仍能持有线杯控制权。
 	const bool bCapable = NewASC && GameMode && GameMode->CanAcceptGameplayCommand(NewFisherController)
 		&& UCatFishingService::CanControllerStartFishingAction(NewFisherController)
@@ -217,14 +204,13 @@ bool ACatFishingSession::ResumePrimaryControlFromAuthority(AController* NewFishe
 	}
 
 	APlayerState* OldFisherPlayerState = Snapshot.FisherPlayerState;
-	ACatCharacter* OldFisherCharacter = FisherCharacter.Get();
 	const FString OldFisherLogValue = CatLogContext::BuildStableNetIdValue(OldFisherPlayerState);
 	if (bFightTakeover)
 	{
 		UCatAbilitySystemComponent* NewAbilitySystem = NewCharacter->GetCatAbilitySystemComponent();
 		// 恢复只读取本人当前属性，不补满体力或重建本场Runner。
 		const double NewStaminaMaximum = NewAbilitySystem
-			? NewAbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute()) : 0.0;
+			? NewAbilitySystem->GetTotalFightStaminaCapacity() : 0.0;
 		const bool bStaminaAttributeReady = FMath::IsFinite(NewStaminaMaximum) && NewStaminaMaximum > 0.0;
 		if (!FightRunner || !FightRunner->IsRunning() || !NewAbilitySystem || !bStaminaAttributeReady)
 		{
@@ -249,8 +235,7 @@ bool ACatFishingSession::ResumePrimaryControlFromAuthority(AController* NewFishe
 					bIgnoredPull, bIgnoredSlack, InitialInputSequence);
 			}
 		}
-		NewStamina = NewAbilitySystem->GetNumericAttribute(
-			UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+		NewStamina = NewAbilitySystem->GetTotalFightStamina();
 		if (!FightRunner->ResumePrimaryFromAuthority(NewFisherController->PlayerState,
 			NewAbilitySystem, NewStrength,
 			NewStaminaMaximum, NewStamina, InitialInputSequence, false, false))
@@ -263,19 +248,11 @@ bool ACatFishingSession::ResumePrimaryControlFromAuthority(AController* NewFishe
 			return false;
 		}
 
-		// 旧操作手离开后保留当下体力，不再瞬间补满；同时从本会话终态恢复名单移除，
-		// 防止他去另一根竿后被旧会话的收尾错误覆盖。
-		if (OldFisherCharacter && OldFisherCharacter != NewCharacter)
-		{
-			StaminaOwner.Reset();
-		}
-		StaminaOwner = NewCharacter;
 		Snapshot.bReeling = FightRunner->GetCatAction() == ECatFightCatAction::Pull;
 		Snapshot.bSlacking = FightRunner->GetCatAction() == ECatFightCatAction::Slack;
 	}
 
 	FisherStableNetId = NewStableNetId;
-	if (bFightStaminaInitialized) StaminaOwner = NewCharacter;
 	FisherCharacter = NewCharacter;
 	Snapshot.FisherPlayerState = NewFisherController->PlayerState;
 
@@ -1030,20 +1007,11 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	const double FishStaminaScale = bPerfect ? Bite->PerfectFishStaminaMultiplier : 1.0;
 	const double LineLengthScale = bPerfect ? Bite->PerfectInitialLineLengthMultiplier : 1.0;
 	// 身体上限由 ASC 播种并复制；Fishing 只消费该运行时属性，不再从角色配置建立另一份上限。
-	const double CatStaminaMaximumFromAttributes = AbilitySystem->GetNumericAttribute(
-		UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+	const double CatStaminaMaximumFromAttributes = AbilitySystem->GetTotalFightStaminaCapacity();
 	if (!FMath::IsFinite(CatStaminaMaximumFromAttributes) || CatStaminaMaximumFromAttributes <= 0.0)
 	{
 		UE_LOG(LogCatFishing, Warning,
 			TEXT("Event=fishing_fight_start_rejected SessionId=%s Reason=StaminaMaximumAttributeInvalid MaxFightStamina=%.3f %s"),
-			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), CatStaminaMaximumFromAttributes,
-			*CatLogContext::BuildControllerFields(FisherCharacter->GetController()));
-		return false;
-	}
-	if (!AbilitySystem->InitializeFishingStaminaForSession())
-	{
-		UE_LOG(LogCatFishing, Warning,
-			TEXT("Event=fishing_fight_start_rejected SessionId=%s Reason=StaminaInitializationRejected MaxFightStamina=%.3f %s"),
 			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), CatStaminaMaximumFromAttributes,
 			*CatLogContext::BuildControllerFields(FisherCharacter->GetController()));
 		return false;
@@ -1116,7 +1084,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 
 	// 组装搏斗模拟的初始状态：猫当前体力从 ASC 读，鱼体力/初始线长按完美中鱼折减系数缩放。
 	FCatFightSimulationState InitialState;
-	InitialState.CatStamina = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+	InitialState.CatStamina = AbilitySystem->GetTotalFightStamina();
 	InitialState.FishStamina = Snapshot.FishFightStaminaRemaining * FishStaminaScale;
 	const FVector RodTipWorldPosition = Rod->GetRodTipWorldTransform().GetLocation();
 	const double RequestedInitialLineLength = Encounter->GetPresentationState().CurrentLineLength * LineLengthScale;
@@ -1127,7 +1095,6 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	if (!FMath::IsFinite(RequestedInitialLineLength)
 		|| MinimumPhysicalLineLength > Config.MaximumLineLengthCentimeters)
 	{
-		AbilitySystem->RequestFishingStaminaReset();
 		return false;
 	}
 	InitialState.LineLengthCentimeters = FMath::Clamp(RequestedInitialLineLength,
@@ -1169,8 +1136,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 			(Exact.WaterSurfaceWorldPoint - RodTipWorldPosition).GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER, FVector::ForwardVector),
 			ECatFishBehavior::OutwardRush, static_cast<float>(InitialState.FishEffortRatio)))
 	{
-		// 求解/吸附/表现应用任一环节失败：回滚已初始化的体力属性，不进入搏斗。
-		AbilitySystem->RequestFishingStaminaReset();
+		// 求解/吸附/表现应用任一环节失败：保留原余额，不进入搏斗。
 		return false;
 	}
 	// 真实水面校正可能把候选点沿岸轻微挪动；最终以 Actor 到竿尖的真实距离抬高线长，
@@ -1209,26 +1175,20 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	FightRunner = NewObject<UCatFishingFightRunner>(this);
 	if (!FightRunner || !FightRunner->InitializeFromAuthority(Init) || !FightRunner->Start())
 	{
-		// Runner 创建/初始化/启动任一步失败：清空引用并回滚体力，不留下半启动的 Runner。
+		// Runner 创建/初始化/启动任一步失败：清空引用并保留体力，不留下半启动的 Runner。
 		FightRunner = nullptr;
-		AbilitySystem->RequestFishingStaminaReset();
 		return false;
 	}
 	Snapshot.bReeling = FightRunner->GetCatAction() == ECatFightCatAction::Pull;
 	Snapshot.bSlacking = FightRunner->GetCatAction() == ECatFightCatAction::Slack;
-	bFightStaminaInitialized = true;
-	StaminaOwner = FisherCharacter;
 	if (!EnterPhaseFromStateTree(ECatFishingPhase::HookedFight).bApplied)
 	{
-		// 阶段写入被拒绝（比如并发终止）：必须把已经启动的 Runner 和已初始化的体力状态全部回滚，
+		// 阶段写入被拒绝（比如并发终止）：必须把已经启动的 Runner 全部停止，
 		// 否则会出现"Runner 在跑但阶段还停在 TrueBiteWindow"的不一致状态。
 		FightRunner->Stop();
 		FightRunner = nullptr;
 		Snapshot.bReeling = false;
 		Snapshot.bSlacking = false;
-		StaminaOwner.Reset();
-		bFightStaminaInitialized = false;
-		AbilitySystem->RequestFishingStaminaReset();
 		return false;
 	}
 	UE_LOG(LogCatFishing, Log,
@@ -1633,9 +1593,8 @@ void ACatFishingSession::SuspendOperatorFromAuthority()
 				*UEnum::GetValueAsString(Phase), *OldFisherLogValue,
 				*CatLogContext::BuildControllerFields(OldController));
 		}
-		// 放下鱼竿只解除本会话对该体力池的所有权；角色保留离开瞬间的剩余体力，不做瞬间补满。
+		// 放下鱼竿只解除操作关系；体力始终归身体所有，保留离开瞬间的余额。
 	}
-	StaminaOwner.Reset(); // 所有允许放下的阶段都解除恢复域，不能重置本人之后另一场的体力。
 	Snapshot.bReeling = false;
 	Snapshot.bSlacking = bFightUnattended;
 	Snapshot.RodLeverageMultiplier = 1.0f;
@@ -2021,15 +1980,7 @@ void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, cons
 	{
 		StateTreeComponent->StopLogic(FString(DiagnosticReason));
 	}
-	// 沿既有终局恢复规则，只通知仍归本会话负责的主控体力池。
-	if (ACatCharacter* Participant = StaminaOwner.Get())
-	{
-		if (UCatAbilitySystemComponent* AbilitySystem = Participant->GetCatAbilitySystemComponent())
-		{
-			AbilitySystem->RequestFishingStaminaReset();
-		}
-	}
-	StaminaOwner.Reset();
+	// 终局保留个人余额；自然恢复由角色身体结算负责。
 
 	FisherCharacter.Reset();
 	ScheduleTerminalDestroy();
@@ -2104,14 +2055,6 @@ void ACatFishingSession::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		{
 			Equipment->ReleaseFishingUse(Snapshot.FishingSessionId);
 		}
-		if (ACatCharacter* Participant = StaminaOwner.Get())
-		{
-			if (UCatAbilitySystemComponent* AbilitySystem = Participant->GetCatAbilitySystemComponent())
-			{
-				AbilitySystem->RequestFishingStaminaReset();
-			}
-		}
-		StaminaOwner.Reset();
 	}
 	ItemsService.Reset();
 	FisherCharacter.Reset();
@@ -2213,9 +2156,9 @@ bool ACatFishingSession::RefreshFightSummary()
     double Strength = 0.0, Stamina = 0.0, Maximum = 0.0;
     if (bPresent)
     {
-        Stamina = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+        Stamina = ASC->GetTotalFightStamina();
         Strength = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
-        Maximum = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+        Maximum = ASC->GetTotalFightStaminaCapacity();
         if (!FMath::IsFinite(Maximum) || Maximum <= 0.0 || !FMath::IsFinite(Stamina)
             || Stamina < 0.0 || Stamina > Maximum || !FMath::IsFinite(Strength) || Strength < 0.0)
         {

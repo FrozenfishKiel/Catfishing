@@ -1547,7 +1547,7 @@ bool UCatFishingService::TryGetFightCapability(const AController* Controller, FS
 	const ACatfishingGameModeBase* GameMode = World ? World->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
 	ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
 	const UCatConditionComponent* Conditions = Character ? Character->GetConditionComponent() : nullptr;
-	const UAbilitySystemComponent* ASC = Character ? Character->GetAbilitySystemComponent() : nullptr;
+	const UCatAbilitySystemComponent* ASC = Character ? Character->GetCatAbilitySystemComponent() : nullptr;
 	const FString StableNetId = ResolveStableNetId(Controller);
 	if (!World || !GameMode || !Character || !Conditions || !ASC || StableNetId.IsEmpty()
 		|| !GameMode->CanAcceptGameplayCommand(Controller) || Conditions->GetSnapshot().bDowned)
@@ -1555,7 +1555,7 @@ bool UCatFishingService::TryGetFightCapability(const AController* Controller, FS
 		return false;
 	}
 	const double Strength = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
-	const double FightStamina = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+	const double FightStamina = ASC->GetTotalFightStamina();
 	if (!FMath::IsFinite(Strength) || Strength <= 0.0
 		|| !FMath::IsFinite(FightStamina) || FightStamina <= 0.0)
 	{

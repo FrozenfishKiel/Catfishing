@@ -59,6 +59,8 @@ bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InContro
 		.AddUObject(this, &ThisClass::HandleAttributeChanged);
 	FishingStrengthChangedHandle = AbilitySystem->GetGameplayAttributeValueChangeDelegate(
 		UCatSurvivalAttributeSet::GetFishingStrengthAttribute()).AddUObject(this, &ThisClass::HandleAttributeChanged);
+	YellowFightStaminaChangedHandle = AbilitySystem->GetGameplayAttributeValueChangeDelegate(
+		UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute()).AddUObject(this, &ThisClass::HandleAttributeChanged);
 	FightStaminaChangedHandle = AbilitySystem->GetGameplayAttributeValueChangeDelegate(
 		UCatSurvivalAttributeSet::GetFightStaminaAttribute()).AddUObject(this, &ThisClass::HandleAttributeChanged);
 	MaxFightStaminaChangedHandle = AbilitySystem->GetGameplayAttributeValueChangeDelegate(
@@ -95,6 +97,7 @@ void UCatHUDModel::Unbind()
 	{
 		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetPoisonAttribute()).Remove(PoisonChangedHandle);
 		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetFishingStrengthAttribute()).Remove(FishingStrengthChangedHandle);
+		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute()).Remove(YellowFightStaminaChangedHandle);
 		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetFightStaminaAttribute()).Remove(FightStaminaChangedHandle);
 		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute()).Remove(MaxFightStaminaChangedHandle);
 	}
@@ -118,6 +121,7 @@ void UCatHUDModel::Unbind()
 	PoisonChangedHandle.Reset();
 	FishingStrengthChangedHandle.Reset();
 	FightStaminaChangedHandle.Reset();
+	YellowFightStaminaChangedHandle.Reset();
 	MaxFightStaminaChangedHandle.Reset();
 	ConditionChangedHandle.Reset();
 	GrowthChangedHandle.Reset();
@@ -179,6 +183,16 @@ void UCatHUDModel::Refresh()
 		NewState.FightStamina = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
 		NewState.FightStaminaMaximum = AbilitySystem->GetNumericAttribute(
 			UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+		NewState.YellowFightStamina = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute());
+		NewState.TotalFightStamina = double(NewState.FightStamina) + NewState.YellowFightStamina;
+		NewState.TotalFightStaminaCapacity = NewState.FightStaminaMaximum > 0
+			? double(NewState.FightStaminaMaximum) + NewState.YellowFightStamina : 0.0;
+		if (NewState.TotalFightStaminaCapacity > 0)
+		{
+			NewState.GreenStaminaBarFraction = float(NewState.FightStamina / NewState.TotalFightStaminaCapacity);
+			NewState.YellowStaminaBarStart = float(NewState.FightStaminaMaximum / NewState.TotalFightStaminaCapacity);
+			NewState.YellowStaminaBarFraction = float(NewState.YellowFightStamina / NewState.TotalFightStaminaCapacity);
+		}
 		if (NewState.FightStaminaMaximum > 0.0f)
 		{
 			NewState.NormalizedFightStamina = FMath::Clamp(
@@ -230,8 +244,11 @@ void UCatHUDModel::Refresh()
 			? FText::FromString(FString::Printf(TEXT("玩家体力 %.0f / %.0f"),
 				NewState.FightStamina, NewState.FightStaminaMaximum))
 			: FText::FromString(FString::Printf(TEXT("玩家体力 %.0f"), NewState.FightStamina));
+	if (NewState.YellowFightStamina > 0)
+		NewState.CatStaminaText = FText::FromString(FString::Printf(TEXT("玩家体力 %.0f / %.0f · 黄色储备 %.0f"),
+			NewState.FightStamina, NewState.FightStaminaMaximum, NewState.YellowFightStamina));
 	NewState.bShowPersonalStamina = NewState.FightStaminaMaximum > 0
-		&& NewState.FightStamina < NewState.FightStaminaMaximum;
+		&& (NewState.FightStamina < NewState.FightStaminaMaximum || NewState.YellowFightStamina > 0);
 	NewState.FishStaminaText = FText::FromString(FString::Printf(
 		TEXT("鱼体力 %.0f%%"), NewState.NormalizedFishStamina * 100.0f));
 	if (NewState.HookCountdownText.IsEmpty())

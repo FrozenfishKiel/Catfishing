@@ -51,6 +51,20 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	float FightStamina = 0.0f;
 
+	UPROPERTY(BlueprintReadOnly)
+	float YellowFightStamina = 0.0f;
+	UPROPERTY(BlueprintReadOnly)
+	double TotalFightStamina = 0.0;
+	UPROPERTY(BlueprintReadOnly)
+	double TotalFightStaminaCapacity = 0.0;
+	/** 固定宽度体力条中绿段填充比例、黄段起点及黄段宽度；分母是绿上限 + 当前黄存量。 */
+	UPROPERTY(BlueprintReadOnly)
+	float GreenStaminaBarFraction = 0.0f;
+	UPROPERTY(BlueprintReadOnly)
+	float YellowStaminaBarStart = 1.0f;
+	UPROPERTY(BlueprintReadOnly)
+	float YellowStaminaBarFraction = 0.0f;
+
 	/** 当前猫体力条的上限；来源是 Character ASC 的 MaxFightStamina，未播种或未复制到本地时保持 0。 */
 	UPROPERTY(BlueprintReadOnly)
 	float FightStaminaMaximum = 0.0f;

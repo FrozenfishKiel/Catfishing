@@ -26,7 +26,7 @@ double Stamina(ACatCharacter* Cat)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatPhysicalSupportEffortTest,
-	"Catfishing.PhysicalEffort.Runtime.SupportStrengthAndExhaustion", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+	"Catfishing.PhysicalEffort.Runtime.SupportStrengthAndImmediateRecovery", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 bool FCatPhysicalSupportEffortTest::RunTest(const FString&)
 {
 	using namespace CatPhysicalEffortTest;
@@ -52,7 +52,7 @@ bool FCatPhysicalSupportEffortTest::RunTest(const FString&)
 	Scene.Step(1);
 	auto* Effort = Weak->FindComponentByClass<UCatPhysicalEffortComponent>();
 	TestTrue(TEXT("actual GAS payment exhausts the helper and closes its active force budget"),
-		Stamina(Weak)==0 && Effort->IsExhausted() && Weak->GetPhysicalBodyComponent()->CaptureDriveSample().MaxForce==0);
+		Stamina(Weak)==0 && Weak->GetPhysicalBodyComponent()->CaptureDriveSample().MaxForce==0);
 	const FVector ExhaustedStart = Weak->GetActorLocation();
 	Scene.Step(15);
 	TestTrue(TEXT("an exhausted stationary cat yields instead of supplying its old strength"),
@@ -73,15 +73,15 @@ bool FCatPhysicalSupportEffortTest::RunTest(const FString&)
 	TestEqual(TEXT("pure vertical traction also blocks recovery after exhaustion"), Stamina(Weak), 0.0);
 	Weak->GetPhysicalBodyComponent()->ClearExternalForce(Scene.Floor);
 	Scene.Step(60);
-	TestEqual(TEXT("recovery delay prevents one-point reentry"), Stamina(Weak), 0.0);
-	// One loaded frame resets the whole delay; exhausted input cannot supply a hidden motor.
-	Weak->GetPhysicalBodyComponent()->SetExternalForceFromAuthority(Scene.Floor, FVector(1000,0,0));
-	Scene.Step(1);
+	TestTrue(TEXT("unloaded recovery begins immediately at five points per second"), FMath::IsNearlyEqual(Stamina(Weak), 5.0, 0.02));
+	const double BeforeReload = Stamina(Weak);
+	Weak->GetPhysicalBodyComponent()->SetExternalForceFromAuthority(Scene.Floor, FVector(0,0,-1000), true);
+	Scene.Step(60);
+	TestEqual(TEXT("renewed load pauses recovery"), Stamina(Weak), BeforeReload);
 	Weak->GetPhysicalBodyComponent()->ClearExternalForce(Scene.Floor);
-	Scene.Step(90);
-	TestEqual(TEXT("a renewed load restarts the full unloaded recovery delay"), Stamina(Weak), 0.0);
-	Scene.Step(240);
-	TestTrue(TEXT("independent delayed recovery reaches the reentry threshold"), Stamina(Weak)>=12 && !Effort->IsExhausted());
+	Scene.Step(60);
+	TestTrue(TEXT("unloading resumes without a second waiting gate"), FMath::IsNearlyEqual(Stamina(Weak), BeforeReload + 5.0, 0.03));
+	TestTrue(TEXT("any positive balance restores force without a twenty-percent gate"), Effort->GetMaximumForceKgCmS2() > 0);
 	const double BeforeImpulse = Stamina(Weak);
 	for (int32 Frame=0; Frame<180; ++Frame)
 	{
@@ -97,7 +97,7 @@ bool FCatPhysicalSupportEffortTest::RunTest(const FString&)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatPhysicalGripEffortTest,
-	"Catfishing.PhysicalEffort.Runtime.RealGripOppositionAndRelease", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+	"Catfishing.PhysicalEffort.Runtime.RealGripOppositionAndZeroStamina", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 bool FCatPhysicalGripEffortTest::RunTest(const FString&)
 {
 	using namespace CatPhysicalEffortTest;
@@ -134,11 +134,9 @@ bool FCatPhysicalGripEffortTest::RunTest(const FString&)
 	TestEqual(TEXT("one hand retains the same cat strength budget"),First->CaptureDriveSample().MaxForce,OneBodyBudget);
 	Seed(Puller,60,.00001f);
 	Scene.Step(2);
-	TestTrue(TEXT("exhaustion releases the helper's remaining actual grip"),
-		Puller->FindComponentByClass<UCatPhysicalEffortComponent>()->IsExhausted() && !First->GetGrab()->IsGripping(true));
-	First->GetGrab()->SetGrabInput(true,true);
-	Scene.Step(30);
-	TestFalse(TEXT("held input cannot relatch during exhaustion"),First->GetGrab()->IsGripping(true));
+	TestEqual(TEXT("the last tiny positive balance is fully charged"), Stamina(Puller), 0.0);
+	TestTrue(TEXT("zero stamina keeps the real grip but supplies no motor"),
+		First->GetGrab()->IsGripping(true) && First->CaptureDriveSample().MaxForce == 0.0);
 	return !HasAnyErrors();
 }
 
@@ -187,6 +185,7 @@ bool FCatPhysicalPeerStalemateTest::RunTest(const FString&)
 	A->GetPhysicalBodyComponent()->TeleportBodyFromAuthority(FTransform(FVector(0,0,20)),TEXT("ZeroPushFixture"));
 	B->GetPhysicalBodyComponent()->TeleportBodyFromAuthority(FTransform(FVector(28,0,20)),TEXT("ZeroPeerFixture"));
 	Seed(A,20,0); Seed(B,20);
+	A->GetPhysicalBodyComponent()->SetExternalForceFromAuthority(Scene.Floor, FVector(0,0,-1000), true);
 	Scene.Step(60);
 	const FVector ZeroStart=B->GetActorLocation();
 	A->GetPhysicalBodyComponent()->SetMoveIntent(FVector::ForwardVector);

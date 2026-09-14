@@ -43,7 +43,9 @@ bool UCatFishDefinition::IsRuntimeDefinitionReady() const
 		&& MinimumFightParticipants >= 1 && MinimumFightParticipants <= 8
 		&& FMath::IsFinite(FishFightStamina) && FishFightStamina > 0.0
 		&& !BitePersonalityId.IsNone() && !FightPersonalityId.IsNone() && bFoodReady
-		&& bChumPreferenceValid && bBaitMultipliersValid;
+		&& bChumPreferenceValid && bBaitMultipliersValid
+		&& FMath::IsFinite(YellowStaminaGrant) && YellowStaminaGrant >= 0.0
+		&& YellowStaminaGrant <= TNumericLimits<float>::Max();
 }
 
 UCatFishPresentationDefinition* UCatFishDefinition::LoadRuntimePresentationDefinition() const

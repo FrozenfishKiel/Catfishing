@@ -8,6 +8,7 @@
 #include "Framework/Game/CatfishingPlayerState.h"
 #include "Character/CatCharacter.h"
 #include "AbilitySystem/Attributes/CatRunAttributeSet.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "AbilitySystem/Attributes/CatRunModifierAttributeSet.h"
 #include "AbilitySystem/Executions/CatRunSettleOfferingExecutionCalculation.h"
 #include "AbilitySystem/Executions/CatRunStartDayExecutionCalculation.h"
@@ -1114,6 +1115,16 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 	case ECatRunPhase::DayActive:
 	{
 		++RunPublicState.Phase.DayIndex;
+		// 数值成长 §4：黄色储备当天可累积，新一天清空；不触碰绿条、Poison 或成长。
+		for (TActorIterator<ACatCharacter> It(GetWorld()); It; ++It)
+			if (auto* ASC = It->GetCatAbilitySystemComponent())
+			{
+				const bool Cleared = ASC->ClearYellowFightStaminaFromAuthority();
+				UE_LOG(LogCatRun, Log, TEXT("Event=daybreak_yellow_stamina_cleared World=%s NetMode=%d Authority=1 Actor=%s RunId=%s Day=%d Result=%s"),
+					*GetNameSafe(GetWorld()), int32(GetNetMode()), *GetNameSafe(*It), *RunPublicState.Phase.RunId.ToString(),
+					RunPublicState.Phase.DayIndex, Cleared ? TEXT("Cleared") : TEXT("Rejected"));
+			}
+
 		if (UCatShopEconomyService* Shop = GetWorld()->GetSubsystem<UCatShopEconomyService>())
 		{
 			if (Shop->AdvanceShopDay(RunPublicState.Phase.DayIndex))

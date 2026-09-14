@@ -377,9 +377,10 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 				UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
 			const double MaximumStamina = AbilitySystem->GetNumericAttribute(
 				UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+			const double Yellow = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute());
 			CatLine = MaximumStamina > 0.0
-				? FString::Printf(TEXT("CAT   Stamina %.1f / %.1f  Strength %.1f"),
-					CurrentStamina, MaximumStamina, Strength)
+				? FString::Printf(TEXT("CAT   Green %.1f / %.1f  Yellow %.1f  Total %.1f  Strength %.1f"),
+					CurrentStamina, MaximumStamina, Yellow, CurrentStamina + Yellow, Strength)
 				: FString::Printf(TEXT("CAT   Stamina %.1f  Strength %.1f"), CurrentStamina, Strength);
 		}
 	}

@@ -106,15 +106,6 @@ void UCatAbilitySystemComponent::ProcessAbilityInput(const float DeltaTime, cons
 	{
 		return;
 	}
-	if (bPendingFishingStaminaReset)
-	{
-		RequestFishingStaminaReset();
-		if (bPendingFishingStaminaReset)
-		{
-			ResetAbilityInput();
-			return;
-		}
-	}
 
 	TArray<FGameplayAbilitySpecHandle> AbilitiesToActivate;
 	for (const FGameplayAbilitySpecHandle Handle : InputHeldSpecHandles)
@@ -202,24 +193,6 @@ bool UCatAbilitySystemComponent::CancelBodyActionAbilitiesFromAuthority()
 	return true;
 }
 
-bool UCatAbilitySystemComponent::ApplyFishingStaminaDelta(const float Delta)
-{
-	// 体力提交流程：先拒绝非法 delta、缺 ActorInfo 和非 authority 调用；再创建正式 GE 并写入 SetByCaller。
-	// 返回值必须来自 GAS 实际应用结果，因为会话初始化用它判断是否真的完成回满或消耗。
-	if (!FMath::IsFinite(Delta) || Delta == 0.0f || !GetOwnerActor() || !GetAvatarActor()
-		|| !IsOwnerActorAuthoritative())
-	{
-		return false;
-	}
-	const FGameplayEffectSpecHandle Spec = MakeOutgoingSpec(UCatGE_FishingStaminaDelta::StaticClass(), 1.0f, MakeEffectContext());
-	if (!Spec.IsValid())
-	{
-		return false;
-	}
-	Spec.Data->SetSetByCallerMagnitude(CatFishingAbilityTags::Data_Fishing_FightStaminaDelta, Delta);
-	return ApplyGameplayEffectSpecToSelf(*Spec.Data.Get()).WasSuccessfullyApplied();
-}
-
 // Character ASC ActorInfo 建立流程：
 // 1. 先读取项目能力设置，只有显式启用的 Full 复制策略才建立 Owner/Avatar，未启用时主动清理引擎可能留下的临时 ActorInfo。
 // 2. 再把同一个 Character Actor 同时作为 Owner 和 Avatar 写入 GAS，这是当前项目选择的 Character-owned ASC 边界。
@@ -297,20 +270,20 @@ bool UCatAbilitySystemComponent::InitializeCharacterAttributesFromDefinition(con
 	SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(), Poison);
 	SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), FishingStrength);
 	SetNumericAttributeBase(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute(), MaxFightStamina);
-	if (!InitializeFishingStaminaForSession())
+	SetNumericAttributeBase(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute(), 0.0f);
+	if (!SeedFightStaminaToMaximumFromAuthority())
 	{
 		return false;
 	}
-	bPendingFishingStaminaReset = false;
 	bInitialCharacterAttributesApplied = true;
 	return true;
 }
 
-bool UCatAbilitySystemComponent::InitializeFishingStaminaForSession()
+bool UCatAbilitySystemComponent::SeedFightStaminaToMaximumFromAuthority()
 {
-	// 体力重置流程：
-	// 1. 先拒绝缺 Owner/Avatar 或非 authority 的调用，保证短周期体力只由服务器恢复。
-	// 2. 再从 ASC 当前 MaxFightStamina 读取本身体的上限；上限未播种或非法时返回 false，让会话入口 fail-closed。
+	// 新身体首次播种；入场、交接、终态和 ActorInfo 刷新均不调用。
+	// 1. 拒绝缺 Owner/Avatar 或非 authority 的调用。
+	// 2. 读取本身体绿段上限；上限未播种或非法时返回 false。
 	// 3. 最后只提交到上限的 delta，沿用正式 GameplayEffect 写口，保持属性委托、复制和日志观察同源。
 	if (!GetOwnerActor() || !GetAvatarActor() || !IsOwnerActorAuthoritative())
 	{
@@ -327,38 +300,6 @@ bool UCatAbilitySystemComponent::InitializeFishingStaminaForSession()
 		return false;
 	}
 	return FMath::IsNearlyEqual(Current, Baseline) || ApplyFishingStaminaDelta(Baseline - Current);
-}
-
-bool UCatAbilitySystemComponent::RequestFishingStaminaReset()
-{
-	bPendingFishingStaminaReset = true;
-	if (!GetOwnerActor() || !GetAvatarActor())
-	{
-		return true;
-	}
-	if (InitializeFishingStaminaForSession())
-	{
-		bPendingFishingStaminaReset = false;
-	}
-	return !bPendingFishingStaminaReset;
-}
-
-bool UCatAbilitySystemComponent::EnsureFishingStaminaReadyForNewSession()
-{
-	// 会话准入流程：先补做延迟回满，再同时检查当前体力和上限；上限缺失时不能让 FishingSession 用配置再开第二套事实源。
-	if (bPendingFishingStaminaReset)
-	{
-		RequestFishingStaminaReset();
-		if (bPendingFishingStaminaReset)
-		{
-			return false;
-		}
-	}
-	const float Maximum = GetNumericAttribute(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
-	const float Current = GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
-	return GetOwnerActor() && GetAvatarActor()
-		&& FMath::IsFinite(Maximum) && Maximum > 0.0f
-		&& FMath::IsFinite(Current) && Current > 0.0f;
 }
 
 bool UCatAbilitySystemComponent::ApplyPoisonDelta(const float Delta)
@@ -401,15 +342,6 @@ bool UCatAbilitySystemComponent::IsPoisonAtLeast(const float Threshold) const
 		&& GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute()) >= Threshold;
 }
 
-void UCatAbilitySystemComponent::InitAbilityActorInfo(AActor* InOwnerActor, AActor* InAvatarActor)
-{
-	Super::InitAbilityActorInfo(InOwnerActor, InAvatarActor);
-	if (bPendingFishingStaminaReset)
-	{
-		RequestFishingStaminaReset();
-	}
-}
-
 void UCatAbilitySystemComponent::ClearActorInfo()
 {
 	ResetAbilityInput();
@@ -434,4 +366,61 @@ void UCatAbilitySystemComponent::OnRemoveAbility(FGameplayAbilitySpec& AbilitySp
 {
 	UnregisterAbilityInput(AbilitySpec.Handle);
 	Super::OnRemoveAbility(AbilitySpec);
+}
+
+// 数值成长 §4 / 2026-09-13 裁决②：先扣绿再扣黄；一张 GE 提交整笔账，恢复只走绿。
+bool UCatAbilitySystemComponent::ApplyFishingStaminaDelta(const float Delta)
+{
+	if (!FMath::IsFinite(Delta) || Delta == 0.0f || !GetOwnerActor() || !GetAvatarActor()
+		|| !IsOwnerActorAuthoritative()) return false;
+	const float Green = GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+	const float Yellow = GetNumericAttribute(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute());
+	if (!FMath::IsFinite(Green) || Green < 0 || !FMath::IsFinite(Yellow) || Yellow < 0) return false;
+	const float GreenDelta = Delta < 0 ? -FMath::Min(Green, -Delta) : Delta;
+	const float YellowDelta = Delta < 0 ? -FMath::Min(Yellow, -(Delta - GreenDelta)) : 0.0f;
+	const auto Spec = MakeOutgoingSpec(UCatGE_FishingStaminaDelta::StaticClass(), 1.0f, MakeEffectContext());
+	if (!Spec.IsValid()) return false;
+	Spec.Data->SetSetByCallerMagnitude(CatFishingAbilityTags::Data_Fishing_FightStaminaDelta, GreenDelta);
+	Spec.Data->SetSetByCallerMagnitude(UCatGE_FishingStaminaDelta::GetYellowDeltaTag(), YellowDelta);
+	return ApplyGameplayEffectSpecToSelf(*Spec.Data.Get()).WasSuccessfullyApplied();
+}
+
+bool UCatAbilitySystemComponent::ApplyYellowFightStaminaDelta(const float Delta)
+{
+	if (!FMath::IsFinite(Delta) || !GetOwnerActor() || !GetAvatarActor() || !IsOwnerActorAuthoritative()) return false;
+	const float Current = GetNumericAttribute(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute());
+	const float Target = FMath::Max(0.0f, Current + Delta);
+	if (!FMath::IsFinite(Current) || !FMath::IsFinite(Target)) return false;
+	if (Target == Current) return true;
+	const auto Spec = MakeOutgoingSpec(UCatGE_YellowFightStaminaDelta::StaticClass(), 1.0f, MakeEffectContext());
+	if (!Spec.IsValid()) return false;
+	Spec.Data->SetSetByCallerMagnitude(UCatGE_FishingStaminaDelta::GetYellowDeltaTag(), Target - Current);
+	const bool Applied = ApplyGameplayEffectSpecToSelf(*Spec.Data.Get()).WasSuccessfullyApplied();
+	UE_LOG(LogCatCharacter, Log, TEXT("Event=yellow_stamina_changed World=%s NetMode=%d Authority=1 LocalRole=%d Actor=%s Before=%.6f Delta=%.6f After=%.6f Result=%s"),
+		*GetNameSafe(GetWorld()), int32(GetOwnerActor()->GetNetMode()), int32(GetOwnerActor()->GetLocalRole()),
+		*GetNameSafe(GetAvatarActor()), Current, Delta, GetYellowFightStamina(), Applied ? TEXT("Applied") : TEXT("Rejected"));
+	return Applied;
+}
+
+bool UCatAbilitySystemComponent::ClearYellowFightStaminaFromAuthority()
+{
+	return ApplyYellowFightStaminaDelta(-GetNumericAttribute(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute()));
+}
+
+double UCatAbilitySystemComponent::GetTotalFightStamina() const
+{
+	return double(GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()))
+		+ double(GetNumericAttribute(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute()));
+}
+
+double UCatAbilitySystemComponent::GetTotalFightStaminaCapacity() const
+{
+	const double Maximum = GetNumericAttribute(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+	return !FMath::IsFinite(Maximum) || Maximum <= 0 ? Maximum
+		: Maximum + double(GetNumericAttribute(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute()));
+}
+
+float UCatAbilitySystemComponent::GetYellowFightStamina() const
+{
+	return GetNumericAttribute(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute());
 }

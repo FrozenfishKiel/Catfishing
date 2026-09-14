@@ -358,7 +358,7 @@ void UCatFishingPhysicalRodComponent::UpdatePrimaryMotorBudget()
 	BudgetBody = Physical;
 	if (!Physical || !ASC) return;
 	const auto* Balance = GetDefault<UCatFishingSettings>()->LoadFightBalanceDefinition();
-	const double Stamina = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+	const double Stamina = ASC->GetTotalFightStamina();
 	const double Strength = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
 	const double Force = Balance && Stamina > 0.0 && FMath::IsFinite(Strength)
 		? FMath::Max(0.0, Strength) * Balance->ForcePerStrengthNewtons * 100.0 : 0.0;
@@ -450,7 +450,7 @@ bool UCatFishingPhysicalRodComponent::BuildControlledRotationInput(FCatFishingRo
 		const auto* Cat = Cast<ACatCharacter>(ControlledBody->GetOwner());
 		const auto* ASC = Cat ? Cat->GetCatAbilitySystemComponent() : nullptr;
 		if (!ASC || !Physical->IsLocomotionEnabled()
-			|| ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()) <= 0)
+			|| ASC->GetTotalFightStamina() <= 0)
 			Input.CatTorqueCapacity = 0;
 		Input.MaximumFishTorque = Rod->CarrierConstraintState.MaximumFishTorqueStrengthMeters;
 		Input.MaximumAngularSpeedDegreesPerSecond = Settings->HeldRodMaximumAngularSpeedDegreesPerSecond;

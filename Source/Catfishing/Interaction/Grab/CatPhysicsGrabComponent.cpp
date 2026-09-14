@@ -304,13 +304,6 @@ void UCatPhysicsGrabComponent::UpdateHand(const bool bLeft, const FVector& Aim)
 
 void UCatPhysicsGrabComponent::TryLatch(const bool bLeft, const FHitResult& Hit)
 {
-	if (const auto* Effort = GetOwner()->FindComponentByClass<UCatPhysicalEffortComponent>())
-		if (!Effort->CanGripFromAuthority())
-		{
-			bLatchedUntilRelease[bLeft ? 0 : 1] = true;
-			LogGrip(bLeft, TEXT("physics_grip_rejected"), TEXT("PhysicalEffortUnavailable"));
-			return;
-		}
 	UPrimitiveComponent* Target = Hit.GetComponent();
 	if (!IsReachSurface(Target, Hit.BoneName, bLeft)) return;
 	const UCatPhysicalBodyComponent* PhysicalBody = GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>();

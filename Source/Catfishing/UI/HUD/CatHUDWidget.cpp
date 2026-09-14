@@ -159,7 +159,8 @@ void UCatHUDWidget::RenderHUD(const FCatHUDViewState& ViewState)
 	}
 	if (CatStaminaProgressBar)
 	{
-		CatStaminaProgressBar->SetPercent(ViewState.NormalizedFightStamina);
+		CatStaminaProgressBar->SetPercent(ViewState.YellowFightStamina > 0
+			? ViewState.GreenStaminaBarFraction : ViewState.NormalizedFightStamina);
 		CatStaminaProgressBar->SetVisibility((ViewState.bShowFightMeters || ViewState.bShowPersonalStamina)
 			? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 	}
@@ -259,12 +260,23 @@ int32 UCatHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& Allott
 {
 	const int32 MaxLayer = Super::NativePaint(
 		Args, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
+	// 复用正式 WBP 已绑定的体力条几何；黄段由原生绘制，无需重建正在使用的 HUD 资产。
+	if (CatStaminaProgressBar && CatStaminaProgressBar->IsVisible()
+		&& LastHUDViewState.YellowStaminaBarFraction > 0)
+	{
+		const FGeometry& Bar = CatStaminaProgressBar->GetCachedGeometry();
+		const FVector2D Size = Bar.GetLocalSize();
+		FSlateDrawElement::MakeBox(OutDrawElements, MaxLayer + 1,
+			Bar.ToPaintGeometry(FVector2D(Size.X * LastHUDViewState.YellowStaminaBarFraction, Size.Y),
+				FSlateLayoutTransform(FVector2D(Size.X * LastHUDViewState.YellowStaminaBarStart, 0))),
+			FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, FLinearColor(1.0f, 0.78f, 0.12f));
+	}
 	const FVector2D LocalSize = AllottedGeometry.GetLocalSize();
 	if (!LastHUDViewState.bShowCrosshair
 		|| LocalSize.X <= 0.0f || LocalSize.Y <= 0.0f
 		|| CrosshairArmLength <= 0.0f || CrosshairThickness <= 0.0f)
 	{
-		return MaxLayer;
+		return MaxLayer + 1;
 	}
 
 	const FVector2D Center = LocalSize * 0.5f;
@@ -294,7 +306,7 @@ int32 UCatHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& Allott
 	DrawArm(Center + FVector2D(Inner, 0.0f), Center + FVector2D(Outer, 0.0f));
 	DrawArm(Center + FVector2D(0.0f, -Outer), Center + FVector2D(0.0f, -Inner));
 	DrawArm(Center + FVector2D(0.0f, Inner), Center + FVector2D(0.0f, Outer));
-	return static_cast<int32>(CrosshairLayer);
+	return FMath::Max(MaxLayer + 1, static_cast<int32>(CrosshairLayer));
 }
 
 // 主页菜单入口流程：把点击转换为纯 UI 意图；HUD 不创建或持有菜单页面。

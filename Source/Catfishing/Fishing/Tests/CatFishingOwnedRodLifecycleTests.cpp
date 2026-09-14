@@ -136,7 +136,7 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 				return Result;
 			}
 			ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 50.0f);
-			if (!ASC->InitializeFishingStaminaForSession()) Result.Equipment = nullptr;
+			if (!ASC->SeedFightStaminaToMaximumFromAuthority()) Result.Equipment = nullptr;
 			return Result;
 		};
 		const FPlayer Owner = MakePlayer(TEXT("OwnedRodOwner"), FVector(0.0, 0.0, 20.0));

@@ -241,12 +241,6 @@ private:
 	/** 鱼是否已从水中 Encounter 交接为世界鱼；true 后所有新抢抄返回 AlreadyResolved。 */
 	bool bCaptureResolved = false;
 
-	/** HookedFight 首次进入时的幂等 stamina 初始化事实；重复阶段事件不能补满已消耗体力。 */
-	bool bFightStaminaInitialized = false;
-
-	/** 本场唯一负责的主控体力池；主控放下后解除，终局不能恢复旁人。 */
-	TWeakObjectPtr<ACatCharacter> StaminaOwner;
-
 	FCatFishingAttemptSnapshot AttemptSnapshot;
 	FCatFishSelectionContext FrozenSelectionContext;
 	FCatFishSelectionResult FrozenSelectionResult;

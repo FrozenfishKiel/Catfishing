@@ -88,6 +88,16 @@ bool FCatHUDPersonalStaminaTest::RunTest(const FString& Parameters)
 	Model->Refresh();
 	Widget->RenderHUD(Model->GetViewState());
 	TestEqual(TEXT("恢复至上限且无会话后收起体力条"), Widget->CatStaminaProgressBar->GetVisibility(), ESlateVisibility::Collapsed);
+	AbilitySystem->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), 0.0f);
+	AbilitySystem->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute(), 20.0f);
+	Model->Refresh();
+	Widget->RenderHUD(Model->GetViewState());
+	TestEqual(TEXT("green field keeps its original meaning"), Model->GetViewState().FightStamina, 0.0f);
+	TestEqual(TEXT("yellow-only balance is visible"), Model->GetViewState().TotalFightStamina, 20.0);
+	TestTrue(TEXT("yellow tail occupies twenty of the hundred-and-twenty point bar"),
+		FMath::IsNearlyEqual(Model->GetViewState().YellowStaminaBarFraction, 20.0f/120.0f));
+	TestEqual(TEXT("yellow-only personal bar remains visible after leaving the rod"), Widget->CatStaminaProgressBar->GetVisibility(), ESlateVisibility::HitTestInvisible);
+	TestTrue(TEXT("text exposes the reserve explicitly"), Widget->CatStaminaTextBlock->GetText().ToString().Contains(TEXT("黄色储备 20")));
 	Model->Unbind();
 	return !HasAnyErrors();
 }
@@ -180,6 +190,14 @@ bool FCatHUDFormalPersonalMeterTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("正式体力控件解除初始隐藏"), Bar->GetVisibility(), ESlateVisibility::HitTestInvisible);
 	TestNotNull(TEXT("保留正式背包按钮"), Widget->GetWidgetFromName(TEXT("InventoryButton")));
 	TestNotNull(TEXT("保留正式设置按钮"), Widget->GetWidgetFromName(TEXT("MainMenuButton")));
+	State.YellowFightStamina = 20.0f;
+	State.GreenStaminaBarFraction = 35.0f / 120.0f;
+	State.YellowStaminaBarStart = 100.0f / 120.0f;
+	State.YellowStaminaBarFraction = 20.0f / 120.0f;
+	State.CatStaminaText = FText::FromString(TEXT("玩家体力 35 / 100 · 黄色储备 20"));
+	Widget->RenderHUD(State);
+	TestEqual(TEXT("正式WBP保留原生计算的绿段比例，没有蓝图旧绑定覆盖"), Bar->GetPercent(), 35.0f / 120.0f);
+	TestEqual(TEXT("正式WBP显示黄段存量文字"), Text->GetText().ToString(), State.CatStaminaText.ToString());
 	State.bHasFishingSession = false;
 	State.bShowFightMeters = false;
 	State.bShowPersonalStamina = true;

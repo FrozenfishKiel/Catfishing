@@ -116,6 +116,20 @@ bool FCatFishingOperatorRunnerIntegrationTest::RunTest(const FString& Parameters
 	TestFalse(TEXT("the frozen bill cannot be replayed"), Runner->ApplyOperatorStaminaChanges(Step));
 	TestEqual(TEXT("replay rejection preserves the balance"), ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), Balance);
 
+	ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), 1.e-9f);
+	ASC->ApplyYellowFightStaminaDelta(20.0f);
+	if (!Runner->UpdateOperatorIntentAndProperties()) return false;
+	TestEqual(TEXT("yellow reserve participates in full operator strength"), Runner->Config.PrimaryOperatorCatStrength, 100.0);
+	FCatFightStepResult ReserveBill;
+	ReserveBill.CatReelStaminaDrain = 5.0;
+	if (!TestTrue(TEXT("production runner can bill past the last green fraction"), Runner->ApplyOperatorStaminaChanges(ReserveBill))) return false;
+	TestEqual(TEXT("green tiny balance is exhausted exactly"), ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), 0.0f);
+	TestEqual(TEXT("runner charges remainder to yellow"), ASC->GetYellowFightStamina(), 15.0f);
+	TestEqual(TEXT("session model reflects total actual remaining balance"), Runner->State.CatStamina, 15.0);
+	TestEqual(TEXT("same-step summary capacity tracks remaining yellow rather than the pre-bill reserve"), Session->GetSnapshot().CombinedFightStaminaMaximum, 75.0);
+	TestFalse(TEXT("yellow payment also rejects a replay"), Runner->ApplyOperatorStaminaChanges(ReserveBill));
+	ASC->ClearYellowFightStaminaFromAuthority();
+
 	// Contract evidence: these are controlled body observations and sampling times, not a
 	// second physics integrator. Separate Chaos runtime tests verify actual motor travel.
 	Runner->State.LineLengthCentimeters = 800.0;
@@ -229,6 +243,16 @@ bool FCatFishingOperatorRunnerIntegrationTest::RunTest(const FString& Parameters
 		if (LoadCase<3) TestEqual(TEXT("one primary ASC writer blocks recovery for applied or cancelling loads"), Runner->LastOperatorStaminaDrain, 0.0);
 		else TestTrue(TEXT("the primary retains normal unloaded slack recovery"), Runner->LastOperatorStaminaDrain<0);
 	}
+	// Drive the real day-entry authority path rather than only calling the ASC clearing helper.
+	ASC->ApplyYellowFightStaminaDelta(20.0f);
+	const float GreenBeforeDay = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+	Mode->RunPublicState.Phase.RunId = FGuid::NewGuid();
+	Mode->bRunStartupInProgress = true;
+	const auto Day = Mode->EnterRunPhaseFromStateTree(ECatRunPhase::DayActive, ECatRunTransitionReason::AllEligibleReady);
+	Mode->bRunStartupInProgress = false;
+	TestTrue(TEXT("formal day-entry authority path succeeds"), Day.bApplied);
+	TestEqual(TEXT("day entry clears the actual body's yellow reserve"), ASC->GetYellowFightStamina(), 0.0f);
+	TestEqual(TEXT("day entry preserves green balance"), ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), GreenBeforeDay);
 	return !HasAnyErrors();
 }
 #endif

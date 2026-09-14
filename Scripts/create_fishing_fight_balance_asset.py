@@ -38,7 +38,7 @@ VALUES = {
     "cat_rod_stamina_multiplier": 1.0,
     "cat_hold_stamina_multiplier": 1.0,
     "cat_load_stamina_multiplier": 1.0,
-    "slack_stamina_regen_per_second": 3.0,
+    "slack_stamina_regen_per_second": 0.0,
     "fish_exhaustion_threshold": 0.5,
     "display_tension_newtons": 50.0,
     "escape_slack_centimeters": 100.0,

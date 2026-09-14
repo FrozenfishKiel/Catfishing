@@ -17,9 +17,5 @@ public:
 	double SupportReferenceSpeedCmS = 100.0;
 	UPROPERTY(Config, EditAnywhere, Category="Recovery", meta=(ClampMin="0"))
 	double RecoveryPerSecond = 5.0;
-	UPROPERTY(Config, EditAnywhere, Category="Recovery", meta=(ClampMin="0"))
-	double RecoveryDelaySeconds = 2.0;
-	UPROPERTY(Config, EditAnywhere, Category="Recovery", meta=(ClampMin="0.01", ClampMax="1"))
-	double ExhaustionResumeRatio = 0.2;
 	bool IsValid() const;
 };

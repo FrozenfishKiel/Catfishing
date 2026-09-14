@@ -170,6 +170,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use")
 	ECatFishFoodSafety FoodSafety = ECatFishFoodSafety::Unset;
 
+	/** 鱼表「限时Buff」明确列出的黄色储备点数；一次性授予，不属于限时恢复。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Use", meta=(ClampMin="0"))
+	double YellowStaminaGrant = 0.0;
+
 	/** 直接食用后授予的局内成长经验；值来自当前鱼表体重档，0 表示吃鱼成长收益未裁。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use", meta = (ClampMin = "0.0"))
 	double EatingExperience = 0.0;

@@ -40,6 +40,7 @@ void UCatSurvivalAttributeSet::GetLifetimeReplicatedProps(TArray<FLifetimeProper
 	DOREPLIFETIME_CONDITION_NOTIFY(UCatSurvivalAttributeSet, FishingStrength, COND_None, REPNOTIFY_Always);
 	DOREPLIFETIME_CONDITION_NOTIFY(UCatSurvivalAttributeSet, FightStamina, COND_None, REPNOTIFY_Always);
 	DOREPLIFETIME_CONDITION_NOTIFY(UCatSurvivalAttributeSet, MaxFightStamina, COND_None, REPNOTIFY_Always);
+	DOREPLIFETIME_CONDITION_NOTIFY(UCatSurvivalAttributeSet, YellowFightStamina, COND_None, REPNOTIFY_Always);
 	DOREPLIFETIME_CONDITION_NOTIFY(UCatSurvivalAttributeSet, Poison, COND_None, REPNOTIFY_Always);
 }
 
@@ -55,7 +56,7 @@ void UCatSurvivalAttributeSet::PreAttributeBaseChange(const FGameplayAttribute& 
 	{
 		NewValue = ClampMaxFightStaminaValue(NewValue);
 	}
-	else if (Attribute == GetFishingStrengthAttribute() || Attribute == GetPoisonAttribute())
+	else if (Attribute == GetFishingStrengthAttribute() || Attribute == GetPoisonAttribute() || Attribute == GetYellowFightStaminaAttribute())
 	{
 		NewValue = ClampSurvivalNonNegativeValue(NewValue);
 	}
@@ -73,13 +74,13 @@ void UCatSurvivalAttributeSet::PreAttributeChange(const FGameplayAttribute& Attr
 	{
 		NewValue = ClampMaxFightStaminaValue(NewValue);
 	}
-	else if (Attribute == GetFishingStrengthAttribute() || Attribute == GetPoisonAttribute())
+	else if (Attribute == GetFishingStrengthAttribute() || Attribute == GetPoisonAttribute() || Attribute == GetYellowFightStaminaAttribute())
 	{
 		NewValue = ClampSurvivalNonNegativeValue(NewValue);
 	}
 }
 
-// 上限变化收口流程：MaxFightStamina 降低时用 ASC 标准 Override 把当前体力压回新上限；上限升高不会自动回满，仍由会话重置入口显式处理。
+// 上限变化收口流程：MaxFightStamina 降低时用 ASC 标准 Override 把当前体力压回新上限；上限升高不会自动回满，只由明确的属性授予入口处理。
 void UCatSurvivalAttributeSet::PostAttributeChange(const FGameplayAttribute& Attribute, const float OldValue,
 	const float NewValue)
 {
@@ -107,7 +108,7 @@ void UCatSurvivalAttributeSet::OnRep_FightStamina(const FGameplayAttributeData& 
 	if (const auto* ASC = GetOwningAbilitySystemComponent())
 		if (AActor* Avatar = ASC->GetAvatarActor())
 			if (auto* Effort = Avatar->FindComponentByClass<UCatPhysicalEffortComponent>())
-				Effort->ObserveStaminaFromReplication(OldFightStamina.GetCurrentValue());
+				Effort->ObserveStaminaFromReplication(double(OldFightStamina.GetCurrentValue()) + GetYellowFightStamina());
 }
 
 // MaxFightStamina 复制通知流程：使用标准 RepNotify 更新搏斗体力上限；显示层和接力会话都只观察 ASC 的同一份上限。
@@ -120,4 +121,13 @@ void UCatSurvivalAttributeSet::OnRep_MaxFightStamina(const FGameplayAttributeDat
 void UCatSurvivalAttributeSet::OnRep_Poison(const FGameplayAttributeData& OldPoison)
 {
 	GAMEPLAYATTRIBUTE_REPNOTIFY(UCatSurvivalAttributeSet, Poison, OldPoison);
+}
+
+void UCatSurvivalAttributeSet::OnRep_YellowFightStamina(const FGameplayAttributeData& OldYellowFightStamina)
+{
+	GAMEPLAYATTRIBUTE_REPNOTIFY(UCatSurvivalAttributeSet, YellowFightStamina, OldYellowFightStamina);
+	if (const auto* ASC = GetOwningAbilitySystemComponent())
+		if (AActor* Avatar = ASC->GetAvatarActor())
+			if (auto* Effort = Avatar->FindComponentByClass<UCatPhysicalEffortComponent>())
+				Effort->ObserveStaminaFromReplication(double(GetFightStamina()) + OldYellowFightStamina.GetCurrentValue());
 }

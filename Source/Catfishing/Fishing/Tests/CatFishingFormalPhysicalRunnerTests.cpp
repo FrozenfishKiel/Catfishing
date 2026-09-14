@@ -194,7 +194,6 @@ bool FCatFishingFormalPhysicalRunnerTest::RunTest(const FString& Parameters)
 		Session->AttemptSnapshot.WaterRegion = Region->GetWaterRegionHandle();
 		Session->CastEquipment = Equipment;
 		Session->FisherCharacter = Cat;
-		Session->StaminaOwner = Cat;
 		Service->Sessions.Add(SessionId, Session);
 		auto* Runner = NewObject<UCatFishingFightRunner>(Session);
 		Session->FightRunner = Runner;

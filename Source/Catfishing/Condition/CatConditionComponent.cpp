@@ -356,8 +356,16 @@ FCatDomainCommandResult UCatConditionComponent::ConsumeCommittedFish(const FGuid
 				Result.Error = GrowthResult.bTerminalReplay ? GrowthResult.ReplayedTerminalError : GrowthResult.Error;
 				Result.Revision = Snapshot.Revision;
 			}
+			else if (FishDefinition->YellowStaminaGrant > 0
+				&& !ASC->ApplyYellowFightStaminaDelta(static_cast<float>(FishDefinition->YellowStaminaGrant)))
+			{
+				Result.Error = ECatDomainCommandError::DependencyUnavailable;
+			}
 			else
 			{
+				UE_LOG(LogCatCharacter, Log, TEXT("Event=fish_yellow_stamina_grant RequestId=%s World=%s NetMode=%d Authority=1 Actor=%s FishDefinitionId=%s Grant=%.3f YellowAfter=%.3f Result=Committed"),
+					*RequestId.ToString(), *GetNameSafe(GetWorld()), int32(GetOwner()->GetNetMode()), *GetNameSafe(GetOwner()),
+					*FishDefinition->FishDefinitionId.ToString(), FishDefinition->YellowStaminaGrant, ASC->GetYellowFightStamina());
 				EvaluateDownedFromAttributes(ECatRecoveryMode::None);
 				Result.bCommitted = true;
 				Result.Error = ECatDomainCommandError::None;
