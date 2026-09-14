@@ -4,6 +4,7 @@
 #include "InputAction.h"
 #include "InputMappingContext.h"
 #include "UI/HUD/CatHUDWidget.h"
+#include "UI/Run/CatAltarConfirmationWidget.h"
 #include "UI/Run/CatDayTransitionWidget.h"
 #include "UI/Frontend/CatFrontendRootWidget.h"
 #include "UI/Interaction/CatInteractionPromptWidget.h"
@@ -18,6 +19,8 @@ UCatUISettings::UCatUISettings()
 {
 	DayTransitionWidgetClass = TSoftClassPtr<UCatDayTransitionWidget>(
 		FSoftClassPath(TEXT("/Game/UI/Run/WBP_CatDayTransition.WBP_CatDayTransition_C")));
+	AltarConfirmationWidgetClass = TSoftClassPtr<UCatAltarConfirmationWidget>(
+		FSoftClassPath(TEXT("/Game/UI/Run/WBP_CatAltarConfirmation.WBP_CatAltarConfirmation_C")));
 	ItemTooltipWidgetClass = TSoftClassPtr<UCatItemTooltipWidget>(
 		FSoftClassPath(TEXT("/Game/UI/Inventory/WBP_CatItemTooltip.WBP_CatItemTooltip_C")));
 	HUDWidgetClass = TSoftClassPtr<UCatHUDWidget>(
@@ -108,6 +111,14 @@ TSubclassOf<UCatDayTransitionWidget> UCatUISettings::LoadDayTransitionWidgetClas
 {
 	UClass* LoadedClass = DayTransitionWidgetClass.LoadSynchronous();
 	return LoadedClass && LoadedClass->IsChildOf(UCatDayTransitionWidget::StaticClass())
+		&& LoadedClass->HasAnyClassFlags(CLASS_CompiledFromBlueprint) ? LoadedClass : nullptr;
+}
+
+// 正式祭坛确认视图加载流程：同步解析配置软类并核对正式 UMG 父类；失败返回空，不创建无法反映正式版式的原生替身。
+TSubclassOf<UCatAltarConfirmationWidget> UCatUISettings::LoadAltarConfirmationWidgetClass() const
+{
+	UClass* LoadedClass = AltarConfirmationWidgetClass.LoadSynchronous();
+	return LoadedClass && LoadedClass->IsChildOf(UCatAltarConfirmationWidget::StaticClass())
 		&& LoadedClass->HasAnyClassFlags(CLASS_CompiledFromBlueprint) ? LoadedClass : nullptr;
 }
 

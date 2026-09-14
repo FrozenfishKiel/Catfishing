@@ -24,9 +24,11 @@ class UCatInventoryPageController;
 class UCatInventoryWidget;
 class UCatLakeMainMenuController;
 class UCatLakeMainMenuWidget;
+class UCatAltarConfirmationWidget;
 class UUserWidget;
 class UCatDayTransitionWidget;
 class UCatWorldInfoController;
+struct FCatAltarConfirmationSnapshot;
 struct FCatRunDayTransition;
 enum class ECatHUDAction : uint8;
 
@@ -76,6 +78,12 @@ public:
 	/** Controller 退出、旅行或 LocalPlayer 换绑时移除翻天 UI 和失败停留记忆；不释放其他功能的锁。 */
 	void ClearDayTransition();
 
+	/** 消费服务器公开的祭坛确认快照并创建或收起顶部确认窗口；等待确认不关闭页面、不改输入模式，取消原因只停留两秒。 */
+	void RefreshAltarConfirmation(APlayerController* Controller, const FCatAltarConfirmationSnapshot& Confirmation);
+
+	/** Controller 退出、旅行或 LocalPlayer 换绑时移除祭坛确认窗口与本机取消反馈记忆；不改变 GameMode 的确认请求。 */
+	void ClearAltarConfirmation();
+
 private:
 	/** 本地玩家独有的对象信息显示控制器；局内 UI 装配时绑定，换 Pawn、Controller 或旅行时成对解绑。 */
 	UPROPERTY(Transient)
@@ -84,6 +92,19 @@ private:
 	/** 本玩家的正式翻天 WBP；RefreshDayTransition 创建和渲染，ClearDayTransition 或正常结束移除。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatDayTransitionWidget> DayTransitionWidget;
+
+	/** 本玩家的正式祭坛确认 WBP；Waiting 或取消反馈期间由公开快照创建，Accepted/Idle/旅行时移除。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatAltarConfirmationWidget> AltarConfirmationWidget;
+
+	/** 最近因正式祭坛确认 WBP 加载或创建失败而停止尝试的请求标识；同一请求不重复同步加载和刷日志，旅行清空。 */
+	FGuid UnavailableAltarConfirmationViewId;
+
+	/** 已开启取消原因反馈的请求标识；Cancelled 首次到达时写入，后续帧只保留同一窗口而不重置两秒时长。 */
+	FGuid LastAltarConfirmationCancellationId;
+
+	/** 取消原因允许保留在本机视图中的截止单调时间，单位秒；只控制表现停留，不参与服务器确认超时。 */
+	double AltarConfirmationCancellationUntilSeconds = 0.0;
 
 	/** 最近因正式 WBP 加载或创建失败而停止尝试的请求标识；RefreshDayTransition 写入并比较，ClearDayTransition 清空，同一请求不重复加载和刷日志。 */
 	FGuid UnavailableDayTransitionViewId;

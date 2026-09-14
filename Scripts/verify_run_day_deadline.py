@@ -15,6 +15,10 @@ case = os.environ.get('CAT_DAY_DEADLINE_CASE', 'manual')
 assert case in ('manual', 'natural')
 level = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+# 本脚本验证一房主一客户端；先保存端数，避免其他三端用例留下的编辑器偏好令等待条件永远无法满足。
+play_settings = unreal.get_default_object(unreal.load_class(None, '/Script/UnrealEd.LevelEditorPlaySettings'))
+original_client_count = play_settings.get_editor_property('PlayNumberOfClients')
+play_settings.set_editor_property('PlayNumberOfClients', 2)
 settings = unreal.get_default_object(unreal.load_class(None, '/Script/Catfishing.CatRunSettings'))
 original_length = settings.get_editor_property('DayLengthSeconds')
 original_progress = settings.get_editor_property('InitialWorldProgress')
@@ -27,11 +31,6 @@ altar = actors.spawn_actor_from_class(unreal.CatAltarActor, origin)
 altar.get_component_by_class(unreal.StaticMeshComponent).set_static_mesh(unreal.load_asset('/Engine/BasicShapes/Cube'))
 altar.set_actor_scale3d(unreal.Vector(0.5, 0.5, 0.5))
 altar_name = altar.get_name()
-camera_location = origin + unreal.Vector(-220, -220, 80)
-camera = actors.spawn_actor_from_class(unreal.CameraActor, camera_location,
-    unreal.MathLibrary.find_look_at_rotation(camera_location, origin))
-camera_name = camera.get_name()
-action = unreal.load_asset('/Game/Input/InputAction/IA_Interact')
 started = time.monotonic()
 state = {'stage': 0, 'ended': False}
 
@@ -62,11 +61,12 @@ def finish(error=None):
     level.editor_request_end_play()
     settings.set_editor_property('DayLengthSeconds', original_length)
     settings.set_editor_property('InitialWorldProgress', original_progress)
+    play_settings.set_editor_property('PlayNumberOfClients', original_client_count)
     state.update(ended=True, ended_at=time.monotonic())
 
 
 def tick(delta):
-    """按真实双端阶段推进：准备镜头和身体、缩短首日、自然或提前入夜、经客户端输入确认。
+    """按真实双端阶段推进：准备发起者身体位置、缩短首日、自然或提前入夜、提交服务器确认。
 
     确认后持续跨过旧截止时间，核对两端过场没有失败、进度只扣一次且新天获得完整六秒。
     最后等待新天自然到点并继续观察夜晚不自动翻天；超时或断言失败统一清理进程。
@@ -82,6 +82,10 @@ def tick(delta):
         worlds = unreal.EditorLevelLibrary.get_pie_worlds(False)
         servers = [world for world in worlds if unreal.GameplayStatics.get_game_mode(world)]
         clients = [world for world in worlds if not unreal.GameplayStatics.get_game_mode(world)]
+        gate = (state['stage'], len(servers), len(clients))
+        if state.get('world_gate') != gate:
+            state['world_gate'] = gate
+            unreal.log('DAY_DEADLINE_PROBE stage/worlds={}'.format(gate))
         if len(servers) != 1 or len(clients) != 1:
             return
         server, client = servers[0], clients[0]
@@ -93,18 +97,11 @@ def tick(delta):
             return
         host = next(player for player in players if player.is_local_controller())
         target = next(actor for actor in unreal.GameplayStatics.get_all_actors_of_class(server, unreal.CatAltarActor) if actor.get_name() == altar_name)
-        client_target = next((actor for actor in unreal.GameplayStatics.get_all_actors_of_class(client, unreal.CatAltarActor) if actor.get_name() == altar_name), None)
-        client_camera = next((actor for actor in unreal.GameplayStatics.get_all_actors_of_class(client, unreal.CameraActor) if actor.get_name() == camera_name), None)
-        if not client_target or not client_camera:
-            return
         run, replicated = snapshot(server), snapshot(client)
         now = unreal.GameplayStatics.get_time_seconds(server)
-        if state['stage'] < 3:
-            for index, player in enumerate(players):
-                player.get_controlled_pawn().set_actor_location(origin + unreal.Vector(-130, 100 if index == 0 else -100, 0), False, True)
-            if remote.get_view_target() != client_camera:
-                remote.set_view_target_with_blend(client_camera, 0.0)
-                return
+        if state['stage'] < 2:
+            # 只有发起者需要现场触达；远端确认不再等待摄像机或准心对准祭坛。
+            host.get_controlled_pawn().set_actor_location(origin + unreal.Vector(-130, 100, 0), False, True)
         if state['stage'] == 0:
             if 'DAY_ACTIVE' not in phase(run):
                 return
@@ -116,18 +113,21 @@ def tick(delta):
         elif state['stage'] == 1:
             if 'NORMAL_NIGHT' not in phase(run) or 'NORMAL_NIGHT' not in phase(replicated):
                 return
-            require(target.interact(host, unreal.GuidLibrary.new_guid()), 'host confirms through altar authority entry')
+            require(target.interact(host, unreal.GuidLibrary.new_guid()), 'host initiates through altar authority entry')
             state['stage'] = 2
         elif state['stage'] == 2:
-            targeting = remote.get_component_by_class(unreal.CatInteractionTargetingComponent)
-            if targeting.get_current_target() != client_target:
+            confirmation = replicated.altar_confirmation
+            if state.get('confirmation_gate') != str(confirmation.state):
+                state['confirmation_gate'] = str(confirmation.state)
+                unreal.log('DAY_DEADLINE_PROBE client_confirmation={}'.format(confirmation.state))
+            if 'WAITING' not in str(confirmation.state):
                 return
             if case == 'manual':
-                require(now < state['old_deadline'] - 0.5, 'remote input occurs before old deadline to reproduce stale callback')
-            instance = unreal.GameplayStatics.get_game_instance(client)
-            inputs = next(item for item in unreal.ObjectIterator(unreal.EnhancedInputLocalPlayerSubsystem)
-                if unreal.GameplayStatics.get_game_instance(item.get_outer()) == instance)
-            inputs.inject_input_vector_for_action(action, unreal.Vector(1, 0, 0), [], [])
+                require(now < state['old_deadline'] - 0.5, 'confirmation occurs before old deadline to reproduce stale callback')
+            # 编辑器 Python 的 ScriptExecutionGuard 强制 RPC 本地执行；本脚本在服务器对应 Controller 提交意图。
+            # 这里只验证昼夜截止和双端状态复制；真实 owning-client RPC 与 Slate 按键由 FormalThreeEndpoint 覆盖。
+            remote_authority = next(player for player in players if not player.is_local_controller())
+            remote_authority.call_method('ServerSetAltarConfirmation', args=(confirmation.request_id, True))
             state.update(stage=3, input_at=now)
         elif state['stage'] == 3:
             if run.day_transition.active or replicated.day_transition.active:

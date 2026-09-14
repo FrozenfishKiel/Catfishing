@@ -103,6 +103,13 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerRequestInteraction(AActor* Target, FGuid RequestId);
 
+	/** 客户端只提交本人对当前祭坛确认请求的目标状态；服务器以 RPC 所属 Controller 识别玩家并由 GameMode 复核请求。 */
+	UFUNCTION(Server, Reliable)
+	void ServerSetAltarConfirmation(FGuid RequestId, bool bConfirmed);
+
+	/** 把 F8/F9 或已获键盘焦点页面转交的按键转换为当前公开请求的一次确认意图；找到可提交请求时返回 true 供 UI 消费该键。 */
+	bool TrySetAltarConfirmationFromKey(const FKey& Key);
+
 	/** 由 owning client 发起固定营地篝火回看请求；Camp 在结算夜全员在场且 CapturePlan 建立成功后触发表现 multicast，并通过 ClientReceiveCampCommandResult 回送领域结果。 */
 	UFUNCTION(Server, Reliable)
 	void ServerRequestCampfirePlayback(ACatCampHubActor* Camp, FGuid RequestId);
@@ -250,6 +257,10 @@ private:
 	void SetDayTransitionLocked(bool bLocked);
 	/** 结束或旅行时解绑快照并清理本功能持有的输入、移动和 UI；不触碰 Run 权威状态。 */
 	void ClearDayTransition();
+	/** 游戏视口直接收到 F8 时复用统一确认提交入口，避免没有模态页面时缺少快捷键。 */
+	void ConfirmAltarConfirmationFromInput();
+	/** 游戏视口直接收到 F9 时复用统一撤回提交入口，重复按键仍由服务器按目标状态幂等处理。 */
+	void RevokeAltarConfirmationFromInput();
 
 	/** 当前快照通知来源；调和时写入，清理时配对解绑，不强持有旧 World 的 GameState。 */
 	TWeakObjectPtr<ACatfishingGameState> DayTransitionGameState;
@@ -331,6 +342,10 @@ private:
 	/** NativeInputActions 已绑定的输入组件；只防止交互这类非 Ability 标签在 SetupInputComponent 重入时重复注册。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UEnhancedInputComponent> NativeInputBoundComponent;
+
+	/** 已安装 F8/F9 绑定的输入组件；输入组件重建后重新绑定一次，避免 SetupInputComponent 重入累积同一确认请求。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UInputComponent> AltarConfirmationInputBoundComponent;
 
 	/** 统一向 authority GameMode 查询运行内玩法命令 gate；缺少 GameMode、非 Active 或 teardown 关门时返回 false。 */
 	bool CanForwardGameplayCommand() const;

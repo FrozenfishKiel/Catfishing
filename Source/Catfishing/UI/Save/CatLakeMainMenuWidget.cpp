@@ -12,6 +12,7 @@
 #include "Input/Reply.h"
 #include "InputCoreTypes.h"
 #include "Logging/CatLog.h"
+#include "Framework/Game/CatfishingPlayerController.h"
 #include "UI/Frontend/CatFrontendSettingsModel.h"
 
 #define LOCTEXT_NAMESPACE "CatLakeMainMenuWidget"
@@ -226,9 +227,14 @@ void UCatLakeMainMenuWidget::NativeDestruct()
 	Super::NativeDestruct();
 }
 
-// 预览键流程：子按钮处理前只识别普通 Escape；回主菜单等待中只消费不关闭，设置页中先取消回暂停菜单，命令页中才关闭菜单，Shift+Escape 继续透传。
+// 预览键流程：子按钮处理前先把 F8/F9 转交 Controller 的唯一祭坛确认入口；入口已受理时返回 Handled 阻止菜单和游戏视口重复路由，其余键仍按既有 Escape 分流。
 FReply UCatLakeMainMenuWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
+	if (ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwningPlayer());
+		Controller && Controller->TrySetAltarConfirmationFromKey(InKeyEvent.GetKey()))
+	{
+		return FReply::Handled();
+	}
 	if (ShouldCloseMenuFromKey(InKeyEvent))
 	{
 		if (LastMenuViewState.bReturnToMainMenuPending)
@@ -241,9 +247,14 @@ FReply UCatLakeMainMenuWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometr
 	return Super::NativeOnPreviewKeyDown(InGeometry, InKeyEvent);
 }
 
-// 键盘流程：当菜单根直接持有焦点时复用普通 Escape 分支；回主菜单等待中锁住关闭入口，Shift+Escape 和其它按键继续走父类默认处理。
+// 根键流程：菜单根直接持有焦点时仍先转交 F8/F9，已受理则终止继续路由；其余键复用既有 Escape 分支，回主菜单等待中继续锁住关闭入口。
 FReply UCatLakeMainMenuWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
+	if (ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwningPlayer());
+		Controller && Controller->TrySetAltarConfirmationFromKey(InKeyEvent.GetKey()))
+	{
+		return FReply::Handled();
+	}
 	if (ShouldCloseMenuFromKey(InKeyEvent))
 	{
 		if (LastMenuViewState.bReturnToMainMenuPending)

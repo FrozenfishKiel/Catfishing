@@ -1,5 +1,6 @@
 #include "UI/CatLocalPlayerUISubsystem.h"
 #include "Framework/Game/CatfishingPlayerController.h"
+#include "UI/Run/CatAltarConfirmationWidget.h"
 #include "UI/Run/CatDayTransitionWidget.h"
 #include "UI/WorldInfo/CatWorldInfoController.h"
 
@@ -252,7 +253,7 @@ void UCatLocalPlayerUISubsystem::RefreshDayTransition(APlayerController* Control
 		DayTransitionFailureUntilSeconds = Now + 2.0;
 		UE_LOG(LogCatUI, Warning,
 			TEXT("Event=day_transition_failure_feedback RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s Message=%s"),
-			*Transition.RequestId.ToString(), *GetNameSafe(Controller->GetWorld()), static_cast<int32>(Controller->GetNetMode()),
+			*Transition.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(Controller->GetWorld()), static_cast<int32>(Controller->GetNetMode()),
 			Controller->HasAuthority(), static_cast<int32>(Controller->GetLocalRole()), *GetNameSafe(Controller), *Transition.Message.ToString());
 	}
 	const bool bShowFailure = Transition.bFailed && Now < DayTransitionFailureUntilSeconds;
@@ -318,7 +319,7 @@ void UCatLocalPlayerUISubsystem::RefreshDayTransition(APlayerController* Control
 			UnavailableDayTransitionViewId = Transition.RequestId;
 			UE_LOG(LogCatUI, Error, TEXT("Event=DayTransitionWBPUnavailable World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s RequestId=%s Class=%s"),
 				*GetNameSafe(Controller->GetWorld()), static_cast<int32>(Controller->GetNetMode()), Controller->HasAuthority(),
-				static_cast<int32>(Controller->GetLocalRole()), *Controller->GetName(), *Transition.RequestId.ToString(), *Settings->DayTransitionWidgetClass.ToString());
+				static_cast<int32>(Controller->GetLocalRole()), *Controller->GetName(), *Transition.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *Settings->DayTransitionWidgetClass.ToString());
 			return;
 		}
 	}
@@ -332,7 +333,7 @@ void UCatLocalPlayerUISubsystem::RefreshDayTransition(APlayerController* Control
 		{
 			UE_LOG(LogCatUI, Warning,
 				TEXT("Event=day_transition_view_unavailable RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s"),
-				*Transition.RequestId.ToString(), *GetNameSafe(Controller->GetWorld()), static_cast<int32>(Controller->GetNetMode()),
+				*Transition.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(Controller->GetWorld()), static_cast<int32>(Controller->GetNetMode()),
 				Controller->HasAuthority(), static_cast<int32>(Controller->GetLocalRole()), *GetNameSafe(Controller));
 		}
 		return;
@@ -353,6 +354,97 @@ void UCatLocalPlayerUISubsystem::ClearDayTransition()
 	LastDayTransitionFailureId.Invalidate();
 	UnavailableDayTransitionViewId.Invalidate();
 	DayTransitionFailureUntilSeconds = 0.0;
+}
+
+// 祭坛确认表现流程：
+// 1. 只接收当前 LocalPlayer 的 Controller，并以 Waiting 快照显示窗口；等待期间不关闭背包、商店或菜单，也不改变焦点和输入模式。
+// 2. Cancelled 首次到达时以单调时间保留两秒原因；Accepted、Idle 或取消展示结束时移出窗口，正式翻天遮罩随后独立接管。
+// 3. 只加载 Settings 中的正式 WBP，失败按 RequestId 去重记录；所有文本与倒计时仍由 View 从公开快照和 GameState 服务器时间读取。
+void UCatLocalPlayerUISubsystem::RefreshAltarConfirmation(APlayerController* Controller,
+	const FCatAltarConfirmationSnapshot& Confirmation)
+{
+	ULocalPlayer* LocalPlayer = GetLocalPlayer();
+	if (!Controller || !LocalPlayer || Controller != LocalPlayer->GetPlayerController(GetWorld()))
+	{
+		return;
+	}
+	const bool bWaiting = Confirmation.State == ECatAltarConfirmationState::Waiting && Confirmation.RequestId.IsValid();
+	const double NowSeconds = FPlatformTime::Seconds();
+	if (Confirmation.State == ECatAltarConfirmationState::Cancelled && Confirmation.RequestId.IsValid()
+		&& Confirmation.RequestId != LastAltarConfirmationCancellationId)
+	{
+		LastAltarConfirmationCancellationId = Confirmation.RequestId;
+		AltarConfirmationCancellationUntilSeconds = NowSeconds + 2.0;
+		UE_LOG(LogCatUI, Warning,
+			TEXT("Event=altar_confirmation_cancelled_feedback RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s Reason=%s"),
+			*Confirmation.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(Controller->GetWorld()),
+			static_cast<int32>(Controller->GetNetMode()), Controller->HasAuthority(), static_cast<int32>(Controller->GetLocalRole()),
+			*GetNameSafe(Controller), *Confirmation.CancelReason.ToString());
+	}
+	const bool bShowCancellation = Confirmation.State == ECatAltarConfirmationState::Cancelled
+		&& Confirmation.RequestId == LastAltarConfirmationCancellationId && NowSeconds < AltarConfirmationCancellationUntilSeconds;
+	if (!bWaiting && !bShowCancellation)
+	{
+		if (AltarConfirmationWidget)
+		{
+			AltarConfirmationWidget->RemoveFromParent();
+			AltarConfirmationWidget = nullptr;
+		}
+		return;
+	}
+	const bool bCreatedThisFrame = !AltarConfirmationWidget;
+	if (bCreatedThisFrame)
+	{
+		if (UnavailableAltarConfirmationViewId == Confirmation.RequestId)
+		{
+			return;
+		}
+		const UCatUISettings* Settings = GetDefault<UCatUISettings>();
+		const TSubclassOf<UCatAltarConfirmationWidget> ViewClass = Settings ? Settings->LoadAltarConfirmationWidgetClass() : nullptr;
+		if (ViewClass)
+		{
+			AltarConfirmationWidget = CreateWidget<UCatAltarConfirmationWidget>(Controller, ViewClass);
+		}
+		if (!AltarConfirmationWidget)
+		{
+			UnavailableAltarConfirmationViewId = Confirmation.RequestId;
+			UE_LOG(LogCatUI, Error,
+				TEXT("Event=altar_confirmation_wbp_unavailable RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s Class=%s"),
+				*Confirmation.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(Controller->GetWorld()),
+				static_cast<int32>(Controller->GetNetMode()), Controller->HasAuthority(), static_cast<int32>(Controller->GetLocalRole()),
+				*GetNameSafe(Controller), Settings ? *Settings->AltarConfirmationWidgetClass.ToString() : TEXT("None"));
+			return;
+		}
+	}
+	if (!AltarConfirmationWidget->IsInViewport())
+	{
+		AltarConfirmationWidget->AddToViewport(8500);
+	}
+	if (!AltarConfirmationWidget->IsInViewport())
+	{
+		if (bCreatedThisFrame)
+		{
+			UE_LOG(LogCatUI, Warning,
+				TEXT("Event=altar_confirmation_view_unavailable RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s"),
+				*Confirmation.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(Controller->GetWorld()),
+				static_cast<int32>(Controller->GetNetMode()), Controller->HasAuthority(), static_cast<int32>(Controller->GetLocalRole()), *GetNameSafe(Controller));
+		}
+		return;
+	}
+	AltarConfirmationWidget->RenderConfirmation(Confirmation);
+}
+
+// 祭坛确认清理流程：只移除本 LocalPlayer 创建的窗口并清空展示去重与取消截止时间；不会发送撤回、取消服务器 Timer 或改写公开快照。
+void UCatLocalPlayerUISubsystem::ClearAltarConfirmation()
+{
+	if (AltarConfirmationWidget)
+	{
+		AltarConfirmationWidget->RemoveFromParent();
+		AltarConfirmationWidget = nullptr;
+	}
+	UnavailableAltarConfirmationViewId.Invalidate();
+	LastAltarConfirmationCancellationId.Invalidate();
+	AltarConfirmationCancellationUntilSeconds = 0.0;
 }
 
 // 页面只为关闭和输入读取这个控制器；每个库存 WBP 自己绑定所属库存的 Model。
@@ -1201,10 +1293,11 @@ void UCatLocalPlayerUISubsystem::BindController(APlayerController* Controller)
 	HandleControllerPawnChanged(Controller->GetPawn());
 }
 
-// Controller 解绑流程：先移除仅属于旧 Controller 的翻天表现，再清理弱引用；Pawn 刷新继续由 Controller 生命周期推送。
+// Controller 解绑流程：先移除仅属于旧 Controller 的翻天与祭坛确认表现，再清理弱引用；Pawn 刷新继续由 Controller 生命周期推送。
 void UCatLocalPlayerUISubsystem::UnbindController()
 {
 	ClearDayTransition();
+	ClearAltarConfirmation();
 	BoundPlayerController.Reset();
 }
 

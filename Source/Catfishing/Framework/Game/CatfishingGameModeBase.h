@@ -114,10 +114,12 @@ public:
 	FCatRunTransitionResult EnterRunPhaseFromStateTree(ECatRunPhase NewPhase, ECatRunTransitionReason Reason);
 	/** StateTree Condition 只读比较最近一次外部结果原因，不从当前 Phase 反推事件来源。 */
 	bool DoesLastRunFlowResultMatch(ECatRunTransitionReason ExpectedReason) const;
-	/** 消费服务器已确认的夜晚供品结算；StableNetId 由 Controller 适配并以 RequestId/Revision 保证幂等。 */
-	FCatRunCommandResult SubmitOfferingSettlement(AController* RequestingController, const FCatOfferingSettlementCommand& Command);
-	/** 全员确认的祭坛请求翻天；冻结供品并联合预检后发布过渡，黑屏提交仍复用现有 GAS 写口。 */
-	bool BeginAltarDayTransition(ACatAltarActor* Altar, AController* Controller, FGuid RequestId);
+	/** 在现场交互合法时建立固定的 Active 玩家确认名单；发起者默认确认，单人会立即转入既有翻天。 */
+	bool BeginAltarConfirmation(ACatAltarActor* Altar, AController* Initiator, FGuid RequestId);
+	/** 接收一名玩家自己的远程确认或撤回；请求、名单、资格和截止时间不匹配时不改写公开快照。 */
+	void SetAltarConfirmation(AController* Player, FGuid RequestId, bool bConfirmed);
+	/** 取消尚未正式进入翻天的确认请求；原因保留在公开快照中供客户端短暂展示。 */
+	void CancelAltarConfirmation(const FText& Reason);
 	/** 祭坛销毁或退出时释放本祭坛的过渡；不撤销已提交 GAS，也不影响另一祭坛。 */
 	void CancelAltarDayTransition(ACatAltarActor* Altar, const FText& Error);
 	/** 供 owning client 在成像归档已收口后提交结算完成终态；本方法只发送 StateTree 事件，不在 C++ 选择目标 Phase。 */
@@ -271,8 +273,18 @@ private:
 	void PublishShopEconomySnapshot();
 	/** 将服务器私有 StableNetId 解析成可复制的 PlayerState。 */
 	APlayerState* ResolvePlayerStateByStableNetId(const FString& StableNetId) const;
+	/** 将公开确认快照里的 PlayerState 反查为当前 Active Controller；正式过场沿用现场发起者，不受最后确认者影响。 */
+	AController* ResolveActiveControllerByPlayerState(const APlayerState* PlayerState) const;
 	/** 进入最终结算夜后关闭新商店订单；已经交付的购买物继续留在营地公共仓库正式库存中。 */
 	void CloseShopForSettlementNight();
+	/** 复核等待请求的三十秒截止，或清理已展示两秒的取消快照；同一句柄在新请求开始时替换。 */
+	void HandleAltarConfirmationTimer();
+	/** 读取当前公开名单是否全部确认；人数从 Participants 数组推导，不维护并行集合或计数。 */
+	bool AreAllAltarConfirmationParticipantsConfirmed() const;
+	/** 比对当前 Active PlayerState 集合和公开 Participants；加入、退出或身份替换都会令本轮确认失效，不能只比较人数。 */
+	bool ValidateAltarConfirmationParticipants() const;
+	/** 全员确认后唯一进入正式翻天的私有入口；它要求公开确认快照已 Accepted，避免旧调用方绕过确认。 */
+	bool BeginAltarDayTransition(ACatAltarActor* Altar, AController* Controller, FGuid RequestId);
 	/** StableNetId 到最小装配记录的服务器唯一映射；GameMode 不复制到客户端，World 销毁时整体释放。 */
 	TMap<FString, FAdmissionRecord> AdmissionRecords;
 	/** 连接丢失身份到服务器世界时间失效点；只在显式 TTL/失败白名单下建立，不恢复失效 FishingSession。 */
@@ -302,6 +314,8 @@ private:
 	TMap<FString, FCatRunCommandResult> RunCommandTerminalCache;
 	/** 白天截止的唯一计时器句柄；每次 Phase 进入和 teardown 都先清除，达标/截止收口时只停回调不伪造公开 deadline。 */
 	FTimerHandle DayDeadlineTimerHandle;
+	/** 当前祭坛确认的唯一计时句柄；等待时裁决截止，取消后复用为两秒终态清理，接受及 World 收口清除。 */
+	FTimerHandle AltarConfirmationTimer;
 	/** 白天 Morning 转 Day 的语义刷新句柄；它只触发同一 RunPublicState 重发，不决定 Phase。 */
 	FTimerHandle DayMorningEnvironmentRefreshTimerHandle;
 	/** 白天 Day 转 Dusk 的语义刷新句柄；它只触发同一 RunPublicState 重发，不决定 Phase。 */

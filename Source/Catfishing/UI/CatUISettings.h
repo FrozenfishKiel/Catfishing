@@ -5,6 +5,7 @@
 #include "CatUISettings.generated.h"
 
 class UCatHUDWidget;
+class UCatAltarConfirmationWidget;
 class UCatDayTransitionWidget;
 class UCatItemTooltipWidget;
 class UCatFrontendRootWidget;
@@ -33,6 +34,9 @@ public:
 
 	/** 读取正式翻天 WBP；缺失、原生类或错误父类都返回空，调用方必须隐藏并记录而非创建替身。 */
 	TSubclassOf<UCatDayTransitionWidget> LoadDayTransitionWidgetClass() const;
+
+	/** 读取正式祭坛确认 WBP；缺失、原生类或错误父类都返回空，等待确认仍由 GameMode 的超时规则收口。 */
+	TSubclassOf<UCatAltarConfirmationWidget> LoadAltarConfirmationWidgetClass() const;
 
 	/** 返回正式 Frontend Root WBP 类；缺失时 LocalPlayer fail-closed，不创建原生替身。 */
 	TSubclassOf<UCatFrontendRootWidget> LoadFrontendRootWidgetClass() const;
@@ -87,6 +91,10 @@ public:
 	/** 翻天遮罩的正式 WBP 软类引用；构造器提供默认路径，项目配置可覆盖，LocalPlayer 经加载入口按请求创建实例，布局由资产维护。 */
 	UPROPERTY(Config, EditAnywhere, Category="Lake|Run")
 	TSoftClassPtr<UCatDayTransitionWidget> DayTransitionWidgetClass;
+
+	/** 祭坛全员确认窗口的正式 WBP 软类引用；LocalPlayer 在 Waiting 或取消反馈期间加载，布局与静态 F8/F9 提示由资产维护。 */
+	UPROPERTY(Config, EditAnywhere, Category="Lake|Run")
+	TSoftClassPtr<UCatAltarConfirmationWidget> AltarConfirmationWidgetClass;
 
 	/** 正式 Frontend 根 WBP 类；只在 Frontend World 为本地玩家创建，Root 内只装配主菜单、存档、房间和设置页面。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Frontend")

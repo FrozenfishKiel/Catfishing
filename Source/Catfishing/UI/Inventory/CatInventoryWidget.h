@@ -65,10 +65,10 @@ protected:
 	/** 移出视口时解除 Model、回执、按钮和格子监听并清理数量与请求状态；显示上下文保留供再次打开。 */
 	virtual void NativeDestruct() override;
 
-	/** 优先处理窗口关闭键，避免焦点停在子格时失效；其他按键保持 UMG 传播。 */
+	/** 在子格消费前先转交 F8/F9 到 Controller 的祭坛确认入口，再处理本页关闭键；其余按键保持 UMG 传播。 */
 	virtual FReply NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
-	/** 根页获得键盘焦点时也接受同一关闭键；其他按键交回父类。 */
+	/** 根页获得键盘焦点时也先转交 F8/F9，再接受同一关闭键；其它按键交回父类。 */
 	virtual FReply NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
 	/** 页面可见期间只轮询已复制的嘴部携带引用并同步叼起按钮；不重建库存或改变选择，保证外部占用变化能立即禁用操作。 */

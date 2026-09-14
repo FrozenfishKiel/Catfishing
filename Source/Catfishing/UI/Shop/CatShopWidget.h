@@ -320,10 +320,10 @@ protected:
 	/** 析构时解绑本 View 拥有的按钮和动态子 WBP；外部意图订阅由 PageController::Unbind 清理。 */
 	virtual void NativeDestruct() override;
 
-	/** 预览按键先于商品按钮处理；商店打开时命中关闭键会统一请求关闭，避免焦点落在动态按钮后按键失效。 */
+	/** 预览按键先把 F8/F9 交给 Controller 的祭坛确认入口；其余键再按商店关闭规则处理，避免动态按钮吞掉确认快捷键。 */
 	virtual FReply NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
-	/** UMG 在本页拥有键盘焦点时交付按键；商店打开且命中关闭键时广播关闭意图并返回已处理。 */
+	/** UMG 在本页拥有键盘焦点时同样转交 F8/F9；商店关闭键仍只广播关闭意图并返回已处理。 */
 	virtual FReply NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
 	/** WBP 可选渲染扩展点；正式商品列表应通过 GetDisplayedEntries 读取当前分类结果。 */

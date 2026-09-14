@@ -70,7 +70,7 @@ struct FCatLakeMainMenuViewState
 	UPROPERTY(BlueprintReadOnly)
 	FText StatusText;
 
-	/** 设置按钮是否可点击；当前由 Controller 根据局内设置模型是否可用写入。 */
+	/** 局内设置页是否具备可用的数据来源；Controller 发现正式 SettingsModel 缺失时写为 false，View 只据此阻止玩家进入无法生效的设置页。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bSettingsEnabled = true;
 
@@ -186,10 +186,10 @@ protected:
 	/** 离开视口时解除命令与设置控件绑定，避免 WBP 重建或 Slate 重建后重复广播同一点击。 */
 	virtual void NativeDestruct() override;
 
-	/** 预览键盘输入时优先消费普通 Escape；回主菜单等待中只锁住输入，设置页内回命令页，命令页内关闭菜单，Shift+Escape 留给编辑器。 */
+	/** 预览键盘输入先转交 F8/F9 祭坛确认，再处理普通 Escape；回主菜单等待中只锁住输入，设置页内回命令页，命令页内关闭菜单。 */
 	virtual FReply NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
-	/** 菜单根拿到键盘焦点时复用普通 Escape 分流；回主菜单等待中只锁住输入，Shift+Escape 和其它键继续交还父类。 */
+	/** 菜单根拿到键盘焦点时同样优先转交 F8/F9，再复用普通 Escape 分流；回主菜单等待中只锁住输入，其它键继续交还父类。 */
 	virtual FReply NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
 	/** WBP 可选渲染扩展点；正式资产可以读取 ViewState 决定动画、焦点或局部文案。 */

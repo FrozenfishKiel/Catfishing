@@ -293,9 +293,14 @@ bool UCatInventoryWidget::ShouldCloseInventoryFromKey(const FKeyEvent& InKeyEven
 	return Inventory && Inventory->GetOwner() != GetOwningPlayerPawn() && Key == Settings->ResolveInteractionConfirmKeyName();
 }
 
-// 在子控件消费之前处理关闭键，避免焦点落在格子上后无法关闭整个库存窗口。
+// 预览键流程：先把 F8/F9 转交 Controller 的唯一祭坛确认入口；入口已受理时返回 Handled 阻止子格和游戏视口重复路由，其余键再按既有关闭规则处理。
 FReply UCatInventoryWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
+	if (ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwningPlayer());
+		Controller && Controller->TrySetAltarConfirmationFromKey(InKeyEvent.GetKey()))
+	{
+		return FReply::Handled();
+	}
 	if (ShouldCloseInventoryFromKey(InKeyEvent))
 	{
 		RequestCloseInventory();
@@ -304,9 +309,14 @@ FReply UCatInventoryWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometry, 
 	return Super::NativeOnPreviewKeyDown(InGeometry, InKeyEvent);
 }
 
-// 根控件直接收到按键时复用同一关闭判断；其余输入保持默认传播。
+// 根键流程：焦点直接落在库存根时仍先转交 F8/F9，已受理则终止本页后续路由；未受理的按键复用既有关闭判断或交回父类。
 FReply UCatInventoryWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
+	if (ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwningPlayer());
+		Controller && Controller->TrySetAltarConfirmationFromKey(InKeyEvent.GetKey()))
+	{
+		return FReply::Handled();
+	}
 	if (ShouldCloseInventoryFromKey(InKeyEvent))
 	{
 		RequestCloseInventory();

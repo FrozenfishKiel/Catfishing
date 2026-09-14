@@ -35,6 +35,7 @@
 #include "GameFramework/PlayerController.h"
 #include "InputAction.h"
 #include "InputActionValue.h"
+#include "InputCoreTypes.h"
 #include "InputMappingContext.h"
 #include "Interaction/CatInteractable.h"
 #include "Interaction/CatInteractionTags.h"
@@ -87,7 +88,7 @@ bool ACatfishingPlayerController::IsDayTransitionInputBlocked() const
 // 调和流程：
 // 1. 旧旅行 World 不再处理；GameState 替换时清理旧绑定，再订阅新的公开快照，晚到依赖由下一帧接入。
 // 2. 输入与服务器移动只跟随 active/failed；重复通知不叠锁，换 Pawn 时归还旧组件并接管新组件。
-// 3. 仅 owning client 把服务器秒数和快照交给独立 UI；这里不提交供品、不推进 Run、不开始新天倒计时。
+// 3. 仅 owning client 把服务器秒数和公开快照交给独立 UI；等待确认不会开启翻天锁，只有后端接受后 DayTransition 才接管输入。
 void ACatfishingPlayerController::ReconcileDayTransition()
 {
 	UWorld* World = GetWorld();
@@ -113,6 +114,7 @@ void ACatfishingPlayerController::ReconcileDayTransition()
 		if (UI)
 		{
 			UI->RefreshDayTransition(this, State->GetRunPublicState().DayTransition, State->GetServerWorldTimeSeconds());
+			UI->RefreshAltarConfirmation(this, State->GetRunPublicState().AltarConfirmation);
 		}
 	}
 }
@@ -183,7 +185,7 @@ void ACatfishingPlayerController::SetDayTransitionLocked(const bool bLocked)
 	const FCatRunDayTransition* Transition = State ? &State->GetRunPublicState().DayTransition : nullptr;
 	UE_LOG(LogCatRun, Log,
 		TEXT("Event=day_transition_operation_lock RequestId=%s Locked=%d Committed=%d Failed=%d TargetDay=%d World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s Pawn=%s"),
-		Transition ? *Transition->RequestId.ToString() : TEXT("None"), bLocked,
+		Transition ? *Transition->RequestId.ToString(EGuidFormats::DigitsWithHyphens) : TEXT("None"), bLocked,
 		Transition && Transition->bCommitted, Transition && Transition->bFailed, Transition ? Transition->TargetDayIndex : INDEX_NONE,
 		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority(), static_cast<int32>(GetLocalRole()),
 		*GetNameSafe(this), *GetNameSafe(GetPawn()));
@@ -204,6 +206,7 @@ void ACatfishingPlayerController::ClearDayTransition()
 		if (UCatLocalPlayerUISubsystem* UI = LocalPlayer->GetSubsystem<UCatLocalPlayerUISubsystem>())
 		{
 			UI->ClearDayTransition();
+			UI->ClearAltarConfirmation();
 		}
 	}
 }
@@ -330,6 +333,12 @@ void ACatfishingPlayerController::SetupInputComponent()
 		EnhancedInput->BindAction(SprintAction, ETriggerEvent::Completed, this, &ThisClass::StopSprint);
 		EnhancedInput->BindAction(SprintAction, ETriggerEvent::Canceled, this, &ThisClass::StopSprint);
 	}
+	if (AltarConfirmationInputBoundComponent.Get() != InputComponent)
+	{
+		InputComponent->BindKey(EKeys::F8, IE_Pressed, this, &ThisClass::ConfirmAltarConfirmationFromInput);
+		InputComponent->BindKey(EKeys::F9, IE_Pressed, this, &ThisClass::RevokeAltarConfirmationFromInput);
+		AltarConfirmationInputBoundComponent = InputComponent;
+	}
 
 	const UCatAbilitySettings* AbilitySettings = GetDefault<UCatAbilitySettings>();
 	const UCatAbilityInputConfig* AbilityInputConfig = AbilitySettings && AbilitySettings->IsFishingRuntimeReady()
@@ -413,6 +422,7 @@ void ACatfishingPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReas
 		AbilityInputBindingComponent->ResetAbilityInput();
 	}
 	NativeInputBoundComponent.Reset();
+	AltarConfirmationInputBoundComponent.Reset();
 	if (FishingCommandComponent)
 	{
 		FishingCommandComponent->ResetTransientCommandState();
@@ -1187,6 +1197,63 @@ void ACatfishingPlayerController::NativeInputTagCanceled(const FGameplayTag Inpu
 {
 	if (InputTag.MatchesTagExact(CatInteractionTags::Input_Interact) && InteractionTargetingComponent)
 		InteractionTargetingComponent->EndInteractionInput(true);
+}
+
+// 祭坛确认输入流程：
+// 1. 只允许 owning client 从当前 GameState 快照读取等待中的有效请求，F8/F9 以目标布尔值表达意图而不计算人数。
+// 2. 正式翻天锁已建立时拒绝发送，避免 Accepted 到 DayTransition 复制之间的迟到输入制造第二条语义路径。
+// 3. 找到请求后记录关联键并可靠发送；服务器仍以 RPC 所属 Controller 和 GameMode 的公开名单完成最终裁决。
+bool ACatfishingPlayerController::TrySetAltarConfirmationFromKey(const FKey& Key)
+{
+	const bool bConfirmed = Key == EKeys::F8;
+	if (!bConfirmed && Key != EKeys::F9)
+	{
+		return false;
+	}
+	const ACatfishingGameState* GameState = GetWorld() ? GetWorld()->GetGameState<ACatfishingGameState>() : nullptr;
+	const FCatAltarConfirmationSnapshot* Confirmation = GameState ? &GameState->GetRunPublicState().AltarConfirmation : nullptr;
+	if (!IsLocalController() || IsDayTransitionInputBlocked() || !Confirmation
+		|| Confirmation->State != ECatAltarConfirmationState::Waiting || !Confirmation->RequestId.IsValid())
+	{
+		return false;
+	}
+	UE_LOG(LogCatRun, Log,
+		TEXT("Event=altar_confirmation_input_submitted RequestId=%s Confirmed=%d World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s"),
+		*Confirmation->RequestId.ToString(EGuidFormats::DigitsWithHyphens), bConfirmed, *GetNameSafe(GetWorld()),
+		static_cast<int32>(GetNetMode()), HasAuthority(), static_cast<int32>(GetLocalRole()), *GetNameSafe(this));
+	ServerSetAltarConfirmation(Confirmation->RequestId, bConfirmed);
+	return true;
+}
+
+// F8 输入流程：游戏视口没有 UMG 焦点时，直接把按键送入统一的确认入口；是否存在有效请求完全由该入口重读公开快照决定。
+void ACatfishingPlayerController::ConfirmAltarConfirmationFromInput()
+{
+	TrySetAltarConfirmationFromKey(EKeys::F8);
+}
+
+// F9 输入流程：游戏视口没有 UMG 焦点时，直接把按键送入统一的撤回入口；服务器对重复的 false 保持幂等。
+void ACatfishingPlayerController::RevokeAltarConfirmationFromInput()
+{
+	TrySetAltarConfirmationFromKey(EKeys::F9);
+}
+
+// RPC 接收流程：服务器只接受 Controller 自己提交的目标确认状态，并把身份解析、请求时限、名单资格与最终结算全部委托给 GameMode。
+void ACatfishingPlayerController::ServerSetAltarConfirmation_Implementation(const FGuid RequestId, const bool bConfirmed)
+{
+	ACatfishingGameModeBase* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
+	if (!GameMode || !RequestId.IsValid())
+	{
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=altar_confirmation_intent_rejected RequestId=%s Confirmed=%d Reason=%s World=%s Controller=%s"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), bConfirmed,
+			GameMode ? TEXT("InvalidRequestId") : TEXT("GameModeUnavailable"), *GetNameSafe(GetWorld()), *GetNameSafe(this));
+		return;
+	}
+	UE_LOG(LogCatRun, Log,
+		TEXT("Event=altar_confirmation_intent_received RequestId=%s Confirmed=%d World=%s NetMode=%d Controller=%s"),
+		*RequestId.ToString(EGuidFormats::DigitsWithHyphens), bConfirmed, *GetNameSafe(GetWorld()),
+		static_cast<int32>(GetNetMode()), *GetNameSafe(this));
+	GameMode->SetAltarConfirmation(this, RequestId, bConfirmed);
 }
 
 // 主动离局 RPC 流程：只把当前 Controller 交给 authority GameMode；标记不销毁 Session、不旅行，并由随后 Logout 精确消费。
