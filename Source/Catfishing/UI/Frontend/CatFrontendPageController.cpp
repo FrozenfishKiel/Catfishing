@@ -175,6 +175,8 @@ void UCatFrontendPageController::RequestSelectSaveSlot(const FName SlotId)
 	}
 	SelectedSlotId = SlotId;
 	PendingDeleteSlotId = NAME_None;
+	UE_LOG(LogCatUI, Log, TEXT("Event=frontend_save_selected World=%s NetMode=%d SlotId=%s"),
+		*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1, *SlotId.ToString());
 	SetLocalResultText(FText::GetEmpty());
 	if (UCatFrontendRootWidget* Root = RootWidget.Get()) { Root->ShowSaveList(); }
 }
@@ -247,6 +249,8 @@ void UCatFrontendPageController::RequestDeleteSelectedSaveSlot()
 		return;
 	}
 	PendingDeleteSlotId = SelectedSlotId;
+	UE_LOG(LogCatUI, Log, TEXT("Event=frontend_save_delete_prompt World=%s NetMode=%d SlotId=%s"),
+		*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1, *PendingDeleteSlotId.ToString());
 	if (UCatFrontendRootWidget* Root = RootWidget.Get()) { Root->ShowSaveList(); }
 }
 
@@ -284,6 +288,8 @@ void UCatFrontendPageController::RequestCancel()
 	}
 	if (!PendingDeleteSlotId.IsNone())
 	{
+		UE_LOG(LogCatUI, Log, TEXT("Event=frontend_save_delete_cancelled World=%s NetMode=%d SlotId=%s"),
+			*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1, *PendingDeleteSlotId.ToString());
 		PendingDeleteSlotId = NAME_None;
 		if (UCatFrontendRootWidget* Root = RootWidget.Get()) { Root->ShowSaveList(); }
 		return;

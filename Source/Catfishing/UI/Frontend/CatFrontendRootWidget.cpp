@@ -1,6 +1,7 @@
 #include "UI/Frontend/CatFrontendRootWidget.h"
 
 #include "Components/Button.h"
+#include "Components/Border.h"
 #include "Components/CheckBox.h"
 #include "Components/ComboBoxString.h"
 #include "Components/PanelWidget.h"
@@ -33,6 +34,16 @@ void UCatFrontendSaveSlotRowWidget::ConfigureRow(UCatFrontendRootWidget* InRootW
 {
 	RootWidget = InRootWidget;
 	SlotId = Summary.SlotId;
+	const bool bSelected = InRootWidget && InRootWidget->GetPageController()
+		&& InRootWidget->GetPageController()->GetSelectedSlotId() == SlotId;
+	if (UBorder* Surface = Cast<UBorder>(GetWidgetFromName(TEXT("SaveSlotRowRootBackground"))))
+	{
+		Surface->SetBrushColor(bSelected ? FLinearColor(0.055f, 0.19f, 0.15f, 0.96f) : FLinearColor(0.016f, 0.055f, 0.048f, 0.78f));
+	}
+	if (UTextBlock* Label = Cast<UTextBlock>(GetWidgetFromName(TEXT("SelectSaveSlotButtonLabel"))))
+	{
+		Label->SetText(FText::FromString(bSelected ? TEXT("已选择") : TEXT("选择")));
+	}
 	if (SaveSlotNameText) { SaveSlotNameText->SetText(FText::FromString(Summary.DisplayName)); }
 	if (SaveSlotMetaText)
 	{
@@ -173,9 +184,25 @@ void UCatFrontendRootWidget::ShowSaveList()
 {
 	ShowPage(SaveListPage, TEXT("SaveListPage"));
 	const bool bShowDeleteConfirmation = PageController && !PageController->GetPendingDeleteSlotId().IsNone();
+	UWidget* DeleteOverlay = SaveListPage ? SaveListPage->GetWidgetFromName(TEXT("SaveDeleteOverlay")) : nullptr;
+	const bool bHadConfirmation = DeleteOverlay && DeleteOverlay->GetVisibility() != ESlateVisibility::Collapsed;
+	if (DeleteOverlay) { DeleteOverlay->SetVisibility(bShowDeleteConfirmation ? ESlateVisibility::Visible : ESlateVisibility::Collapsed); }
+	if (UWidget* Content = SaveListPage ? SaveListPage->GetWidgetFromName(TEXT("SaveListRootShade")) : nullptr)
+	{
+		Content->SetIsEnabled(!bShowDeleteConfirmation);
+	}
+	if (UWidget* Scrim = GetWidgetFromName(TEXT("FrontendSaveDeleteScrim")))
+	{
+		Scrim->SetVisibility(bShowDeleteConfirmation ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	}
 	if (UTextBlock* ConfirmationText = FindPageControl<UTextBlock>(SaveListPage, TEXT("DeleteConfirmationText"), TEXT("SaveListPage"))) { ConfirmationText->SetVisibility(bShowDeleteConfirmation ? ESlateVisibility::Visible : ESlateVisibility::Collapsed); }
 	if (ConfirmDeleteSaveButton) { ConfirmDeleteSaveButton->SetVisibility(bShowDeleteConfirmation ? ESlateVisibility::Visible : ESlateVisibility::Collapsed); }
 	HandleSaveModelChanged();
+	if (bShowDeleteConfirmation && !bHadConfirmation)
+	{
+		if (UWidget* Cancel = SaveListPage->GetWidgetFromName(TEXT("CancelDeleteSaveButton"))) { Cancel->SetKeyboardFocus(); }
+	}
+	else if (bHadConfirmation && !bShowDeleteConfirmation && CancelSaveButton) { CancelSaveButton->SetKeyboardFocus(); }
 }
 
 // 房间显示流程：显式选择 RoomPage，原生写真实结果、好友和成员行；可选蓝图事件不承担任何交互或数据呈现。
@@ -479,6 +506,10 @@ void UCatFrontendRootWidget::BindPageControls()
 	if (DeleteSelectedSaveButton) { DeleteSelectedSaveButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestDeleteSelectedSaveSlot); }
 	if (ConfirmDeleteSaveButton) { ConfirmDeleteSaveButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestConfirmDeleteSaveSlot); }
 	if (CancelSaveButton) { CancelSaveButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestCancel); }
+	if (UButton* Cancel = SaveListPage ? Cast<UButton>(SaveListPage->GetWidgetFromName(TEXT("CancelDeleteSaveButton"))) : nullptr)
+	{
+		Cancel->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestCancel);
+	}
 	if (FriendSearchTextBox) { FriendSearchTextBox->OnTextChanged.AddUniqueDynamic(this, &ThisClass::HandleFriendSearchTextChanged); }
 	if (RefreshFriendsButton) { RefreshFriendsButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestRefreshFriends); }
 	if (LeaveRoomButton) { LeaveRoomButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestLeaveRoom); }
@@ -528,6 +559,10 @@ void UCatFrontendRootWidget::UnbindPageControls()
 	if (DeleteSelectedSaveButton) { DeleteSelectedSaveButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestDeleteSelectedSaveSlot); }
 	if (ConfirmDeleteSaveButton) { ConfirmDeleteSaveButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestConfirmDeleteSaveSlot); }
 	if (CancelSaveButton) { CancelSaveButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestCancel); }
+	if (UButton* Cancel = SaveListPage ? Cast<UButton>(SaveListPage->GetWidgetFromName(TEXT("CancelDeleteSaveButton"))) : nullptr)
+	{
+		Cancel->OnClicked.RemoveDynamic(this, &ThisClass::RequestCancel);
+	}
 	if (FriendSearchTextBox) { FriendSearchTextBox->OnTextChanged.RemoveDynamic(this, &ThisClass::HandleFriendSearchTextChanged); }
 	if (RefreshFriendsButton) { RefreshFriendsButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestRefreshFriends); }
 	if (LeaveRoomButton) { LeaveRoomButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestLeaveRoom); }
@@ -562,6 +597,11 @@ void UCatFrontendRootWidget::HandleSaveModelChanged()
 	const bool bCanSubmit = SaveModel && !SaveModel->IsBusy() && Snapshot.ActiveOperation == ECatOnlineOperation::None
 		&& Snapshot.SessionState == ECatOnlineSessionState::NoSession && !Snapshot.bIsAcceptedInvitePending;
 	const bool bHasSelection = PageController && !PageController->GetSelectedSlotId().IsNone();
+	if (UTextBlock* Empty = SaveListPage ? Cast<UTextBlock>(SaveListPage->GetWidgetFromName(TEXT("SaveEmptyText"))) : nullptr)
+	{
+		Empty->SetVisibility(SaveModel && SaveModel->GetSlotSummaries().IsEmpty() ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+		Empty->SetText(FText::FromString(SaveModel && SaveModel->IsBusy() ? TEXT("正在读取存档…") : TEXT("尚无存档\n为新的旅程取个名字吧")));
+	}
 	if (CreateSaveButton) { CreateSaveButton->SetIsEnabled(bCanSubmit); }
 	if (CreateSaveNameTextBox) { CreateSaveNameTextBox->SetIsEnabled(bCanSubmit); }
 	if (LoadSelectedSaveButton) { LoadSelectedSaveButton->SetIsEnabled(bCanSubmit && bHasSelection); }
@@ -963,6 +1003,10 @@ void UCatFrontendRootWidget::ShowPage(UWidget* Page, const TCHAR* PageName)
 	}
 	const bool bPageChanged = FrontendPageSwitcher->GetActiveWidget() != Page;
 	FrontendPageSwitcher->SetActiveWidget(Page);
+	if (UWidget* Scrim = GetWidgetFromName(TEXT("FrontendSaveDeleteScrim")))
+	{
+		Scrim->SetVisibility(ESlateVisibility::Collapsed);
+	}
 	if (UWidget* Scrim = GetWidgetFromName(TEXT("FrontendExitScrim")))
 	{
 		Scrim->SetVisibility(ESlateVisibility::Collapsed);

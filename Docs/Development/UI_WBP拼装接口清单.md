@@ -58,7 +58,13 @@ HUD、背包、背包格子、交互提示和局内 ESC 菜单的默认路径来
 
 `NorthStarTitleText` 沿用原 Designer 名称，显示“秘境同行”；`MenuSubtitleText` 继续接收 `RefreshFlowFeedback` 的真实错误和默认提示，不是可删的装饰文本。首页短按钮文案禁用自动换行，四态样式序列化在原按钮上。新日志 `LogCatUI / Event=frontend_page_shown` 只在切到不同页面时记录 World、NetMode、View、Page、Asset，供 Development 落盘追踪，重复刷新不刷屏。
 
-这次接入仅交付首页视觉、退出确认表现及必要 Root 适配，不代表其余页面完成美术重做，也不关闭 Frontend / Online 模块。设置页下拉框文字裁切在旧 760×500 画布对照中同样存在，仍属设置页待处理表现问题。
+首页接入交付首页视觉、退出确认表现及必要 Root 适配。存档页随后沿用同一背景与配色，其他页面仍待完善；这些局部交付不关闭 Frontend / Online 模块。设置页下拉框文字裁切在旧 760×500 画布对照中同样存在，仍属设置页待处理表现问题。
+
+存档样式入口 `Scripts/style_frontend_save.py` 修改原 `WBP_CatFrontendSaveList`、`WBP_CatSaveSlotRow` 和 Root，执行前拒绝目标包的未保存修改，并按 SHA256 备份到 `Saved/Automation/FrontendSaveStyle/Backups`。完整生成脚本在首页样式后执行它。两个样式脚本通过 `CompileStyledFrontendWidget` 补齐新增控件 GUID 后编译，保留已有 GUID 和绑定。
+
+存档卡片继续由 `RebuildSaveRows` 使用真实 SaveModel 摘要创建；`ConfigureRow` 读取 Controller 的稳定 SlotId 选择事实，设置原 `SaveSlotRowRootBackground` 高亮和“已选择”标签，不复制选择状态。`SaveEmptyText` 根据真实摘要数量和 busy 显示。新建名称、时间、保存格式及异步请求路径保持原义。
+
+原 `DeleteConfirmationText` 和 `ConfirmDeleteSaveButton` 移到 `SaveDeleteOverlay` 内的居中面板，新增 `CancelDeleteSaveButton` 绑定同一 `RequestCancel` 并成对解绑。`ShowSaveList` 根据已有 `PendingDeleteSlotId` 控制确认层、背景禁用和取消按钮焦点；取消后回到返回按钮。Root 的 `FrontendSaveDeleteScrim` 单独覆盖整个视口，切页时撤下；原行内确认摆法已经替换。选择、显示删除确认和取消分别记录 `frontend_save_selected`、`frontend_save_delete_prompt`、`frontend_save_delete_cancelled`，仍由正式 Save 子系统记录磁盘请求和结果。
 
 正式 Frontend Root 目标路径是 `/Game/UI/Frontend/WBP_CatFrontendRoot`，父类是 `UCatFrontendRootWidget`。当前前端包含 Root、五个业务子 WBP、全局 Loading 和动态列表行资产。Root 是 `UCatLocalPlayerUISubsystem` 的主界面创建目标；Loading WBP 由同一个 LocalPlayer UI 作为最高层遮罩创建，不嵌入 Root。
 
@@ -68,7 +74,7 @@ HUD、背包、背包格子、交互提示和局内 ESC 菜单的默认路径来
 | `/Game/UI/Frontend/WBP_CatFrontendMenu` | `UUserWidget`，装到 `MenuPage` | 首页、退出确认，以及进入加入队伍页的按钮 |
 | `/Game/UI/Frontend/WBP_CatFrontendJoin` | `UUserWidget`，装到 `JoinPage` | 好友房间及邀请链接加入入口 |
 | `/Game/UI/Frontend/WBP_CatJoinFriendRow` | `UCatFrontendJoinFriendRowWidget`，加入页动态行 | 展示真实好友房间并提交加入请求 |
-| `/Game/UI/Frontend/WBP_CatFrontendSaveList` | `UUserWidget`，装到 `SaveListPage` | Minecraft 风格单页存档列表 |
+| `/Game/UI/Frontend/WBP_CatFrontendSaveList` | `UUserWidget`，装到 `SaveListPage` | 湖畔风格单页存档列表、名称输入和删除确认 |
 | `/Game/UI/Frontend/WBP_CatFrontendRoom` | `UUserWidget`，装到 `RoomPage` | Steam 好友、邀请、当前房间和房主开始游戏 |
 | `/Game/UI/Frontend/WBP_CatFrontendSettings` | `UUserWidget`，装到 `FrontendSettingsPage` | 游戏、画面、声音、控制四类设置 |
 | `/Game/UI/Frontend/WBP_CatFrontendLoading` | `UUserWidget`，全局遮罩内容 | 进入游戏时用真实 gate 合成总进度；退出到主菜单时只显示真实等待状态，不要求条形进度 |
@@ -98,7 +104,7 @@ Root 会在五个子 WBP 的 WidgetTree 内按名称解析以下关键控件：�
 
 当前源码事实：Root、PageController、三个 Model、LocalPlayer 全局 Loading 遮罩接线已落 `.h/.cpp`；`UCatSaveSubsystem` 已实现槽目录、异步创建/读写及删除入口，库存与角色位置恢复已接领域接口。Frontend Root 承载加载遮罩，局内菜单只提交退出主菜单请求。`CatUISettings` 软类指向 `/Game/UI/Frontend/WBP_CatFrontendRoot.WBP_CatFrontendRoot_C`，`Config/DefaultGame.ini` 已精确 Cook `/Game/UI/Frontend` 和 `/Game/Audio/Settings`。
 
-`Source/CatfishingEditor/UI/CatFrontendWidgetAuthoringLibrary.h/.cpp` 与 `Scripts/create_frontend_assets.py` 已提供资产生成入口，目标为上述 9 个 WBP，以及 `/Game/Audio/Settings` 下的 1 个 SoundMix（`SMX_CatFrontendSettings`）和 5 个 SoundClass（`SC_CatMaster`、`SC_CatMusic`、`SC_CatSFX`、`SC_CatAmbience`、`SC_CatVoice`），共 6 个音频资产。2026-09-08 已通过现有资产脚本重建 `WBP_CatFrontendLoading`、`WBP_CatFrontendRoot` 和 `WBP_CatLakeMainMenu`，局部 LoadingPage 与局内等待面板已从资产树移出。
+`Source/CatfishingEditor/UI/CatFrontendWidgetAuthoringLibrary.h/.cpp` 与 `Scripts/generate_frontend_widgets.py` 提供当前前端 WBP 生成及样式入口。作者库另提供 `/Game/Audio/Settings` 下 1 个 SoundMix（`SMX_CatFrontendSettings`）和 5 个 SoundClass（`SC_CatMaster`、`SC_CatMusic`、`SC_CatSFX`、`SC_CatAmbience`、`SC_CatVoice`）的创建方法。2026-09-08 已重建 `WBP_CatFrontendLoading`、`WBP_CatFrontendRoot` 和 `WBP_CatLakeMainMenu`，局部 LoadingPage 与局内等待面板已从资产树移出。
 
 当前源码与资产合同已有 Editor Development 构建和资产脚本成功证据；完整 Steam 双端、打包 Development 日志、真实存档创建到房主开始游戏再到地图加载百分比推进的端到端表现仍未完成，不能声明正式主界面模块关闭。
 

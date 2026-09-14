@@ -218,7 +218,8 @@ def main():
     root_background.set_color_and_opacity(color(1, 1, 1, 1))
     # 原具名绑定控件没有删除或改名；新背景仅作装饰，不需要 C++ BindWidget。
     for bp in (menu, root):
-        unreal.BlueprintEditorLibrary.compile_blueprint(bp)
+        if not unreal.CatFrontendWidgetAuthoringLibrary.compile_styled_frontend_widget(bp):
+            raise RuntimeError("Unable to compile " + bp.get_path_name())
     generated = unreal.find_object(None, ROOT + ".WBP_CatFrontendRoot_C:WidgetTree.StaticBackgroundImage")
     if generated is None or generated.get_editor_property("brush").get_editor_property("resource_object") != texture:
         raise RuntimeError("Compiled Root did not retain the background reference")

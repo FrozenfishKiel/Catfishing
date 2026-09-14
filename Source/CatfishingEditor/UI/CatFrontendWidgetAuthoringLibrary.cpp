@@ -1807,6 +1807,21 @@ namespace CatFrontendWidgetAuthoring
 }
 }
 
+bool UCatFrontendWidgetAuthoringLibrary::CompileStyledFrontendWidget(UBlueprint* Blueprint)
+{
+	UWidgetBlueprint* WidgetBlueprint = Cast<UWidgetBlueprint>(Blueprint);
+	if (!WidgetBlueprint) { return false; }
+	WidgetBlueprint->ForEachSourceWidget([WidgetBlueprint](UWidget* Widget)
+	{
+		if (!WidgetBlueprint->WidgetVariableNameToGuidMap.Contains(Widget->GetFName()))
+		{
+			WidgetBlueprint->OnVariableAdded(Widget->GetFName());
+		}
+	});
+	FKismetEditorUtilities::CompileBlueprint(WidgetBlueprint);
+	return WidgetBlueprint->Status != BS_Error;
+}
+
 bool UCatFrontendWidgetAuthoringLibrary::CreateMissingFrontendWidgetBlueprints(bool bJoinPageOnly, bool bRebuildJoinPage)
 {
 	// 前端 WBP 创建流程：先补齐普通业务子资产，再重建全局 Loading 和 Root，确保 Root 只挂独立 Loading 页面合同；最后修复文本字体并核验全部合同。
