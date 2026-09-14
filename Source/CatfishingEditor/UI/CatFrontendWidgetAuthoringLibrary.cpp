@@ -893,9 +893,9 @@ namespace CatFrontendWidgetAuthoring
 		SetBoxSlot(Friends, true, FMargin(0.0f, 8.0f));
 		AddButton(Tree, FriendsColumn, TEXT("RefreshFriendsButton"), TEXT("刷新好友"));
 		AddText(Tree, PlayersColumn, TEXT("PlayersTitleText"), TEXT("当前房间"), 22);
-		AddText(Tree, PlayersColumn, TEXT("RoomInviteCodeText"), TEXT("邀请链接：未提供"), 16);
+		AddText(Tree, PlayersColumn, TEXT("RoomInviteCodeText"), TEXT("房间 ID 暂不可用"), 16);
 		AddText(Tree, PlayersColumn, TEXT("RoomAccessPolicyText"), TEXT("房间权限：未提供"), 16);
-		AddButton(Tree, PlayersColumn, TEXT("CopyInviteCodeButton"), TEXT("复制邀请链接"));
+		AddButton(Tree, PlayersColumn, TEXT("CopyInviteCodeButton"), TEXT("复制房间 ID"));
 		UScrollBox* Players = Tree->ConstructWidget<UScrollBox>(UScrollBox::StaticClass(), TEXT("PlayersScrollBox"));
 		PlayersColumn->AddChild(Players);
 		SetBoxSlot(Players, true, FMargin(0.0f, 8.0f));
@@ -1431,9 +1431,9 @@ namespace CatFrontendWidgetAuthoring
 		}
 		if (FCString::Strcmp(AssetName, TEXT("WBP_CatFrontendRoom")) == 0)
 		{
-			if (UTextBlock* Text = Cast<UTextBlock>(WidgetBlueprint->WidgetTree->FindWidget(TEXT("RoomInviteCodeText")))) { Text->SetText(FText::FromString(TEXT("邀请链接暂不可用"))); Text->SetAutoWrapText(true); }
+			if (UTextBlock* Text = Cast<UTextBlock>(WidgetBlueprint->WidgetTree->FindWidget(TEXT("RoomInviteCodeText")))) { Text->SetText(FText::FromString(TEXT("房间 ID 暂不可用"))); Text->SetAutoWrapText(true); }
 			if (UButton* Button = Cast<UButton>(WidgetBlueprint->WidgetTree->FindWidget(TEXT("CopyInviteCodeButton"))))
-			{ if (UTextBlock* Label = Cast<UTextBlock>(Button->GetContent())) { Label->SetText(FText::FromString(TEXT("复制邀请链接"))); } }
+			{ if (UTextBlock* Label = Cast<UTextBlock>(Button->GetContent())) { Label->SetText(FText::FromString(TEXT("复制房间 ID"))); } }
 		}
 		int32 ChangedFontCount = 0;
 		WidgetBlueprint->ForEachSourceWidget([&ChangedFontCount](UWidget* Widget)

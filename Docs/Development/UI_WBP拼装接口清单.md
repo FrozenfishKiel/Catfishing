@@ -64,6 +64,12 @@ HUD、背包、背包格子、交互提示和局内 ESC 菜单的默认路径来
 
 房间 `CharacterPreviewImage` 的 `/Game/UI/Frontend/M_UI_RoomCharacterPreview` 使用 UI 域 AlphaComposite 材质：`CharacterTexture.RGB` 为最终颜色，`1-CharacterMaskTexture.A` 为透明度。两个参数均由席位的本地 `ACatFrontendCharacterPreview` 提供 640×768 实时纹理，不可把单张 SceneColorHDR 的旧接法接回颜色输入。原生捕获使用局部灰色环境补光及持久化抗锯齿配置，CuteCat 原材质和 idle 不变。准备刷新复用 Actor，空位、离房和页面退出释放捕获。清晰度修复及分层证据见《主界面重构设计笔记》2026-09-14 对应节。
 
+2026-09-14 房间弹窗：`style_frontend_room.py` 调用 `style_frontend_room_dialogs.py::style`，在原 Room WBP 中生成左侧房间摘要、居中邀请弹窗和右侧设置弹窗。`OpenRoomInviteButton` / `OpenRoomSettingsButton` 绑定 Root 同名请求；`RoomDialogLayer` 控制模态遮罩，关闭按钮、背景点击和 Escape 优先关闭弹窗，切页清空密码草稿。好友搜索、滚动列表、刷新和行邀请仍消费原 RoomModel/好友句柄，未增加平台请求入口。
+
+`RoomInviteCodeText` / `CopyInviteCodeButton` / `RequestCopyRoomInviteCode` 保留现有绑定名，但本轮显示和复制的值明确改为 **Snapshot.LobbyId（完整平台房间 ID 字符串）**，不再是 JoinLobbyUri，也不是免密邀请码。加入页原解析器继续接受完整 ID 和 URI，局内邀请链接入口不变。六位邀请码和准入由 Online 后续实现，不得截断 Lobby ID 伪装短码。
+
+设置控件为 `RoomNameInput`、`RoomCapacityInput`（人数整数 1–4）、`RoomAccessInput`（Public/FriendsOnly/InviteOnly 的三个显示选项）、`RoomPasswordInput`（遮罩、关闭即清空）及 `RoomClearPasswordCheckBox`。打开时读取快照现值，非房主只读。**SaveRoomSettingsButton 当前禁用，保存、密码校验和邀请免密尚未接通**；输入不写 Online、Session 元数据或存档。后续必须接权威保存请求与成功/拒绝回执，并按 Online 的容量范围及准入策略替换选项和提示；不能仅启用按钮便宣称完成。设置草稿目前不跨关闭保存，也不能回读原密码。正式设置仍待接口与双端验收。
+
 存档样式入口 `Scripts/style_frontend_save.py` 修改原 `WBP_CatFrontendSaveList`、`WBP_CatSaveSlotRow` 和 Root，执行前拒绝目标包的未保存修改，并按 SHA256 备份到 `Saved/Automation/FrontendSaveStyle/Backups`。完整生成脚本在首页样式后执行它。两个样式脚本通过 `CompileStyledFrontendWidget` 补齐新增控件 GUID 后编译，保留已有 GUID 和绑定。
 
 存档卡片继续由 `RebuildSaveRows` 使用真实 SaveModel 摘要创建；`ConfigureRow` 读取 Controller 的稳定 SlotId 选择事实，设置原 `SaveSlotRowRootBackground` 高亮和“已选择”标签，不复制选择状态。`SaveEmptyText` 根据真实摘要数量和 busy 显示。新建名称、时间、保存格式及异步请求路径保持原义。

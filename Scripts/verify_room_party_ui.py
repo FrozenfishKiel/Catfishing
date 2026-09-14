@@ -25,6 +25,8 @@ def shot(name):
     unreal.SystemLibrary.execute_console_command(state['root'].get_world(),'Shot showui filename='+str(out/(name+'.png')).replace('\\','/'))
 
 def finish(error=None):
+    failed=[name for name,value in state['checks'].items() if value is False]
+    if failed and not error: error='Failed checks: '+', '.join(failed)
     if error: state['checks']['error']=error
     (out/'RuntimeChecks.json').write_text(json.dumps(state['checks'],ensure_ascii=False,indent=2),encoding='utf-8')
     unreal.unregister_slate_post_tick_callback(state['handle'])
@@ -102,6 +104,54 @@ def tick(delta):
             state['checks']['idle_time_advances']=abs(state['preview_mesh'].get_position()-state['animation_position'])>.001
             shot('RoomIdleSecondFrame')
             rows[0].configure_row(member(0,True))
+            state['phase']=20 if '-RoomDialogChecks' in unreal.SystemLibrary.get_command_line() else 2
+            state['next']=time.monotonic()+2
+        elif phase==20:
+            r=state['root'];r.request_open_room_invite()
+            state['checks']['invite_modal_opens']=child(r,'RoomDialogLayer').get_visibility()==unreal.SlateVisibility.VISIBLE
+            child(r,'RoomNameText').set_text('镜湖营地')
+            child(r,'RoomInviteCodeText').set_text('109775241384567890')
+            child(r,'RoomMemberCountText').set_text('2 / 4 位伙伴')
+            scroll=child(r,'FriendsScrollBox');scroll.clear_children()
+            cls=unreal.load_asset('/Game/UI/Frontend/WBP_CatRoomFriendRow').generated_class()
+            for i,(name,status) in enumerate([('阿吉','在线'),('月牙','游戏中'),('松果','已邀请'),('wode 很长的 Steam 好友名字','离线')]):
+                row=unreal.CatFrontendWidgetAuthoringLibrary.create_widget_preview(r.get_world(),cls,r.get_owning_player())
+                child(row,'FriendNameText').set_text(name);child(row,'FriendStatusText').set_text(status)
+                child(row,'InviteFriendButton').set_is_enabled(i<2)
+                if i==2: child(row,'InviteFriendButtonLabel').set_text('已发送')
+                scroll.add_child(row)
+            state['phase']=21;state['next']=time.monotonic()+2
+        elif phase==21:
+            shot('RoomInviteDialog')
+            state['phase']=211;state['next']=time.monotonic()+1
+        elif phase==211:
+            child(state['root'],'RoomInviteIdTabButton').get_editor_property('on_clicked').broadcast()
+            child(state['root'],'RoomModalIdText').set_text('109775241384567890')
+            state['checks']['invite_id_tab']=child(state['root'],'RoomInviteTabs').get_active_widget_index()==1
+            state['phase']=22;state['next']=time.monotonic()+2
+        elif phase==22:
+            shot('RoomInviteIdDialog')
+            state['phase']=221;state['next']=time.monotonic()+1
+        elif phase==221:
+            r=state['root'];r.request_cancel()
+            state['checks']['cancel_closes_modal_not_room']=child(r,'RoomDialogLayer').get_visibility()==unreal.SlateVisibility.COLLAPSED and child(r,'FrontendPageSwitcher').get_active_widget()==child(r,'RoomPage')
+            r.request_open_room_settings()
+            state['checks']['settings_capacity_options_persisted']=child(r,'RoomCapacityInput').get_option_count()==4
+            state['checks']['settings_access_options_persisted']=child(r,'RoomAccessInput').get_option_count()==3
+            state['checks']['settings_save_unavailable']=not child(r,'SaveRoomSettingsButton').get_is_enabled()
+            state['checks']['settings_nonhost_readonly']=not child(r,'RoomNameInput').get_is_enabled()
+            child(r,'RoomNameInput').set_text('镜湖营地')
+            child(r,'RoomCapacityInput').set_selected_option('4')
+            child(r,'RoomAccessInput').set_selected_index(1)
+            child(r,'RoomPasswordInput').set_text('fixture-secret')
+            state['checks']['room_password_masked']=child(r,'RoomPasswordInput').get_editor_property('is_password')
+            state['phase']=23;state['next']=time.monotonic()+2
+        elif phase==23:
+            shot('RoomSettingsDialog')
+            state['phase']=231;state['next']=time.monotonic()+1
+        elif phase==231:
+            r=state['root'];r.request_cancel()
+            state['checks']['cancel_clears_password']=str(child(r,'RoomPasswordInput').get_text())==''
             state['phase']=2;state['next']=time.monotonic()+2
         elif phase==2:
             actors=unreal.GameplayStatics.get_all_actors_of_class(state['root'].get_world(),unreal.CatFrontendCharacterPreview)
@@ -159,10 +209,11 @@ def tick(delta):
 performance=unreal.get_default_object(unreal.load_class(None,'/Script/UnrealEd.EditorPerformanceSettings'))
 state['previous_throttle']=performance.get_editor_property('bThrottleCPUWhenNotForeground')
 state['previous_stats']=unreal.SystemLibrary.get_console_variable_int_value('cat.Fishing.Stats')
-unreal.EditorPythonScripting.set_keep_python_script_alive(True)
 room_style=runpy.run_path(str(Path(__file__).with_name('style_frontend_room.py')))
 if '-RoomPreviewMaterialOnly' in unreal.SystemLibrary.get_command_line():
     room_style['preview_material']()
+elif '-RoomDialogChecks' in unreal.SystemLibrary.get_command_line():
+    room_style['main']()
 else:
     room_style['main']()
     runpy.run_path(str(Path(__file__).with_name('style_lake_party.py')),run_name='__main__')
@@ -174,4 +225,5 @@ state['checks']['cute_cat_class']=slot.get_editor_property('preview_character_cl
 state['checks']['idle_animation']=slot.get_editor_property('preview_animation').get_path_name()
 performance.set_editor_property('bThrottleCPUWhenNotForeground',False)
 state['handle']=unreal.register_slate_post_tick_callback(tick)
+unreal.EditorPythonScripting.set_keep_python_script_alive(True)
 unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).editor_request_begin_play()

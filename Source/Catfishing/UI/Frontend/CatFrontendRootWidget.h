@@ -330,6 +330,22 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
 	void RequestCopyRoomInviteCode();
 
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
+	void RequestOpenRoomInvite();
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
+	void RequestOpenRoomSettings();
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
+	void RequestCloseRoomDialog();
+	UFUNCTION()
+	void RequestRoomInviteFriendsTab();
+	UFUNCTION()
+	void RequestRoomInviteIdTab();
+	UFUNCTION()
+	void RequestSaveRoomSettings();
+	bool IsRoomDialogOpen() const;
+	void BindRoomDialogControls(bool bBind);
+	void RefreshRoomDialogPresentation(const FCatOnlineSnapshot& Snapshot);
+
 	/** 设置页选择游戏分类的意图；Controller 转交 SettingsModel，不用字符串或页面编号表达分类。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
 	void RequestSelectGameSettings();
@@ -357,6 +373,7 @@ protected:
 	 * 接收 Root 获得键盘焦点后的 Escape；按下时交给 Controller 执行确认取消或流程返回，其余按键保持父类处理。
 	 * 本实现不根据当前 Switcher 索引做页面分发，避免 View 的表现状态反过来成为流程真相。
 	 */
+	virtual FReply NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 	virtual FReply NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
 	/**

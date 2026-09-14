@@ -11,6 +11,7 @@ color, slate, widget, font, button_style, ensure, attach, text = (shared[k] for 
 PAGE = '/Game/UI/Frontend/WBP_CatFrontendRoom'
 ROW = '/Game/UI/Frontend/WBP_CatRoomPlayerSlot'
 MATERIAL = '/Game/UI/Frontend/M_UI_RoomCharacterPreview'
+FRIEND = '/Game/UI/Frontend/WBP_CatRoomFriendRow'
 
 def preview_material():
     mat = unreal.load_asset(MATERIAL)
@@ -46,11 +47,11 @@ def preview_material():
 def main():
     assert not unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).is_in_play_in_editor(), 'Stop PIE first'
     dirty = {p.get_name() for p in unreal.EditorLoadingAndSavingUtils.get_dirty_content_packages()}
-    assert not dirty.intersection((PAGE,ROW,MATERIAL)), 'Unsaved target asset edits'
+    assert not dirty.intersection((PAGE,ROW,MATERIAL,FRIEND)), 'Unsaved target asset edits'
     project = Path(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir()))
     backup = project/'Saved/Automation/RoomStage/Backups'
     backup.mkdir(parents=True,exist_ok=True)
-    for package in (PAGE,ROW,MATERIAL):
+    for package in (PAGE,ROW,MATERIAL,FRIEND):
         source = project/'Content'/(package.removeprefix('/Game/')+'.uasset')
         if source.exists():
             target = backup/(source.stem+'-'+hashlib.sha256(source.read_bytes()).hexdigest()+'.uasset')
@@ -122,22 +123,7 @@ def main():
     scroll=widget(page,'PlayersScrollBox',unreal.ScrollBox)
     scroll.set_orientation(unreal.Orientation.ORIENT_HORIZONTAL)
     scroll.set_editor_property('scroll_bar_visibility',unreal.SlateVisibility.COLLAPSED)
-    for name in ('RoomInviteCodeText','RoomAccessPolicyText','CopyInviteCodeButton'):
-        attach(widget(page,'FriendsColumn'),widget(page,name)).set_padding(unreal.Margin(0,6,0,0))
-    friends_surface=widget(page,'FriendsColumnSurface')
-    friends_parent=friends_surface.get_parent()
-    # 维持左侧固定宽度，营地席位获得其余宽度。
-    friend_bounds=ensure(page,'RoomFriendsBounds',unreal.SizeBox)
-    friend_bounds.set_width_override(260)
-    if friends_surface.get_parent()!=friend_bounds:
-        children=list(friends_parent.get_all_children())
-        friends_parent.clear_children()
-        attach(friend_bounds,friends_surface)
-        for child in children:
-            s=attach(friends_parent,friend_bounds if child==friends_surface else child)
-            size=unreal.SlateChildSize()
-            size.set_editor_property('size_rule',unreal.SlateSizeRule.AUTOMATIC if child==friends_surface else unreal.SlateSizeRule.FILL)
-            s.set_size(size)
+    ensure(page,'RoomFriendsBounds',unreal.SizeBox)
     widget(page,'PlayersColumnSurface').set_brush_color(color(.005,.022,.018,.32))
     widget(page,'PlayersColumnSurface').set_padding(unreal.Margin(12,20,12,0))
     widget(page,'PlayersTitleText').set_text('营地伙伴')
@@ -150,9 +136,11 @@ def main():
     hint=text(page,'RoomReadinessHint','等待其他队员准备 · 房主点击开始即视为准备',14,color(.64,.77,.70))
     attach(widget(page,'PlayersColumn'),hint).set_padding(unreal.Margin(0,8,0,12))
     hint.set_auto_wrap_text(True)
-    for bp in (row,page):
+    friend=unreal.load_asset(FRIEND)
+    runpy.run_path(str(Path(__file__).with_name('style_frontend_room_dialogs.py')))['style'](page,friend)
+    for bp in (row,page,friend):
         if not unreal.CatFrontendWidgetAuthoringLibrary.compile_styled_frontend_widget(bp): raise RuntimeError('WBP compile failed: '+bp.get_name())
         if not unreal.EditorAssetLibrary.save_loaded_asset(bp,only_if_is_dirty=False): raise RuntimeError('Save failed')
-    unreal.log('Event=frontend_room_stage_authored Assets=2 Character=BP_CuteCatCharacter')
+    unreal.log('Event=frontend_room_stage_authored Assets=3 Character=BP_CuteCatCharacter')
 
 if __name__=='__main__': main()

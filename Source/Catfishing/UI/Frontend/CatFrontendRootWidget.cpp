@@ -372,7 +372,11 @@ void UCatFrontendRootWidget::RequestDeleteSelectedSaveSlot() { if (PageControlle
 void UCatFrontendRootWidget::RequestConfirmDeleteSaveSlot() { if (PageController) { PageController->RequestConfirmDeleteSaveSlot(); } HandleSaveModelChanged(); }
 
 // 返回点击流程：交给有效 Controller 依次处理确认、读档等待或离房；具体 Show 调用和终态通知负责刷新，本入口不猜目标页。
-void UCatFrontendRootWidget::RequestCancel() { if (PageController) { PageController->RequestCancel(); } }
+void UCatFrontendRootWidget::RequestCancel()
+{
+	if (IsRoomDialogOpen()) { RequestCloseRoomDialog(); return; }
+	if (PageController) { PageController->RequestCancel(); }
+}
 
 // 好友刷新点击流程：交给有效 Controller 请求平台刷新，再重读房间反馈与现有快照；请求完成前不会把失效缓存标成新结果。
 void UCatFrontendRootWidget::RequestRefreshFriends() { if (PageController) { PageController->RequestRefreshFriends(); } HandleRoomModelChanged(); }
@@ -399,14 +403,18 @@ void UCatFrontendRootWidget::RequestRestoreFrontendSettingsDefaults() { if (Page
 // 输出设备刷新请求流程：将按钮意图交给 Controller 发起正式异步枚举，再立即按 pending 状态回填控件；不复用已失效设备列表或直接访问 AudioMixer。
 void UCatFrontendRootWidget::RequestRefreshAudioOutputDevices() { if (PageController) { PageController->RequestRefreshAudioOutputDevices(); } HandleSettingsModelChanged(); }
 
-// 邀请码复制流程：直接读取 RoomModel 已确认的 joinlobby URI，非空时写入系统剪贴板并更新房间提示；Model 缺失或 URI 为空时不改变剪贴板。
+// 保留原 WBP 绑定名；复制平台确认的完整 Lobby ID，现有加入解析器已支持该格式。
 void UCatFrontendRootWidget::RequestCopyRoomInviteCode()
 {
 	const FCatOnlineSnapshot Snapshot = RoomModel ? RoomModel->GetSnapshot() : FCatOnlineSnapshot();
-	if (!Snapshot.JoinLobbyUri.IsEmpty())
+	if (!Snapshot.LobbyId.IsEmpty())
 	{
-		FPlatformApplicationMisc::ClipboardCopy(*Snapshot.JoinLobbyUri);
-		if (RoomResultTextBlock) { RoomResultTextBlock->SetText(FText::FromString(TEXT("邀请链接已复制。"))); }
+		FPlatformApplicationMisc::ClipboardCopy(*Snapshot.LobbyId);
+		if (RoomResultTextBlock) { RoomResultTextBlock->SetText(FText::FromString(TEXT("房间 ID 已复制。"))); }
+		if (auto* Feedback = RoomPage ? Cast<UTextBlock>(RoomPage->GetWidgetFromName(TEXT("RoomInviteFeedbackText"))) : nullptr)
+		{
+			Feedback->SetText(FText::FromString(TEXT("房间 ID 已复制，可发给好友。")));
+		}
 	}
 }
 
@@ -579,6 +587,7 @@ void UCatFrontendRootWidget::BindPageControls()
 	if (StartRoomGameButton) { StartRoomGameButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestStartRoomGame); }
 	if (ReadyRoomButton) { ReadyRoomButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestToggleRoomReady); }
 	if (CopyInviteCodeButton) { CopyInviteCodeButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestCopyRoomInviteCode); }
+	BindRoomDialogControls(true);
 }
 
 // 按钮解绑流程：逐个移除本 Root 注册的动态委托；空指针和重复拆除安全跳过，防止 Widget 重建叠加点击回调。
@@ -633,6 +642,7 @@ void UCatFrontendRootWidget::UnbindPageControls()
 	if (StartRoomGameButton) { StartRoomGameButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestStartRoomGame); }
 	if (ReadyRoomButton) { ReadyRoomButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestToggleRoomReady); }
 	if (CopyInviteCodeButton) { CopyInviteCodeButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestCopyRoomInviteCode); }
+	BindRoomDialogControls(false);
 }
 
 // Model 订阅流程：每个 Model 各自只有一个刷新入口；订阅后 Root 更新实际原生控件，并可选调用纯表现扩展，不跨模型归纳业务状态。
@@ -961,8 +971,7 @@ void UCatFrontendRootWidget::RefreshRoomPresentation()
 	const FCatOnlineSnapshot Snapshot = RoomModel ? RoomModel->GetSnapshot() : FCatOnlineSnapshot();
 	if (RoomInviteCodeText)
 	{
-		RoomInviteCodeText->SetText(Snapshot.JoinLobbyUri.IsEmpty()
-			? FText::FromString(TEXT("邀请链接暂不可用")) : FText::FromString(Snapshot.JoinLobbyUri));
+		RoomInviteCodeText->SetText(FText::FromString(Snapshot.LobbyId.IsEmpty() ? TEXT("房间 ID 暂不可用") : Snapshot.LobbyId));
 	}
 	if (RoomAccessPolicyText)
 	{
@@ -989,7 +998,8 @@ void UCatFrontendRootWidget::RefreshRoomPresentation()
 			? (RoomModel && RoomModel->CanStartGame() ? TEXT("队员已准备，出发吧。") : TEXT("等待其他队员准备 · 房主点击开始即视为准备"))
 			: TEXT("准备好后，等待房主开始游戏")));
 	}
-	if (CopyInviteCodeButton) { CopyInviteCodeButton->SetIsEnabled(!Snapshot.JoinLobbyUri.IsEmpty()); }
+	if (CopyInviteCodeButton) { CopyInviteCodeButton->SetIsEnabled(!Snapshot.LobbyId.IsEmpty()); }
+	RefreshRoomDialogPresentation(Snapshot);
 }
 
 // 新建存档点击流程：只读取玩家在强制输入控件中填写的原始名称并转交 Controller；空值由正式校验返回反馈，Root 不生成默认名称。
@@ -1110,6 +1120,7 @@ void UCatFrontendRootWidget::ShowPage(UWidget* Page, const TCHAR* PageName)
 		return;
 	}
 	const bool bPageChanged = FrontendPageSwitcher->GetActiveWidget() != Page;
+	if (bPageChanged) { RequestCloseRoomDialog(); }
 	FrontendPageSwitcher->SetActiveWidget(Page);
 	if (PlayersScrollBox)
 	{
