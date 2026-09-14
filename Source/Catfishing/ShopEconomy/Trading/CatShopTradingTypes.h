@@ -6,13 +6,13 @@
 #include "ShopEconomy/Catalog/CatShopCatalogTypes.h"
 #include "CatShopTradingTypes.generated.h"
 
-/** 团队公款复制/查询快照；当前只在服务器服务内维护，UI 接线后可用它做只读展示。 */
+/** 团队公款的只读查询快照；经济服务从权威余额和事务版本构造，供交易回执和公开经济投影读取。 */
 USTRUCT(BlueprintType)
 struct FCatShopWalletSnapshot
 {
 	GENERATED_BODY()
 
-	/** 公款聚合版本；每次余额改变递增，购买和售鱼命令以它做并发前提。 */
+	/** 团队余额的事务版本；经济服务在余额改变后递增，回执和公开投影读取它标识余额快照，不作为购买或售鱼的并发前提。 */
 	UPROPERTY(BlueprintReadOnly)
 	int64 Revision = 0;
 
@@ -218,13 +218,13 @@ namespace CatShopCartLimits
 	inline constexpr int32 MaxCartCountPerEntry = 999;
 }
 
-/** 玩家一次支付整个购物车的经济命令；ExpectedRevision 对应团队公款版本。 */
+/** 玩家一次支付整个购物车的经济命令；服务器按当前公款余额裁决，不接受客户端钱包版本作为付款前提。 */
 USTRUCT(BlueprintType)
 struct FCatShopCartCommand
 {
 	GENERATED_BODY()
 
-	/** RequestId、ExpectedRevision 与服务器身份；客户端不能提交总价或仓库发货结果。 */
+	/** 购买的请求身份；只使用 RequestId 与服务器身份，共用上下文中的 ExpectedRevision 不参与购买裁决或重放签名。 */
 	UPROPERTY(BlueprintReadWrite)
 	FCatDomainCommandContext Context;
 

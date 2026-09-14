@@ -152,7 +152,7 @@ public:
 	/** 从指定商店摊位支付整车商品项；服务器先限制购物车载荷，再复核摊位和营地公共仓库。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")
 	void ServerSubmitShopCartAtKiosk(ACatShopKioskActor* ShopKiosk,
-		const TArray<FCatShopCartLineCommand>& Lines, FGuid RequestId, int64 ExpectedWalletRevision);
+		const TArray<FCatShopCartLineCommand>& Lines, FGuid RequestId);
 
 	/** 向明确买家出售当前打开鱼护中的鱼实例；不接收客户端价格，整单结果可靠回送给 owning client。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")

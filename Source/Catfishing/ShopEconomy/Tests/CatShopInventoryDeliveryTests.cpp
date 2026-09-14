@@ -18,7 +18,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatShopInventoryDeliveryReplayTest,
 // 购物车交付边界回归：
 // 1. 在独立 authority World 加载正式摊位蓝图和公共仓库，使用实际目录与公款配置。
 // 2. 验证缺失仓库拒绝且公款与账本不变，再验证定义批次提交拒绝能恢复库存。
-// 3. 只调用购买入口，核对通知时实物已入库、金额正确且已有唯一账本。
+// 3. 使用落后的钱包快照购买，核对仍按服务器余额成交，通知时实物已入库、金额正确且已有唯一账本。
 // 4. 重放购买时核对统一回执仍被接受，再篡改同号载荷验证拒绝；两者均不重复扣钱、发货或广播。
 // 5. 在已有物品上复核回滚后的槽位、实例身份和堆叠数量；带回调的实例批次必须在执行回调前拒绝。
 // 6. 实际填满仓库格子与堆叠并确认无法再接收，再用新货架通过报价预检；核对购买因容量拒绝且货架、公款与账本不变。
@@ -66,7 +66,7 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 	FCatShopCartCommand Command;
 	Command.Context.RequestId = FGuid::NewGuid();
 	Command.Context.StableNetId = TEXT("InventoryDeliveryRegression");
-	Command.Context.ExpectedRevision = WalletBefore.Revision;
+	Command.Context.ExpectedRevision = WalletBefore.Revision - 1;
 	Command.ShopInventoryId = Shelf->GetShopInventoryId();
 	Command.Lines.AddDefaulted_GetRef().EntryId = Selected.EntryId;
 	FCatInventoryReceiveBatch Batch;
@@ -115,6 +115,8 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("公共库存收到目录规定数量"),
 		Inventory->CountVisibleInventoryQuantityByDefinitionId(Selected.DefinitionId),
 		QuantityBefore + Selected.PurchaseQuantity);
+	// 将同一请求的期望版本改成高于服务器当前版本后重放，仍须识别为原意图，不能因版本不同再次拒绝或扣款。
+	Command.Context.ExpectedRevision = Shop->GetWalletSnapshot().Revision + 1;
 	const FCatShopCartTransactionResult Replay = Shop->PurchaseCatalogCart(Command, Shelf, nullptr);
 	TestEqual(TEXT("购买重放不依赖当前仓库"), Replay.Command.Error,
 		ECatDomainCommandError::AlreadyResolved);

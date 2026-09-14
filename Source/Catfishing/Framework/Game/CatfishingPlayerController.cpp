@@ -977,15 +977,14 @@ void ACatfishingPlayerController::ServerRequestInteraction_Implementation(AActor
 
 // 摊位购物车支付 RPC 流程：服务器只接受来源摊位引用和 EntryId/次数意图，不接受客户端提交的价格、库存或收货仓库。
 void ACatfishingPlayerController::ServerSubmitShopCartAtKiosk_Implementation(ACatShopKioskActor* ShopKiosk,
-	const TArray<FCatShopCartLineCommand>& Lines, const FGuid RequestId, const int64 ExpectedWalletRevision)
+	const TArray<FCatShopCartLineCommand>& Lines, const FGuid RequestId)
 {
 	FCatDomainCommandResult DeliveryResult;
 	DeliveryResult.RequestId = RequestId;
 	if (UCatShopTradeController* Controller = GetWorld()
 		? GetWorld()->GetSubsystem<UCatShopTradeController>() : nullptr)
 	{
-		DeliveryResult = Controller->SubmitCartFromKiosk(this, ShopKiosk, Lines, RequestId,
-			ExpectedWalletRevision).Delivery;
+		DeliveryResult = Controller->SubmitCartFromKiosk(this, ShopKiosk, Lines, RequestId).Delivery;
 	}
 	else
 	{

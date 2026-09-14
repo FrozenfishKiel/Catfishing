@@ -149,7 +149,7 @@ TArray<FCatShopTransactionRecord> UCatShopEconomyService::GetTransactionLedgerSn
 // 整车报价流程：
 // 1. 先校验请求身份、来源摊位和购物车行，再合并重复 EntryId，保证库存与价格只算一次聚合数量。
 // 2. 逐行读取服务器当前货架目录和库存，计算本行小计、交付数量和整车总价；客户端传来的价格或数量倍率一律不用。
-// 3. 最后按团队公款版本和余额整体裁决；任何一行库存不足、目录缺失或总价溢出都会让整车拒绝。
+// 3. 最后按服务器当前团队余额整体裁决；客户端钱包快照不参与，任何一行库存不足、目录缺失或总价溢出都会让整车拒绝。
 bool UCatShopEconomyService::ResolveCatalogCartForAuthority(const FCatShopCartCommand& Command,
 	const UCatShopInventoryComponent* ShopInventory, FCatShopResolvedCart& OutResolved,
 	ECatDomainCommandError& OutError) const
@@ -190,11 +190,7 @@ bool UCatShopEconomyService::ResolveCatalogCartForAuthority(const FCatShopCartCo
 		OutError = ECatDomainCommandError::DependencyUnavailable;
 		return false;
 	}
-	if (Command.Context.ExpectedRevision != WalletRevision)
-	{
-		OutError = ECatDomainCommandError::RevisionConflict;
-		return false;
-	}
+	// 公款由全队共享；客户端快照可能落后，购买只按这次服务器读取的余额裁决。
 	OutResolved.Command = Command;
 	OutResolved.Command.Lines = NormalizedLines;
 	OutResolved.Lines.Reserve(NormalizedLines.Num());
@@ -892,7 +888,7 @@ FString UCatShopEconomyService::MakeTerminalKey(const FString& StableNetId, cons
 }
 
 // 购物车载荷签名流程：
-// 1. 正常购物车先按购买写口相同规则归一化，再冻结公款前提、来源摊位和 EntryId/选购次数。
+// 1. 正常购物车先按购买写口相同规则归一化，再冻结来源摊位和 EntryId/选购次数；钱包快照不属于购买意图。
 // 2. 非法购物车也记录原始行签名，避免不同坏载荷都落到空 Lines= 后绕过同 RequestId 漂移检查。
 // 3. 价格、库存和发货数量不进签名，它们来自服务器摊位目录和公开经济事实，重放时只能回读不能由客户端指定。
 FString UCatShopEconomyService::MakeCartPayloadSignature(const FCatShopCartCommand& Command)
@@ -917,8 +913,7 @@ FString UCatShopEconomyService::MakeCartPayloadSignature(const FCatShopCartComma
 			LineParts.Add(FString::Printf(TEXT("%d:%s:%d"), LineIndex, *Line.EntryId.ToString(), Line.CartCount));
 		}
 	}
-	return FString::Printf(TEXT("Expected=%lld|Shop=%s|Normalized=%s|Lines=%s"),
-		Command.Context.ExpectedRevision,
+	return FString::Printf(TEXT("Shop=%s|Normalized=%s|Lines=%s"),
 		*Command.ShopInventoryId.ToString(EGuidFormats::DigitsWithHyphens),
 		bNormalized ? TEXT("true") : TEXT("false"),
 		*FString::Join(LineParts, TEXT(",")));

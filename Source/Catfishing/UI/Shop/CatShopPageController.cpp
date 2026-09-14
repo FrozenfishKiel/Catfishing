@@ -223,20 +223,19 @@ void UCatShopPageController::HandleViewPayCartRequested()
 	}
 
 	const FGuid RequestId = FGuid::NewGuid();
-	const int64 ExpectedWalletRevision = State.Economy.WalletRevision;
 	PendingShopRequestId = RequestId;
 	Model->MarkCartPaymentSubmitted();
 	if (CatController->HasAuthority())
 	{
 		CatController->ServerSubmitShopCartAtKiosk_Implementation(
-			SourceShop, Lines, RequestId, ExpectedWalletRevision);
+			SourceShop, Lines, RequestId);
 	}
 	else
 	{
-		CatController->ServerSubmitShopCartAtKiosk(SourceShop, Lines, RequestId, ExpectedWalletRevision);
+		CatController->ServerSubmitShopCartAtKiosk(SourceShop, Lines, RequestId);
 	}
-	UE_LOG(LogCatUI, Log, TEXT("Event=ui_shop_cart_payment_submitted LineCount=%d WalletRevision=%lld"),
-		Lines.Num(), ExpectedWalletRevision);
+	UE_LOG(LogCatUI, Log, TEXT("Event=ui_shop_cart_payment_submitted RequestId=%s LineCount=%d"),
+		*RequestId.ToString(), Lines.Num());
 }
 
 // 购物车结果流程：

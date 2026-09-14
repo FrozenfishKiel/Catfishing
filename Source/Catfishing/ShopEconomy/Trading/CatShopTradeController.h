@@ -54,7 +54,7 @@ public:
 
 	/** 服务器接收玩家摊位购物车请求，复核玩法门与服务距离并重建身份、货架和营地收货仓库；交经济服务成交后返回统一钱货终态，前置失败直接返回拒绝。 */
 	FCatShopOrderResult SubmitCartFromKiosk(AController* RequestingController, ACatShopKioskActor* ShopKiosk,
-		const TArray<FCatShopCartLineCommand>& Lines, FGuid RequestId, int64 ExpectedWalletRevision);
+		const TArray<FCatShopCartLineCommand>& Lines, FGuid RequestId);
 
 	/** 向明确买家出售当前鱼护内指定鱼实例；Guard为空时只售嘴叼鱼，整单复核后统一处理实物与GAS入账。 */
 	FCatShopOrderResult SubmitFishSaleFromPlayer(AController* RequestingController, ACatFishBuyerActor* Buyer,

@@ -61,8 +61,7 @@ bool UCatShopTradeController::ShouldCreateSubsystem(UObject* Outer) const
 }
 
 FCatShopOrderResult UCatShopTradeController::SubmitCartFromKiosk(AController* RequestingController,
-	ACatShopKioskActor* ShopKiosk, const TArray<FCatShopCartLineCommand>& Lines, const FGuid RequestId,
-	const int64 ExpectedWalletRevision)
+	ACatShopKioskActor* ShopKiosk, const TArray<FCatShopCartLineCommand>& Lines, const FGuid RequestId)
 {
 	// 摊位购物车提交流程：
 	// 1. 先重读服务器玩法 gate 和原始 RPC 载荷大小，拒绝无效局状态或异常购物车。
@@ -113,7 +112,6 @@ FCatShopOrderResult UCatShopTradeController::SubmitCartFromKiosk(AController* Re
 
 	FCatShopCartCommand Command;
 	Command.Context.RequestId = RequestId;
-	Command.Context.ExpectedRevision = ExpectedWalletRevision;
 	Command.Context.StableNetId = CurrentPlayerState->GetUniqueId()->ToString();
 	Command.ShopInventoryId = ShopInventory->GetShopInventoryId();
 	Command.Lines = Lines;

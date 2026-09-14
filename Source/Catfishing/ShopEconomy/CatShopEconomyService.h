@@ -51,7 +51,7 @@ public:
 
 	/**
 	 * 声明：只读解析整车商品，供购买写口在入库前取得服务器总价、每行物品数量和货架前提；本方法不检查收货仓库。
-	 * 实现：合并重复 EntryId，重新读取来源摊位当前目录和库存，再按团队公款版本、库存数量、价格和溢出边界整体验证。
+	 * 实现：合并重复 EntryId，重新读取来源摊位当前目录和库存，再按服务器当前余额、库存数量、价格和溢出边界整体验证，不要求客户端钱包版本匹配。
 	 * 边界：它不写幂等缓存、不扣钱、不扣库存；同一购物车真正提交时 PurchaseCatalogCart 会再走同一套判据。
 	 */
 	bool ResolveCatalogCartForAuthority(const FCatShopCartCommand& Command,
@@ -183,7 +183,7 @@ private:
 	void CacheCartTerminalResult(const FString& CacheKey, const FString& PayloadSignature,
 		const FCatShopCartTransactionResult& Result);
 
-	/** 团队余额变更后的只读事务版本；余额由 GameState ASC 持有，版本只用于购买兼容和账本排序。 */
+	/** 团队余额的事务版本；本服务初始化并在成交改变余额后递增，快照、命令回执和账本读取它记录余额版本，购买裁决与重放签名不依赖客户端版本。 */
 	int64 WalletRevision = 0;
 
 	/** 本局已完成交易的审计记录；购买仅在实物入库与扣款成功后写入，服务查询和公开流水读取它。 */
