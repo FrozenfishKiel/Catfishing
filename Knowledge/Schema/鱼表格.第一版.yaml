@@ -65,8 +65,8 @@ columns:
   - name: fish_id
     classification: declarative
     type: id
-    publish: FishDefinitionId
-    note: 2026-09-09 加；值必须与 Content/Catfishing/Data/Fish 资产名一致
+    publish: excluded
+    note: 2026-09-14 更正：本列是资产文件名（Fish_RiverPattern），资产内部的 FishDefinitionId 是另一套（RiverPatternFish），代码按内部 ID 查表。迁移脚本必须做这一层映射，不能把本列当 FishDefinitionId 直接写配置——2026-09-14 往 BasePool 填包名就抽不出鱼。两套标识归张佳的鱼资产迁移收口
   - name: 名字
     classification: declarative
     type: string
@@ -233,6 +233,7 @@ columns:
 
 # 代码有、表里没有的字段：谁定值、要不要在表里加列
 code_only_fields:
+  FishDefinitionId: 资产内部稳定 ID（RiverPatternFish／Loach／StinkyFish…），代码一律按它查表，配置里的 BasePool 等清单也用它。表里 fish_id 列装的是资产文件名（Fish_RiverPattern），两者不同名，迁移脚本必须做映射。2026-09-14 发现：往 BasePool 填包名会抽不出鱼。要不要把两套统一成一套归张佳的鱼资产迁移定
   bEatingTimedEffectConfigured: 属主确认食用限时 GE 绑定的显式标记；False 为迁移缺口，True 且空 GE 表示确认无效果
   EatingTimedEffect: T02 每鱼独立限时 GameplayEffect 类，Condition 进食提交后由 ASC 应用；同鱼刷新、异鱼并存；正式 GE/GameplayCue 绑定待钱成澔与张佳
   EatingTimedEffectDurationSeconds: T02 食用 GE 基础秒数，应用时乘成长时长倍率；不覆盖猫神祝福，正式绑定未迁移
