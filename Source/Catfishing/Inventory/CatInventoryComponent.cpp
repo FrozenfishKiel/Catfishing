@@ -1,4 +1,5 @@
 #include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatWorldDropProtectionComponent.h"
 #include "Growth/CatGrowthComponent.h"
 
 #include "GameFramework/Pawn.h"
@@ -16,6 +17,8 @@
 #include "Inventory/CatFishInventoryItemInstance.h"
 #include "Items/Fish/CatFishPickupActor.h"
 #include "Inventory/CatInventoryWorldItem.h"
+#include "Inventory/CatInventoryAccessRules.h"
+#include "Camp/CatCampSettings.h"
 #include "Inventory/CatInventoryItemDefinition.h"
 #include "Inventory/CatInventoryItemInstance.h"
 #include "Inventory/CatInventorySettings.h"
@@ -2278,6 +2281,12 @@ FCatDomainCommandResult UCatInventoryComponent::ReleaseItemToWorldFromAuthority(
 		return Finish(ECatDomainCommandError::InvalidPayload);
 	if (!Character->GetConditionComponent() || Character->GetConditionComponent()->GetSnapshot().bDowned)
 		return Finish(ECatDomainCommandError::PermissionDenied);
+	if (GetOwner() != Character && !CatInventoryAccessRules::IsHostReachable(GetOwner(), Character, GetDefault<UCatCampSettings>()))
+		return Finish(ECatDomainCommandError::PermissionDenied);
+	// 道具:64、联机社交:220：鱼离开库存只走 Carry，不能用 Drop/Place 绕开一嘴一鱼。
+	if (Action != ECatInventoryWorldAction::Carry
+		&& (Cast<UCatFishInventoryItemInstance>(Entry->Instance) || Cast<UCatFishDefinition>(Entry->Instance->GetItemDefinition())))
+		return Finish(ECatDomainCommandError::PermissionDenied);
 	// Carry 事务流程：
 	// 1. 仅鱼护/鱼缸里完整的一条鱼可进入嘴部，格位、实例、访问和倒地校验仍沿本方法完成。
 	// 2. 先复用或首次生成同一世界 Actor，再认领空嘴并在任何库存广播前完成附着；失败不扣格也不改来源 Actor。
@@ -2293,13 +2302,14 @@ FCatDomainCommandResult UCatInventoryComponent::ReleaseItemToWorldFromAuthority(
 			const FCatInventoryEntry* CurrentEntry = GetInventoryEntryAtSlot(SlotIndex);
 			return CurrentEntry && CurrentEntry->Instance == FishItem && CurrentEntry->StackCount == 1
 				&& FishItem && FishItem->GetItemInstanceId() == ItemInstanceId
-				&& FishItem->GetWorldActor() == OriginalWorldActor && FishItem->GetRuntimeOwnerActor() == OriginalRuntimeOwner;
+				&& FishItem->GetWorldActor() == OriginalWorldActor && FishItem->GetRuntimeOwnerActor() == OriginalRuntimeOwner
+				&& CatInventoryAccessRules::ResolveReachableFishContainer(GetOwner(), Character) == this;
 		};
-		const ACatFishGuardActor* SourceGuard = Cast<ACatFishGuardActor>(GetOwner());
-		const ACatFishTankActor* SourceTank = Cast<ACatFishTankActor>(GetOwner());
-		const bool bFishContainer = (SourceGuard && SourceGuard->GetFishInventoryComponent() == this)
-			|| (SourceTank && SourceTank->GetFishInventoryComponent() == this);
-		if (!bFishContainer || !FishItem || Quantity != 1 || Entry->StackCount != 1 || Character->GetMouthCarriedActor() != nullptr)
+		const bool bFishContainer = CatInventoryAccessRules::ResolveReachableFishContainer(GetOwner(), Character) == this;
+		if (!bFishContainer || !FishItem || !FishItem->GetFishDefinition()
+			|| !FishItem->GetFishDefinition()->IsInventoryRuntimeDefinitionReady()
+			|| !FMath::IsFinite(FishItem->GetFishWeightKilograms()) || FishItem->GetFishWeightKilograms() <= 0
+			|| Quantity != 1 || Entry->StackCount != 1 || Character->GetMouthCarriedActor() != nullptr)
 			return Finish(ECatDomainCommandError::PermissionDenied);
 		// 容器取鱼必须有真实嘴部挂点；在生成载体或认领嘴部前拒绝，不能退化成附着到空骨架根。
 		const UCatFishPickupSettings* PickupSettings = GetDefault<UCatFishPickupSettings>();
@@ -2460,6 +2470,7 @@ FCatDomainCommandResult UCatInventoryComponent::ReleaseItemToWorldFromAuthority(
 		Body->SetSimulatePhysics(true);
 		Body->SetPhysicsLinearVelocity(Character->GetActorForwardVector().GetSafeNormal2D() * Settings->DropForwardSpeed + FVector(0, 0, Settings->DropUpwardSpeed));
 	}
+	UCatWorldDropProtectionComponent::ArmFromAuthority(WorldActor);
 	WorldActor->ForceNetUpdate();
 	return Finish(ECatDomainCommandError::None);
 }
@@ -2811,6 +2822,20 @@ UCatInventoryComponent::FInventoryExchangeMutation UCatInventoryComponent::Execu
 	}
 
 	FCatInventoryEntry& DropEntry = DropInventory->InventoryList.Entries[DropSlotIndex];
+	// 两个交换方向都必须检查；不能把鱼放在目标格，再以普通物品发起交换绕过嘴部。
+	const auto IsFishEntry = [](const FCatInventoryEntry& Entry)
+	{
+		return Entry.Instance && (Cast<UCatFishInventoryItemInstance>(Entry.Instance)
+			|| Cast<UCatFishDefinition>(Entry.Instance->GetItemDefinition()));
+	};
+	if (DraggedOwner->GetWorld() != DropOwner->GetWorld()
+		|| (DraggedInventory != DropInventory && (IsFishEntry(DraggedEntry) || IsFishEntry(DropEntry))))
+	{
+		Result.Error = ECatDomainCommandError::PermissionDenied;
+		UE_LOG(LogCatInventory, Warning, TEXT("Event=inventory_exchange_rejected Reason=FishRequiresMouthOrWorldMismatch World=%s NetMode=%d Authority=1 LocalRole=%d Source=%s Target=%s"),
+			*GetNameSafe(DraggedOwner->GetWorld()), DraggedOwner->GetNetMode(), DraggedOwner->GetLocalRole(), *GetNameSafe(DraggedOwner), *GetNameSafe(DropOwner));
+		return Result;
+	}
 	if (!DropInventory->CanAcceptInventoryEntryAtSlot(DraggedEntry, DropSlotIndex))
 	{
 		Result.Error = ECatDomainCommandError::InvalidPayload;
@@ -2980,20 +3005,37 @@ void UCatInventoryComponent::BroadcastInventoryChange(const int32 ChangedIndex)
 	OnInventoryObservedChanged.Broadcast();
 }
 
-// 槽位接收默认规则：通用库存只校验目标下标有效；装备栏或专用容器可以在子类按标签继续收窄。
+// 槽位接收规则：复用定义规则并拒绝把仍在别处库存的鱼重复收货；正式 Carry 先脱离原库存再由嘴部入护。
 bool UCatInventoryComponent::CanAcceptInventoryEntryAtSlot(const FCatInventoryEntry& IncomingEntry,
 	const int32 TargetSlotIndex) const
 {
-	(void)IncomingEntry;
-	return IsValidInventorySlotIndex(TargetSlotIndex);
+	const UCatInventoryItemInstance* Instance = IncomingEntry.Instance;
+	const UCatInventoryItemDefinition* Definition = Instance ? Instance->GetItemDefinition() : nullptr;
+	if (!Definition || !CanAcceptInventoryDefinitionAtSlot(*Definition, TargetSlotIndex)) return false;
+	if (Cast<UCatFishInventoryItemInstance>(Instance) || Cast<UCatFishDefinition>(Definition))
+	{
+		const AActor* SourceOwner = Instance->GetRuntimeOwnerActor();
+		if (const ACatFishPickupActor* WorldFish = Cast<ACatFishPickupActor>(SourceOwner);
+			WorldFish && WorldFish->InventoryStoreTarget.Get() != this) return false;
+		if (SourceOwner && SourceOwner != GetOwner())
+		{
+			if (SourceOwner->GetWorld() != GetWorld()) return false;
+			TArray<UCatInventoryComponent*> Inventories;
+			SourceOwner->GetComponents(Inventories);
+			for (const UCatInventoryComponent* Source : Inventories)
+				if (Source->FindInventorySlotIndexFromInstance(Instance) != INDEX_NONE) return false;
+		}
+	}
+	return true;
 }
 
-// 定义接收默认规则：容量预演没有运行实例，只能问定义是否能进目标格；通用库存仍只裁决数组边界。
+// 定义接收规则：容量预演和实际入库共享背包禁收单鱼合同；鱼护/鱼缸另由专用组件收窄定义。
 bool UCatInventoryComponent::CanAcceptInventoryDefinitionAtSlot(const UCatInventoryItemDefinition& IncomingDefinition,
 	const int32 TargetSlotIndex) const
 {
-	(void)IncomingDefinition;
-	return IsValidInventorySlotIndex(TargetSlotIndex);
+	// 道具:64：背包只装鱼护道具；单鱼只能在嘴部或地面鱼容器中，发货/恢复也不能直入背包。
+	return IsValidInventorySlotIndex(TargetSlotIndex)
+		&& !(Cast<ACatCharacter>(GetOwner()) && Cast<UCatFishDefinition>(&IncomingDefinition));
 }
 
 // 容量预演单项流程：先合并同类未满格，再占用空格；每个目标槽都复用定义接收规则，避免预演放行正式入库会拒绝的物品。

@@ -5,6 +5,17 @@
 #include "GameFramework/Actor.h"
 #include "Interaction/CatInteractable.h"
 #include "FishContainers/CatFishGuardActor.h"
+#include "FishContainers/CatFishTankActor.h"
+#include "Inventory/CatFishOnlyInventoryComponent.h"
+
+UCatInventoryComponent* CatInventoryAccessRules::ResolveReachableFishContainer(AActor* Host, const ACatCharacter* Character)
+{
+	if (!IsValid(Host) || Host->IsHidden() || Host->GetAttachParentActor()
+		|| !IsHostReachable(Host, Character, GetDefault<UCatCampSettings>())) return nullptr;
+	if (ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(Host)) return Guard->GetFishInventoryComponent();
+	if (ACatFishTankActor* Tank = Cast<ACatFishTankActor>(Host)) return Tank->GetFishInventoryComponent();
+	return nullptr;
+}
 
 double CatInventoryAccessRules::ResolveReachRadiusCentimeters(const AActor* Host,
 	const UCatCampSettings* Settings)

@@ -1,6 +1,10 @@
 #include "FishContainers/CatFishTankActor.h"
 
 #include "Components/SceneComponent.h"
+#include "Character/CatCharacter.h"
+#include "Framework/Game/CatfishingPlayerController.h"
+#include "Inventory/CatInventoryAccessRules.h"
+#include "Items/Fish/CatFishPickupActor.h"
 #include "Components/SphereComponent.h"
 #include "FishContainers/CatFishContainerSettings.h"
 #include "FishContainers/CatFishTankInteractionComponent.h"
@@ -234,12 +238,31 @@ double ACatFishTankActor::GetInteractionRadius_Implementation() const
 		? FMath::Max(0.0, InteractionRadiusCentimeters) : 0.0;
 }
 
-// 鱼缸交互流程：本地把鱼缸正式库存作为外部库存打开；服务器交互转发只确认本 Actor 当下仍可交互。
+// 鱼缸交互流程：本地开现有库存页；客户端转发现有交互RPC，服务器把嘴部原鱼交给本缸的正式库存。
+// T24：旧入口仅开UI，依赖通用Move入缸；现沿同一嘴鱼Store事务，不另建鱼数组或库存直转路径。
 bool ACatFishTankActor::Interact_Implementation(AController* RequestingController, const FGuid RequestId)
 {
-	APlayerController* PlayerController = Cast<APlayerController>(RequestingController);
-	return RequestId.IsValid() && CanInteract_Implementation(RequestingController)
+	auto* PlayerController = Cast<ACatfishingPlayerController>(RequestingController);
+	auto* Character = PlayerController ? Cast<ACatCharacter>(PlayerController->GetPawn()) : nullptr;
+	if (!RequestId.IsValid() || !PlayerController || !CanInteract_Implementation(RequestingController)
+		|| CatInventoryAccessRules::ResolveReachableFishContainer(this, Character) != FishInventory)
+	{
+		UE_LOG(LogCatFishContainers, Warning, TEXT("Event=fish_tank_interaction_rejected RequestId=%s Tank=%s Player=%s Reason=InvalidRequestOrReach World=%s NetMode=%d Authority=%d LocalRole=%d"),
+			*RequestId.ToString(), *GetName(), *GetNameSafe(Character), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole());
+		return false;
+	}
+	const bool bOpened = PlayerController->IsLocalController()
 		&& TankInteraction->OpenInventoryForPlayer(PlayerController);
+	if (!HasAuthority())
+	{
+		PlayerController->ServerRequestInteraction(this, RequestId);
+		return true;
+	}
+	if (ACatFishPickupActor* Fish = ACatFishPickupActor::FindCarriedFish(Character))
+	{
+		return Fish->StoreInFishGuardFromAuthority(PlayerController, RequestId, this).Command.bCommitted;
+	}
+	return bOpened || Character != nullptr;
 }
 
 // 鱼库存读取流程：返回本 Actor 持有的正式鱼库存组件；调用者继续通过 InventoryComponent 命令写入。

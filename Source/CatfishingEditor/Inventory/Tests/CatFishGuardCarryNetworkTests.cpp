@@ -148,7 +148,7 @@ namespace CatFishGuardCarryNetwork
 			if (Stage == 6)
 			{
 				if (!VerifyFormalFishCarryFromGroundedGuard(*ServerCat, *ClientCat)) return false;
-				Test->AddInfo(TEXT("Event=fish_guard_carry_network Result=CarryButtonDisabledWhileOccupiedThenCarriesOriginalFishAfterGuardDrop Fish=OriginalTwoGUIDs_2.5kg_3.75kg Screenshots=ClientBeforeCarry,ClientAfterCarry"));
+				Test->AddInfo(TEXT("Event=fish_guard_carry_network Result=CarryButtonEnabledWithGuardInBagThenCarriesOriginalFishAfterGuardDrop Fish=OriginalTwoGUIDs_2.5kg_3.75kg Screenshots=ClientBeforeCarry,ClientAfterCarry"));
 				return true;
 			}
 
@@ -179,7 +179,7 @@ namespace CatFishGuardCarryNetwork
 			if (Stage == 2 || Stage == 4)
 			{
 				if (!BothSidesMatch(true, false)) return false;
-				if (Stage == 2 && !VerifyFormalCarryButtonDisabledForOccupiedGuard()) return false;
+				if (Stage == 2 && !VerifyFormalCarryButtonEnabledWhileGuardInBag()) return false;
 				if (Stage == 2 && CarryView.IsValid())
 				{
 					CarryView->RequestCloseInventory();
@@ -295,7 +295,7 @@ namespace CatFishGuardCarryNetwork
 				|| !Character->GetCharacterMovement()->IsMovingOnGround() || !Character->GetInventoryComponent()
 				|| Character->GetInventoryComponent()->GetInventorySlotCount() <= 0) return false;
 			if (!Test->TestTrue(TEXT("stage=0 unmodified formal character has empty mouth and configured socket"),
-				!ACatFishPickupActor::FindCarriedFish(Character) && !ACatFishGuardActor::FindCarriedGuard(Character)
+				!ACatFishPickupActor::FindCarriedFish(Character) && Character->GetMouthCarriedActor() == nullptr
 				&& Character->GetMesh()->DoesSocketExist(GetDefault<UCatFishPickupSettings>()->MouthCarrySocketName))) return true;
 			UClass* GuardClass = LoadClass<ACatFishGuardActor>(nullptr, TEXT("/Game/Blueprint/Actors/BP_CatGuard.BP_CatGuard_C"));
 			UCatFishDefinition* Definition = LoadObject<UCatFishDefinition>(nullptr,
@@ -339,9 +339,9 @@ namespace CatFishGuardCarryNetwork
 			return false;
 		}
 
-		/** 原鱼护占嘴时，在另一个仍可交互的地面鱼护中选择鱼；等待它复制和页面布局，核对正式按钮禁用。
-		 * 已叼起鱼护自己的页面会按现行生命周期关闭，因此另放一只地面鱼护作为可见 UI 夹具，不强行保留失效页面。 */
-		bool VerifyFormalCarryButtonDisabledForOccupiedGuard()
+		/** 原鱼护入包时，在另一个仍可交互的地面鱼护中选择鱼；等待它复制和页面布局，核对正式按钮启用。
+		 * 已入包鱼护自己的页面会按现行生命周期关闭，因此另放一只地面鱼护作为可见 UI 夹具，不强行保留失效页面。 */
+		bool VerifyFormalCarryButtonEnabledWhileGuardInBag()
 		{
 			ACatCharacter* ServerCat = ServerController.IsValid() ? Cast<ACatCharacter>(ServerController->GetPawn()) : nullptr;
 			if (!OccupiedViewGuard.IsValid() && ServerCat)
@@ -390,7 +390,8 @@ namespace CatFishGuardCarryNetwork
 			const FPointerEvent Released(0, FVector2D::ZeroVector, FVector2D::ZeroVector, TSet<FKey>(),
 				EKeys::LeftMouseButton, 0.0f, FModifierKeysState());
 			FishSlot->TakeWidget()->OnMouseButtonUp(FishSlot->GetCachedGeometry(), Released);
-			return Test->TestFalse(TEXT("formal CarryButton is disabled while original guard owns the mouth"), CarryButton->GetIsEnabled());
+			// 墓碑（T25，道具:64）：旧断言要求鱼护占嘴禁用按钮；背包鱼护不占嘴，另一地面护的取鱼按钮应启用。
+			return Test->TestTrue(TEXT("formal CarryButton enabled while guard is in backpack"), CarryButton->GetIsEnabled());
 		}
 
 		/** 在既有鱼护已经落地、嘴部已释放后，经正式 WBP 点击原鱼 Carry；等待权威回执并核对两端同一鱼身份成为唯一嘴部 Actor。 */
@@ -501,7 +502,7 @@ namespace CatFishGuardCarryNetwork
 
 		/** 同时观察原两端对象：先核对原库存、精确 GUID/重量/数量，再读归属、刚体、嘴部附件与背包。
 		 * InventoryOwner 仅通过反射只读核对，不为测试新增生产 getter；服务器内鱼还须保持原 UObject。
-		 * 携带核对正式 socket 与可见性，落地核对空嘴和背包扣格；两端都须保留拾取前尺寸，最后比较位置、旋转和缩放。
+		 * 携带核对隐藏保管与不占嘴，落地核对空嘴和背包扣格；两端都须保留拾取前尺寸，最后比较位置、旋转和缩放。
 		 * 任一复制事实未到位返回 false 并写明端与等待项，让上层继续等待或带阶段超时报错。 */
 		bool BothSidesMatch(const bool bCarried, const bool bDrop)
 		{
@@ -534,20 +535,19 @@ namespace CatFishGuardCarryNetwork
 				const UPrimitiveComponent* Body = Cast<UPrimitiveComponent>(Guard->GetRootComponent());
 				if (!OwnerProperty || OwnerProperty->GetObjectPropertyValue_InContainer(Guard) != (bCarried ? Character : nullptr)
 					|| Guard->GetOwner() != (bCarried ? Character : nullptr) || Guard->IsGrounded() == bCarried
-					|| Guard->IsHidden() || Guard->GetActorEnableCollision() == bCarried || !Body || Body->IsSimulatingPhysics() != bDrop) return false;
+					|| Guard->IsHidden() != bCarried || Guard->GetActorEnableCollision() == bCarried || !Body || Body->IsSimulatingPhysics() != bDrop) return false;
 				WaitingFor = FString::Printf(TEXT("peer=%d mouth attachment/socket and backpack agree with carried=%d"), Peer, bCarried);
 				const UCatInventoryComponent* Backpack = Character->GetInventoryComponent();
 				if (!Backpack || ACatFishPickupActor::FindCarriedFish(Character)
-					|| Character->GetMouthCarriedActor() != (bCarried ? static_cast<AActor*>(Guard) : nullptr)) return false;
+					|| Character->GetMouthCarriedActor() != nullptr) return false;
 				// 初始背包必须没有其他鱼护，首次客户端按正式定义查槽位才唯一对应本用例生成的载体。
 				if (!GuardId.IsValid() && !bCarried && Backpack->CountVisibleInventoryQuantityByDefinitionId(TEXT("FishGuard")) != 0) return false;
 				if (bCarried)
 				{
-					if (ACatFishGuardActor::FindCarriedGuard(Character) != Guard || Guard->GetAttachParentActor() != Character
-						|| Guard->GetRootComponent()->GetAttachParent() != Character->GetMesh()
-						|| Guard->GetRootComponent()->GetAttachSocketName() != GetDefault<UCatFishPickupSettings>()->MouthCarrySocketName) return false;
+					// 墓碑（T25，道具:64）：携带鱼护改为库存隐藏保管；继续核对原Actor、双方归属、内鱼GUID和重量。
+					if (Character->GetMouthCarriedActor() || Guard->GetAttachParentActor() || !Guard->IsHidden()) return false;
 				}
-				else if (Guard->GetAttachParentActor() || ACatFishGuardActor::FindCarriedGuard(Character)
+				else if (Guard->GetAttachParentActor() || Character->GetMouthCarriedActor()
 					|| (GuardId.IsValid() && Backpack->FindInventorySlotIndexFromInstanceId(GuardId) != INDEX_NONE)) return false;
 			}
 			WaitingFor = TEXT("both original guards converge in position, rotation and scale");
@@ -566,7 +566,7 @@ namespace CatFishGuardCarryNetwork
 		FAutomationTestBase* Test = nullptr;
 		/** 场景中原鱼护的世界缩放；准备阶段记录非默认尺寸，双方携带和落地阶段读取，防止两端一起变大仍被当作复制正确。 */
 		FVector OriginalGuardWorldScale = FVector::OneVector;
-		/** 当前异步步骤，0准备/1初始复制/2占嘴时 Carry 禁用并放置/3放置/4再拾取/5丢弃/6空嘴 Carry；仅在条件齐备后推进，避免重复 RPC。 */
+		/** 当前异步步骤，0准备/1初始复制/2持护时 Carry 启用并放置/3放置/4再拾取/5丢弃/6空嘴 Carry；仅在条件齐备后推进，避免重复 RPC。 */
 		int32 Stage = 0;
 		/** 当前步骤起始单调时间，单位秒；每次推进刷新，超时用它限制等待。 */
 		double StageStartedAt = 0.0;

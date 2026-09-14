@@ -15,6 +15,8 @@ class CATFISHING_API UCatWaterQuerySubsystem : public UWorldSubsystem
 	GENERATED_BODY()
 
 public:
+	/** 掉落物空气墙：扫过水平投影的整个线段及包围半径；不受离水面高度限制，不跳过窄水域。 */
+	bool DoesWorldDropSweepTouchWater(const FVector& Start, const FVector& End, double RadiusCentimeters) const;
 	FCatWaterSpatialResult QueryWaterPoint(const FVector& WorldPoint, const FCatWaterRegionHandle& ExpectedHandle) const;
 	FCatWaterSpatialResult QueryShoreRelation(const FVector& WorldPoint, const FCatWaterRegionHandle& ExpectedHandle) const;
 	/** 查询指定水域内脚点的浸没深度；不使用岸高容差，也不裁决“危险”。 */

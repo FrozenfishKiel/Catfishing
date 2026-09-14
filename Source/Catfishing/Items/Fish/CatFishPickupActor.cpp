@@ -1,4 +1,6 @@
 #include "Items/Fish/CatFishPickupActor.h"
+#include "Inventory/CatWorldDropProtectionComponent.h"
+#include "Environment/CatWaterQuerySubsystem.h"
 #include "Condition/CatFishThrowEffectActor.h"
 #include "Fishing/Integration/CatFishingResolutionSubsystem.h"
 #include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
@@ -30,6 +32,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "Inventory/CatFishInventoryItemInstance.h"
 #include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventoryAccessRules.h"
 #include "Inventory/CatInventoryStatics.h"
 #include "Inventory/CatInventorySettings.h"
 #include "Logging/CatLog.h"
@@ -331,7 +334,10 @@ ACatFishPickupActor* ACatFishPickupActor::FindCarriedFish(const ACatCharacter* C
 bool ACatFishPickupActor::BeginMouthCarryFromAuthority(ACatCharacter* Character, APlayerState* PlayerState, const bool bPublish)
 {
 	const bool bAlreadyClaimed = Character && Character->GetMouthCarriedActor() == this;
-	if (!HasAuthority() || !Character || !PlayerState || PresentationState.State != ECatFishPickupState::Available
+	if (!HasAuthority() || !IsValid(Character) || !IsValid(PlayerState)
+		|| Character->GetWorld() != GetWorld() || PlayerState->GetWorld() != GetWorld()
+		|| Character->GetPlayerState() != PlayerState || !FishDefinition || !bIdentityInitialized
+		|| IsActorBeingDestroyed() || PresentationState.State != ECatFishPickupState::Available
 		|| !Character->GetMesh() || (!bAlreadyClaimed && !Character->TryClaimMouthCarriedActorFromAuthority(this)))
 	{
 		return false;
@@ -671,7 +677,9 @@ bool ACatFishPickupActor::DropFromAuthority(AController* RequestingController)
 			Query.AddIgnoredActor(this);
 			FHitResult Hit;
 			const FCollisionShape Shape = FCollisionShape::MakeBox(Extent);
-			if (GetWorld()->SweepSingleByChannel(Hit, Character->GetPawnViewLocation(), ReleaseTransform.GetLocation(),
+			const UCatWaterQuerySubsystem* Water = GetWorld()->GetSubsystem<UCatWaterQuerySubsystem>();
+			if ((Water && Water->DoesWorldDropSweepTouchWater(ReleaseTransform.GetLocation(), ReleaseTransform.GetLocation(), Extent.Size()))
+				|| GetWorld()->SweepSingleByChannel(Hit, Character->GetPawnViewLocation(), ReleaseTransform.GetLocation(),
 				ReleaseTransform.GetRotation(), ECC_WorldDynamic, Shape, Query)
 				|| GetWorld()->OverlapBlockingTestByChannel(ReleaseTransform.GetLocation(), ReleaseTransform.GetRotation(),
 					ECC_WorldDynamic, Shape, Query))
@@ -701,6 +709,7 @@ bool ACatFishPickupActor::DropFromAuthority(AController* RequestingController)
 					UE_LOG(LogCatFishContainers, Log, TEXT("Event=fish_throw_armed FishInstanceId=%s Thrower=%s World=%s NetMode=%d Authority=1 LocalRole=%d"),
 						*PresentationState.FishInstanceId.ToString(), *GetNameSafe(Character), *GetNameSafe(GetWorld()), GetNetMode(), GetLocalRole());
 				}
+				UCatWorldDropProtectionComponent::ArmFromAuthority(this);
 				bDropped = true;
 				Error = ECatDomainCommandError::None;
 				Reason = TEXT("Dropped");
@@ -775,17 +784,34 @@ FCatCaptureCommitResult ACatFishPickupActor::StoreInFishGuardFromAuthority(ACont
 	const FString StableNetId = PlayerState && PlayerState->GetUniqueId().IsValid()
 		? PlayerState->GetUniqueId()->ToString() : FString();
 	UCatRunImprintService* Imprint = GetWorld() ? GetWorld()->GetSubsystem<UCatRunImprintService>() : nullptr;
+	const auto Finish = [&]()
+	{
+		const FString Event = FString::Printf(TEXT("Event=fish_store_result RequestId=%s FishInstanceId=%s Actor=%s Target=%s Player=%s Committed=%d Error=%s World=%s NetMode=%d Authority=%d LocalRole=%d"),
+			*RequestId.ToString(), *PresentationState.FishInstanceId.ToString(), *GetName(), *GetNameSafe(TargetInventoryHost), *GetNameSafe(Character),
+			Result.Command.bCommitted, *UEnum::GetValueAsString(Result.Command.Error), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole());
+		if (Result.Command.bCommitted) { UE_LOG(LogCatFishContainers, Log, TEXT("%s"), *Event); }
+		else { UE_LOG(LogCatFishContainers, Warning, TEXT("%s"), *Event); }
+		return Result;
+	};
 	if (!HasAuthority() || bConsumptionCommitted || !RequestId.IsValid() || TargetInventoryHost == nullptr
 		|| TargetInventoryHost->GetWorld() != GetWorld() || StableNetId.IsEmpty()
 		|| !Character || PresentationState.State != ECatFishPickupState::Carried
 		|| GetAttachParentActor() != Character || FindCarriedFish(Character) != this)
 	{
-		return Result;
+		return Finish();
+	}
+	if (!Character->GetConditionComponent() || Character->GetConditionComponent()->GetSnapshot().bDowned
+		|| !CatInventoryAccessRules::ResolveReachableFishContainer(TargetInventoryHost, Character))
+	{
+		Result.Command.Error = ECatDomainCommandError::PermissionDenied;
+		UE_LOG(LogCatFishContainers, Warning, TEXT("Event=fish_store_rejected RequestId=%s FishInstanceId=%s Target=%s Player=%s Reason=InvalidGroundContainerOrReach World=%s NetMode=%d Authority=1 LocalRole=%d"),
+			*RequestId.ToString(), *PresentationState.FishInstanceId.ToString(), *GetNameSafe(TargetInventoryHost), *GetNameSafe(Character), *GetNameSafe(GetWorld()), GetNetMode(), GetLocalRole());
+		return Finish();
 	}
 	if (!FishDefinition || (!bCaptureRecorded && (!Imprint || !Imprint->CanRecordCommittedCapture())))
 	{
 		Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
-		return Result;
+		return Finish();
 	}
 
 	UCatFishInventoryItemInstance* FishItemInstance = InventoryItem
@@ -801,29 +827,24 @@ FCatCaptureCommitResult ACatFishPickupActor::StoreInFishGuardFromAuthority(ACont
 	FCatInventoryInstanceEntry& FishEntry = ReceiveBatch.InstanceEntries.AddDefaulted_GetRef();
 	FishEntry.ItemInstance = FishItemInstance;
 	FishEntry.Count = 1;
-	TArray<UCatInventoryComponent*> TargetInventories;
-	UCatInventoryStatics::AppendInventoryComponentsFromActor(TargetInventoryHost, TargetInventories);
-	UCatInventoryComponent* TargetInventory = nullptr;
-	for (UCatInventoryComponent* CandidateInventory : TargetInventories)
-	{
-		if (CandidateInventory != nullptr && CandidateInventory->CanFullyAcceptInventoryBatch(ReceiveBatch))
-		{
-			TargetInventory = CandidateInventory;
-			break;
-		}
-	}
+	UCatInventoryComponent* TargetInventory = CatInventoryAccessRules::ResolveReachableFishContainer(TargetInventoryHost, Character);
 	if (FishItemInstance == nullptr || TargetInventory == nullptr)
 	{
 		Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
-		return Result;
+		return Finish();
 	}
 	// 收货会在最后才广播；先锁住本鱼，保留同一实例和 Actor，避免广播重入时将半提交状态当成可售库存。
 	bConsumptionCommitted = true;
-	if (!TargetInventory->TryAddInventoryBatchInternal(ReceiveBatch, false))
+	bool bReceived = false;
+	{
+		TGuardValue<TWeakObjectPtr<UCatInventoryComponent>> StoreScope(InventoryStoreTarget, TargetInventory);
+		bReceived = TargetInventory->TryAddInventoryBatchInternal(ReceiveBatch, false);
+	}
+	if (!bReceived)
 	{
 		bConsumptionCommitted = false;
 		Result.Command.Error = ECatDomainCommandError::CapacityExceeded;
-		return Result;
+		return Finish();
 	}
 
 	Result.Command.bCommitted = true;
@@ -848,7 +869,7 @@ FCatCaptureCommitResult ACatFishPickupActor::StoreInFishGuardFromAuthority(ACont
 	bConsumptionCommitted = false;
 	TargetInventory->BroadcastInventoryChange();
 	ForceNetUpdate();
-	return Result;
+	return Finish();
 }
 
 // 库存落地流程：读取实物鱼实例与表现定义，标记为已捕获后复用世界鱼初始化；失败不保留实例，来源库存尚未扣除。
@@ -1030,7 +1051,8 @@ bool ACatFishPickupActor::IsAuthorityRequestSpatiallyValid(const AController* Re
 	// 墓碑（2026-09-14，T15 验收回退）：§5.5 的 150cm 是玩法半径，不授权抹掉网络余量。
 	// 依 CatInteractionSettings 2026-09-12 统一半径裁决，服务器仍加技术容差，避免准星亮却按不动；身体→碰撞中心测量保留。
 	const double ServerDistance = Settings ? Settings->GetServerInteractionDistanceCentimeters() : 0.0;
-	if (!HasAuthority() || !Pawn || !Settings || !World || ServerDistance <= 0.0
+	if (!HasAuthority() || !Pawn || !Settings || !World || Pawn->GetWorld() != World
+		|| RequestingController->GetWorld() != World || ServerDistance <= 0.0
 		|| FVector::Dist(Pawn->GetActorLocation(), GetFishingCollisionCenter()) > ServerDistance)
 	{
 		return false;
@@ -1106,7 +1128,7 @@ bool ACatFishPickupActor::ResolveFishingPickupFromAuthority(AController* Request
 	{
 		Terminal.Error = ECatDomainCommandError::DependencyUnavailable;
 	}
-	else if (FindCarriedFish(Character) || ACatFishGuardActor::FindCarriedGuard(Character))
+	else if (Character->GetMouthCarriedActor() != nullptr)
 	{
 		Terminal.Error = ECatDomainCommandError::InvalidPhase;
 	}

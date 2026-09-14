@@ -17,6 +17,7 @@ class USkeletalMeshComponent;
 class USphereComponent;
 class UBoxComponent;
 class UCatFishInventoryItemInstance;
+class UCatInventoryComponent;
 
 UENUM(BlueprintType)
 enum class ECatFishPickupState : uint8
@@ -149,6 +150,7 @@ private:
 	bool bThrowEffectArmed = false;
 	TWeakObjectPtr<ACatCharacter> ThrowingCharacter;
 	friend class ACatFishingSession;
+	friend class UCatInventoryComponent;
 	friend class FCatFishPickupMouthCarryAndGuardStoreTest;
 
 	/** 客户端消费鱼身份与携带状态后刷新网格、碰撞和附着，通知表现蓝图；不生成捕获记录或经济事务。 */
@@ -200,6 +202,8 @@ private:
 	bool bCaptureRecorded = false;
 	/** 本鱼是否正被不可逆消费提交占用；入护成功会解除该占用以便同一保管 Actor 后续 Carry，真正售出或吃掉才保持到销毁。 */
 	bool bConsumptionCommitted = false;
+	// 仅正式Store静默入库作用域内授权该接收器，不让通用Add直接接走世界/嘴部原鱼。
+	TWeakObjectPtr<UCatInventoryComponent> InventoryStoreTarget;
 	FTransform LandedMeshBaseTransform = FTransform::Identity;
 	FTransform CarriedMeshBaseTransform = FTransform::Identity;
 	FName AppliedPresentationFishDefinitionId = NAME_None;

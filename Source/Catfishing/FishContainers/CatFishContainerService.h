@@ -47,11 +47,7 @@ public:
 	/** 恢复世界鱼容器；内部先校验宿主、容量、定义和实例唯一性，再创建动态宿主并提交鱼数组，失败时关闭本 World 写口。 */
 	bool RestorePersistedWorldFishContainers(const TArray<FCatPersistentContainerSnapshot>& SavedContainers);
 
-	/** 嘴叼世界鱼对具体鱼护入箱时的唯一提交入口；恢复期间拒绝新提交，同 RequestId/会话重放只返回首次 Committed DTO。 */
-	FCatCaptureCommitResult CommitCapture(const FCatCaptureCommitCommand& Command);
 
-	/** 不处于恢复窗口时原子移动一条鱼；UI/RPC 只能提交鱼实例与槽位。 */
-	FCatDomainCommandResult TransferOwnedFish(const FCatFishTransferCommand& Command);
 
 	/** Controller 在服务器上发起直接吃鱼时调用；本服务会用服务器身份重读可触达的鱼护或共享鱼缸，并在容器移除成功或终态重放成功后才把食用效果交给目标 Character。 */
 	FCatFishConsumeResult ConsumeReachableFish(AController* RequestingController,
@@ -102,12 +98,6 @@ private:
 
 	/** 恢复当前正在创建或销毁的唯一宿主；注册与注销只接受这条生命周期配对，其他宿主的重入会封锁恢复。 */
 	TWeakObjectPtr<AActor> ExpectedRestoreHost;
-	/** 捕获命令的首次完整终态缓存。 */
-	TMap<FString, FCatCaptureCommitResult> CaptureTerminalCache;
-	/** FishingSessionId 到唯一捕获提交事实；即使换身份或 RequestId，也不能为同一会话创建第二条鱼。 */
-	TMap<FGuid, FCatCaptureCommittedResult> CaptureByFishingSession;
-	/** 转移命令的首次完整终态缓存。 */
-	TMap<FString, FCatDomainCommandResult> TransferTerminalCache;
 	/** 直接吃鱼命令的首次完整终态缓存。 */
 	TMap<FString, FCatFishConsumeResult> ConsumeTerminalCache;
 	/** 直接吃鱼终态的请求载荷签名；防止同身份同容器同 RequestId 改鱼实例后重放已记录终态。 */

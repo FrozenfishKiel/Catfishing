@@ -233,3 +233,47 @@ FCatWaterSpatialResult UCatWaterQuerySubsystem::QueryNearestShoreForPreview(
 	}
 	return Best.bSucceeded ? Best : CatWaterQueryPrivate::MakeError(ECatWaterQueryError::RegionNotFound);
 }
+
+// 空气墙按所有有效水域逐一查询，重叠水域仍阻挡；不采用“最近岸线”丢掉其余水域。
+bool UCatWaterQuerySubsystem::DoesWorldDropSweepTouchWater(const FVector& Start, const FVector& End, const double RadiusCentimeters) const
+{
+	if (!CatWaterQueryPrivate::IsFinite(Start) || !CatWaterQueryPrivate::IsFinite(End)
+		|| !FMath::IsFinite(RadiusCentimeters) || RadiusCentimeters < 0) return true;
+	CompactRegistry();
+	for (const auto& Pair : RegionsById)
+	{
+		for (const auto& WeakRegion : Pair.Value)
+		{
+			const ACatWaterRegion* Region = WeakRegion.Get();
+			if (!Region) continue;
+			const FCatWaterGeometryCache& Cache = Region->BakedGeometry;
+			FVector A = Cache.WorldToPlane.TransformPosition(Start);
+			FVector B = Cache.WorldToPlane.TransformPosition(End);
+			A.Z = B.Z = 0;
+			const auto IsWaterPoint = [&](const FVector& Point)
+			{
+				return CatWaterQueryPrivate::IsWater(FCatWaterGeometry::QueryPoint(Cache,
+					Cache.PlaneToWorld.TransformPosition(Point), TNumericLimits<double>::Max()));
+			};
+			if (IsWaterPoint(A) || IsWaterPoint(B)) return true;
+			const double Radius = RadiusCentimeters * Cache.WorldToPlane.GetScale3D().GetAbsMax() + Cache.BoundaryToleranceCm;
+			const auto TouchesBoundary = [&](const TArray<FCatWaterBakedPolygon>& Polygons)
+			{
+				for (const FCatWaterBakedPolygon& Polygon : Polygons)
+				{
+					for (int32 Index = 0; Index < Polygon.Vertices.Num(); ++Index)
+					{
+						const FVector C(Polygon.Vertices[Index], 0);
+						const FVector D(Polygon.Vertices[(Index + 1) % Polygon.Vertices.Num()], 0);
+						FVector OnPath, OnEdge;
+						FMath::SegmentDistToSegmentSafe(A, B, C, D, OnPath, OnEdge);
+						if (FVector::DistSquared(OnPath, OnEdge) <= FMath::Square(Radius)) return true;
+					}
+				}
+				return false;
+			};
+			if (TouchesBoundary(Cache.IncludePolygons) || TouchesBoundary(Cache.ExcludePolygons)) return true;
+		}
+	}
+	return false;
+}

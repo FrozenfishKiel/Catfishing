@@ -179,7 +179,7 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 		Result.Command.Error = ECatFishingCommandError::DependencyUnavailable;
 		return Finish(Result);
 	}
-	// 单嘴约束：嘴里叼着鱼（或鱼护这类嘴部载体）不能抛竿，得先放进鱼护或扔下（钓鱼规则 §5.2）。
+	// 单嘴约束：嘴里叼着鱼不能抛竿；背包鱼护不占嘴，得先放进鱼护或扔下（钓鱼规则 §5.2）。
 	// 抢抄与拾取已各自带同一条前置，这里补上抛竿这一路，三个入口共用 GetMouthCarriedActor() 这一个事实源。
 	if (Character->GetMouthCarriedActor() != nullptr)
 	{

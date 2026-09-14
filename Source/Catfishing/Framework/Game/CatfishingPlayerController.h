@@ -175,7 +175,7 @@ public:
 	void ServerReleaseInventoryItemToWorld(FGuid RequestId, AActor* SourceHost, int32 Slot,
 		FGuid ItemInstanceId, int32 Quantity, ECatInventoryWorldAction Action);
 
-	/** 长按交互提交拾起鱼护意图；鱼护自己复核距离、身体、嘴部空闲与库存容量。 */
+	/** 长按交互提交拾起鱼护意图；鱼护自己复核距离、身体与库存容量，不占嘴部鱼槽。 */
 	UFUNCTION(Server, Reliable)
 	void ServerPickUpFishGuard(ACatFishGuardActor* Guard, FGuid RequestId);
 

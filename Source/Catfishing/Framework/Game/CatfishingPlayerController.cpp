@@ -1148,38 +1148,19 @@ void ACatfishingPlayerController::ServerReleaseInventoryItemToWorld_Implementati
 }
 
 // 快捷丢弃流程：服务器检查玩法门和身体，再读取当前携带对象；空嘴直接返回。
-// 单鱼解除原Actor的携带，鱼护沿原库存Drop释放；不接收客户端目标、不保存快捷请求，也不改背包选中格。
+// 单鱼解除原Actor携带；鱼护属于背包，走库存Drop/Place，不再通过嘴部快捷键释放。
 void ACatfishingPlayerController::ServerDropCarriedItem_Implementation()
 {
 	ACatCharacter* CatCharacter = Cast<ACatCharacter>(GetPawn());
 	if (!CanForwardGameplayCommand() || !CatCharacter || !CatCharacter->GetConditionComponent()
 		|| CatCharacter->GetConditionComponent()->GetSnapshot().bDowned) return;
 	ACatFishPickupActor* Fish = Cast<ACatFishPickupActor>(CatCharacter->GetMouthCarriedActor());
-	ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(CatCharacter->GetMouthCarriedActor());
-	if (!IsValid(Fish) && !IsValid(Guard)) return;
-	bool bDropped = false;
-	if (IsValid(Fish))
-	{
-		bDropped = Fish->DropFromAuthority(this);
-	}
-	else if (UCatInventoryComponent* Inventory = CatCharacter->GetInventoryComponent())
-	{
-		for (const FCatInventoryEntry& Entry : Inventory->GetInventoryEntries())
-		{
-			if (Entry.Instance && Entry.StackCount == 1 && Entry.Instance->GetWorldActor() == Guard)
-			{
-				// 这里只满足原库存接口的事务参数，不为快捷入口另建请求状态。
-				bDropped = UCatInventoryStatics::ReleaseItemToWorldFromAuthority(CatCharacter, FGuid::NewGuid(), CatCharacter,
-					Inventory->FindInventorySlotIndexFromInstance(Entry.Instance), Entry.Instance->GetItemInstanceId(),
-					1, ECatInventoryWorldAction::Drop).bCommitted;
-				break;
-			}
-		}
-	}
+	if (!IsValid(Fish)) return;
+	const bool bDropped = Fish->DropFromAuthority(this);
 	const FString Event = FString::Printf(
 		TEXT("Event=mouth_drop_result World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s ItemActor=%s Dropped=%d"),
 		*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(),
-		*GetNameSafe(Fish ? static_cast<AActor*>(Fish) : static_cast<AActor*>(Guard)), bDropped);
+		*GetNameSafe(Fish), bDropped);
 	if (bDropped) { UE_LOG(LogCatfishing, Log, TEXT("%s"), *Event); }
 	else { UE_LOG(LogCatfishing, Warning, TEXT("%s"), *Event); }
 }

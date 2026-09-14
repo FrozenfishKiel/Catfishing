@@ -453,7 +453,7 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 		: FCatWaterSpatialResult{};
 	const double FishRadius = FishDefinition ? FishDefinition->ScoopTargetRadiusCentimeters : 0.0;
 	const FVector FishLocation = Encounter ? Encounter->GetFishingCollisionCenter() : FVector::ZeroVector;
-	// 抄鱼与拾取共用单嘴约束；鱼护虽在背包中，其可见嘴部载体仍占用这一位置。
+	// 抄鱼与拾取共用一嘴一鱼；背包中的鱼护不占嘴部槽位（道具:64）。
 	const bool bMouthFree = ScoopingCharacter && ScoopingCharacter->GetMouthCarriedActor() == nullptr;
 	// 高差单独算一遍：DoesScoopRayReachFish 内部也会因为高差返回 false，光看它分不清「没对准」还是「站太高」。
 	// 拒绝原因要拆开给玩家提示（钓鱼规则 §5.5:273），所以这里把垂直约束提成独立谓词，判定口径仍是同一个上限。

@@ -38,6 +38,7 @@
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "Inventory/CatInventorySettings.h"
+#include "Inventory/CatInventoryStatics.h"
 #include "Net/UnrealNetwork.h"
 #include "OnlineSubsystemTypes.h"
 #include "Run/CatRunSettings.h"
@@ -1129,6 +1130,13 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 			Fishing->SuspendFishingAndReleaseOperators();
 		if (UCatChumFieldSubsystem* Fields = GetWorld()->GetSubsystem<UCatChumFieldSubsystem>())
 			Fields->ClearFieldsForRunTransition();
+		// T30：沿 T19 同一阶段入口清昨日未拾物；初次进入第一天不能销毁关卡初始物品。
+		if (NewPhase == ECatRunPhase::DayActive && RunPublicState.Phase.DayIndex > 0)
+		{
+			const int32 Purged = UCatInventoryStatics::PurgeUnclaimedWorldDropsFromAuthority(GetWorld());
+			UE_LOG(LogCatRun, Log, TEXT("Event=run_day_world_drops_cleared RunId=%s Day=%d Destroyed=%d World=%s NetMode=%d Authority=1 LocalRole=%d"),
+				*RunPublicState.Phase.RunId.ToString(), RunPublicState.Phase.DayIndex, Purged, *GetNameSafe(GetWorld()), GetNetMode(), GetLocalRole());
+		}
 		UE_LOG(LogCatRun, Log, TEXT("Event=run_fishing_transients_cleared RunId=%s World=%s NetMode=%d Authority=1 LocalRole=%d Day=%d NextPhase=%s"),
 			*RunPublicState.Phase.RunId.ToString(), *GetNameSafe(GetWorld()), int32(GetNetMode()), int32(GetLocalRole()),
 			RunPublicState.Phase.DayIndex, *UEnum::GetValueAsString(NewPhase));

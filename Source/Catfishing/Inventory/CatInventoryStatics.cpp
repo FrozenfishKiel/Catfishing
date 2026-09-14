@@ -12,30 +12,13 @@
 #include "Inventory/CatInventoryAccessRules.h"
 #include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatInventoryItemInstance.h"
+#include "Inventory/CatFishInventoryItemInstance.h"
+#include "Condition/CatConditionComponent.h"
 #include "Inventory/CatInventorySettings.h"
 #include "Interaction/CatInteractable.h"
 #include "Items/CatItem.h"
 #include "Items/Fish/CatFishPickupActor.h"
 #include "Logging/CatLog.h"
-
-namespace
-{
-	// 落点水域禁止（道具册 §4：物品丢不进湖里）。
-	// 判据只问一次水域查询：落点在任一水域轮廓内（含边界）就拒绝，玩家换个方向再扔。
-	// 查不到水域（关卡里没有 CatWaterRegion、或查询子系统缺席）时**放行**——这条规则是给湖加的门，
-	// 不是给「没有湖的关卡不许扔东西」加的门；查询失败就退回本条规则落地前的行为。
-	bool IsWorldReleasePointOverWater(const UWorld* World, const FVector& WorldPoint)
-	{
-		const UCatWaterQuerySubsystem* WaterQuery = World
-			? World->GetSubsystem<UCatWaterQuerySubsystem>() : nullptr;
-		if (WaterQuery == nullptr)
-		{
-			return false;
-		}
-		const FCatWaterSpatialResult Result = WaterQuery->QueryNearestShoreForPreview(WorldPoint);
-		return Result.bSucceeded && Result.Containment != ECatWaterContainment::Outside;
-	}
-}
 
 // 落点求解流程：只用物理根的局部包围盒检查占用，不把准星交互球算作实体；放置依次搜索正前方与左右各30度内的地面。
 // 丢弃从视点、角色半径和物理盒尺寸求前方释放中心，沿途扫盒并检查终点占用，阻挡即拒绝；成功把盒中心换算为Actor变换。
@@ -67,7 +50,8 @@ bool UCatInventoryStatics::FindWorldReleaseTransform(ACatCharacter* Character, A
 		FHitResult Hit;
 		if (World->SweepSingleByChannel(Hit, Eye, Center, Rotation, ECC_WorldDynamic, Shape, Query)
 			|| World->OverlapBlockingTestByChannel(Center, Rotation, ECC_WorldDynamic, Shape, Query)) return false;
-		if (IsWorldReleasePointOverWater(World, Center)) return false;
+		if (const UCatWaterQuerySubsystem* Water = World->GetSubsystem<UCatWaterQuerySubsystem>();
+			Water && Water->DoesWorldDropSweepTouchWater(Center, Center, Extent.Size())) return false;
 		OutTransform = FTransform(Rotation, Center - Rotation.RotateVector(CenterOffset), Scale);
 		return true;
 	}
@@ -104,7 +88,8 @@ bool UCatInventoryStatics::FindWorldReleaseTransform(ACatCharacter* Character, A
 					break;
 				}
 			}
-			if (bSupported && !IsWorldReleasePointOverWater(World, Ground.ImpactPoint))
+			const UCatWaterQuerySubsystem* Water = World->GetSubsystem<UCatWaterQuerySubsystem>();
+			if (bSupported && (!Water || !Water->DoesWorldDropSweepTouchWater(Center, Center, Extent.Size())))
 			{
 				OutTransform = FTransform(Rotation, Center - Rotation.RotateVector(CenterOffset), Scale);
 				return true;
@@ -141,7 +126,9 @@ namespace
 		FCatInventoryHostEndpoint& OutEndpoint)
 	{
 		OutEndpoint = FCatInventoryHostEndpoint();
-		if (World == nullptr || ControlledCharacter == nullptr || SubmittedHost == nullptr
+		if (World == nullptr || !IsValid(ControlledCharacter) || !IsValid(SubmittedHost)
+			|| SubmittedHost->IsActorBeingDestroyed()
+			|| (SubmittedHost != ControlledCharacter && Cast<ACatCharacter>(SubmittedHost))
 			|| SubmittedHost->GetWorld() != World)
 		{
 			return false;
@@ -224,11 +211,13 @@ int32 UCatInventoryStatics::PurgeUnclaimedWorldDropsFromAuthority(UWorld* World)
 		if (IsValid(Doomed) && Doomed->Destroy())
 		{
 			++DestroyedCount;
+			UE_LOG(LogCatfishing, Log, TEXT("Event=world_drop_purged Actor=%s World=%s NetMode=%d Authority=1 LocalRole=%d"),
+				*GetNameSafe(Doomed), *GetNameSafe(World), World->GetNetMode(), Doomed->GetLocalRole());
 		}
 	}
 	UE_LOG(LogCatfishing, Log,
-		TEXT("Event=world_drops_purged_for_day_transition World=%s Candidates=%d Destroyed=%d"),
-		*GetNameSafe(World), PendingDestroy.Num(), DestroyedCount);
+		TEXT("Event=world_drops_purged_for_day_transition World=%s NetMode=%d Authority=1 Candidates=%d Destroyed=%d"),
+		*GetNameSafe(World), World->GetNetMode(), PendingDestroy.Num(), DestroyedCount);
 	return DestroyedCount;
 }
 
@@ -311,6 +300,24 @@ FCatDomainCommandResult UCatInventoryStatics::MoveItemBetweenInventoryHostsFromA
 		}
 		else
 		{
+			const auto InvalidFishEndpoint = [&](const FCatInventoryHostEndpoint& Endpoint)
+			{
+				const FCatInventoryEntry* Entry = Endpoint.Inventory->GetInventoryEntryAtSlot(Endpoint.SlotIndex);
+				return Entry && Entry->Instance
+					&& (Cast<UCatFishInventoryItemInstance>(Entry->Instance) || Cast<UCatFishDefinition>(Entry->Instance->GetItemDefinition()))
+					&& CatInventoryAccessRules::ResolveReachableFishContainer(Endpoint.Host, ControlledCharacter) != Endpoint.Inventory;
+			};
+			if (!ControlledCharacter->HasAuthority() || !ControlledCharacter->GetConditionComponent()
+				|| (ControlledCharacter->GetConditionComponent()->GetSnapshot().bDowned
+					&& (SourceInventoryHost != ControlledCharacter || TargetInventoryHost != ControlledCharacter))
+				|| InvalidFishEndpoint(SourceEndpoint) || InvalidFishEndpoint(TargetEndpoint))
+			{
+				Result.Error = ECatDomainCommandError::PermissionDenied;
+				UE_LOG(LogCatfishing, Warning, TEXT("Event=inventory_host_move_rejected RequestId=%s Player=%s Source=%s Target=%s Reason=InvalidFishHostOrCharacter World=%s NetMode=%d Authority=%d LocalRole=%d"),
+					*RequestId.ToString(), *GetNameSafe(ControlledCharacter), *GetNameSafe(SourceInventoryHost), *GetNameSafe(TargetInventoryHost),
+					*GetNameSafe(World), ControlledCharacter->GetNetMode(), ControlledCharacter->HasAuthority(), ControlledCharacter->GetLocalRole());
+				return Result;
+			}
 			const FString PayloadContext = FString::Printf(
 				TEXT("SourceHost=%s|TargetHost=%s"),
 				*GetPathNameSafe(SourceEndpoint.Host),
