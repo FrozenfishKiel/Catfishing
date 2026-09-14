@@ -58,7 +58,9 @@ HUD、背包、背包格子、交互提示和局内 ESC 菜单的默认路径来
 
 `NorthStarTitleText` 沿用原 Designer 名称，显示“秘境同行”；`MenuSubtitleText` 继续接收 `RefreshFlowFeedback` 的真实错误和默认提示，不是可删的装饰文本。首页短按钮文案禁用自动换行，四态样式序列化在原按钮上。新日志 `LogCatUI / Event=frontend_page_shown` 只在切到不同页面时记录 World、NetMode、View、Page、Asset，供 Development 落盘追踪，重复刷新不刷屏。
 
-首页接入交付首页视觉、退出确认表现及必要 Root 适配。存档页随后沿用同一背景与配色，其他页面仍待完善；这些局部交付不关闭 Frontend / Online 模块。设置页下拉框文字裁切在旧 760×500 画布对照中同样存在，仍属设置页待处理表现问题。
+首页接入交付首页视觉、退出确认表现及必要 Root 适配。随后存档、加入、房间和设置页统一沿用同一背景与配色；这些局部交付不关闭 Frontend / Online 模块。设置页通过调整行高和下拉框内部留白修正闭合控件的文字裁切，展开选项列表尚未完成本轮人工交互验证。
+
+`Scripts/style_frontend_pages.py` 负责加入、房间、设置及三个好友/玩家动态行 WBP：保留原控件名、类型和请求绑定，增加列面板，统一文字、按钮、输入框、滑条和滚动条，取消动态行的旧固定高度。设置行改为至少 64 设计像素，下拉框采用 17 号原中文字体与紧凑内边距；字段含义、数值单位、选项、busy、草稿/应用/取消、权限和不支持说明均保持原规则。脚本拒绝未保存目标包，备份位于 `Saved/Automation/FrontendPagesStyle/Backups`，完整生成入口在首页和存档样式之后执行它。没有新增网络或设置持久化入口，没有扩大 Cook 目录。
 
 存档样式入口 `Scripts/style_frontend_save.py` 修改原 `WBP_CatFrontendSaveList`、`WBP_CatSaveSlotRow` 和 Root，执行前拒绝目标包的未保存修改，并按 SHA256 备份到 `Saved/Automation/FrontendSaveStyle/Backups`。完整生成脚本在首页样式后执行它。两个样式脚本通过 `CompileStyledFrontendWidget` 补齐新增控件 GUID 后编译，保留已有 GUID 和绑定。
 
