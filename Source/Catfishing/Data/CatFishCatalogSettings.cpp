@@ -128,6 +128,11 @@ FCatFishBiteTimingDefaults UCatFishCatalogSettings::ResolveBiteTiming(const UCat
 	FCatFishBiteTimingDefaults Result;
 	Result.ProbeDurationSeconds = Definition.ProbeDurationSeconds;
 	Result.TrueBiteWindowSeconds = Definition.TrueBiteWindowSeconds;
+	if (const FCatFishBiteTimingDefaults* Override = BiteTimingOverridesByFishDefinitionId.Find(Definition.FishDefinitionId))
+	{
+		if (Result.ProbeDurationSeconds == 0.0) Result.ProbeDurationSeconds = Override->ProbeDurationSeconds;
+		if (Result.TrueBiteWindowSeconds == 0.0) Result.TrueBiteWindowSeconds = Override->TrueBiteWindowSeconds;
+	}
 	if (const FCatFishBiteTimingDefaults* Defaults = BiteTimingDefaultsByRarityTier.Find(Definition.RarityTierId))
 	{
 		if (Result.ProbeDurationSeconds == 0.0) Result.ProbeDurationSeconds = Defaults->ProbeDurationSeconds;

@@ -57,7 +57,7 @@ void ACatFishTankActor::BeginPlay()
 		// 这就是「鱼缸容量随局清空」，不需要另写一条清理。
 		CapacityTier = 0;
 		CommittedUpgradeRequestIds.Reset();
-		FishInventory->SetInventorySlotCountFromAuthority(ResolveSlotCapacityForCurrentTier());
+		FishInventory->SetInventorySlotCountFromAuthority(ResolveSlotCapacityForTier(CapacityTier));
 	}
 	// 库存只在扩容时广播；即使容量没有变化，也必须在组件 BeginPlay 之后发布第一份完整摘要。
 	if (HasAuthority() && WorldInfo)
@@ -88,8 +88,7 @@ int32 ACatFishTankActor::GetCapacityTier() const
 
 bool ACatFishTankActor::RestoreCapacityTierFromAuthority(const int32 Tier)
 {
-	const auto* Settings = GetDefault<UCatFishContainerSettings>();
-	const int32 Capacity = Settings ? Settings->GetSharedFishTankCapacityForTier(Tier) : 0;
+	const int32 Capacity = ResolveSlotCapacityForTier(Tier);
 	if (!HasAuthority() || !FishInventory || Tier < 0 || Capacity <= 0) return false;
 	for (int32 Index = Capacity; Index < FishInventory->GetInventoryEntries().Num(); ++Index)
 		if (FishInventory->GetInventoryEntries()[Index].Instance) return false;
@@ -105,17 +104,17 @@ bool ACatFishTankActor::RestoreCapacityTierFromAuthority(const int32 Tier)
 
 // 容量解析流程：优先按「设置里的初始档 + 已购档」取容量；设置没给出正容量时回退到编辑器容量并记一条 Warning。
 // 这条回退是刻意的：鱼缸在容量档位落地之前就在跑，没配置就把缸判成 0 格等于让整局收不了鱼。
-int32 ACatFishTankActor::ResolveSlotCapacityForCurrentTier() const
+int32 ACatFishTankActor::ResolveSlotCapacityForTier(const int32 Tier) const
 {
 	const UCatFishContainerSettings* Settings = GetDefault<UCatFishContainerSettings>();
-	const int32 ConfiguredCapacity = Settings ? Settings->GetSharedFishTankCapacityForTier(CapacityTier) : 0;
+	const int32 ConfiguredCapacity = Settings ? Settings->GetSharedFishTankCapacityForTier(Tier) : 0;
 	if (ConfiguredCapacity > 0)
 	{
 		return ConfiguredCapacity;
 	}
 	UE_LOG(LogCatFishContainers, Warning,
 		TEXT("Event=fish_tank_capacity_config_missing Tank=%s Tier=%d FallbackCapacity=%d Reason=SettingsTierUnresolved"),
-		*GetNameSafe(this), CapacityTier, FMath::Max(0, FishInventorySlotCapacity));
+		*GetNameSafe(this), Tier, FMath::Max(0, FishInventorySlotCapacity));
 	return FMath::Max(0, FishInventorySlotCapacity);
 }
 
@@ -188,7 +187,7 @@ bool ACatFishTankActor::ApplyCapacityUpgradeFromAuthority(const int32 TargetTier
 	const int32 PreviousTier = CapacityTier;
 	const int32 PreviousCapacity = FishInventory->GetInventorySlotCount();
 	CapacityTier = TargetTier;
-	const int32 NewCapacity = ResolveSlotCapacityForCurrentTier();
+	const int32 NewCapacity = ResolveSlotCapacityForTier(CapacityTier);
 	if (NewCapacity <= PreviousCapacity)
 	{
 		CapacityTier = PreviousTier;

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "Collection/CatRunFishCollectionTypes.h"
@@ -251,7 +251,7 @@ public:
 	/** 返回本项目当前载荷版本；引擎在保存前写入 SavedDataVersion，读取方据此拒绝未知格式。 */
 	virtual int32 GetLatestDataVersion() const override;
 
-	/** 读盘后只迁移已知 v5 数据，不访问 World 或角色；库存与位置等到正式宿主就绪后再应用。 */
+	/** 读盘后只迁移已知 v5/v6 数据，不访问 World 或角色；库存与位置等到正式宿主就绪后再应用。 */
 	virtual void HandlePostLoad() override;
 
 	/** 写盘完成后接收引擎真实结果，并消费一次完成委托；不会把受理成功当作落盘成功。 */
@@ -260,9 +260,9 @@ public:
 	/** 当前不可变写盘候选的完成接收者；Subsystem 写盘前绑定，完成时清空，不进入磁盘。 */
 	FCatRunSaveFinished OnSaveFinished;
 
-	/** 旧 USaveGame 文件的格式标记；保留字段名以识别 v5，加载时升级为 v6，新文件同时由引擎记录数据版本。 */
+	/** 旧 USaveGame 文件的格式标记；保留字段名以识别 v5/v6，加载时升级为 v7，新文件同时由引擎记录数据版本。 */
 	UPROPERTY(SaveGame)
-	int32 FormatVersion = 6;
+	int32 FormatVersion = 7;
 
 	/** 是否已采集过正式世界；新建空槽为 false，首次采样后为 true，区分新局和缺失世界载荷。 */
 	UPROPERTY(SaveGame)
@@ -314,13 +314,13 @@ public:
 
 	/** 这一局是否已经终局（毕业或团灭）；由 Run 的 EndReason 写入且只增不减，房主退出不算终局（那是可续的局中断点）。
 	 *  它是「不再提供继续」的唯一磁盘事实；文件本身一个不动，仍可读出来当战绩回看（2026-09-11 拍）。
-	 *  新增的加法字段：旧 v6 文件没有这项，反序列化后保持 false，正是「没打完、可以继续」，因此不抬 schema 版本。 */
+	 *  未携带此字段的旧 v6 反序列化后保持 false，表示「没打完、可以继续」；v7 迁移保留已有完成位。 */
 	UPROPERTY(SaveGame)
 	bool bRunCompleted = false;
 
 	/** 写盘时共享鱼缸里那些鱼折算出的可献点数；它只服务加载页摘要，不在恢复时写回任何鱼缸。
 	 *  INDEX_NONE 表示这份存档没记过（旧 v6 文件，或体重档未裁时算不出来），前端显示「未记录」而不是 0 点。
-	 *  新增的加法字段：旧文件反序列化后保持 INDEX_NONE，语义正确，因此不抬 schema 版本。 */
+	 *  未携带此字段的旧文件保持 INDEX_NONE；v7 迁移保留已有摘要。 */
 	UPROPERTY(SaveGame)
 	int32 TankOfferingPoints = INDEX_NONE;
 
@@ -336,7 +336,7 @@ public:
 	UPROPERTY(SaveGame)
 	FCatSavedCampInventory CampInventory;
 
-	/** 加法迁移标记；旧档没有公款与现行鱼库存，不能把默认零值当成已保存事实。 */
+	/** 载荷形状标记（兼容已发布的两种 v6）；旧单仓档没有公款与现行鱼库存，不能把默认零值当成已保存事实。 */
 	UPROPERTY(SaveGame)
 	bool bHasInventoryCheckpoint = false;
 	UPROPERTY(SaveGame)
@@ -344,7 +344,7 @@ public:
 	UPROPERTY(SaveGame)
 	int32 TeamWalletBalance = 0;
 
-	/** 世界鱼容器的已提交鱼；每项用关卡稳定键重新关联，而非运行期随机 GUID。 */
+	/** 旧单仓格式的世界鱼容器；仅为已有文件兼容读取保留，新断点写 WorldInventories。 */
 	UPROPERTY(SaveGame)
 	TArray<FCatPersistentContainerSnapshot> WorldFishContainers;
 };

@@ -9,7 +9,7 @@
 
 class UCatFishDefinition;
 
-/** 逐鱼窗口的配置默认值，单位秒；键沿用资产 RarityTierId，不翻译设计表的新档位。 */
+/** 逐鱼窗口的配置值，单位秒；分别供内部鱼 ID 覆盖表和旧档位回退表使用。 */
 USTRUCT()
 struct FCatFishBiteTimingDefaults
 {
@@ -75,10 +75,14 @@ public:
 
 	FCatFishSelectionResult SelectRuntimeDefinition(const FCatFishSelectionContext& Context) const;
 
-	/** 两字段独立解析：只有资产为 0 才取档位默认；非法值原样交由会话拒绝，0 仍表示缺配。 */
+	/** 两字段独立解析：资产为 0 时先取逐鱼覆盖，再取档位默认；非法值原样交由会话拒绝，0 仍表示缺配。 */
 	FCatFishBiteTimingDefaults ResolveBiteTiming(const UCatFishDefinition& Definition) const;
 
-	/** 暂定正式默认表；逐鱼资产迁移后正值自动覆盖，不写回资产，也不包含完美窗。 */
+	/** 设计表逐鱼覆盖；键必须是资产内部 FishDefinitionId，资产正值优先，不写回资产。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Bite")
+	TMap<FName, FCatFishBiteTimingDefaults> BiteTimingOverridesByFishDefinitionId;
+
+	/** 未配置逐鱼值时的旧档位折中回退；不代表正式鱼表，也不包含完美窗。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Bite")
 	TMap<FName, FCatFishBiteTimingDefaults> BiteTimingDefaultsByRarityTier;
 

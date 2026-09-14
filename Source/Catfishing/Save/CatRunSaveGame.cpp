@@ -1,20 +1,29 @@
 #include "Save/CatRunSaveGame.h"
 
+#include "Logging/CatLog.h"
+
 #include UE_INLINE_GENERATED_CPP_BY_NAME(CatRunSaveGame)
 
-// 版本查询流程：返回包含普通库存鱼载荷的 v6；这是磁盘 schema，与库存复制版本无关。
+// 版本查询流程：返回使用分仓、公款和鱼缸档位断点的 v7；这是磁盘 schema，与库存复制版本无关。
 int32 UCatRunSaveGame::GetLatestDataVersion() const
 {
-	return 6;
+	return 7;
 }
 
-// 读盘迁移流程：仅识别未使用 LocalPlayerSaveGame 的旧 v5；旧格式没有库存鱼，新增鱼字段自然保持空值。
-// 迁移只改已加载对象，原文件不动；未知版本保持原值，由协调器拒绝，绝不默认创建新世界覆盖它。
+// v5/v6 只在内存升级版本，不覆盖原文件；未知版本交由协调器拒绝。
+// v6 已在线存在两种形状：bHasInventoryCheckpoint 区分分仓断点与旧单仓，绝不能把旧档默认公款 0 当事实。
+// 旧单仓保留载荷，由 RestoreWorldAfterHostsReady 在宿主就绪后迁移；玩家背包鱼由库存恢复按槽跳过。
 void UCatRunSaveGame::HandlePostLoad()
 {
-	if (GetSavedDataVersion() == 0 && FormatVersion == 5)
+	const int32 PreviousVersion = FormatVersion;
+	const bool bLegacyV5 = GetSavedDataVersion() == 0 && FormatVersion == 5;
+	const bool bLegacyV6 = (GetSavedDataVersion() == 0 || GetSavedDataVersion() == 6) && FormatVersion == 6;
+	if (bLegacyV5 || bLegacyV6)
 	{
 		FormatVersion = GetLatestDataVersion();
+		if (GetSavedDataVersion() == 6) SavedDataVersion = GetLatestDataVersion();
+		UE_LOG(LogCatRun, Log, TEXT("Event=persistence_schema_migrated Slot=%s FromVersion=%d ToVersion=%d InventoryCheckpoint=%d Result=InMemoryOnly"),
+			*SlotId.ToString(), PreviousVersion, FormatVersion, bHasInventoryCheckpoint);
 	}
 	Super::HandlePostLoad();
 }

@@ -45,7 +45,7 @@ namespace
 	/** UE SaveGame 本地文件扩展名；扫描目录时只接受这一类正式槽文件。 */
 	constexpr const TCHAR* SaveGameFileExtension = TEXT(".sav");
 
-	// Windows 本地槽预检流程：只读取 UE 文件标记；本项目 v5/v6 都是现代 GVAS 格式，不接受引擎的无标记旧格式回退。
+	// Windows 本地槽预检流程：只读取 UE 文件标记；本项目 v5/v6/v7 都是现代 GVAS 格式，不接受引擎的无标记旧格式回退。
 	// UE 会把任意无效文件头当作旧版类名解析，可能触发 FName 长度断言；这里在 UObject 加载前拒绝这类文件。
 	bool HasRunSaveFileHeader(const FString& SlotName)
 	{
@@ -835,7 +835,7 @@ namespace
 			|| !Saved.HostTransform.IsValid() || Saved.HostTransform.GetScale3D().GetMin() <= 0.0
 			|| Saved.Capacity <= 0 || Saved.InventorySlots.Num() > Saved.Capacity
 			|| uint8(Saved.TeamStorageRole) > uint8(ECatTeamStorageRole::SupplyStore)
-			|| (bTank ? (Saved.CapacityTier < 0 || GetDefault<UCatFishContainerSettings>()->GetSharedFishTankCapacityForTier(Saved.CapacityTier) != Saved.Capacity)
+			|| (bTank ? Saved.CapacityTier < 0
 				: Saved.CapacityTier != INDEX_NONE))
 		{
 			Failure = FText::FromString(TEXT("世界库存宿主、角色、容量或鱼缸档位无效。"));
@@ -884,6 +884,22 @@ bool UCatSaveSubsystem::RestoreWorldInventories(UWorld& World,
 	{
 		if (Names.Contains(Saved.HostName) || !ValidateWorldInventory(Saved, OutFailure)) return false;
 		Names.Add(Saved.HostName);
+		if (const auto* TankDefaults = Cast<ACatFishTankActor>(Saved.HostClass.Get()->GetDefaultObject()))
+		{
+			// 目标取当前配置；容量只约束占用数，旧空槽与尾部位置不使有效存档失效。
+			const ACatFishTankActor* CapacityHost = TankDefaults;
+			for (TActorIterator<ACatFishTankActor> It(&World); It; ++It)
+				if (It->GetFName() == Saved.HostName) { CapacityHost = *It; break; }
+			const int32 TargetCapacity = CapacityHost->ResolveSlotCapacityForTier(Saved.CapacityTier);
+			const int32 Occupied = Saved.InventorySlots.FilterByPredicate([](const auto& Slot) { return Slot.Quantity > 0; }).Num();
+			if (TargetCapacity <= 0 || Occupied > TargetCapacity)
+			{
+				OutFailure = FText::FromString(TEXT("世界鱼容器的已保存鱼超过当前容量。"));
+				UE_LOG(LogCatRun, Warning, TEXT("Event=persistence_inventory_capacity_exceeded World=%s NetMode=%d Authority=1 Host=%s SavedCapacity=%d TargetCapacity=%d FishCount=%d Result=RestoreRejectedDiskPreserved"),
+					*World.GetName(), World.GetNetMode(), *Saved.HostName.ToString(), Saved.Capacity, TargetCapacity, Occupied);
+				return false;
+			}
+		}
 		for (const auto& Slot : Saved.InventorySlots)
 		{
 			if (!Slot.ItemInstanceId.IsValid()) continue;
@@ -920,12 +936,26 @@ bool UCatSaveSubsystem::RestoreWorldInventories(UWorld& World,
 	{
 		AActor* Host = Hosts.FindChecked(Saved.HostName);
 		auto* Inventory = GetSavedHostInventory(Host);
+		const auto* Tank = Cast<ACatFishTankActor>(Host);
+		const int32 TargetCapacity = Tank ? Tank->ResolveSlotCapacityForTier(Saved.CapacityTier) : Saved.Capacity;
+		TArray<FCatSavedRunInventorySlot> Slots = Saved.InventorySlots;
+		if (Slots.Num() > TargetCapacity)
+		{
+			for (int32 Index = TargetCapacity; Index < Slots.Num(); ++Index)
+			{
+				if (Slots[Index].Quantity <= 0) continue;
+				const int32 Empty = Slots.IndexOfByPredicate([](const auto& Slot) { return Slot.Quantity == 0; });
+				if (Empty == INDEX_NONE || Empty >= TargetCapacity) return false; // 占用数已在宿主修改前预检。
+				Slots[Empty] = Slots[Index];
+			}
+			Slots.SetNum(TargetCapacity);
+		}
 		TArray<FCatInventoryEntry> Entries;
-		if (!PrepareInventoryEntriesFromSave(Saved.InventorySlots, *Inventory, Entries, OutFailure)
-			|| !Inventory->RestoreInventorySlotsFromAuthority(Entries, Saved.Capacity, OutFailure)) return false;
-		UE_LOG(LogCatRun, Log, TEXT("Event=persistence_inventory_restored World=%s NetMode=%d Authority=1 LocalRole=%d Host=%s Role=%d Capacity=%d Tier=%d Slots=%d"),
+		if (!PrepareInventoryEntriesFromSave(Slots, *Inventory, Entries, OutFailure)
+			|| !Inventory->RestoreInventorySlotsFromAuthority(Entries, TargetCapacity, OutFailure)) return false;
+		UE_LOG(LogCatRun, Log, TEXT("Event=persistence_inventory_restored World=%s NetMode=%d Authority=1 LocalRole=%d Host=%s Role=%d SavedCapacity=%d TargetCapacity=%d Tier=%d Slots=%d"),
 			*World.GetName(), World.GetNetMode(), Host->GetLocalRole(), *Host->GetName(), uint8(Saved.TeamStorageRole),
-			Saved.Capacity, Saved.CapacityTier, Saved.InventorySlots.Num());
+			Saved.Capacity, TargetCapacity, Saved.CapacityTier, Saved.InventorySlots.Num());
 	}
 	return true;
 }

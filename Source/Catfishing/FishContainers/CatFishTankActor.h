@@ -134,6 +134,7 @@ protected:
 
 private:
 	friend class UCatShopTradeController;
+	friend class UCatSaveSubsystem;
 	/** 库存任一次本地变化后把通知转成蓝图可订阅的形式；本函数不读写库存，只转发。 */
 	void HandleFishInventoryChanged();
 
@@ -148,8 +149,8 @@ private:
 	UPROPERTY(Replicated)
 	int32 CapacityTier = 0;
 
-	/** 按当前档位解析鱼缸应有的槽位容量；配置未给出正容量时回退到编辑器上的 FishInventorySlotCapacity。 */
-	int32 ResolveSlotCapacityForCurrentTier() const;
+	/** 按指定档位解析鱼缸应有的槽位容量；配置未给出正容量时回退到编辑器上的 FishInventorySlotCapacity。 */
+	int32 ResolveSlotCapacityForTier(int32 Tier) const;
 
 	/** 已经提交过的升级请求号；服务器本地保存，只用于挡住可靠 RPC 重放再升一档，不复制也不进存档。 */
 	TSet<FGuid> CommittedUpgradeRequestIds;

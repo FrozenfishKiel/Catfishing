@@ -68,6 +68,7 @@ class CATFISHING_API ACatfishingGameModeBase : public AGameModeBase
 	friend class FCatTerminalSaveQueueTestCommand;
 	friend class FCatShopWorldCheckpointTest;
 	friend class FCatShopSettlementTest;
+	friend class FCatShopSettlementMissingDataTest;
 	friend class FCatRunTransientCleanupTest;
 	friend class FCatFishingSlackAimCommandRoutingTest;
 	friend class FCatFishingSlackAimRodContinuityTest;

@@ -23,6 +23,8 @@ class CATFISHING_API UCatSaveSubsystem : public UGameInstanceSubsystem
 	friend class FCatPhysicalCharacterSaveRestoreConsumerTest;
 	friend class FCatTerminalSaveQueueTestCommand;
 	friend class FCatShopWorldCheckpointTest;
+	friend class FCatTankCapacityConfigRestoreTest;
+	friend class FCatLegacyBackpackFishRestoreTest;
 public:
 	/** 初始化槽摘要缓存与恢复状态；磁盘文件仍由 RefreshSlotSummaries 读取，避免前端把未扫描目录当成空档。 */
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;

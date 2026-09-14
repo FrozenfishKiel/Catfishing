@@ -950,6 +950,20 @@ bool UCatInventoryComponent::RestoreInventorySlotsFromAuthority(const TArray<FCa
 		}
 		SeenIds.Add(InstanceId);
 	}
+	TArray<FCatInventoryEntry> CompatibleSlots = RestoredSlots;
+	if (Cast<ACatCharacter>(GetOwner()))
+	{
+		for (int32 SlotIndex = 0; SlotIndex < CompatibleSlots.Num(); ++SlotIndex)
+		{
+			auto& Entry = CompatibleSlots[SlotIndex];
+			if (!Entry.Instance || !Cast<UCatFishDefinition>(Entry.Instance->GetItemDefinition())) continue;
+			UE_LOG(LogCatfishing, Warning,
+				TEXT("Event=inventory_restore_backpack_fish_skipped World=%s NetMode=%d Authority=1 LocalRole=%d Actor=%s SlotIndex=%d FishDefinitionId=%s ItemInstanceId=%s Result=SlotCleared"),
+				*GetNameSafe(GetWorld()), GetOwner()->GetNetMode(), GetOwner()->GetLocalRole(), *GetNameSafe(GetOwner()), SlotIndex,
+				*Entry.Instance->GetItemDefinition()->GetInventoryDefinitionId().ToString(), *Entry.Instance->GetItemInstanceId().ToString());
+			Entry = FCatInventoryEntry(this);
+		}
+	}
 	const int32 PreviousEntryCount = InventoryList.Entries.Num();
 	while (InventoryList.Entries.Num() < RestoreSlotCount)
 	{
@@ -964,7 +978,7 @@ bool UCatInventoryComponent::RestoreInventorySlotsFromAuthority(const TArray<FCa
 	};
 	for (int32 SlotIndex = 0; SlotIndex < RestoredSlots.Num(); ++SlotIndex)
 	{
-		const FCatInventoryEntry& Entry = RestoredSlots[SlotIndex];
+		const FCatInventoryEntry& Entry = CompatibleSlots[SlotIndex];
 		if (Entry.Instance != nullptr && !CanAcceptInventoryEntryAtSlot(Entry, SlotIndex))
 		{
 			RemoveValidationEntries();
@@ -973,7 +987,7 @@ bool UCatInventoryComponent::RestoreInventorySlotsFromAuthority(const TArray<FCa
 		}
 	}
 	RemoveValidationEntries();
-	if (!ReplaceInventoryEntriesFromAuthority(RestoredSlots, RestoreSlotCount))
+	if (!ReplaceInventoryEntriesFromAuthority(CompatibleSlots, RestoreSlotCount))
 	{
 		OutFailure = FText::FromString(TEXT("正式库存恢复替换槽位失败。"));
 		return false;

@@ -942,7 +942,12 @@ bool ACatFishingSession::TryResolveProbeDurationSeconds(double& OutProbeSeconds,
 	if (Resolved > 0.0)
 	{
 		OutProbeSeconds = Resolved;
-		if (OutSource) *OutSource = FishDefinition->ProbeDurationSeconds == 0.0 ? TEXT("RarityDefault") : TEXT("Asset");
+		if (OutSource)
+		{
+			const auto* Override = GetDefault<UCatFishCatalogSettings>()->BiteTimingOverridesByFishDefinitionId.Find(FishDefinition->FishDefinitionId);
+			*OutSource = FishDefinition->ProbeDurationSeconds != 0.0 ? TEXT("Asset")
+				: Override && Override->ProbeDurationSeconds != 0.0 ? TEXT("FishOverride") : TEXT("RarityDefault");
+		}
 		return true;
 	}
 	const FVector2D& Range = GetDefault<UCatFishingSettings>()->ProbeDurationRangeSeconds;
@@ -964,7 +969,12 @@ bool ACatFishingSession::TryResolveTrueBiteWindowSeconds(double& OutSeconds, con
 	{
 		if (Resolved < 8.0 || Resolved > 15.0) return false; // 钓鱼规则 §3.4：资产和档位默认使用同一设计区间。
 		OutSeconds = Resolved;
-		if (OutSource) *OutSource = FishDefinition->TrueBiteWindowSeconds == 0.0 ? TEXT("RarityDefault") : TEXT("Asset");
+		if (OutSource)
+		{
+			const auto* Override = GetDefault<UCatFishCatalogSettings>()->BiteTimingOverridesByFishDefinitionId.Find(FishDefinition->FishDefinitionId);
+			*OutSource = FishDefinition->TrueBiteWindowSeconds != 0.0 ? TEXT("Asset")
+				: Override && Override->TrueBiteWindowSeconds != 0.0 ? TEXT("FishOverride") : TEXT("RarityDefault");
+		}
 		return true;
 	}
 	const double Fallback = GetDefault<UCatFishingSettings>()->TrueBiteWindowSeconds;

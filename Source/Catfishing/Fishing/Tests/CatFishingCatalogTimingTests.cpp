@@ -17,8 +17,25 @@ bool FCatFishingCatalogTimingDefaultsTest::RunTest(const FString& Parameters)
 	if (!Wrapper.CreateTestWorld(EWorldType::Game)) return false;
 	auto* Session = Wrapper.GetTestWorld()->SpawnActor<ACatFishingSession>();
 	const auto* Catalog = GetDefault<UCatFishCatalogSettings>();
-	const TMap<FName, FVector2D> Expected = {{TEXT("Common"), {1.75, 10.0}}, {TEXT("Uncommon"), {2.5, 13.0}},
-		{TEXT("Rare"), {3.0, 15.0}}, {TEXT("Event"), {2.5, 13.0}}};
+	const TMap<FName, FVector2D> Expected = {
+		{TEXT("RiverPatternFish"), {1.5, 9.0}},
+		{TEXT("LittleSilverFish"), {2.0, 11.0}},
+		{TEXT("LittleColorFish"), {2.0, 11.0}},
+		{TEXT("ForestLongtailFish"), {3.0, 15.0}},
+		{TEXT("SilvermoonTrout"), {3.0, 15.0}},
+		{TEXT("LakeGiantShadow"), {2.5, 13.0}},
+		{TEXT("PetalFish"), {2.5, 13.0}},
+		{TEXT("WindbellFish"), {2.5, 13.0}},
+		{TEXT("SaltedFish"), {2.5, 13.0}},
+		{TEXT("StinkyFish"), {2.0, 11.0}},
+		{TEXT("Blackfish"), {3.0, 15.0}},
+		{TEXT("Loach"), {1.5, 9.0}},
+		{TEXT("EstuaryBass"), {2.5, 13.0}},
+		{TEXT("PufferFish"), {2.5, 13.0}},
+		{TEXT("ElectricEel"), {2.5, 13.0}},
+		{TEXT("Pike"), {3.0, 15.0}}
+	};
+	TestEqual(TEXT("逐鱼覆盖16键齐全"), Catalog->BiteTimingOverridesByFishDefinitionId.Num(), 16);
 	TestEqual(TEXT("正式配置四键齐全"), Catalog->BiteTimingDefaultsByRarityTier.Num(), 4);
 	TestEqual(TEXT("正式鱼目录包含16条"), Catalog->Definitions.Num(), 16);
 	TSet<FName> SeenTiers;
@@ -26,8 +43,8 @@ bool FCatFishingCatalogTimingDefaultsTest::RunTest(const FString& Parameters)
 	{
 		auto* Fish = Ref.LoadSynchronous();
 		if (!TestNotNull(TEXT("正式鱼资产只读加载"), Fish)) return false;
-		const auto* Timing = Expected.Find(Fish->RarityTierId);
-		if (!TestNotNull(TEXT("正式资产的字面档位有默认值"), Timing)) return false;
+		const auto* Timing = Expected.Find(Fish->FishDefinitionId);
+		if (!TestNotNull(TEXT("正式资产内部ID命中设计表"), Timing)) return false;
 		SeenTiers.Add(Fish->RarityTierId);
 		Session->FishDefinition = Fish;
 		double Probe = 0.0, Response = 0.0;
@@ -35,8 +52,8 @@ bool FCatFishingCatalogTimingDefaultsTest::RunTest(const FString& Parameters)
 		const TCHAR* ResponseSource = nullptr;
 		TestTrue(TEXT("生产试探解析器成功"), Session->TryResolveProbeDurationSeconds(Probe, &ProbeSource));
 		TestTrue(TEXT("生产响应解析器成功"), Session->TryResolveTrueBiteWindowSeconds(Response, &ResponseSource));
-		TestEqual(TEXT("试探优先逐鱼，否则正式档位"), Probe, Fish->ProbeDurationSeconds > 0.0 ? Fish->ProbeDurationSeconds : Timing->X);
-		TestEqual(TEXT("响应优先逐鱼，否则正式档位"), Response, Fish->TrueBiteWindowSeconds > 0.0 ? Fish->TrueBiteWindowSeconds : Timing->Y);
+		TestEqual(TEXT("试探优先逐鱼，否则逐鱼设计值"), Probe, Fish->ProbeDurationSeconds > 0.0 ? Fish->ProbeDurationSeconds : Timing->X);
+		TestEqual(TEXT("响应优先逐鱼，否则逐鱼设计值"), Response, Fish->TrueBiteWindowSeconds > 0.0 ? Fish->TrueBiteWindowSeconds : Timing->Y);
 		TestTrue(TEXT("正式16条均不走任何旧兜底"), FString(ProbeSource) != TEXT("LegacyFallback") && FString(ResponseSource) != TEXT("LegacyFallback"));
 		TestTrue(TEXT("响应在8到15秒内，绝不落全局3秒"), Response >= 8.0 && Response <= 15.0);
 		AddInfo(FString::Printf(TEXT("Event=formal_fish_timing_verified Fish=%s RarityTierId=%s ProbeSeconds=%.3f ProbeSource=%s ResponseSeconds=%.3f ResponseSource=%s"),
@@ -71,6 +88,26 @@ bool FCatFishingCatalogTimingOverridesTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("响应为逐鱼12秒"), Response, 12.0);
 	TestTrue(TEXT("试探独立回到配置"), Session->TryResolveProbeDurationSeconds(Probe));
 	TestEqual(TEXT("试探为Common默认"), Probe, 1.75);
+	Fish->FishDefinitionId = TEXT("LittleSilverFish");
+	TestTrue(TEXT("逐鱼覆盖优先于旧Common档"), Session->TryResolveProbeDurationSeconds(Probe));
+	TestEqual(TEXT("小银鱼逐鱼试探2秒"), Probe, 2.0);
+	TestTrue(TEXT("资产响应优先于逐鱼覆盖"), Session->TryResolveTrueBiteWindowSeconds(Response));
+	TestEqual(TEXT("资产响应仍为12秒"), Response, 12.0);
+	Fish->ProbeDurationSeconds = 6.25;
+	Fish->TrueBiteWindowSeconds = 0.0;
+	TestTrue(TEXT("另一字段资产优先"), Session->TryResolveProbeDurationSeconds(Probe));
+	TestEqual(TEXT("资产试探仍为6.25秒"), Probe, 6.25);
+	TestTrue(TEXT("响应独立落逐鱼覆盖"), Session->TryResolveTrueBiteWindowSeconds(Response));
+	TestEqual(TEXT("小银鱼逐鱼响应11秒"), Response, 11.0);
+	{
+		TGuardValue<FCatFishBiteTimingDefaults> Override(Catalog->BiteTimingOverridesByFishDefinitionId.FindChecked(TEXT("LittleSilverFish")), {});
+		Fish->ProbeDurationSeconds = 0.0;
+		Session->TryResolveProbeDurationSeconds(Probe);
+		Session->TryResolveTrueBiteWindowSeconds(Response);
+		TestEqual(TEXT("逐鱼零值再落档位试探"), Probe, 1.75);
+		TestEqual(TEXT("逐鱼零值再落档位响应"), Response, 10.0);
+	}
+	Fish->FishDefinitionId = NAME_None;
 	for (const double Invalid : {-1.0, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()})
 	{
 		Fish->ProbeDurationSeconds = Fish->TrueBiteWindowSeconds = Invalid;

@@ -779,34 +779,36 @@ int32 UCatShopEconomyService::FinalizeRunResourcesFromAuthority(const bool bGrad
 		return 0;
 	};
 	if (!TryGetTeamWalletBalance(Balance)) return Reject(TEXT("WalletUnavailable"));
-	if (bGraduation && (!DriedFish || !DriedFish->IsInventoryRuntimeDefinitionReady()
-		|| !TryGetOriginalItemPrice(Settings->SettlementDriedFishDefinitionId, CoinCost) || CoinCost <= 0))
-		return Reject(TEXT("DriedFishDefinitionOrCatalogPriceMissing"));
 
 	TMap<UCatInventoryComponent*, TArray<FCatInventoryEntry>> Before, After, Held;
 	TSet<FGuid> PricedIds;
 	TSet<AActor*> RemoveActors;
 	int64 EquipmentCoins = 0;
-	int32 EquipmentCount = 0;
+	int32 EquipmentCount = 0, SkippedEquipmentCount = 0;
 	const auto PriceDefinition = [&](UCatInventoryItemDefinition* Definition, int32 Count)
 	{
-		if (!bGraduation) return true;
-		if (!Definition || Count <= 0) return false;
-		if (!bGraduation || Definition->IsA<UCatFishDefinition>()) return true;
+		if (!bGraduation) return;
+		if (Definition && Definition->IsA<UCatFishDefinition>()) return;
 		int32 Price = 0;
-		if (!TryGetOriginalItemPrice(Definition->GetInventoryDefinitionId(), Price)) return false;
+		if (!Definition || Count <= 0 || !TryGetOriginalItemPrice(Definition->GetInventoryDefinitionId(), Price)
+			|| EquipmentCoins > MAX_int64 - int64(Price) * Count)
+		{
+			SkippedEquipmentCount += FMath::Max(0, Count);
+			UE_LOG(LogCatfishing, Warning, TEXT("Event=shop_settlement_equipment_skipped World=%s NetMode=%d Authority=1 Definition=%s Count=%d Result=ExcludedFromExchangeValue"),
+				*GetNameSafe(World), World->GetNetMode(), Definition ? *Definition->GetInventoryDefinitionId().ToString() : TEXT("None"), Count);
+			return;
+		}
 		const int64 AddedValue = int64(Price) * Count;
-		if (EquipmentCoins > MAX_int64 - AddedValue) return false;
 		EquipmentCoins += AddedValue;
 		EquipmentCount += Count;
-		return true;
+		return;
 	};
 	const auto PriceInstance = [&](UCatInventoryItemInstance* Instance, int32 Count)
 	{
 		if (!Instance || Count <= 0) return false;
 		if (PricedIds.Contains(Instance->GetItemInstanceId())) return true;
 		PricedIds.Add(Instance->GetItemInstanceId());
-		if (!PriceDefinition(Instance->GetItemDefinition(), Count)) return false;
+		PriceDefinition(Instance->GetItemDefinition(), Count);
 		if ((!bGraduation || !Instance->IsA<UCatFishInventoryItemInstance>()) && Instance->GetWorldActor())
 			RemoveActors.Add(Instance->GetWorldActor());
 		return true;
@@ -825,13 +827,13 @@ int32 UCatShopEconomyService::FinalizeRunResourcesFromAuthority(const bool bGrad
 			for (auto& Entry : Remaining)
 			{
 				if (!Entry.Instance || Entry.StackCount <= 0) continue;
-				if (!PriceInstance(Entry.Instance, Entry.StackCount)) return Reject(TEXT("EquipmentOriginalPriceMissing"));
+				if (!PriceInstance(Entry.Instance, Entry.StackCount)) return Reject(TEXT("InvalidResourceInstance"));
 				if (!bGraduation || !Entry.Instance->IsA<UCatFishInventoryItemInstance>()) Entry = FCatInventoryEntry(Inventory);
 			}
 			auto& HeldEntries = Held.Add(Inventory);
 			Inventory->AppendHeldInventoryEntriesFromAuthority(HeldEntries);
 			for (const auto& Entry : HeldEntries)
-				if (!PriceInstance(Entry.Instance, Entry.StackCount)) return Reject(TEXT("HeldEquipmentOriginalPriceMissing"));
+				if (!PriceInstance(Entry.Instance, Entry.StackCount)) return Reject(TEXT("InvalidResourceInstance"));
 			if (It->IsA<ACatCampInventoryActor>())
 			{
 				++Camps;
@@ -840,16 +842,16 @@ int32 UCatShopEconomyService::FinalizeRunResourcesFromAuthority(const bool bGrad
 			}
 		}
 	}
-	if (bGraduation && Stores > 1) return Reject(TEXT("SupplyStoreAmbiguous"));
+	if (Stores > 1) Target = nullptr;
 	if (!Target && Camps == 1) Target = Fallback;
 	for (TActorIterator<ACatItem> It(World); It; ++It)
 	{
 		if (!It->IsAwaitingPickup()) continue;
 		const auto Batch = It->GetPickupInventory();
 		for (const auto& Entry : Batch.DefinitionEntries)
-			if (!PriceDefinition(Entry.ItemDefinition, Entry.Count)) return Reject(TEXT("WorldEquipmentOriginalPriceMissing"));
+			PriceDefinition(Entry.ItemDefinition, Entry.Count);
 		for (const auto& Entry : Batch.InstanceEntries)
-			if (!PriceInstance(Entry.ItemInstance, Entry.Count)) return Reject(TEXT("WorldEquipmentOriginalPriceMissing"));
+			if (!PriceInstance(Entry.ItemInstance, Entry.Count)) return Reject(TEXT("InvalidResourceInstance"));
 		RemoveActors.Add(*It);
 	}
 	// 部署鱼竿由 Fishing 的实例 ID 关联 held 库存，不保证使用通用 WorldActor 引用。
@@ -858,8 +860,7 @@ int32 UCatShopEconomyService::FinalizeRunResourcesFromAuthority(const bool bGrad
 		const auto& Rod = It->GetPresentationState();
 		if (Rod.ItemInstanceId.IsValid() && !PricedIds.Contains(Rod.ItemInstanceId))
 		{
-			if (!PriceDefinition(GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(Rod.RodDefinitionId), 1))
-				return Reject(TEXT("DeployedRodOriginalPriceMissing"));
+			PriceDefinition(GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(Rod.RodDefinitionId), 1);
 			PricedIds.Add(Rod.ItemInstanceId);
 		}
 		RemoveActors.Add(*It);
@@ -871,16 +872,22 @@ int32 UCatShopEconomyService::FinalizeRunResourcesFromAuthority(const bool bGrad
 		{
 			if (It->GuardItem)
 			{
-				if (!PriceInstance(It->GuardItem, 1)) return Reject(TEXT("GuardOriginalPriceMissing"));
+				if (!PriceInstance(It->GuardItem, 1)) return Reject(TEXT("InvalidResourceInstance"));
 			}
-			else if (!PriceDefinition(It->GuardDefinition.LoadSynchronous(), 1)) return Reject(TEXT("GuardOriginalPriceMissing"));
+			else PriceDefinition(It->GuardDefinition.LoadSynchronous(), 1);
 			RemoveActors.Add(*It);
 		}
 	}
 	if (EquipmentCoins > MAX_int64 - Balance) return Reject(TEXT("EquipmentValueOverflow"));
 	const int64 TotalCoins = int64(Balance) + EquipmentCoins;
-	const int64 Count64 = bGraduation ? TotalCoins / CoinCost : 0;
-	if (Count64 > MAX_int32 || (bGraduation && !Target)) return Reject(TEXT("DriedFishDeliveryUnavailable"));
+	// 兑换缺配只跳过最后一项，不阻止清款、装备退役与世界资源清理。
+	const bool bCanExchange = bGraduation && DriedFish && DriedFish->IsInventoryRuntimeDefinitionReady()
+		&& TryGetOriginalItemPrice(Settings->SettlementDriedFishDefinitionId, CoinCost) && CoinCost > 0;
+	if (bGraduation && !bCanExchange)
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=shop_settlement_exchange_skipped World=%s NetMode=%d Authority=1 Definition=%s Result=DriedFishDefinitionOrCatalogPriceMissing DriedFish=0"),
+			*GetNameSafe(World), World->GetNetMode(), *Settings->SettlementDriedFishDefinitionId.ToString());
+	const int64 Count64 = bCanExchange ? TotalCoins / CoinCost : 0;
+	if (Count64 > MAX_int32 || (Count64 > 0 && !Target)) return Reject(TEXT("DriedFishDeliveryUnavailable"));
 	const int32 Count = int32(Count64);
 	struct FPreservedFish { UCatFishInventoryItemInstance* Item; ACatFishPickupActor* Actor; AActor* OldActor; };
 	TArray<FPreservedFish> PreservedFish;
@@ -958,9 +965,9 @@ int32 UCatShopEconomyService::FinalizeRunResourcesFromAuthority(const bool bGrad
 	for (AActor* Actor : RemoveActors) if (IsValid(Actor)) Actor->Destroy();
 	for (const auto& Pair : Before) if (IsValid(Pair.Key) && !Pair.Key->GetOwner()->IsActorBeingDestroyed()) Pair.Key->BroadcastInventoryChange();
 	OnShopInventoryRefreshed.Broadcast();
-	UE_LOG(LogCatfishing, Log, TEXT("Event=shop_settlement_resources_finalized World=%s NetMode=%d Authority=1 Graduation=%d WalletBefore=%d Equipment=%d EquipmentCoins=%lld UnitPrice=%d DriedFish=%d Discarded=%lld WalletAfter=0"),
-		*GetNameSafe(World), World->GetNetMode(), bGraduation, Balance, EquipmentCount, EquipmentCoins, CoinCost, Count,
-		bGraduation ? TotalCoins % CoinCost : int64(0));
+	UE_LOG(LogCatfishing, Log, TEXT("Event=shop_settlement_resources_finalized World=%s NetMode=%d Authority=1 Graduation=%d WalletBefore=%d Equipment=%d SkippedEquipment=%d EquipmentCoins=%lld UnitPrice=%d DriedFish=%d Discarded=%lld WalletAfter=0"),
+		*GetNameSafe(World), World->GetNetMode(), bGraduation, Balance, EquipmentCount, SkippedEquipmentCount, EquipmentCoins, CoinCost, Count,
+		bCanExchange ? TotalCoins % CoinCost : TotalCoins);
 	return Count;
 }
 

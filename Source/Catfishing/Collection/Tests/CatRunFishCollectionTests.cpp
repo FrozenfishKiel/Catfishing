@@ -115,7 +115,7 @@ bool FCatRunFishCollectionSaveTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("使用引擎 SaveGame 序列化"), UGameplayStatics::SaveGameToMemory(Save, Bytes))) return false;
 	auto* Loaded = Cast<UCatRunSaveGame>(UGameplayStatics::LoadGameFromMemory(Bytes));
 	if (!TestNotNull(TEXT("真实反序列化成功"), Loaded)) return false;
-	TestEqual(TEXT("未抬 v6 格式"), Loaded->FormatVersion, 6);
+	TestEqual(TEXT("公共记录随分仓断点写入 v7 格式"), Loaded->FormatVersion, 7);
 	F.Run = FCatRunPublicState();
 	F.Run.Phase.RunId = FGuid::NewGuid();
 	F.State->SetRunPublicStateFromAuthority(F.Run);
