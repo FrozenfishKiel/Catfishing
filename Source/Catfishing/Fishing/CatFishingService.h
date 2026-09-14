@@ -38,10 +38,6 @@ public:
 	FCatFishingCommandResult LeaveRod(AController* Controller, const FCatLeaveRodCommand& Command);
 	FCatFishingCommandResult PackRod(AController* Controller, const FCatPackRodCommand& Command);
 
-	/** 旧协作协议转到指定会话，再统一走 OperateRod 的距离、资格与容量校验。 */
-	FCatDomainCommandResult SubmitFightAssist(FGuid FishingSessionId, AController* AssistingController,
-		FGuid RequestId, int64 ExpectedRevision);
-
 	/** 把 NearShore 抢抄意图转给指定会话；服务不自己创建鱼或选择胜者。 */
 	FCatScoopResult RequestScoop(FGuid FishingSessionId, AController* ScoopingController, const FCatScoopCommand& Command);
 

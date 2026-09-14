@@ -914,21 +914,6 @@ FCatFishingCommandResult UCatFishingService::PackRod(AController* Controller, co
 	return Result;
 }
 
-// 旧协作命令只保留可加载的兼容入口；Session 明确拒绝注册助手，真实帮助由抓握约束传力。
-FCatDomainCommandResult UCatFishingService::SubmitFightAssist(const FGuid FishingSessionId,
-	AController* AssistingController, const FGuid RequestId, const int64 ExpectedRevision)
-{
-	CompactSessions();
-	if (ACatFishingSession* Session = Sessions.FindRef(FishingSessionId).Get())
-	{
-		return Session->SubmitFightAssist(AssistingController, RequestId, ExpectedRevision);
-	}
-	FCatDomainCommandResult Result;
-	Result.RequestId = RequestId;
-	Result.Error = ECatDomainCommandError::NotFound;
-	return Result;
-}
-
 // 抄网转发流程：只定位 Session 并转发；范围裁决、世界鱼创建与嘴叼交接全部由 Session 原子收敛。
 FCatScoopResult UCatFishingService::RequestScoop(const FGuid FishingSessionId, AController* ScoopingController,
 	const FCatScoopCommand& Command)

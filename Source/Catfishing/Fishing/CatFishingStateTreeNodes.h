@@ -61,59 +61,12 @@ struct CATFISHING_API FCatFishingWaitTask : public FStateTreeTaskCommonBase
 	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;
 };
 
-/** 历史资源交换参数；保留序列化类型待资产引用审计，正式搏斗由 FightRunner 结算。 */
-USTRUCT()
-struct FCatFishingFightExchangeTaskInstanceData
-{
-	GENERATED_BODY()
-
-	/** 本次成功交换消耗的鱼体力。 */
-	UPROPERTY(EditAnywhere, Category = "Parameter")
-	double FishStaminaCost = 0.0;
-
-	/** 本次成功交换对每名参与猫消耗的搏斗体力。 */
-	UPROPERTY(EditAnywhere, Category = "Parameter")
-	double ParticipantStaminaCost = 0.0;
-};
-
-/** 历史搏斗交换节点；无已确认运行消费者，暂待二进制资产引用审计，不用于正式搏斗调参。 */
-USTRUCT(meta = (DisplayName = "Cat Fishing Fight Exchange", Category = "Catfishing|Fishing"))
-struct CATFISHING_API FCatFishingFightExchangeTask : public FStateTreeTaskCommonBase
-{
-	GENERATED_BODY()
-
-	using FInstanceDataType = FCatFishingFightExchangeTaskInstanceData;
-
-	/** 关闭 Tick；每次 State 进入最多提交一次资源交换。 */
-	FCatFishingFightExchangeTask();
-
-	/** 向 StateTree 暴露单次搏斗交换参数，使具体消耗留在资产配置且 0 值继续 fail-closed。 */
-	virtual const UStruct* GetInstanceDataType() const override { return FInstanceDataType::StaticStruct(); }
-
-	/** 进入 State 时向 Session 提交力量/体力交换；任何不足返回 Failed 供资产选择失败边。 */
-	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;
-};
-
 USTRUCT(meta=(DisplayName="Cat Fishing Schedule Waiting Probe", Category="Catfishing|Fishing"))
 struct CATFISHING_API FCatFishingScheduleWaitingProbeTask : public FStateTreeTaskCommonBase
 {
 	GENERATED_BODY()
 	using FInstanceDataType = FCatFishingWaitTaskInstanceData;
 	FCatFishingScheduleWaitingProbeTask();
-	virtual const UStruct* GetInstanceDataType() const override { return FInstanceDataType::StaticStruct(); }
-	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;
-};
-
-/**
- * 旧 ST_FishingSession 资产的序列化兼容节点。内部行为已改为只打开真咬窗口；
- * 新资产使用 FCatFishingOpenTrueBiteWindowTask，待所有分支资产升级后可移除。
- */
-USTRUCT(meta=(DisplayName="Cat Fishing Open True Bite Window (Legacy Node)", Category="Catfishing|Fishing"))
-struct CATFISHING_API FCatFishingResolveTrueBiteSelectionTask : public FStateTreeTaskCommonBase
-{
-	GENERATED_BODY()
-	using FInstanceDataType = FCatFishingWaitTaskInstanceData;
-	FCatFishingResolveTrueBiteSelectionTask();
 	virtual const UStruct* GetInstanceDataType() const override { return FInstanceDataType::StaticStruct(); }
 	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;
 };

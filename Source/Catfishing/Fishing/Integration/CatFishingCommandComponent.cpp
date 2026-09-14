@@ -1418,67 +1418,6 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 	DeliverPlaceChumResultFromAuthority(Service->PlaceChum(Controller, Command));
 }
 
-// 旧版搏斗协作转发流程：先复查 Fishing 操作 gate，再把会话键、幂等键和期望 Revision 交给 Fishing Service；Session 继续裁 Giant、阶段和版本。
-void UCatFishingCommandComponent::ForwardLegacyAssist(const FGuid FishingSessionId, const FGuid RequestId,
-	const int64 ExpectedRevision)
-{
-	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwner());
-	if (Controller && Controller->HasAuthority() && Controller->CanForwardFishingCommand())
-	{
-		if (UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
-		{
-			Fishing->SubmitFightAssist(FishingSessionId, Controller, RequestId, ExpectedRevision);
-		}
-	}
-}
-
-// 旧版抢抄 RPC 兼容流程：保留显式 SessionId/ExpectedRevision，但服务器重建身份且不接受任何容器目标。
-void UCatFishingCommandComponent::ForwardLegacyScoop(const FGuid FishingSessionId, FCatScoopCommand Command)
-{
-	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwner());
-	if (!Controller || !Controller->HasAuthority() || !Controller->CanForwardFishingCommand())
-	{
-		return;
-	}
-	FCatFishingCommandResult Result;
-	Result.CommandType = ECatFishingCommandType::RequestScoop;
-	Result.RequestId = Command.Context.RequestId;
-	Result.FishingSessionId = FishingSessionId;
-	double CooldownSeconds = 0.0;
-	double RemainingSeconds = 0.0;
-	if (!GetDefault<UCatFishingSettings>()->TryGetScoopCooldown(CooldownSeconds)
-		|| !ScoopCooldownGate.TryConsume(GetWorld()->GetTimeSeconds(), CooldownSeconds, RemainingSeconds))
-	{
-		Result.Error = CooldownSeconds > 0.0
-			? ECatFishingCommandError::CooldownActive : ECatFishingCommandError::DependencyUnavailable;
-		DeliverResultFromAuthority(Result);
-		return;
-	}
-
-	Command.Context.StableNetId.Reset();
-	BroadcastCosmeticEventFromAuthority(CatFishingAbilityTags::Cosmetic_Fishing_ScoopSwing);
-	if (UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
-	{
-		const FCatScoopResult ScoopResult = Fishing->RequestScoop(FishingSessionId, Controller, Command);
-		Result.bCommitted = ScoopResult.Command.bCommitted;
-		Result.Error = MapDomainCommandError(ScoopResult.Command.Error);
-		Result.Revision = ScoopResult.Command.Revision;
-		if (ACatFishingSession* Session = Fishing->FindSession(FishingSessionId))
-		{
-			const FCatFishingSessionSnapshot& UpdatedSnapshot = Session->GetSnapshot();
-			Result.Revision = UpdatedSnapshot.Revision;
-			Result.SnapshotSequence = UpdatedSnapshot.SnapshotSequence;
-			Result.PhaseEpoch = UpdatedSnapshot.PhaseEpoch;
-			Result.CastAttemptId = UpdatedSnapshot.CastAttemptId;
-		}
-	}
-	else
-	{
-		Result.Error = ECatFishingCommandError::DependencyUnavailable;
-	}
-	DeliverResultFromAuthority(Result);
-}
-
 // 显式打窝 RPC 流程：先保留 RequestId，再用 Fishing 操作 gate 裁阶段；gate 关闭也回送 CommandsClosed，合法路径才进入 ChumPlacementService 的水域、库存和幂等校验。
 void UCatFishingCommandComponent::ServerSubmitPlaceChum_Implementation(const FCatPlaceChumCommand& Command)
 {

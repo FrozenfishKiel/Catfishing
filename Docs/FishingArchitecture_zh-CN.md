@@ -1,5 +1,26 @@
 # 钓鱼核心架构（技术文档）
 
+## 2026-09-14：删除无消费者的旧入口与 StateTree 节点
+
+当前生产链继续使用 CommandComponent → FishingService → Session → 固定步 FightRunner；助手通过物理抓握传力。旧协作拒绝链、重复抄网转发、旧交换节点与旧咬钩兼容节点已删除。下文历史检查点中“保留旧协作/交换反射入口”的记录仅描述当时状态，以本节为准。
+
+修改前工作区已有 Frontend/Online 源码、前端生成脚本和 Room WBP 等并行改动，本轮不纳入提交。源码检查确认两个 ForwardLegacy 函数没有调用且不是 UFUNCTION；SubmitFightAssist 仅由废弃转发和专属测试调用。新构建与 Automation 基线未运行；资产删除基线为真实编辑器只读审计 1,997 个项目/插件包、3 棵 StateTree，旧符号 0 引用、0 错误。证据：`Saved/Automation/FishingLegacyCleanup/AssetAudit-Before.json`。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 平衡资产生成、默认值与保存 | `Scripts/create_fishing_fight_balance_asset.py::VALUES/main` → `UCatFishingFightBalanceDefinition`；正式包 `/Game/Catfishing/Data/Fishing/DA_FishingFightBalance_Default` | 删除原生类型已不存在的 `cat_body_mass_kilograms/helper_strength_multiplier` 访问；现有策划值、新建合法默认值、版本迁移与就绪门不变 | 删除旧键和成功日志中的旧质量字段；质量仍由实际物理身体提供 | 核对原生字段后修脚本，再验证新建与已有资产 | UE 实际创建/保存、二次运行保留调参、非法资产拒绝；不触碰正式资产调参 | 已删除；UE 实测新建/保存、二次运行保留 93cm/s、非法配置拒绝通过；正式资产 25 项参数未变，临时测试资产已删除；`GeneratorAudit.json`、`GeneratorAudit.log`，提交 `c55d759` |
+| 协作入口与状态权威 | `CommandComponent::ForwardLegacyAssist` → `Service::SubmitFightAssist` → `Session::SubmitFightAssist`；仅 `CatFishingServiceTests` 另有调用 | 旧链恒拒绝、不注册成员；生产主控、物理抓握、费用、复制、回执和生命周期保持原样 | 整条非反射链删除，删除只测试旧协议的断言 | 无消费者核查先于删除；保留实际抓握协作回归 | Editor/Game 构建、Service 与物理协作定向 Automation | 已删除；隔离 Editor/Game 构建通过；Service 7 项、主控 ASC 结算与物理连接回归通过；三客户端抓握失败在清理前基线同样复现，作为既有问题保留 |
+| 抄网生产消费者 | `CommandComponent::ForwardLegacyScoop` 无调用；`SubmitScoop` → 现有服务器命令 → `Service::RequestScoop` → `Session::RequestScoop` | 删除重复冷却/回执实现；实际抄网几何、嘴叼世界鱼交接、物品事务不变 | 删除旧转发声明和定义 | 现行命令已接入，无生产入口切换 | 定向抄网/命令回归；未知会话抄网断言保留 | 已删除；未知会话抄网拒绝/RequestId 断言通过；生产 RequestScoop 路径未改，无新增抄网表现验收 |
+| StateTree 反射节点及参数 | `CatFishingStateTreeNodes` 旧 Exchange/ResolveTrueBiteSelection 节点；`DefaultGame.ini` 的 FishingSessionStateTree/FishBehaviorStateTree 绑定正式树 | Exchange 已恒拒绝；旧咬钩节点重复 OpenTrueBiteWindow；不改真咬输入、阶段转换、选鱼/扣饵时序 | 删除两个旧 Task、Exchange InstanceData 与 Session 拒绝口；正式树、生成库继续使用现行节点 | `Scripts/audit_fishing_legacy_nodes.py` 全包扫描及加载拓扑先通过，再删除 | 新 DLL 重载全部树并重新审计；树包 SHA256 不变；真实正式树回归 | 删除前后均为 1,997 包/3 树/0 引用/0 错误；新进程确认旧反射类型不存在，三树 SHA256 不变；正式咬钩树和鱼行为树真实 World 回归通过 |
+| 旧参数、HUD/动画与资产风险 | `CatFishingFightBalanceDefinition.h`、`CatFishingTypes.h`、`Actors/CatFishingActorTypes.h/CatFishingRodActor.h` 的废弃反射字段；正式平衡包仍含旧字段名 | 不恢复旧模型；本轮节点审计不证明这些字段无 Blueprint/WBP 属性绑定；枚举值、复制字段布局、显示兼容和单位保持 | 暂留属性身份，修正 FishFightStaminaRemaining 仍称由巨鱼交换扣费的注释 | 完成字段级 Blueprint/WBP 图与属性绑定检查、正式 DataAsset 迁移并重载后才能删除 | 既往缺父类 `/Game/UI/WBP_CatLakeReach` 本轮未注册且无法加载，不能沿用旧日志宣称当前已完成全量字段审计；旧鱼测试包也未完成引用检查 | 未完成：旧参数/HUD 字段和 `/Game/Data/Fish` 三份旧测试资产继续保留，未删二进制 |
+| 日志、配置、Cook、持久化与退出 | 现行 `LogCatFishing` Runner/命令事件、`DefaultGame.ini` 软引用及 Session 终结清理；`Docs/FishingMVPOperationGuide_zh-CN.md` 节点表 | 无新增配置、Cook 包或状态写入；删除无人调用链专属旧拒绝事件，保留生产日志；无新字段单位/默认值变化 | 更新节点表、生产入口图和本节；不修改游戏资源扣费/退款/保存/退出入口 | 源码删除后复核文档与生产引用 | contract 与局部 runtime_behavior 分层；打包双端和正式 UI 表现不属于本次死代码删除证据 | 文档已更新；打包与 presentation_delivery 未运行，模块不关闭 |
+
+contract：`Saved/Automation/FishingLegacyCleanup-20260914/BuildEditorCommittedBase.log` 和 `BuildGameCommittedBase.log` 均 Succeeded，验证源码为 `0bf88537c2a626104bb95551a009428a93d1840b` 加本轮 10 份钓鱼源码修改，清单见 `CommittedBaselineManifest.json`。首次直接冻结并行工作区的构建遇到前端缺失声明/方法实现；同步声明时也造成一次 UHT 行号失配，失败日志均保留，未修改主工作区前端代码。后续改用已提交基线隔离验证，不宣称这等同于所有并行改动的整体验收。
+
+runtime_behavior：`Report-20260914-151559-774/index.json` 共 14 项，13 项通过（10 clean、3 warning）、1 项失败、0 notRun。通过项覆盖 Service 路由、首根正式竿、物资退出生命周期、未知会话抄网拒绝、真实正式咬钩/鱼行为树、物理连接与单主控 ASC 结算、SlackAim 命令衔接。`GroupListenThreeClients` 在放下竿后助手抓握保留断言失败，单独复跑 `Report-20260914-151935-826` 同样失败；清理前基线对照 `Report-20260914-152320-261` 同样在 `parking retains the independent helper body grip on both endpoints` 断言失败。基线源码/配置 600 文件已按提交核对（仅允许 CRLF 差异），见 `BaselineReplayManifest.json`；`BuildBaselineReplay.log` 编译成功。由此确认该失败先于本轮清理存在；未改动实际放竿或抓握玩法来迁就测试。对照完成后隔离源码与已验证清理 DLL 已恢复。新进程 `PostRemoval.log` 包含 `REMOVED_REFLECTED_TYPES_ABSENT`、`fishing_legacy_node_audit` 和 `FISHING_LEGACY_POST_REMOVAL_PASS`；删除后审计汇总另存 `Saved/Automation/FishingLegacyCleanup/AssetAudit-After.json`，三份树包哈希与删除前一致，正式平衡包 SHA256 与 Git LFS 对象一致。
+
+presentation_delivery：未运行 Cook、打包双端默认日志或正式 WBP/动画交付验收；不关闭 Fishing 模块。此处是本轮影响审查材料，模块进度仍仅在 `Docs/Development/需求对齐差距清单.md` 维护。
+
 ## 2026-09-11：共享鱼竿与按快速抖动划界的退饵
 
 当前规则：鱼竿是可共享的同一物品实例，没有部署者专属操作或收纳权限。R 放下当前竿，空手时拿起 250cm 内无人操作的竿；无目标时仍从自己的背包部署。X 有鱼线时先收线，无鱼线时收进按键者的背包。单竿同时只有一个显式主控，普通物理帮助不会自动接任。抛出立即扣实际抛竿者 1 份鱼饵；快速抖动 `BiteWarning` 开始前收线退还，上鱼成功（Caught/Landed）也退还；快速抖动开始后普通收线不退，即使漏过窗口重新回到 Waiting。退款始终给原扣饵者，接管不会新扣饵。下文历史检查点中的“仅本人竿”“仅主人 X”及“提竿才确认饵消耗”不再是当前规则。
@@ -274,7 +295,7 @@
    └─ X   → 优先当前操作竿；空手只找 250cm 内本人无人占位竿；有会话=取消或切线 / 无会话=Leave 后 Pack
         ▼
 【服务层】UCatFishingService（World Subsystem，只在服务器存在）
-   PlaceRod/OperateRod/LeaveRod/PackRod/BeginCast/RequestScoop/SubmitFightAssist
+   PlaceRod/OperateRod/LeaveRod/PackRod/BeginCast/RequestScoop
    持有：按 RodActorId 登记的全场竿 Registry、每人最多两根部署额度、每根竿一个活跃会话、BeginCast 幂等缓存
         ▼
 【会话层】ACatFishingSession（一次钓鱼长流程的宿主 Actor）

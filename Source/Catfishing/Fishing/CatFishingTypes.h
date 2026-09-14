@@ -201,7 +201,7 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	int32 ActiveHelperCount = 0;
 
-	/** 当前鱼短周期体力剩余；常规搏斗由固定步 Runner 消耗，兼容巨鱼交换由 StateTree Task 消耗。 */
+	/** 当前鱼短周期体力剩余；体力结算统一由服务器固定步 Runner 提交。 */
 	UPROPERTY(BlueprintReadOnly)
 	double FishFightStaminaRemaining = 0.0;
 

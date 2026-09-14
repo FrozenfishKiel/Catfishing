@@ -43,7 +43,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.Fishing.Service.SessionSurvivesLeaveAndInputRoutesByCurrentRod",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-// 测试流程：取得真实 Fishing WorldSubsystem 后从三个公开入口提交缺身份/未知会话命令；结果必须明确拒绝且不会创建可观察会话。
+// 测试流程：取得真实 Fishing WorldSubsystem 后通过抄网入口提交缺身份/未知会话命令；结果必须明确拒绝且不会创建可观察会话。
 bool FCatFishingServiceFailClosedTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -59,13 +59,6 @@ bool FCatFishingServiceFailClosedTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-
-	const FGuid AssistRequestId = FGuid::NewGuid();
-	const FCatDomainCommandResult AssistResult = Fishing->SubmitFightAssist(
-		FGuid::NewGuid(), nullptr, AssistRequestId, 1);
-	TestFalse(TEXT("未知会话协作不提交"), AssistResult.bCommitted);
-	TestEqual(TEXT("未知会话协作返回 NotFound"), AssistResult.Error, ECatDomainCommandError::NotFound);
-	TestEqual(TEXT("协作拒绝保留 RequestId"), AssistResult.RequestId, AssistRequestId);
 
 	FCatScoopCommand ScoopCommand;
 	ScoopCommand.Context.RequestId = FGuid::NewGuid();

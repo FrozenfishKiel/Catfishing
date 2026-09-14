@@ -177,37 +177,6 @@ FCatFishingPhaseResult ACatFishingSession::EnterPhaseFromStateTree(const ECatFis
 	return Result;
 }
 
-// 旧协作和交换Task的反射类型仍可加载，但不能创建成员或绕过固定步扣款。
-FCatDomainCommandResult ACatFishingSession::SubmitFightAssist(AController* AssistingController,
-    const FGuid RequestId, const int64 ExpectedRevision)
-{
-    FCatDomainCommandResult Result;
-    Result.RequestId = RequestId;
-    Result.Revision = Snapshot.Revision;
-    Result.Error = !HasAuthority() || !RequestId.IsValid() || ResolveStableNetId(AssistingController).IsEmpty()
-        ? ECatDomainCommandError::InvalidIdentity
-        : ExpectedRevision != Snapshot.Revision ? ECatDomainCommandError::RevisionConflict
-        : ECatDomainCommandError::InvalidPhase;
-    UE_LOG(LogCatFishing, Warning,
-        TEXT("Event=fishing_legacy_assist_rejected SessionId=%s RequestId=%s Reason=PhysicalAssistanceOnly World=%s NetMode=%d Authority=%d LocalRole=%d %s"),
-        *Snapshot.FishingSessionId.ToString(), *RequestId.ToString(), *GetNameSafe(GetWorld()),
-        int32(GetNetMode()), HasAuthority(), int32(GetLocalRole()), *CatLogContext::BuildControllerFields(AssistingController));
-    return Result;
-}
-
-FCatDomainCommandResult ACatFishingSession::ResolveFightExchangeFromStateTree(const double FishStaminaCost,
-    const double ParticipantStaminaCost)
-{
-    FCatDomainCommandResult Result;
-    Result.RequestId = Snapshot.FishingSessionId;
-    Result.Revision = Snapshot.Revision;
-    Result.Error = ECatDomainCommandError::InvalidPhase;
-    UE_LOG(LogCatFishing, Warning,
-        TEXT("Event=fishing_legacy_exchange_rejected SessionId=%s Reason=FixedStepOwnsBilling World=%s NetMode=%d Authority=%d LocalRole=%d"),
-        *Snapshot.FishingSessionId.ToString(), *GetNameSafe(GetWorld()), int32(GetNetMode()), HasAuthority(), int32(GetLocalRole()));
-    return Result;
-}
-
 // 当前显式主控接管同一会话；物理抓握本身不会调用此入口或转让会话。
 bool ACatFishingSession::ResumePrimaryControlFromAuthority(AController* NewFisherController)
 {

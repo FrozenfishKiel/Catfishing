@@ -102,9 +102,6 @@ public:
 	FCatFishingInputEdge SubmitCutLine();
 	FCatFishingInputEdge SubmitScoop();
 	FCatFishingInputEdge SubmitChum();
-	void ForwardLegacyAssist(FGuid FishingSessionId, FGuid RequestId, int64 ExpectedRevision);
-	/** 旧蓝图抢抄入口的兼容转发；成功后同样直接变成嘴叼世界鱼，不接受客户端容器目标。 */
-	void ForwardLegacyScoop(FGuid FishingSessionId, FCatScoopCommand Command);
 
 	UPROPERTY(BlueprintAssignable)
 	FCatFishingCommandResultReceived OnResultReceived;
