@@ -246,6 +246,7 @@ bool UCatFishingFightRunner::UpdateOperatorIntentAndProperties()
 	bOperatorSettlementPending = false;
 	FrozenOperatorMovementSamples.Reset(); FrozenOperatorAbilitySystem.Reset();
 	FrozenOperatorStamina = FrozenOperatorStaminaMaximum = 0.0;
+	FrozenOperatorGreenStamina = FrozenOperatorYellowStamina = FrozenOperatorGreenMaximum = 0.0;
 	bFrozenOperatorUnderLoad = false;
 	Config.PrimaryOperatorCatStrength = 0.0;
 	OperatorSupportAlignment = 0.0;
@@ -259,6 +260,9 @@ bool UCatFishingFightRunner::UpdateOperatorIntentAndProperties()
 	const auto* Physical = Character ? Character->GetPhysicalBodyComponent() : nullptr;
 	if (!ASC || !Physical || !Physical->GetBody()) return false;
 	const double Strength = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
+	FrozenOperatorGreenStamina = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+	FrozenOperatorYellowStamina = ASC->GetYellowFightStamina();
+	FrozenOperatorGreenMaximum = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
 	FrozenOperatorStamina = ASC->GetTotalFightStamina();
 	FrozenOperatorStaminaMaximum = ASC->GetTotalFightStaminaCapacity();
 	if (!FMath::IsFinite(Strength) || Strength < 0.0 || !FMath::IsFinite(FrozenOperatorStamina) || FrozenOperatorStamina < 0.0
@@ -325,8 +329,21 @@ bool UCatFishingFightRunner::ApplyOperatorStaminaChanges(const FCatFightStepResu
 	LastOperatorStaminaDrain = 0.0;
 	if (!State.bOperatorPresent) return true;
 	auto* ASC = FrozenOperatorAbilitySystem.Get();
-	if (!IsValid(ASC) || !ASC->GetOwner() || ASC->GetOwner()->IsActorBeingDestroyed()
-		|| ASC->GetTotalFightStamina() != FrozenOperatorStamina) return false;
+	if (!IsValid(ASC) || !ASC->GetOwner() || ASC->GetOwner()->IsActorBeingDestroyed()) return false;
+	const double Green = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+	const double Yellow = ASC->GetYellowFightStamina();
+	const double GreenMaximum = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+	if (Green != FrozenOperatorGreenStamina || Yellow != FrozenOperatorYellowStamina
+		|| GreenMaximum != FrozenOperatorGreenMaximum)
+	{
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_stamina_bill_rejected SessionId=%s Reason=BalanceChanged Green=%.9g FrozenGreen=%.9g Yellow=%.9g FrozenYellow=%.9g GreenMaximum=%.9g FrozenGreenMaximum=%.9g World=%s NetMode=%d Authority=%d LocalRole=%d Owner=%s"),
+			Session.IsValid() ? *Session->GetSnapshot().FishingSessionId.ToString() : TEXT("None"),
+			Green, FrozenOperatorGreenStamina, Yellow, FrozenOperatorYellowStamina, GreenMaximum, FrozenOperatorGreenMaximum,
+			*GetNameSafe(ASC->GetWorld()), ASC->GetOwner()->GetNetMode(), ASC->GetOwner()->HasAuthority(),
+			int32(ASC->GetOwner()->GetLocalRole()), *GetNameSafe(ASC->GetOwner()));
+		return false;
+	}
 	const bool bFreeEffort = Step.bSlackRecoveryActive || State.bFishExhausted;
 	double MovementDrain = 0.0;
 	if (!bFreeEffort)

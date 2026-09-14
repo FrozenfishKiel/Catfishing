@@ -130,6 +130,28 @@ bool FCatFishingOperatorRunnerIntegrationTest::RunTest(const FString& Parameters
 	TestFalse(TEXT("yellow payment also rejects a replay"), Runner->ApplyOperatorStaminaChanges(ReserveBill));
 	ASC->ClearYellowFightStaminaFromAuthority();
 
+	// Equal totals cannot authorize a bill sampled from a different green/yellow composition.
+	ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), 30.0f);
+	ASC->ApplyYellowFightStaminaDelta(20.0f);
+	if (!Runner->UpdateOperatorIntentAndProperties()) return false;
+	ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), 20.0f);
+	ASC->ApplyYellowFightStaminaDelta(10.0f);
+	AddExpectedErrorPlain(TEXT("Event=fishing_stamina_bill_rejected"), EAutomationExpectedErrorFlags::Contains, 2);
+	TestFalse(TEXT("same total with changed green/yellow rejects the old bill"), Runner->ApplyOperatorStaminaChanges(ReserveBill));
+	TestEqual(TEXT("rejected bill preserves green"), ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), 20.0f);
+	TestEqual(TEXT("rejected bill preserves yellow"), ASC->GetYellowFightStamina(), 30.0f);
+	TestFalse(TEXT("a rejected old bill cannot be replayed"), Runner->ApplyOperatorStaminaChanges(ReserveBill));
+	if (!Runner->UpdateOperatorIntentAndProperties()) return false;
+	ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute(), 75.0f);
+	TestFalse(TEXT("changed green maximum rejects a bill even when balance is unchanged"), Runner->ApplyOperatorStaminaChanges(ReserveBill));
+	TestEqual(TEXT("maximum mismatch leaves the full balance untouched"), ASC->GetTotalFightStamina(), 50.0);
+	if (!Runner->UpdateOperatorIntentAndProperties()) return false;
+	TestTrue(TEXT("a newly sampled bill can be paid after an attribute change"), Runner->ApplyOperatorStaminaChanges(ReserveBill));
+	TestEqual(TEXT("fresh bill spends green first"), ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), 15.0f);
+	TestEqual(TEXT("fresh bill retains yellow while green suffices"), ASC->GetYellowFightStamina(), 30.0f);
+	ASC->ClearYellowFightStaminaFromAuthority();
+	ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute(), 60.0f);
+
 	// Contract evidence: these are controlled body observations and sampling times, not a
 	// second physics integrator. Separate Chaos runtime tests verify actual motor travel.
 	Runner->State.LineLengthCentimeters = 800.0;

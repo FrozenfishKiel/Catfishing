@@ -140,6 +140,9 @@ private:
 	TWeakObjectPtr<UCatAbilitySystemComponent> FrozenOperatorAbilitySystem;
 	double FrozenOperatorStamina = 0.0;
 	double FrozenOperatorStaminaMaximum = 0.0;
+	double FrozenOperatorGreenStamina = 0.0;
+	double FrozenOperatorYellowStamina = 0.0;
+	double FrozenOperatorGreenMaximum = 0.0;
 	bool bFrozenOperatorUnderLoad = false;
 	double OperatorSupportAlignment = 1.0;
 	double LastOperatorStaminaDrain = 0.0;

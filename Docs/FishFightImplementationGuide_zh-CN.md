@@ -1,5 +1,11 @@
 # 鱼运动与遛鱼逻辑：设计与实现
 
+## 2026-09-14：体力账单按构成校验
+
+Runner 在采样时分别冻结绿色体力、黄色体力和绿色上限，支付前逐项比较。相同总量但绿黄构成变化，或余额不变但绿色上限变化，都会拒绝旧账单并记录 `Event=fishing_stamina_bill_rejected`。拒绝不写 ASC，旧账单不能重放；重新采样后的新账单仍按先绿后黄支付。没有新增属性、复制字段、资产、配置或存档格式。
+
+验证：隔离工作区 `Saved/Integration/FishingBiteTiming-20260914` 的 `Saved/BiteValidation/StaminaBuild.log` 编译成功；`StaminaReport/index.json` 的正式 Runner/ASC 集成测试 1 项通过、0 失败，覆盖上述两种余额变化、拒绝后重放、重新采样扣费及原有运动账单回归。属于 contract 与测试世界运行链证据；未运行真实打包联机，本项不改变正式 UI 表现。
+
 ## 2026-09-14：黄色体力与搏斗外恢复（当前体力口径）
 
 来源：上游 `feature/design-backlog-batch1@d986285d` 的 `Knowledge/Design/设计修改记录.md`（2026-09-13 裁决②/⑥），以及仓库 `Knowledge/Design/GDD 系统分册/猫咪与状态/数值成长.md` §4/§5、鱼表 `鱼/鱼表格/第一版.csv` 的「限时Buff」列。本轮从本地 Debug `ee000ce4` 适配，未合并上游商店、成长选项或前端改造。
