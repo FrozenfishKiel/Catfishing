@@ -38,6 +38,8 @@
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatCharacterVariantContract,
 	"Catfishing.CharacterVariants.Contract.TemplateAndSkeletonBindings",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+// 绑定回归流程：加载共享模板与两种角色，逐项核对继承、骨架、步态、嘴部挂点和现行身体动作映射；缺少基础资产时提前失败。
+// CuteCat 仅检查仍被玩法使用的 Montage 与倒地片段，不再要求已删除的营地救援动画；本用例不保存资产。
 bool FCatCharacterVariantContract::RunTest(const FString& Parameters)
 {
 	UAnimBlueprint* Template = LoadObject<UAnimBlueprint>(nullptr, TEXT("/Game/Character/Animation/ABPT_CatCharacterBase"));
