@@ -74,7 +74,6 @@ bool FCatCharacterVariantContract::RunTest(const FString& Parameters)
 				TEXT("/Game/Catfishing/Animation/BodyAction/AM_BodyAction_CampfirePlayback"),
 				TEXT("/Game/Catfishing/Animation/BodyAction/AM_BodyAction_RequestManualHelp"),
 				TEXT("/Game/Catfishing/Animation/BodyAction/AM_BodyAction_RequestMischief"),
-				TEXT("/Game/Catfishing/Animation/BodyAction/AM_BodyAction_RescueCharacterToCamp"),
 				TEXT("/Game/Catfishing/Animation/BodyAction/AM_BodyAction_PlaceProtectionSign")})
 			{
 				UAnimationAsset* Original = LoadObject<UAnimationAsset>(nullptr, Montage);

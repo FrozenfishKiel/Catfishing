@@ -89,7 +89,7 @@ public:
 	bool GiveToAbilitySystem(UCatAbilitySystemComponent* AbilitySystem,
 		FCatGrantedAbilitySetHandles& OutGrantedHandles) const;
 
-	/** 设计资产配置的授予条目列表；运行时门禁读取它验证六个 Fishing 输入能力和五个无输入 BodyAction 能力都齐全且无重复。 */
+	/** 设计资产配置的授予条目列表；运行时门禁读取它验证六个 Fishing 输入能力和四个无输入 BodyAction 能力都齐全且无重复。 */
 	UPROPERTY(EditDefaultsOnly, Category="Abilities")
 	TArray<FCatAbilitySetAbility> GrantedAbilities;
 };

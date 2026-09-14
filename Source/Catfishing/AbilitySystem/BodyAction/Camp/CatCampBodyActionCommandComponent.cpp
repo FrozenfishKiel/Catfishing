@@ -14,16 +14,3 @@ bool UCatCampBodyActionCommandComponent::SubmitCampfirePlayback(ACatCampHubActor
 	Payload->RequestId = RequestId;
 	return SubmitPayload(Payload, CatFishingAbilityTags::AbilityEvent_Body_CampfirePlayback);
 }
-
-bool UCatCampBodyActionCommandComponent::SubmitRescueCharacterToCamp(ACatCampHubActor* Camp,
-	ACatCharacter* TargetCharacter, const FGuid RequestId) const
-{
-	// 救援载荷流程：组件创建救援专用请求并投给 ASC；Ability 前摇结束后才进入 Camp/Condition 的权威裁决。
-	// Submit 方法保持 const，是因为它不写组件状态；NewObject 需要非 const Outer 只是为了让瞬时载荷挂在组件生命周期下等待 GameplayEvent 消费。
-	UCatBodyActionRequestRescueCharacterToCamp* Payload = NewObject<UCatBodyActionRequestRescueCharacterToCamp>(
-		const_cast<UCatCampBodyActionCommandComponent*>(this));
-	Payload->Camp = Camp;
-	Payload->TargetCharacter = TargetCharacter;
-	Payload->RequestId = RequestId;
-	return SubmitPayload(Payload, CatFishingAbilityTags::AbilityEvent_Body_RescueCharacterToCamp);
-}

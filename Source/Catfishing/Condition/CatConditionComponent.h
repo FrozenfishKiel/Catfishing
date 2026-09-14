@@ -6,13 +6,12 @@
 #include "Components/ActorComponent.h"
 #include "CatConditionComponent.generated.h"
 
-class AController;
 class UCatFishDefinition;
 
 /** Condition 完整快照发生提交或复制变化的本机通知；订阅者必须重新读取 GetSnapshot，不使用增量载荷拼状态。 */
 DECLARE_MULTICAST_DELEGATE(FCatConditionSnapshotChanged);
 
-/** Character 局内离散身体状态组件；维护 Wet、危险水域和倒地救援事实，向交互与表现消费者发布快照。 */
+/** Character 局内离散身体状态组件；维护 Wet、危险水域和倒地事实，向交互与表现消费者发布快照。 */
 UCLASS(ClassGroup = (Catfishing), meta = (BlueprintSpawnableComponent))
 class CATFISHING_API UCatConditionComponent : public UActorComponent
 {
@@ -44,9 +43,6 @@ public:
 	/** 服务器开发验证入口设置离散倒地状态；首次倒地会收口进行中的钓鱼，重复同值不会重复发布。 */
 	bool SetDownedFromAuthority(bool bNewDowned);
 
-	/** 搬运完成入口；要求目标已倒地且服务器已把 Character 放到固定营地救援点，随后记录恢复方式；同 RequestId 只提交一次。 */
-	FCatDomainCommandResult CompleteCarryToCamp(AController* HelpingController, FGuid RequestId, bool bAtCampRescuePoint);
-
 	/** 本机完整快照变化通知；LocalPlayer UI 成对订阅，领域写入者不依赖该通知推进。 */
 	FCatConditionSnapshotChanged OnSnapshotChanged;
 
@@ -61,11 +57,11 @@ private:
 	/** authority 提交后请求复制并广播，客户端 RepNotify 只广播；集中保证 UI 不漏掉任何完整快照变化。 */
 	void PublishSnapshot();
 
-	/** Wet/Downed/Recovery 的唯一复制事实；Condition 写入、UI 和表现层读取，Wet 本身不由任何 Ability 清除或触发。 */
+	/** Wet/Downed/水域暴露 的唯一复制事实；Condition 写入、UI 和表现层读取，Wet 本身不由任何 Ability 清除或触发。 */
 	UPROPERTY(ReplicatedUsing = OnRep_Snapshot)
 	FCatConditionSnapshot Snapshot;
 
-	/** 本组件处理的身体命令首次完整终态；防止网络重试重复吃鱼或重复记录救援结果。 */
+	/** 本组件处理的身体命令首次完整终态；防止网络重试重复吃鱼。 */
 	TMap<FString, FCatDomainCommandResult> TerminalCache;
 
 	/** 当前脚点持续处在危险水深中的确认时长，单位为 World 秒；水域暴露更新写入它，用来给危险水域进入判定提供滞回前的累计证据。 */

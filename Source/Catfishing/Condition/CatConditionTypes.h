@@ -4,16 +4,6 @@
 #include "Framework/Core/CatDomainCommandTypes.h"
 #include "CatConditionTypes.generated.h"
 
-/** 倒地后的恢复方式；它描述服务器已接受的客观救援路径，不包含动画或数值公式。 */
-UENUM(BlueprintType)
-enum class ECatRecoveryMode : uint8
-{
-	/** 当前没有恢复动作。 */
-	None,
-	/** 伙伴搬运到固定营地救援点。 */
-	CarriedToCamp
-};
-
 UENUM(BlueprintType)
 enum class ECatWaterExposureState : uint8
 {
@@ -30,13 +20,13 @@ enum class ECatWaterExposureUpdate : uint8
 	DangerousEntered
 };
 
-/** Character 局内身体离散状态的复制读模型；保存表现、交互资格和救援需要的客观状态。 */
+/** Character 局内身体离散状态的复制读模型；保存表现和交互资格需要的客观状态。 */
 USTRUCT(BlueprintType)
 struct FCatConditionSnapshot
 {
 	GENERATED_BODY()
 
-	/** 每次 Wet、Downed 或恢复方式提交后递增。 */
+	/** 身体离散状态快照的版本，0 表示尚未提交变化；Condition 在 Wet、Downed 或水域暴露状态改变后递增，复制读模型的消费者读取它识别状态版本。 */
 	UPROPERTY(BlueprintReadOnly)
 	int64 Revision = 0;
 
@@ -48,11 +38,7 @@ struct FCatConditionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	ECatWaterExposureState WaterExposure = ECatWaterExposureState::Dry;
 
-	/** 猫当前是否处于倒地状态；Condition 写入，交互、身体表现和救援入口读取。 */
+	/** 猫当前是否处于倒地状态；Condition 写入，交互和身体表现读取。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bDowned = false;
-
-	/** 最近一次服务器接受的恢复方式；无动作时为 None。 */
-	UPROPERTY(BlueprintReadOnly)
-	ECatRecoveryMode RecoveryMode = ECatRecoveryMode::None;
 };

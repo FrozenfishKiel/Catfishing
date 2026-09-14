@@ -14,21 +14,18 @@ class USceneComponent;
 /** 篝火公共回看请求；它只启动可跳过表现，不参与普通夜晚供品结算或 StateTree 转移。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatCampfirePlaybackRequested, FGuid);
 
-/** 玩法世界唯一固定营地宿主；同时承载玩家出生点语义、救援落点、共享鱼缸引用和可选回看，不支持建造/装饰/搬迁。 */
+/** 玩法世界唯一固定营地宿主；同时承载玩家出生点语义、共享鱼缸引用和可选回看，不支持建造/装饰/搬迁。 */
 UCLASS()
 class CATFISHING_API ACatCampHubActor : public APlayerStart
 {
 	GENERATED_BODY()
 
 public:
-	/** 建立关卡摆放营地所需的出生点父类、固定根节点、救援落点和复制属性；布局仍由关卡资产负责，运行时不会生成第二套营地真相。 */
+	/** 建立关卡摆放营地所需的出生点父类、固定根节点和复制属性；布局仍由关卡资产负责，运行时不会生成第二套营地真相。 */
 	ACatCampHubActor(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 
 	/** 按当前营地附近地面为 0 到 MaxCampSpawnPlayers-1 的玩家序号解析合法出生位置；超过容量会拒绝而不是循环复用，成功时返回的是 Pawn 根胶囊中心 Transform，失败时调用方必须保持无 Pawn。 */
 	bool TryResolvePlayerEntryTransform(int32 PreferredEntryIndex, const APawn* PawnToFit, FTransform& OutTransform) const;
-
-	/** 伙伴把倒地目标送到固定 RescuePoint；Teleport 成功后才提交 CarriedToCamp 事实。 */
-	FCatDomainCommandResult RescueToCamp(AController* HelpingController, ACatCharacter* TargetCharacter, FGuid RequestId);
 
 	/** 判断传入鱼缸是否就是本营地显式关联的共享鱼缸；交互组件只用它解析 Camp 上下文，不取得写权限。 */
 	bool IsSharedFishTank(const ACatFishTankActor* Candidate) const;
@@ -61,10 +58,6 @@ private:
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<USceneComponent> CampRoot;
 
-	/** 倒地搬运的固定落点；没有动态建造或玩家自定义坐标。 */
-	UPROPERTY(VisibleAnywhere)
-	TObjectPtr<USceneComponent> RescuePoint;
-
 	/** 关卡显式关联的共享鱼缸；空引用时外部容器上下文 fail-closed，不在命令执行中 Spawn。 */
 	UPROPERTY(EditInstanceOnly, Category = "Camp")
 	TObjectPtr<ACatFishTankActor> SharedFishTank;
@@ -72,9 +65,6 @@ private:
 	/** 关卡显式关联的营地公共仓库；它接收商店购买物，并作为玩家移动公共装备的唯一营地入口，不由商店摊位配置。 */
 	UPROPERTY(EditInstanceOnly, Category = "Camp")
 	TObjectPtr<ACatCampInventoryActor> PublicInventory;
-
-	/** 救援者身份、命令类别与 RequestId 到首次成功终态；网络重试先重放，避免重复 Teleport 同一倒地目标。 */
-	TMap<FString, FCatDomainCommandResult> RescueTerminalCache;
 
 	/** 玩家身份+RequestId 到篝火回看首次终态；成功重试只重放结果，不重复广播表现或创建成像计划。 */
 	TMap<FString, FCatDomainCommandResult> CampfirePlaybackTerminalCache;

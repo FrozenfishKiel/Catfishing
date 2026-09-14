@@ -741,20 +741,6 @@ void ACatfishingPlayerController::ServerRequestCampfirePlayback_Implementation(A
 	}
 }
 
-// 搬运救援 RPC 路由流程：只把目标和营地投给 BodyAction Ability；没有正式 Ability 接管时回送依赖错误。
-void ACatfishingPlayerController::ServerRescueCharacterToCamp_Implementation(ACatCampHubActor* Camp,
-	ACatCharacter* TargetCharacter, const FGuid RequestId)
-{
-	if (!CampBodyActionCommandComponent
-		|| !CampBodyActionCommandComponent->SubmitRescueCharacterToCamp(Camp, TargetCharacter, RequestId))
-	{
-		FCatDomainCommandResult Result;
-		Result.RequestId = RequestId;
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-		DeliverCampCommandResultToOwningClient(Result);
-	}
-}
-
 // 公共领域结果客户端流程：可靠接收结果后按请求落盘并整体替换本机读模型，再广播给 UI；未开界面也保留接收证据，不触发新的领域命令。
 void ACatfishingPlayerController::ClientReceiveCampCommandResult_Implementation(
 	const FCatDomainCommandResult& Result)

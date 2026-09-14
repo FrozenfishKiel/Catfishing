@@ -181,7 +181,6 @@ bool UCatConditionComponent::SetDownedFromAuthority(const bool bNewDowned)
 		return true;
 	}
 	Snapshot.bDowned = bNewDowned;
-	Snapshot.RecoveryMode = ECatRecoveryMode::None;
 	++Snapshot.Revision;
 	PublishSnapshot();
 	UE_LOG(LogCatCharacter, Log,
@@ -197,41 +196,6 @@ bool UCatConditionComponent::SetDownedFromAuthority(const bool bNewDowned)
 		}
 	}
 	return true;
-}
-
-// 搬运完成流程：先重放已完成 RequestId，再要求真实救援者、固定营地落点和目标仍处于 Downed；不修改倒地事实，只把恢复方式标为 CarriedToCamp。
-FCatDomainCommandResult UCatConditionComponent::CompleteCarryToCamp(AController* HelpingController,
-	const FGuid RequestId, const bool bAtCampRescuePoint)
-{
-	FCatDomainCommandResult Result;
-	Result.RequestId = RequestId;
-	const FString Key = MakeTerminalKey(TEXT("CarryToCamp"), RequestId);
-	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
-	{
-		Result = *Cached;
-		MarkCommandReplayed(Result);
-		return Result;
-	}
-	if (!GetOwner() || !GetOwner()->HasAuthority() || !HelpingController || !RequestId.IsValid() || !bAtCampRescuePoint)
-	{
-		Result.Error = ECatDomainCommandError::InvalidPayload;
-		TerminalCache.Add(Key, Result);
-		return Result;
-	}
-	if (!Snapshot.bDowned)
-	{
-		Result.Error = ECatDomainCommandError::InvalidPhase;
-		TerminalCache.Add(Key, Result);
-		return Result;
-	}
-	Snapshot.RecoveryMode = ECatRecoveryMode::CarriedToCamp;
-	++Snapshot.Revision;
-	PublishSnapshot();
-	Result.bCommitted = true;
-	Result.Error = ECatDomainCommandError::None;
-	Result.Revision = Snapshot.Revision;
-	TerminalCache.Add(Key, Result);
-	return Result;
 }
 
 // Snapshot 复制回调流程：客户端只消费完整离散事实；表现系统可查询它，但这里不触发新的身体命令。

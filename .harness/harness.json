@@ -106,7 +106,7 @@
         "Recovery"
       ],
       "tracking_rule": "CharacterBody、Condition、Growth、FishingImpact、Recovery 只是同一猫身体状态与吃鱼成长闭环的证据切面，禁止拆成可独立关闭的业务任务、影子清单或半成品交付项；问题补充只能放在模块级缺口下，不能把清单写成彼此失联的小事项。",
-      "completion_rule": "只有角色 ASC 与当前需求口径一致地持有局内身体数值，Condition 只复制 Wet/Downed/Recovery 离散状态，吃鱼只收口既有成长经验、已裁 Buff/黄色体力边界和 RequestId 幂等，Downed/恢复能经服务器命令影响钓鱼与救援且不存在死亡终态，UI 不再泄露废弃白盒状态，以及构建、自动化、Lake 运行证据和旧失败闭环整体成立时，本模块才能整体关闭；渐进中毒、草药恢复和纯清毒休息已被 2026-09-14 用户裁决移出当前门禁，Buff 池、数值、文案或表现资产未裁时必须 fail-closed 并作为模块级内容缺口记录，不能把局部绿灯写成完成。",
+      "completion_rule": "只有角色 ASC 与当前需求口径一致地持有局内身体数值，Condition 只复制 Wet/Downed/水域暴露 离散状态，吃鱼只收口既有成长经验、已裁 Buff/黄色体力边界和 RequestId 幂等，Downed 能经服务器命令影响交互与钓鱼且不存在死亡终态；旧瞬移营地救援已删除，新救援另行重做，UI 不再泄露废弃白盒状态，以及构建、自动化、Lake 运行证据和旧失败闭环整体成立时，本模块才能整体关闭；渐进中毒、草药恢复和纯清毒休息已被 2026-09-14 用户裁决移出当前门禁，Buff 池、数值、文案或表现资产未裁时必须 fail-closed 并作为模块级内容缺口记录，不能把局部绿灯写成完成。",
       "handoff_rule": "换 Agent、换会话或失败回边时必须携带 Character/Growth/Condition 的同一组端到端证据；AttributeSet、Condition、Growth、UI 或 Fishing 的局部单测绿灯不能单独标为完成，也不能因为换 AI 而把疲惫/饥饿口径、Buff 未裁项或恢复链证据散落到多个清单。"
     },
     "RunEnvironmentSocial": {
@@ -194,7 +194,7 @@
       "表达型/外观解锁 FProfileGrant 授予、Journal/ACK 与装配恢复 fail-closed 证据；玩法装备解锁门已由 2026-09-14 用户裁决移出当前门禁",
       "Frontend/Online 的 UBT 构建、UI/Online Automation 报告、源码边界核对和打包 Steam 联机实玩结论",
       "Data/World/Profile/Album 的鱼表目录 fail-closed、CaptureCommittedResult 到 FishRecorded Grant、CapturePlan 成像结果到 Imprint Grant、Unlock Grant、Profile durable Journal、公开图鉴快照、相册隐藏和 Imprint Media 传输证据",
-      "Character/Growth/Condition 的 ASC 属性口径、Wet/Downed/Recovery 快照、吃鱼成长经验、Buff fail-closed、黄色体力边界、恢复命令、Fishing 打断和 UI 状态暴露证据；渐进中毒和草药恢复已由 2026-09-14 用户裁决移出当前门禁",
+      "Character/Growth/Condition 的 ASC 属性口径、Wet/Downed/水域暴露 快照、吃鱼成长经验、Buff fail-closed、黄色体力边界、离散倒地命令、Fishing 打断和 UI 状态暴露证据；渐进中毒和草药恢复已由 2026-09-14 用户裁决移出当前门禁",
       "Run/Environment/Social 的 RunFlow 阶段、Environment 快照、WaterQuery/ChumPool、求助/恶作剧/保护牌、客观拿鱼边界和重连白名单证据",
       "Delivery/Harness/Assets 的模块交付清单、跨模块回归入口、玩家验收来源、正式资产 readiness 和交付 handoff 证据"
     ]

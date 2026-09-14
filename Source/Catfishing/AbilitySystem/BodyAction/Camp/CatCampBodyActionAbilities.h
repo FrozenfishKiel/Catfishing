@@ -6,7 +6,6 @@
 #include "CatCampBodyActionAbilities.generated.h"
 
 class ACatCampHubActor;
-class ACatCharacter;
 
 /** 篝火回看请求载荷；它只把目标营地和请求键带过 GAS 前摇，CapturePlan 与表现仍归 Camp。 */
 UCLASS()
@@ -20,26 +19,6 @@ public:
 	TObjectPtr<ACatCampHubActor> Camp;
 
 	/** 本次回看命令的幂等键；Camp 结果和 owning-client 回执都使用同一个键。 */
-	UPROPERTY(Transient)
-	FGuid RequestId;
-};
-
-/** 搬运倒地伙伴回营地的请求载荷；它只描述救援意图，不直接改变目标 Character 状态。 */
-UCLASS()
-class CATFISHING_API UCatBodyActionRequestRescueCharacterToCamp : public UObject
-{
-	GENERATED_BODY()
-
-public:
-	/** 接收救援的固定营地；最终落点和距离约束由 Camp 在服务器侧裁决。 */
-	UPROPERTY(Transient)
-	TObjectPtr<ACatCampHubActor> Camp;
-
-	/** 被救援的目标角色；Ability 只保存引用，倒地事实和 World 归属在提交阶段重读。 */
-	UPROPERTY(Transient)
-	TObjectPtr<ACatCharacter> TargetCharacter;
-
-	/** 本次救援命令的幂等键；公共领域结果用它回送给发起者。 */
 	UPROPERTY(Transient)
 	FGuid RequestId;
 };
@@ -73,39 +52,6 @@ private:
 	TObjectPtr<UCatBodyActionRequestCampfirePlayback> ActiveRequest;
 
 	/** 当前回看动作冻结的表现事件标签；开始和取消停止表现都读取同一标签，避免配置变化造成错停。 */
-	UPROPERTY(Transient)
-	FGameplayTag ActivePresentationEventTag;
-};
-
-/** 搬运救援身体动作 Ability；它自己拥有事件校验、前摇窗口、提交和取消收尾，不把流程交给共享父类。 */
-UCLASS()
-class CATFISHING_API UCatGA_BodyActionRescueCharacterToCamp : public UGameplayAbility
-{
-	GENERATED_BODY()
-
-public:
-	/** 建立救援 Ability 的网络策略、资产标签和 GameplayEvent 触发器；这条能力只响应搬运救援事件。 */
-	UCatGA_BodyActionRescueCharacterToCamp();
-
-protected:
-	/** 激活救援动作：校验救援事件与载荷，启动角色表现，并在可取消前摇后提交 Camp 救援请求。 */
-	virtual void ActivateAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
-		const FGameplayAbilityActivationInfo ActivationInfo, const FGameplayEventData* TriggerEventData) override;
-	/** 结束救援动作：取消时停止已启动的角色表现，然后清除本 Ability 冻结的请求状态。 */
-	virtual void EndAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
-		const FGameplayAbilityActivationInfo ActivationInfo, const bool bReplicateEndAbility,
-		const bool bWasCancelled) override;
-
-private:
-	/** 前摇结束后提交搬运救援请求；它只调用 Camp 救援入口，并根据领域结果决定正常结束还是取消。 */
-	UFUNCTION()
-	void CommitRescueCharacterToCampAfterWindow();
-
-	/** 当前救援动作冻结的请求对象；由激活阶段写入，提交或取消收尾时清空。 */
-	UPROPERTY(Transient)
-	TObjectPtr<UCatBodyActionRequestRescueCharacterToCamp> ActiveRequest;
-
-	/** 当前救援动作冻结的表现事件标签；开始和取消停止表现都读取同一标签，避免配置变化造成错停。 */
 	UPROPERTY(Transient)
 	FGameplayTag ActivePresentationEventTag;
 };
