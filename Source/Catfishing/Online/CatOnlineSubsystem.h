@@ -56,8 +56,9 @@ public:
 	FCatOnlineResult RequestAcceptInvite(FCatSessionInviteHandle InviteHandle);
 
 	/**
-	 * 根据已确认 SessionRole 选择 Host exit 或 Client leave；Lake Host 先等最终保存成功再 teardown、Destroy 和回前台，
-	 * 释放本局载荷后才结案，保存失败保留会话。
+	 * 根据已确认 SessionRole 选择 Host exit 或 Client leave；Lake Host 等一次保存回执后 teardown、Destroy 和回前台，
+	 * 释放本局载荷后才结案，保存失败仍退出，Save 保留重试事实。
+	 * 墓碑（2026-09-14，T33）：取消“保存成功才准退出”；Knowledge/Design/GDD 系统分册/局与进程.md:103。
 	 *
 	 * 这里的 Host **不是房主**（2026-09-07 决策点⑩两层论）：它是「本进程正在当 listen server」这个网络事实。
 	 * 房主是房间管理层的社交角色，在 UCatRoomOwnerService 手里，离开时只移交给最早加入者、本局接着打。
@@ -192,7 +193,7 @@ private:
 	/** Lake Host Leave 启动活动世界保存并订阅最终落盘结果；同步拒绝保留 Session，受理后由匹配 RequestId/epoch 的完成回调继续 teardown。 */
 	bool BeginHostLeaveSave();
 
-	/** 消费离开请求所属的世界保存结果；最终持久化成功才允许 teardown 和返回后的载荷释放，失败或失效回调不会销毁 Session。 */
+	/** 消费离开请求所属的世界保存结果；匹配的成功或失败回执均继续 teardown 和返回后的载荷释放；失效回调仍拒绝。 */
 	void HandleHostLeaveSaveCompleted(FGuid SaveRequestId, bool bSuccess, uint64 CallbackEpoch);
 
 	/** 解除本次离开在精确 Save 子系统上的完成订阅并清除保存关联键；终态与反初始化均可幂等调用。 */
@@ -204,7 +205,7 @@ private:
 	/** 成对解除终态释放所等待的精确 Save 变化通知；不会清除 Save 数据，结案和反初始化均可幂等调用。 */
 	void ClearRunReleaseDelegate();
 
-	/** Host Leave 在世界保存成功后向当前玩法地图 GameMode 提交 Run teardown；同步 Ready、异步 Pending 与失败都保持同一 RequestId/epoch。 */
+	/** Host Leave 在一次世界保存尝试结束后向当前玩法地图 GameMode 提交 Run teardown；同步 Ready、异步 Pending 与失败都保持同一 RequestId/epoch。 */
 	bool BeginHostRunTeardown();
 
 	/** Host 预载完成后的唯一玩法地图 Listen 旅行入口；只提交旅行并等待 PostLoadMap，Lobby ready 还必须通过目标地图的 listen 与 Run 玩法命令门。 */
@@ -479,7 +480,7 @@ private:
 	/** Save 为本次离开保存生成的关联键；受理返回后冻结，完成时与 Online epoch 一起校验，其他检查点写盘不能推进退出。 */
 	FGuid HostLeaveSaveRequestId;
 
-	/** 本次 Leave 在确认回到 Frontend 后可以释放本局载荷的许可；前台离房和 Client 离房可直接获得，Lake Host 只能由匹配的保存成功回执授权，操作结束即失效。 */
+	/** 本次 Leave 在确认回到 Frontend 后可以释放本局载荷的许可；前台离房和 Client 离房可直接获得，Lake Host 由匹配的保存回执或同步保存拒绝授权，操作结束即失效。 */
 	bool bReleaseActiveRunOnFrontend = false;
 
 	/** 终态释放正在等待的 Save 来源；仅 busy 时保存弱引用用于配对解绑，不复制槽标识、载荷或持久化状态。 */

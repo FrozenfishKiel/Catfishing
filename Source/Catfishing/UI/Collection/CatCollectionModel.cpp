@@ -153,14 +153,10 @@ void UCatCollectionModel::Refresh()
 		NewState.Imprints.Add(MoveTemp(Entry));
 	}
 
-	int32 RecordedCount = 0;
-	for (const FCatCollectionEntryView& Entry : NewState.Entries)
-	{
-		RecordedCount += Entry.bRecordedUnlocked ? 1 : 0;
-	}
+	// 墓碑（2026-09-14，T43）：删除“已收集数/总数、相册 N 张”完成度摘要；页和个人最佳仍保留。
+	// Knowledge/Design/GDD 系统分册/印记.md:45 禁止印记数量/完成度，图鉴.md:19 定位为认识记录而非收集进度条。
 	NewState.SummaryText = NewState.bAvailable
-		? FText::FromString(FString::Printf(TEXT("图鉴：%d / %d 种已收集，相册 %d 张"),
-			RecordedCount, NewState.Entries.Num(), NewState.Imprints.Num()))
+		? NSLOCTEXT("Catfishing", "CollectionKnowledgeSummary", "图鉴 · 认识的鱼与个人记录")
 		: FText::FromString(TEXT("图鉴：本地记录未就绪"));
 	ViewState = MoveTemp(NewState);
 	OnViewStateChanged.Broadcast();

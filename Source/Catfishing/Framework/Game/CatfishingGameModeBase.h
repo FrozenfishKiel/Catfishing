@@ -65,6 +65,8 @@ UCLASS()
 class CATFISHING_API ACatfishingGameModeBase : public AGameModeBase
 {
 	GENERATED_BODY()
+	friend class FCatTerminalSaveQueueTestCommand;
+	friend class FCatRunTransientCleanupTest;
 	friend class FCatFishingSlackAimCommandRoutingTest;
 	friend class FCatFishingSlackAimRodContinuityTest;
 	friend class FCatFishingRodEffortSnapshotLifecycleTest;

@@ -1113,13 +1113,23 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 		}
 	}
 
-	// 只有局未启动或真正结束才终止会话；夜晚保留操作位和正在进行的搏斗。
-	if (NewPhase == ECatRunPhase::NotStarted || NewPhase == ECatRunPhase::Ending || NewPhase == ECatRunPhase::Ended)
+	// 墓碑（2026-09-14，T19）：旧入口只在 NotStarted/Ending/Ended 收口，翻天会复用昨日 Session。
+	// Knowledge/Design/GDD 系统分册/钓鱼系统/钓鱼规则.md:338-341：翻天/终局释放瞬态，普通入夜仍允许搏斗打完。
+	const bool bClearFishingTransients = NewPhase == ECatRunPhase::DayActive
+		|| NewPhase == ECatRunPhase::NotStarted || NewPhase == ECatRunPhase::FailureSettlementNight
+		|| NewPhase == ECatRunPhase::SuccessSettlementNight || NewPhase == ECatRunPhase::Ending || NewPhase == ECatRunPhase::Ended;
+	if (bClearFishingTransients)
 	{
+		// 终态广播可能重入命令入口，先封住旧阶段准入，再按 Session -> Field 顺序清理。
+		bRunCommandsOpen = false;
+		RunPublicState.Phase.bNewFishingBitesAllowed = false;
 		if (UCatFishingService* Fishing = GetWorld()->GetSubsystem<UCatFishingService>())
-		{
 			Fishing->SuspendFishingAndReleaseOperators();
-		}
+		if (UCatChumFieldSubsystem* Fields = GetWorld()->GetSubsystem<UCatChumFieldSubsystem>())
+			Fields->ClearFieldsForRunTransition();
+		UE_LOG(LogCatRun, Log, TEXT("Event=run_fishing_transients_cleared RunId=%s World=%s NetMode=%d Authority=1 LocalRole=%d Day=%d NextPhase=%s"),
+			*RunPublicState.Phase.RunId.ToString(), *GetNameSafe(GetWorld()), int32(GetNetMode()), int32(GetLocalRole()),
+			RunPublicState.Phase.DayIndex, *UEnum::GetValueAsString(NewPhase));
 	}
 
 	ClearDayDeadline();
@@ -1239,6 +1249,15 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 		ScheduleDayEnvironmentRefreshes();
 	}
 	RefreshEnvironmentAndPublish();
+	// 墓碑（2026-09-14，T33；局与进程.md:103）：终局不再等周期检查点偶发采样。
+	// 新阶段和环境已提交后再请求，Save 按 RequestId 追踪单写口及失败重试。
+	if (RunPublicState.EndReason == ECatRunEndReason::Success
+		|| RunPublicState.EndReason == ECatRunEndReason::WorldProgressDepleted)
+	{
+		if (UCatSaveSubsystem* Save = GetGameInstance() ? GetGameInstance()->GetSubsystem<UCatSaveSubsystem>() : nullptr;
+			Save && !Save->GetActiveSlotId().IsNone())
+			Save->RequestCompleteActiveRun();
+	}
 	UE_LOG(LogCatRun, Log, TEXT("Event=run_phase_entered RunId=%s Revision=%lld Day=%d Phase=%s Reason=%s Deadline=%.3f"),
 		*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision,
 		RunPublicState.Phase.DayIndex, *UEnum::GetValueAsString(NewPhase), *UEnum::GetValueAsString(Reason),
@@ -1293,6 +1312,9 @@ bool ACatfishingGameModeBase::BeginAltarDayTransition(ACatAltarActor* Altar, ACo
 	Transition.LastCommittedOffering = PreviousResult;
 	Transition.RequestId = RequestId;
 	Transition.bActive = true;
+	// 墓碑（2026-09-14，T19）：献祭原先只关新命令；局与进程.md:95、钓鱼规则.md:338 要求中断正在进行的互动。
+	if (UCatFishingService* Fishing = GetWorld()->GetSubsystem<UCatFishingService>())
+		Fishing->SuspendFishingAndReleaseOperators();
 	Transition.StartServerTimeSeconds = GetWorld()->GetTimeSeconds();
 	Transition.FadeOutSeconds = Altar->FadeOutSeconds;
 	Transition.HoldSeconds = Altar->HoldSeconds;
@@ -1964,7 +1986,8 @@ void ACatfishingGameModeBase::ApplyDayBreakBodyResetToCharacters()
 // 自然聚鱼流程：读取 Environment 显式事件与锚点后按 Run+Day+Event+Anchor 去重，扫描唯一同 ID WaterRegion；构造系统身份命令并提交同一聚鱼写口，只有 committed 才记录去重键。
 void ACatfishingGameModeBase::SubmitNaturalChumFieldIfConfigured()
 {
-	if (!HasAuthority() || !RunPublicState.Environment.bHasActiveEvent || !GetWorld())
+	if (!HasAuthority() || !RunPublicState.Environment.bHasActiveEvent || !GetWorld()
+		|| (RunPublicState.Phase.Phase != ECatRunPhase::DayActive && RunPublicState.Phase.Phase != ECatRunPhase::NormalNight))
 	{
 		return;
 	}
@@ -2140,6 +2163,8 @@ FCatRunTeardownResult ACatfishingGameModeBase::RequestRunTeardown(const FCatRunT
 	const bool bGrantAcksComplete = ImprintService->PrepareForRunTeardown();
 
 	bRunCommandsOpen = false;
+	if (UCatChumFieldSubsystem* Fields = GetWorld()->GetSubsystem<UCatChumFieldSubsystem>())
+		Fields->ClearFieldsForRunTransition();
 	ClearDayDeadline();
 	if (RunStateTreeComponent && RunStateTreeComponent->IsRunning())
 	{

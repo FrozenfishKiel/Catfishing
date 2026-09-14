@@ -20,6 +20,7 @@ UCLASS()
 class CATFISHING_API UCatFishingService : public UWorldSubsystem
 {
 	GENERATED_BODY()
+	friend class FCatRunTransientCleanupTest;
 
 public:
 	/** 每人场上合计最多两根实体竿；手持和损坏但尚未收回的竿也占名额。 */
@@ -65,8 +66,8 @@ public:
 	void FlushDeferredOperatorRemovalsFromAuthority();
 
 	/**
-	 * Run 启动失败或进入结束阶段时终止当前会话、释放全部竿位并恢复角色移动；夜晚不调用。
-	 * 该入口不永久关闭 World 内的 FishingService，下一天仍可重新使用已部署鱼竿。
+	 * Run 启动失败、献祭、翻天或终局时终止当前会话并释放全部竿位；普通入夜不调用。
+	 * 该入口不永久关闭 World 内的 FishingService，下一天使用场上鱼竿必须重新准备并建立新 Session，不继承旧倒计时。
 	 */
 	void SuspendFishingAndReleaseOperators();
 	/** Run 更新新咬钩准入后刷新等待计时，不结束真咬窗口或搏斗、不释放竿位。 */

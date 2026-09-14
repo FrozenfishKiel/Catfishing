@@ -35,6 +35,7 @@ UCLASS(BlueprintType)
 class CATFISHING_API ACatFishingSession : public AActor
 {
 	GENERATED_BODY()
+	friend class FCatRunTransientCleanupTest;
 
 public:
 	/** 创建唯一 StateTree 组件、开启只读 Snapshot 复制并关闭 Tick。 */

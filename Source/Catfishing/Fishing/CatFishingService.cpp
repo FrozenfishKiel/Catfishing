@@ -1176,7 +1176,7 @@ void UCatFishingService::RefreshBiteAvailabilityFromAuthority()
 	}
 }
 
-// 启动失败/局末补偿：释放所有竿位；白天截止和夜晚只刷新新咬钩准入。
+// 启动失败、献祭强制中断、翻天及终局：终止 Session（含全部等待计时）再释放竿位；普通入夜仍只刷新新咬钩准入。
 void UCatFishingService::SuspendFishingAndReleaseOperators()
 {
 	TerminateAllSessionsAndReleaseOperators(TEXT("Run unavailable"));

@@ -374,11 +374,21 @@ void UCatSaveSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 	LastResultText = FText::FromString(TEXT("存档目录尚未读取。"));
+	SaveQueueTicker = FTSTicker::GetCoreTicker().AddTicker(
+		FTickerDelegate::CreateUObject(this, &ThisClass::TickSaveQueue));
 }
 
 // 反初始化流程：异步委托以 UObject 弱绑定自动失效；这里先清所有强引用和旅行许可，使失效 World 回调即使晚到也不能恢复到下一次游戏实例。
 void UCatSaveSubsystem::Deinitialize()
 {
+	FTSTicker::RemoveTicker(SaveQueueTicker);
+	SaveQueueTicker.Reset();
+	QueuedSaveRequests.Reset();
+	QueuedSaveSlots.Reset();
+	QueuedSavePayloads.Reset();
+	RetrySavePayloads.Reset();
+	CompletedRunSlots.Reset();
+	PendingCompletionSlots.Reset();
 	bBusy = false;
 	bLoadedRunForTravel = false;
 	bWorldRestoreApplied = false;
@@ -405,7 +415,7 @@ void UCatSaveSubsystem::RefreshSlotSummaries()
 		MakeResult(false, FText::FromString(TEXT("本机玩家尚未就绪，不能读取存档目录。")));
 		return;
 	}
-	if (bBusy)
+	if (IsBusy())
 	{
 		return;
 	}
@@ -468,7 +478,9 @@ void UCatSaveSubsystem::RefreshSlotSummaries()
 					continue;
 				}
 				SeenSlotIds.Add(SlotId);
-				LoadedSummaries.Add(MakeSummary(*SaveGame));
+				FCatSaveSlotSummary Summary = MakeSummary(*SaveGame);
+				Summary.bRunCompleted |= Self->CompletedRunSlots.Contains(SlotId);
+				LoadedSummaries.Add(MoveTemp(Summary));
 			}
 			LoadedSummaries.Sort([](const FCatSaveSlotSummary& Left, const FCatSaveSlotSummary& Right)
 			{
@@ -501,7 +513,7 @@ FCatSaveResult UCatSaveSubsystem::RequestCreateSlot(const FString& DisplayName)
 {
 	const ULocalPlayer* LocalPlayer = GetGameInstance()->GetFirstGamePlayer();
 	const FString TrimmedDisplayName = DisplayName.TrimStartAndEnd();
-	if (!LocalPlayer || bBusy || !bSlotDirectoryLoaded || bWorldRestoreApplied || PendingRestoreSaveGame || TrimmedDisplayName.IsEmpty()
+	if (!LocalPlayer || IsBusy() || !bSlotDirectoryLoaded || bWorldRestoreApplied || PendingRestoreSaveGame || TrimmedDisplayName.IsEmpty()
 		|| TrimmedDisplayName.Len() > 64)
 	{
 		return MakeResult(false, FText::FromString(TEXT("存档目录未就绪、操作进行中或名称无效。")));
@@ -536,16 +548,21 @@ FCatSaveResult UCatSaveSubsystem::RequestLoadSlot(const FName SlotId)
 	const ULocalPlayer* LocalPlayer = GetGameInstance()->GetFirstGamePlayer();
 	const FCatSaveSlotSummary* RequestedSummary = SlotSummaries.FindByPredicate(
 		[SlotId](const FCatSaveSlotSummary& Summary) { return Summary.SlotId == SlotId; });
-	if (!LocalPlayer || bBusy || !bSlotDirectoryLoaded || bWorldRestoreApplied || PendingRestoreSaveGame || !IsValidSlotId(SlotId)
+	if (!LocalPlayer || IsBusy() || !bSlotDirectoryLoaded || bWorldRestoreApplied || PendingRestoreSaveGame || !IsValidSlotId(SlotId)
 		|| !RequestedSummary)
 	{
 		return MakeResult(false, FText::FromString(TEXT("存档不存在、目录未就绪或正在执行其他操作。")));
 	}
-	if (RequestedSummary->bRunCompleted)
+	if (RequestedSummary->bRunCompleted || CompletedRunSlots.Contains(SlotId))
 	{
 		UE_LOG(LogCatRun, Log, TEXT("Event=persistence_slot_read_rejected Slot=%s World=%s Reason=RunCompleted"),
 			*SlotId.ToString(), *GetNameSafe(GetWorld()));
 		return MakeResult(false, FText::FromString(TEXT("这一局已经结束，只能回看不能继续；请新建一个世界开新局。")));
+	}
+	if (RetrySavePayloads.Contains(SlotId))
+	{
+		EnqueueRunSave(SlotId, RetrySavePayloads.FindAndRemoveChecked(SlotId));
+		return MakeResult(false, FText::FromString(TEXT("正在重试该槽上次未成功的保存，请完成后再继续。")));
 	}
 	if (!HasRunSaveFileHeader(MakeRunSlotFileName(SlotId)))
 	{
@@ -575,7 +592,7 @@ FCatSaveResult UCatSaveSubsystem::RequestLoadSlot(const FName SlotId)
 FCatSaveResult UCatSaveSubsystem::RequestDeleteSlot(const FName SlotId)
 {
 	const ULocalPlayer* LocalPlayer = GetGameInstance()->GetFirstGamePlayer();
-	if (!LocalPlayer || bBusy || !bSlotDirectoryLoaded || SlotId == ActiveSlotId || !IsValidSlotId(SlotId)
+	if (!LocalPlayer || IsBusy() || !bSlotDirectoryLoaded || SlotId == ActiveSlotId || !IsValidSlotId(SlotId)
 		|| !SlotSummaries.ContainsByPredicate([SlotId](const FCatSaveSlotSummary& Summary) { return Summary.SlotId == SlotId; }))
 	{
 		return MakeResult(false, FText::FromString(TEXT("运行中的存档不能删除，或目标槽不存在。")));
@@ -588,6 +605,9 @@ FCatSaveResult UCatSaveSubsystem::RequestDeleteSlot(const FName SlotId)
 		*Result.RequestId.ToString(), *SlotId.ToString(), *SlotName, bDeleted);
 	if (bDeleted)
 	{
+		RetrySavePayloads.Remove(SlotId);
+		CompletedRunSlots.Remove(SlotId);
+		PendingCompletionSlots.Remove(SlotId);
 		SlotSummaries.RemoveAll([SlotId](const FCatSaveSlotSummary& Entry) { return Entry.SlotId == SlotId; });
 	}
 	FinishDiskRequest(Result.RequestId, bDeleted, bDeleted
@@ -596,64 +616,137 @@ FCatSaveResult UCatSaveSubsystem::RequestDeleteSlot(const FName SlotId)
 	return Result;
 }
 
-// 运行保存请求流程：
-// 1. 目录终态不明时先安排重读并拒绝本次保存，调用方需要在目录完成后重新发起请求。
-// 2. 目录、活动槽和摘要都就绪后，从 authority World 完整采集载荷；任何领域快照失败都只返回错误，不启动写盘。
-// 3. 游戏线程采样成功后先合并玩家基线，再交给 UE 异步覆盖该槽唯一文件，回调负责发布保存完成通知。
+// 墓碑（2026-09-14，T33）：busy 拒绝和仅在快照末尾采样终局已移除。
+// 《局与进程》Knowledge/Design/GDD 系统分册/局与进程.md:103：已完结槽不可续，写失败不影响本局、下局重试。
+// 快照仍同步完整校验；受理后串行写入，每个 RequestId 都收到完成回执，失败载荷跨 World 保留。
 FCatSaveResult UCatSaveSubsystem::RequestSaveActiveRun()
 {
-	if (!bBusy && !bSlotDirectoryLoaded)
-	{
-		RefreshSlotSummaries();
-		return MakeResult(false, bBusy ? FText::FromString(TEXT("正在重读存档目录，请完成后重试保存。")) : LastResultText);
-	}
-	if (bBusy || !bSlotDirectoryLoaded || ActiveSlotId.IsNone())
-	{
-		return MakeResult(false, FText::FromString(TEXT("没有可保存的活动世界槽，或已有存档操作正在进行。")));
-	}
-	const FCatSaveSlotSummary* Summary = SlotSummaries.FindByPredicate(
-		[this](const FCatSaveSlotSummary& Entry) { return Entry.SlotId == ActiveSlotId; });
-	if (!Summary)
-	{
-		return MakeResult(false, FText::FromString(TEXT("活动槽不在已提交目录中，请刷新存档目录。")));
-	}
+	if (!bSlotDirectoryLoaded || ActiveSlotId.IsNone() || !PendingRestoreSaveGame
+		|| !SlotSummaries.ContainsByPredicate([this](const FCatSaveSlotSummary& Summary) { return Summary.SlotId == ActiveSlotId; }))
+		return MakeResult(false, FText::FromString(TEXT("没有可保存的活动世界槽。")));
 	const ULocalPlayer* LocalPlayer = GetGameInstance()->GetFirstGamePlayer();
 	if (!LocalPlayer)
-	{
 		return MakeResult(false, FText::FromString(TEXT("本机玩家不可用，不能保存世界。")));
-	}
 	UCatRunSaveGame* SaveGame = CastChecked<UCatRunSaveGame>(
 		ULocalPlayerSaveGame::CreateNewSaveGameForLocalPlayer(UCatRunSaveGame::StaticClass(),
 			LocalPlayer, MakeRunSlotFileName(ActiveSlotId)));
 	FText Failure;
 	if (!BuildActiveRunSaveGame(*SaveGame, Failure))
 	{
+		if (PendingCompletionSlots.Contains(ActiveSlotId))
+		{
+			UE_LOG(LogCatRun, Warning, TEXT("Event=persistence_completion_snapshot_failed Slot=%s World=%s Reason=%s Result=QueueMarker"),
+				*ActiveSlotId.ToString(), *GetNameSafe(GetWorld()), *Failure.ToString());
+			return EnqueueRunSave(ActiveSlotId, nullptr);
+		}
 		return MakeResult(false, Failure);
 	}
-	// 游戏线程采样时更新内存快照；异步回调绝不把本轮之后的新采样覆盖回来，保证写盘途中发生的 Logout 捕获仍留给下一次保存。
 	PendingRestoreSaveGame->bHasPlayerSnapshot = SaveGame->bHasPlayerSnapshot;
 	PendingRestoreSaveGame->PlayerSnapshot = SaveGame->PlayerSnapshot;
-	// 终局标记同样先落进内存载荷；即使这一次写盘失败，本局后续的保存也仍然认得「已完结」，不会退回可继续。
 	PendingRestoreSaveGame->bRunCompleted = SaveGame->bRunCompleted;
-	ActiveAsyncRunSaveGame = SaveGame;
-	bBusy = true;
-	const FCatSaveResult Result = MakeResult(true, FText::FromString(TEXT("正在保存当前世界。")));
-	UE_LOG(LogCatRun, Log, TEXT("Event=persistence_slot_write_started RequestId=%s Slot=%s File=%s"),
-		*Result.RequestId.ToString(), *ActiveSlotId.ToString(), *MakeRunSlotFileName(ActiveSlotId));
-	SaveGame->OnSaveFinished.BindUObject(this, &ThisClass::HandleRunSaved, Result.RequestId);
-	if (!SaveGame->AsyncSaveGameToSlotForLocalPlayer())
-	{
-		FinishDiskRequest(Result.RequestId, false, FText::FromString(TEXT("本机存档写入未能启动。")));
-		return MakeResult(false, LastResultText);
-	}
+	return EnqueueRunSave(ActiveSlotId, SaveGame);
+}
+
+FCatSaveResult UCatSaveSubsystem::RequestCompleteActiveRun()
+{
+	const auto* Mode = GetWorld() ? GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
+	if (!Mode || !Mode->HasAuthority() || ActiveSlotId.IsNone() || !PendingRestoreSaveGame)
+		return MakeResult(false, FText::FromString(TEXT("没有可标记完成的房主活动槽。")));
+	const auto Reason = Mode->GetRunPublicState().EndReason;
+	if (Reason != ECatRunEndReason::Success && Reason != ECatRunEndReason::WorldProgressDepleted)
+		return MakeResult(false, FText::FromString(TEXT("当前局尚未终局。")));
+	// 先保留事实，任何快照失败、旧在途写入或 ReleaseActiveRun 都不能撤销它。
+	CompletedRunSlots.Add(ActiveSlotId);
+	PendingCompletionSlots.Add(ActiveSlotId);
+	PendingRestoreSaveGame->bRunCompleted = true;
+	for (auto& Summary : SlotSummaries)
+		if (Summary.SlotId == ActiveSlotId) Summary.bRunCompleted = true;
+	const FCatSaveResult Result = RequestSaveActiveRun();
+	if (!Result.bAccepted) RetrySavePayloads.FindOrAdd(ActiveSlotId);
+	UE_LOG(LogCatRun, Display, TEXT("Event=persistence_completion_requested RequestId=%s Slot=%s RunId=%s World=%s NetMode=%d Authority=1 LocalRole=%d Accepted=%d"),
+		*Result.RequestId.ToString(), *ActiveSlotId.ToString(), *Mode->GetRunPublicState().Phase.RunId.ToString(),
+		*GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), int32(Mode->GetLocalRole()), Result.bAccepted);
 	return Result;
 }
 
+FCatSaveResult UCatSaveSubsystem::EnqueueRunSave(const FName SlotId, UCatRunSaveGame* Payload)
+{
+	// 先建队列再广播受理；消费者重入时 CRUD/释放已可见队列占用。
+	const FGuid RequestId = FGuid::NewGuid();
+	QueuedSaveRequests.Add(RequestId);
+	QueuedSaveSlots.Add(RequestId, SlotId);
+	QueuedSavePayloads.Add(RequestId, Payload);
+	FCatSaveResult Result;
+	Result.bAccepted = true;
+	Result.RequestId = RequestId;
+	Result.Message = FText::FromString(TEXT("世界存档已排队。"));
+	LastResultText = Result.Message;
+	UE_LOG(LogCatRun, Log, TEXT("Event=persistence_slot_write_queued RequestId=%s Slot=%s World=%s MarkerOnly=%d QueueDepth=%d"),
+		*RequestId.ToString(), *SlotId.ToString(), *GetNameSafe(GetWorld()), Payload == nullptr, QueuedSaveRequests.Num());
+	OnChanged.Broadcast();
+	return Result;
+}
+
+bool UCatSaveSubsystem::TickSaveQueue(float DeltaSeconds)
+{
+	if (bBusy) return true;
+	if (QueuedSaveRequests.IsEmpty() && !RetrySavePayloads.IsEmpty()
+		&& FPlatformTime::Seconds() >= NextSaveRetrySeconds)
+	{
+		// 一轮失败最多每五秒重试一次；CoreTicker 随 GameInstance 跨旅行，终局关 Run 命令不关重试。
+		TArray<FName> RetrySlots;
+		RetrySavePayloads.GenerateKeyArray(RetrySlots);
+		for (const FName SlotId : RetrySlots)
+		{
+			if (RetrySavePayloads.Contains(SlotId))
+				EnqueueRunSave(SlotId, RetrySavePayloads.FindAndRemoveChecked(SlotId));
+		}
+	}
+	StartNextRunSave();
+	return true;
+}
+
+void UCatSaveSubsystem::StartNextRunSave()
+{
+	if (bBusy || QueuedSaveRequests.IsEmpty()) return;
+	ActiveQueuedSaveRequest = QueuedSaveRequests[0];
+	QueuedSaveRequests.RemoveAt(0);
+	ActiveQueuedSaveSlot = QueuedSaveSlots.FindAndRemoveChecked(ActiveQueuedSaveRequest);
+	ActiveAsyncRunSaveGame = QueuedSavePayloads.FindAndRemoveChecked(ActiveQueuedSaveRequest);
+	bBusy = true;
+	const ULocalPlayer* LocalPlayer = GetGameInstance()->GetFirstGamePlayer();
+	const bool bMarkerOnly = !ActiveAsyncRunSaveGame;
+	if (bMarkerOnly && LocalPlayer)
+	{
+		// 只有轮到本写请求才读取最后成功的文件；不重建或覆盖其他槽，也不写失败的部分世界快照。
+		ActiveAsyncRunSaveGame = Cast<UCatRunSaveGame>(ULocalPlayerSaveGame::LoadOrCreateSaveGameForLocalPlayer(
+			UCatRunSaveGame::StaticClass(), LocalPlayer, MakeRunSlotFileName(ActiveQueuedSaveSlot)));
+		if (ActiveAsyncRunSaveGame && !ActiveAsyncRunSaveGame->WasLoaded()) ActiveAsyncRunSaveGame = nullptr;
+	}
+	FText Failure;
+	if (!LocalPlayer || !ActiveAsyncRunSaveGame
+		|| !ValidateLoadedRunSaveGame(*ActiveAsyncRunSaveGame, ActiveQueuedSaveSlot, Failure))
+	{
+		if (bMarkerOnly) ActiveAsyncRunSaveGame = nullptr; // 修复文件后重试须重新读盘，不能永久复用坏载荷。
+		FinishDiskRequest(ActiveQueuedSaveRequest, false, Failure.IsEmpty()
+			? FText::FromString(TEXT("终局标记补写未能读取原槽，已保留重试。")) : Failure);
+		return;
+	}
+	ActiveAsyncRunSaveGame->bRunCompleted |= CompletedRunSlots.Contains(ActiveQueuedSaveSlot);
+	ActiveAsyncRunSaveGame->LastSavedAt = FDateTime::UtcNow();
+	ActiveAsyncRunSaveGame->OnSaveFinished.BindUObject(this, &ThisClass::HandleRunSaved, ActiveQueuedSaveRequest);
+	UE_LOG(LogCatRun, Log, TEXT("Event=persistence_slot_write_started RequestId=%s Slot=%s World=%s RunCompleted=%d"),
+		*ActiveQueuedSaveRequest.ToString(), *ActiveQueuedSaveSlot.ToString(), *GetNameSafe(GetWorld()), ActiveAsyncRunSaveGame->bRunCompleted);
+	const FGuid RequestId = ActiveQueuedSaveRequest;
+	if (!ActiveAsyncRunSaveGame->AsyncSaveGameToSlotForLocalPlayer() && ActiveQueuedSaveRequest == RequestId)
+		FinishDiskRequest(RequestId, false, FText::FromString(TEXT("本机存档写入未能启动，已保留重试。")));
+}
+
 // 终态释放流程：先拒绝仍有磁盘回调的请求；调用方确认房间或世界已离开后，清本局强引用、玩家快照、时长和旅行许可，目录保留供下一次选槽。
-// 这里既不采集也不保存，Host 必须先等自己的 OnSaveCompleted 成功，再完成离开，最后调用本入口。
+// 这里既不采集也不保存，Host 等待一次保存回执后即可离开；失败载荷和完成意图由独立重试集合保留。
 bool UCatSaveSubsystem::ReleaseActiveRun()
 {
-	if (bBusy)
+	if (IsBusy())
 	{
 		UE_LOG(LogCatRun, Warning, TEXT("Event=persistence_release_rejected Slot=%s Reason=Busy"), *ActiveSlotId.ToString());
 		return false;
@@ -683,7 +776,7 @@ bool UCatSaveSubsystem::HasLoadedRunForTravel() const
 // 忙碌读取流程：返回目录或世界异步读写的统一串行状态；前端据此禁止重复点击。
 bool UCatSaveSubsystem::IsBusy() const
 {
-	return bBusy;
+	return bBusy || !QueuedSaveRequests.IsEmpty();
 }
 
 // 结果读取流程：返回最近一次同步受理或异步完成的文本；不会把日志解析结果伪装成 UI 状态。
@@ -1152,10 +1245,11 @@ bool UCatSaveSubsystem::ValidateLoadedRunSaveGame(const UCatRunSaveGame& SaveGam
 		OutFailure = FText::FromString(TEXT("存档版本、槽归属或展示元数据无效。"));
 		return false;
 	}
+	// 墓碑（2026-09-14，T33；局与进程.md:103）：首个完整快照之前也可能终局；空槽允许仅持有完成位，仍禁止半套世界/玩家数据。
 	if (!SaveGame.bHasWorldSnapshot && (SaveGame.bHasPlayerSnapshot || !SaveGame.WorldFishContainers.IsEmpty()
-		|| !SaveGame.CampInventory.InventorySlots.IsEmpty() || !SaveGame.RunFishCollectionCaptures.IsEmpty() || SaveGame.bRunCompleted))
+		|| !SaveGame.CampInventory.InventorySlots.IsEmpty() || !SaveGame.RunFishCollectionCaptures.IsEmpty()))
 	{
-		OutFailure = FText::FromString(TEXT("未开始的新槽夹带已有世界库存或终局标记，不能按新局进入。"));
+		OutFailure = FText::FromString(TEXT("没有完整世界快照的槽夹带世界或玩家数据，不能按新局进入。"));
 		return false;
 	}
 	if (SaveGame.bHasWorldSnapshot && !SaveGame.bHasPlayerSnapshot)
@@ -1259,6 +1353,7 @@ void UCatSaveSubsystem::HandleRunSaved(UCatRunSaveGame* SavedGame, const bool bS
 		[SlotId](const FCatSaveSlotSummary& Entry) { return Entry.SlotId == SlotId; });
 	FCatSaveSlotSummary& Summary = Existing ? *Existing : SlotSummaries.AddDefaulted_GetRef();
 	Summary = MakeSummary(*ActiveAsyncRunSaveGame);
+	Summary.bRunCompleted |= CompletedRunSlots.Contains(SlotId);
 	SlotSummaries.Sort([](const FCatSaveSlotSummary& Left, const FCatSaveSlotSummary& Right)
 	{
 		return Left.LastSavedAt > Right.LastSavedAt;
@@ -1299,6 +1394,16 @@ void UCatSaveSubsystem::HandleRunLoaded(ULocalPlayerSaveGame* LoadedGame,
 		RejectPendingRestore(Failure.IsEmpty() ? FText::FromString(TEXT("世界存档读取或校验失败。")) : Failure);
 		return;
 	}
+	// 实际载荷是最终依据；目录缓存之外的完成标记同样不得授予恢复/旅行许可。
+	if (LoadedRunSaveGame->bRunCompleted || CompletedRunSlots.Contains(RequestedSlotId))
+	{
+		bBusy = false;
+		CompletedRunSlots.Add(RequestedSlotId);
+		for (auto& Summary : SlotSummaries)
+			if (Summary.SlotId == RequestedSlotId) Summary.bRunCompleted = true;
+		RejectPendingRestore(FText::FromString(TEXT("这一局已经结束，请新建世界槽。")));
+		return;
+	}
 	PendingRestoreSaveGame = LoadedRunSaveGame;
 	if (FCatSaveSlotSummary* Summary = SlotSummaries.FindByPredicate(
 		[RequestedSlotId](const FCatSaveSlotSummary& Entry) { return Entry.SlotId == RequestedSlotId; }))
@@ -1328,11 +1433,36 @@ void UCatSaveSubsystem::HandleRunLoaded(ULocalPlayerSaveGame* LoadedGame,
 // 磁盘请求收口流程：先清候选对象和 busy，保留退出时更新的唯一玩家基线，再写结果与关联日志；最后广播 UI 和有效请求回执，回调可安全发起下一次请求。
 void UCatSaveSubsystem::FinishDiskRequest(const FGuid RequestId, const bool bSuccess, const FText& Message)
 {
+	const FName CompletedSlot = RequestId == ActiveQueuedSaveRequest && RequestId.IsValid()
+		? ActiveQueuedSaveSlot : (ActiveAsyncRunSaveGame ? ActiveAsyncRunSaveGame->SlotId : ActiveSlotId);
+	if (RequestId.IsValid() && RequestId == ActiveQueuedSaveRequest)
+	{
+		if (bSuccess)
+		{
+			RetrySavePayloads.Remove(ActiveQueuedSaveSlot);
+			if (ActiveAsyncRunSaveGame && ActiveAsyncRunSaveGame->bRunCompleted)
+				PendingCompletionSlots.Remove(ActiveQueuedSaveSlot);
+		}
+		else
+		{
+			RetrySavePayloads.Add(ActiveQueuedSaveSlot, ActiveAsyncRunSaveGame);
+			NextSaveRetrySeconds = FPlatformTime::Seconds() + 5.0;
+			UE_LOG(LogCatRun, Warning, TEXT("Event=persistence_retry_retained RequestId=%s Slot=%s World=%s CompletionPending=%d Reason=%s"),
+				*RequestId.ToString(), *ActiveQueuedSaveSlot.ToString(), *GetNameSafe(GetWorld()),
+				PendingCompletionSlots.Contains(ActiveQueuedSaveSlot), *Message.ToString());
+		}
+		UE_LOG(LogCatRun, Log, TEXT("Event=persistence_write_receipt RequestId=%s Slot=%s World=%s Success=%d CompletionPending=%d"),
+			*RequestId.ToString(), *ActiveQueuedSaveSlot.ToString(), *GetNameSafe(GetWorld()), bSuccess,
+			PendingCompletionSlots.Contains(ActiveQueuedSaveSlot));
+		ActiveQueuedSaveRequest.Invalidate();
+		ActiveQueuedSaveSlot = NAME_None;
+	}
+
 	ActiveAsyncRunSaveGame = nullptr;
 	bBusy = false;
 	LastResultText = Message;
 	UE_LOG(LogCatRun, Log, TEXT("Event=persistence_request_completed RequestId=%s Success=%d Slot=%s World=%s Message=%s"),
-		*RequestId.ToString(), bSuccess, *ActiveSlotId.ToString(), *GetNameSafe(GetWorld()), *Message.ToString());
+		*RequestId.ToString(), bSuccess, *CompletedSlot.ToString(), *GetNameSafe(GetWorld()), *Message.ToString());
 	OnChanged.Broadcast();
 	if (RequestId.IsValid())
 	{
