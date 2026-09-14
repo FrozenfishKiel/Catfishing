@@ -180,6 +180,9 @@ bool FCatFishingBaitTerminalConsumptionTest::RunTest(const FString& Parameters)
 		Session->Snapshot.Phase = ECatFishingPhase::Probe;
 		Session->CastEquipment = Fixture.Equipment;
 		Session->AttemptSnapshot.RodItemInstanceId = Fixture.Equipment->GetSnapshot().RodItemInstanceId;
+		// 2026-09-14，T13 夹具补齐：生产抛竿已绑定钓手与竿定义；真咬 D0/Lmax 校验不放宽。
+		Session->FisherCharacter = Fixture.Character;
+		Session->AttemptSnapshot.RodDefinitionId = Fixture.Equipment->GetSnapshot().RodDefinitionId;
 		const bool bEarly = Outcome == ECatFishingOutcome::EmptyHook;
 		if (!bEarly)
 		{

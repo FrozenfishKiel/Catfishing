@@ -1,4 +1,5 @@
 #include "Character/CatCharacterMovementComponent.h"
+#include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
 #include "AbilitySystem/Config/CatPhysicalEffortSettings.h"
 #include "AbilitySystem/Physics/CatPhysicalEffortComponent.h"
 
@@ -81,6 +82,7 @@ void UCatCharacterMovementComponent::TickComponent(float DeltaTime, ELevelTick T
 
 bool UCatCharacterMovementComponent::DoJump(bool bReplayingMoves, float DeltaTime)
 {
+	if (UCatGE_FishingScoopCooldown::IsOperationBlocked(CharacterOwner)) return false;
 	auto* Cat = Cast<ACatCharacter>(CharacterOwner);
 	auto* Body = Cat ? Cat->GetPhysicalBodyComponent() : nullptr;
 	if (!Body || !Body->IsLocomotionEnabled()) return false;
@@ -106,7 +108,7 @@ void UCatCharacterMovementComponent::PerformMovement(float DeltaSeconds)
 		ActiveDrive = bAuthority ? Body->CaptureDriveSample() : Body->GetReplicatedDrive();
 		ActiveExternalForce = bAuthority ? Body->GetExternalForceFromAuthority() : Body->GetReplicatedExternalForce();
 	}
-	ActiveDrive.MoveIntent = Body->IsLocomotionEnabled() ? MoveIntent : FVector::ZeroVector;
+	ActiveDrive.MoveIntent = Body->IsLocomotionEnabled() && !UCatGE_FishingScoopCooldown::IsOperationBlocked(Cat) ? MoveIntent : FVector::ZeroVector;
 	ActiveDrive.bLocomotion = Body->IsLocomotionEnabled();
 	if (const auto* Controller = Cast<ACatfishingPlayerController>(Cat->GetController()); Controller && Controller->IsDayTransitionInputBlocked())
 		ActiveDrive.MoveIntent = FVector::ZeroVector;

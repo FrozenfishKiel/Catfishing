@@ -871,6 +871,14 @@ FCatFishingUseFreezeResult UCatEquipmentComponent::BeginFishingUse(const FGuid F
 	return Result;
 }
 
+FName UCatEquipmentComponent::GetCurrentFishingBaitDefinitionId(const FGuid FishingSessionId) const
+{
+	const FCatFishingUseRecord* Record = FishingUseRecords.Find(FishingSessionId);
+	if (Record && Record->bBaitCommitted) return Record->FrozenBaitDefinitionId;
+	if (!Snapshot.BaitDefinitionId.IsNone()) return Snapshot.BaitDefinitionId;
+	return Record && Record->bBaitQuantityFrozen ? Record->FrozenBaitDefinitionId : NAME_None;
+}
+
 FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingBaitDeferred(const FGuid FishingSessionId)
 {
 	// 确认消耗鱼饵的流程：
@@ -891,6 +899,36 @@ FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingBaitDeferred(
 	{
 		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
 	}
+	// 墓碑（2026-09-14，T13；钓鱼规则 §2.3、§3.4）：抛竿预留不再锁死本次真咬的饵。
+	// 选鱼读取当时选择，真咬再次读取；若期间换饵，原子扣新饵并退旧饵，禁止两份都消耗。
+	const FName CurrentBait = GetCurrentFishingBaitDefinitionId(FishingSessionId);
+	if (Record->bBaitQuantityFrozen && CurrentBait != Record->FrozenBaitDefinitionId)
+	{
+		UCatInventoryComponent* Inventory = ResolveOwnerInventoryComponent();
+		UCatEquipmentDefinition* OldBait = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(Record->FrozenBaitDefinitionId);
+		const int32 CurrentSlot = Inventory ? Inventory->FindInventorySlotIndexFromInstanceId(Snapshot.BaitItemInstanceId) : INDEX_NONE;
+		const FCatInventoryEntry* CurrentEntry = Inventory ? Inventory->GetInventoryEntryAtSlot(CurrentSlot) : nullptr;
+		if (!CurrentEntry || !CurrentEntry->Instance || CurrentEntry->Instance->GetItemDefinitionId() != CurrentBait
+			|| !Inventory->ExchangeReservedBaitInternal(CurrentSlot, OldBait))
+		{
+			UE_LOG(LogCatEquipment, Warning, TEXT("Event=fishing_current_bait_rejected SessionId=%s Owner=%s World=%s NetMode=%d Authority=1 Result=ReservationPreserved"),
+				*FishingSessionId.ToString(), *GetNameSafe(GetOwner()), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()));
+			return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::CapacityExceeded, false, Record);
+		}
+		Record->FrozenBaitDefinitionId = CurrentBait;
+		Record->bBaitQuantityFrozen = false;
+		Record->bBaitCommitted = true; // 回调前关闭事务，重入不会再次扣量。
+		ReconcileLoadoutSelectionsWithInventory(nullptr, NAME_None);
+		++Snapshot.Revision;
+		const FCatFishingUseOperationResult Committed = MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);
+		UE_LOG(LogCatEquipment, Log, TEXT("Event=fishing_current_bait_committed SessionId=%s Bait=%s Owner=%s World=%s NetMode=%d Authority=1 Result=ExchangedReservation"),
+			*FishingSessionId.ToString(), *CurrentBait.ToString(), *GetNameSafe(GetOwner()), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()));
+		Inventory->BroadcastInventoryChange();
+		PublishSnapshot();
+		return Committed; // 广播可重入并增删使用记录，不能继续持有 TMap 内部指针。
+	}
+	UE_LOG(LogCatEquipment, Log, TEXT("Event=fishing_current_bait_committed SessionId=%s Bait=%s Owner=%s World=%s NetMode=%d Authority=1"),
+		*FishingSessionId.ToString(), *CurrentBait.ToString(), *GetNameSafe(GetOwner()), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()));
 	if (Record->bBaitQuantityFrozen)
 	{
 		if (Record->FrozenBaitDefinitionId.IsNone())

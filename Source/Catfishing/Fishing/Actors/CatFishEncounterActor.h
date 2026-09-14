@@ -7,6 +7,7 @@
 #include "CatFishEncounterActor.generated.h"
 
 class USceneComponent;
+class UBoxComponent;
 class USkeletalMeshComponent;
 class UStateTree;
 class UStateTreeComponent;
@@ -18,9 +19,11 @@ UCLASS(Blueprintable, meta=(ChildCannotTick))
 class CATFISHING_API ACatFishEncounterActor : public AActor
 {
 	GENERATED_BODY()
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UBoxComponent> FishingCollision;
 
 public:
 	ACatFishEncounterActor();
+	FVector GetFishingCollisionCenter() const;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	bool InitializeAuthoritativeIdentity(FGuid InFishingSessionId, FGuid InCastAttemptId, FName InFishDefinitionId,
 		double InInitialLineLength, double InVisualScale);

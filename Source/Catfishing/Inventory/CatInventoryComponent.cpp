@@ -3246,3 +3246,17 @@ bool UCatInventoryComponent::MoveHeldInventoryEntriesToCustodianFromAuthority(
 	}
 	return true;
 }
+
+// T13，钓鱼规则 §2.3/§4.5：库存拥有原子写入，Session 不创建第二份数量状态。
+bool UCatInventoryComponent::ExchangeReservedBaitInternal(const int32 CurrentSlot, UCatInventoryItemDefinition* ReturnedBait)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !ReturnedBait) return false;
+	const TArray<FCatInventoryEntry> Before = InventoryList.Entries;
+	if (!ConsumeItemAtSlotInternal(CurrentSlot, 1, false)) return false;
+	int32 Remaining = 1;
+	bool bFullyAdded = false;
+	AddEntry(ReturnedBait, Remaining, bFullyAdded, nullptr, false);
+	if (bFullyAdded && Remaining == 0) return true;
+	ReplaceInventoryEntriesFromAuthority(Before, Before.Num(), false);
+	return false;
+}

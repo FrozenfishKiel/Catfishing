@@ -457,6 +457,8 @@ protected:
 	friend class UCatEquipmentComponent;
 	/** Internal mutation lets the fishing coordinator establish its record before notifying observers. */
 	bool ConsumeItemAtSlotInternal(int32 SlotIndex, int32 ConsumeCount, bool bBroadcastChange);
+	/** 真咬换饵：扣当前一份并退旧预留；失败恢复原实例／格子，成功由 Equipment 发布。 */
+	bool ExchangeReservedBaitInternal(int32 CurrentSlot, UCatInventoryItemDefinition* ReturnedBait);
 	bool TryAddInventoryBatchInternal(const FCatInventoryReceiveBatch& ReceiveBatch, bool bBroadcastChange);
 	/** 本库存独立的显示 Model；组件按需创建并持有，服务器本地提交或客户端复制后更新，其他库存不会写入它。 */
 	UPROPERTY(Transient)

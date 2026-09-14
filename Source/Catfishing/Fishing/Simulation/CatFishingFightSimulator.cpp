@@ -48,8 +48,6 @@ bool FCatFightSimulationConfig::IsValid() const
 		&& FMath::IsFinite(ReelSpeedCentimetersPerSecond) && ReelSpeedCentimetersPerSecond > 0.0
 		&& FMath::IsFinite(FishFullEffortSpeedCentimetersPerSecond) && FishFullEffortSpeedCentimetersPerSecond > 0.0
 		&& FMath::IsFinite(ExhaustedCatEscapeSpeedMultiplier) && ExhaustedCatEscapeSpeedMultiplier >= 1.0
-		&& FMath::IsFinite(FishExhaustionThreshold) && FishExhaustionThreshold >= 0.0
-		&& FishExhaustionThreshold <= 1.0
 		&& FMath::IsFinite(StrongConfrontationAlignmentThreshold)
 		&& StrongConfrontationAlignmentThreshold > 0.0 && StrongConfrontationAlignmentThreshold <= 1.0
 		&& FMath::IsFinite(StrongConfrontationConfirmationSeconds)
@@ -645,12 +643,8 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 		Result.FishUncappedStaminaDrain = Result.FishStaminaDrain;
 		Result.Trace.FishStaminaDrainBeforeClamp = Result.FishStaminaDrain;
 		Result.FishStaminaDrain = FMath::Min(Result.FishStaminaDrain, State.FishStamina);
-		// 没有运动缺失或费用关闭时，不能仅因残余体力低于阈值就判为力竭。
-		if (Result.FishStaminaDrain > 0.0
-			&& State.FishStamina - Result.FishStaminaDrain <= Config.FishExhaustionThreshold)
-		{
-			Result.FishStaminaDrain = State.FishStamina;
-		}
+		// 墓碑（2026-09-14，T14；钓鱼规则 §4.6）：删除 FishExhaustionThreshold 提前归零。
+		// 有限正余额仍继续游动；仅实际耗至 <=0 或真实触岸进入翻肚出口。
 	}
 
 	const bool bConfrontationCandidate = !State.bFishExhausted && !bExhaustedCatEscape && bLineRestraining

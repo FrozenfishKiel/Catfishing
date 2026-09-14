@@ -59,6 +59,8 @@ class CATFISHING_API ACatFishPickupActor : public AActor, public ICatInteractabl
 public:
 	/** 为世界鱼装配独立的刚体与准星探测组件，防止交互半径影响物理支撑；鱼身份由后续初始化提供。 */
 	ACatFishPickupActor();
+	FVector GetFishingCollisionCenter() const;
+	bool ResolveFishingPickupFromAuthority(AController* RequestingController, FGuid RequestId);
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	/** 接收库存落地的一条鱼，恢复冻结重量和表现；这条鱼已入过正式库存，不再次生成捕获奖励。 */

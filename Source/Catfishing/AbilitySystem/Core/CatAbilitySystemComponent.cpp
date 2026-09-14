@@ -3,6 +3,7 @@
 #include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "AbilitySystem/Effects/CatFishingStaminaEffect.h"
+#include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
 #include "AbilitySystem/Effects/CatGrowthAttributeEffect.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "AbilitySystemBlueprintLibrary.h"
@@ -65,6 +66,7 @@ void UCatAbilitySystemComponent::UnregisterAbilityInput(const FGameplayAbilitySp
 
 void UCatAbilitySystemComponent::AbilityInputTagPressed(const FGameplayTag InputTag)
 {
+	if (HasMatchingGameplayTag(CatFishingAbilityTags::Cooldown_Fishing_Scoop)) return;
 	const TArray<FGameplayAbilitySpecHandle>* Handles = SpecHandlesByInputTag.Find(InputTag);
 	if (!Handles)
 	{
@@ -102,7 +104,7 @@ void UCatAbilitySystemComponent::AbilityInputTagReleased(const FGameplayTag Inpu
 void UCatAbilitySystemComponent::ProcessAbilityInput(const float DeltaTime, const bool bGamePaused)
 {
 	(void)DeltaTime;
-	if (bGamePaused)
+	if (bGamePaused || HasMatchingGameplayTag(CatFishingAbilityTags::Cooldown_Fishing_Scoop))
 	{
 		return;
 	}

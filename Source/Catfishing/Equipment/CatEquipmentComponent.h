@@ -94,6 +94,8 @@ public:
 		UCatInventoryComponent* RodInventoryComponent = nullptr);
 	/** 确认消耗 Begin 已暂存的鱼饵；正式库存数量已经在 Begin 扣减，本函数只收口会话内的饵料事务。 */
 	FCatFishingUseOperationResult CommitFishingBaitDeferred(FGuid FishingSessionId);
+	/** 当前选中饵；最后一份已暂存、选择被库存对账清空时仍可使用本竿预留。 */
+	FName GetCurrentFishingBaitDefinitionId(FGuid FishingSessionId) const;
 	/** 按递增累计磨损的差额立即扣减 Begin 绑定的鱼竿实例；重复序号不重扣，Release 不回滚。 */
 	FCatFishingUseOperationResult ApplyFishingRodWear(FGuid FishingSessionId, int64 WearSequence,
 		double AbsoluteTotal);

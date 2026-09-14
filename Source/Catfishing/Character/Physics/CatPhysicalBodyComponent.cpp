@@ -1,4 +1,5 @@
 #include "Character/Physics/CatPhysicalBodyComponent.h"
+#include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
 #include "Character/CatCharacterMovementComponent.h"
 #include "AbilitySystem/Physics/CatPhysicalEffortComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -607,6 +608,7 @@ FVector UCatPhysicalBodyComponent::GetSupportFootPointWorld() const
 }
 void UCatPhysicalBodyComponent::SetMoveIntent(FVector WorldDirection)
 {
+	if (UCatGE_FishingScoopCooldown::IsOperationBlocked(GetOwner())) WorldDirection = FVector::ZeroVector;
 	if (WorldDirection.ContainsNaN()) return;
 	WorldDirection.Z = 0;
 	const FVector NextInput = bLocomotionEnabled ? WorldDirection.GetClampedToMaxSize(1) : FVector::ZeroVector;
@@ -630,6 +632,7 @@ void UCatPhysicalBodyComponent::SendLocalInput()
 }
 void UCatPhysicalBodyComponent::SetViewIntent(FRotator View)
 {
+	if (UCatGE_FishingScoopCooldown::IsOperationBlocked(GetOwner())) return;
 	if (View.ContainsNaN()) return;
 	View.Pitch = FMath::ClampAngle(View.Pitch, -85, 75);
 	View.Yaw = FRotator::NormalizeAxis(View.Yaw);
@@ -668,6 +671,7 @@ void UCatPhysicalBodyComponent::ServerSetInput_Implementation(FVector Move, FRot
 }
 void UCatPhysicalBodyComponent::RequestJump()
 {
+	if (UCatGE_FishingScoopCooldown::IsOperationBlocked(GetOwner())) return;
 	// 爬行中不许跳：倒地的猫能慢慢挪，但不能原地起跳。正式角色走 CMC 分支，所以这道门要挡在最前面。
 	if (bCrawlOnly)
 	{

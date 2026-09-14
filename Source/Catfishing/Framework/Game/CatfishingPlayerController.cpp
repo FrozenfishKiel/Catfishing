@@ -16,6 +16,7 @@
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "AbilitySystem/Config/CatAbilityInputConfig.h"
 #include "AbilitySystem/Config/CatAbilitySettings.h"
+#include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
 #include "AbilitySystem/BodyAction/Camp/CatCampBodyActionCommandComponent.h"
 #include "AbilitySystem/BodyAction/Social/CatSocialBodyActionCommandComponent.h"
 #include "AbilitySystem/Input/CatAbilityInputBindingComponent.h"
@@ -480,7 +481,7 @@ void ACatfishingPlayerController::RemoveInputMappingContext()
 // 移动输入流程：翻天锁或引擎移动忽略时先清物理移动意图；其余以可见水平朝向转换前后左右输入，Pawn 缺失时不制造旁路状态。
 void ACatfishingPlayerController::Move(const FInputActionValue& Value)
 {
-	if (IsDayTransitionInputBlocked() || IsMoveInputIgnored())
+	if (IsDayTransitionInputBlocked() || UCatGE_FishingScoopCooldown::IsOperationBlocked(GetPawn()) || IsMoveInputIgnored())
 	{
 		StopMove();
 		return;
@@ -539,7 +540,7 @@ void ACatfishingPlayerController::FlushPressedKeys()
 // 视角输入流程：翻天锁或引擎视角忽略时不累积 RotationInput；其他时候把 Mapping Context 已处理过的二维意图写入视角。
 void ACatfishingPlayerController::Look(const FInputActionValue& Value)
 {
-	if (IsDayTransitionInputBlocked() || IsLookInputIgnored()) return;
+	if (IsDayTransitionInputBlocked() || UCatGE_FishingScoopCooldown::IsOperationBlocked(GetPawn()) || IsLookInputIgnored()) return;
 	const FVector2D LookAxis = Value.Get<FVector2D>();
 	AddYawInput(LookAxis.X);
 	AddPitchInput(LookAxis.Y);
@@ -548,7 +549,7 @@ void ACatfishingPlayerController::Look(const FInputActionValue& Value)
 // 跳跃按下流程：翻天锁或引擎移动忽略时先停止已有跳跃保持态；其他时候只对当前 Character 生效，持竿时清保持态并拒绝起跳，普通 Pawn 不伪造实现。
 void ACatfishingPlayerController::StartJump()
 {
-	if (IsDayTransitionInputBlocked() || IsMoveInputIgnored())
+	if (IsDayTransitionInputBlocked() || UCatGE_FishingScoopCooldown::IsOperationBlocked(GetPawn()) || IsMoveInputIgnored())
 	{
 		StopJump();
 		return;
@@ -649,7 +650,7 @@ bool ACatfishingPlayerController::CanForwardGameplayCommand() const
 {
 	const ACatfishingGameModeBase* GameMode = GetWorld()
 		? GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
-	return GameMode && GameMode->CanAcceptGameplayCommand(this);
+	return !UCatGE_FishingScoopCooldown::IsOperationBlocked(GetPawn()) && GameMode && GameMode->CanAcceptGameplayCommand(this);
 }
 
 // Controller 钓鱼 gate 流程：现取 authority GameMode 并使用 Fishing 专用白天规则；它只服务抛竿、鱼竿操作、协作、抢抄和玩家打窝，不影响 Social 或结算 RPC。
@@ -657,7 +658,7 @@ bool ACatfishingPlayerController::CanForwardFishingCommand() const
 {
 	const ACatfishingGameModeBase* GameMode = GetWorld()
 		? GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
-	return GameMode && GameMode->CanAcceptFishingCommand(this);
+	return !UCatGE_FishingScoopCooldown::IsOperationBlocked(GetPawn()) && GameMode && GameMode->CanAcceptFishingCommand(this);
 }
 
 // 结算完成 RPC 流程：现取 authority GameMode/Imprint 服务并检查当前 Run 的计划终态与 Grant ACK；通过后才调用 Run 唯一写入口，不让客户端布尔值直接结束结算夜。
@@ -1051,7 +1052,7 @@ void ACatfishingPlayerController::ServerRequestInteraction_Implementation(AActor
 	const bool bValidTarget = IsValid(Target) && Target->GetWorld() == GetWorld()
 		&& Target->GetClass()->ImplementsInterface(UCatInteractable::StaticClass());
 	const bool bAccepted = bGameplayOpen && RequestId.IsValid() && bValidTarget
-		&& ICatInteractable::Execute_CanInteract(Target, this);
+		&& (Cast<ACatFishPickupActor>(Target) || ICatInteractable::Execute_CanInteract(Target, this));
 	if (!bAccepted)
 	{
 		UE_LOG(LogCatfishing, Warning, TEXT("Event=interaction_request_rejected World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Target=%s RequestId=%s GameplayOpen=%d ValidTarget=%d ValidRequest=%d"),
@@ -1312,6 +1313,7 @@ void ACatfishingPlayerController::ServerPlaceProtectionSign_Implementation(const
 // 3. 其余仅处理 IA_Interact，由唯一 TargetingComponent 把交互交给准星 Actor；不认识的标签无副作用返回。
 void ACatfishingPlayerController::NativeInputTagPressed(const FGameplayTag InputTag)
 {
+	if (UCatGE_FishingScoopCooldown::IsOperationBlocked(GetPawn())) return;
 	if (IsDayTransitionInputBlocked()) return;
 	if (InputTag.MatchesTagExact(CatInteractionTags::Input_DropCarriedItem))
 	{

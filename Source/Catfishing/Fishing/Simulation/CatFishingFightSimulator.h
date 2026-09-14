@@ -88,7 +88,7 @@ struct CATFISHING_API FCatFightSimulationConfig
 	double FishFullEffortSpeedCentimetersPerSecond = 0.0;
 	/** 主控零体力时的持续外冲速度，按满出力参考游速放大。 */
 	double ExhaustedCatEscapeSpeedMultiplier = 2.0;
-	double FishExhaustionThreshold = 0.5;
+	// 墓碑（2026-09-14，T14；钓鱼规则 §4.6）：删除提前归零配置，鱼体力仅 <=0 翻肚。
 	/** 仅供强对抗/僵持表现分类，不参与位移、做功或终局裁决。 */
 	double StrongConfrontationAlignmentThreshold = 0.55;
 	double StrongConfrontationConfirmationSeconds = 0.2;

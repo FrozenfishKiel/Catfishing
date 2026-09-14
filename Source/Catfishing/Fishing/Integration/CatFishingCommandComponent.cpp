@@ -1,4 +1,6 @@
 #include "Fishing/Integration/CatFishingCommandComponent.h"
+#include "Fishing/Integration/CatFishingResolutionSubsystem.h"
+#include "Items/Fish/CatFishPickupActor.h"
 
 #include "GameFramework/PlayerController.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
@@ -55,31 +57,6 @@ namespace
 			*CatLogContext::BuildControllerFields(Controller));
 	}
 
-	/**
-	 * 挥空硬直：只在本次挥网判定失败时对本人施加，成功抄到不吃硬直（钓鱼规则 §5.2）。
-	 * 「没够着」「被抢先」「对不可抄的对象出手」都算挥空，所以命中前的早退分支也要走这里。
-	 * 现行口径只锁抄网技能本身——GE 只授 Cat.Cooldown.Fishing.Scoop 一个标签，猫仍可走动、收线、用别的键；
-	 * 设计只写了「无法操作」四个字，没裁是全身硬直还是仅锁抄网，按窄口径实现，缺口记在工程待裁项。
-	 * 时长仍以 FishingSettings 的服务器权威值为准，与 ScoopCooldownGate 读同一个数。
-	 */
-	void ApplyScoopMissStunFromAuthority(const APlayerController* Controller, const double CooldownSeconds)
-	{
-		const ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
-		UAbilitySystemComponent* AbilitySystem = Character ? Character->GetAbilitySystemComponent() : nullptr;
-		if (!AbilitySystem || !FMath::IsFinite(CooldownSeconds) || CooldownSeconds <= 0.0)
-		{
-			return;
-		}
-		const FGameplayEffectContextHandle Context = AbilitySystem->MakeEffectContext();
-		const FGameplayEffectSpecHandle Spec = AbilitySystem->MakeOutgoingSpec(
-			UCatGE_FishingScoopCooldown::StaticClass(), 1.0f, Context);
-		if (!Spec.IsValid())
-		{
-			return;
-		}
-		Spec.Data->SetDuration(static_cast<float>(CooldownSeconds), true);
-		AbilitySystem->ApplyGameplayEffectSpecToSelf(*Spec.Data.Get());
-	}
 
 	/** 构造阶段 gate 拒绝时的统一竿命令回执；旧直连 RPC 用它保留 RequestId，让 UI/Ability 能结束等待态。 */
 	FCatFishingCommandResult MakeRodCommandsClosedResult(const ECatFishingCommandType CommandType, const FGuid RequestId)
@@ -108,6 +85,7 @@ void UCatFishingCommandComponent::DeliverResultFromAuthority(const FCatFishingCo
 		return;
 	}
 
+	if (Result.CommandType == ECatFishingCommandType::RequestScoop) ScoopResults.FindOrAdd(Result.RequestId, Result);
 	// 唯一命令回执出口：每条结果都留结构化日志，失败用 Warning 便于在 Output Log 里过滤。
 	const FString ControllerFields = CatLogContext::BuildControllerFields(Controller);
 	if (Result.bCommitted)
@@ -309,6 +287,8 @@ void UCatFishingCommandComponent::ResetTransientCommandState()
 	LocalChumChargeStartTime = -1.0; // 关卡/会话切换时收起残留的蓄力预览线。
 	ChumChargeStartServerTime = -1.0;
 	ScoopCooldownGate.Reset(); // 世界时间会在旅行时重建，旧世界的绝对时间戳不能带入新地图。
+	ScoopResults.Reset();
+	PendingScoopRequests.Reset();
 	// This component lives on the Controller across pawn changes. Preserve monotonic sequence fences.
 }
 
@@ -383,6 +363,7 @@ void UCatFishingCommandComponent::ServerClearHeldInputForLifecycle_Implementatio
 			if (ACatFishingSession* Session = Fishing->FindActiveSessionByRod(Rod))
 			{
 				SessionId = Session->GetSnapshot().FishingSessionId;
+				Session->ClearCancelHoldFromAuthority();
 				Session->SetReelingFromAuthority(Controller->PlayerState, Edge.InputSequence - 1, false);
 				Session->SetSlackingFromAuthority(Controller->PlayerState, Edge.InputSequence, false);
 			}
@@ -747,6 +728,13 @@ FCatFishingInputEdge UCatFishingCommandComponent::SubmitCancel()
 	return Edge;
 }
 
+FCatFishingInputEdge UCatFishingCommandComponent::SubmitCancelReleased()
+{
+	FCatFishingInputEdge Edge = MakeDiscreteEdge();
+	DispatchAbilityCommand(ECatFishingCommandType::CancelReleased, Edge);
+	return Edge;
+}
+
 FCatFishingInputEdge UCatFishingCommandComponent::SubmitCutLine()
 {
 	FCatFishingInputEdge Edge = MakeDiscreteEdge();
@@ -757,6 +745,9 @@ FCatFishingInputEdge UCatFishingCommandComponent::SubmitCutLine()
 FCatFishingInputEdge UCatFishingCommandComponent::SubmitScoop()
 {
 	FCatFishingInputEdge Edge = MakeDiscreteEdge();
+	APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	Edge.bHasCastViewRay = UCatFishingAimLibrary::TryGetLocalCastViewRay(Controller, Edge.CastViewOrigin, Edge.CastViewDirection);
+	Edge.FishingTarget = Edge.bHasCastViewRay ? UCatFishingAimLibrary::ResolveFishingViewTarget(Controller, Edge.CastViewOrigin, Edge.CastViewDirection) : nullptr;
 	DispatchAbilityCommand(ECatFishingCommandType::RequestScoop, Edge);
 	return Edge;
 }
@@ -823,6 +814,29 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 	{
 		return;
 	}
+	if (CommandType == ECatFishingCommandType::RequestScoop)
+		if (const FCatFishingCommandResult* Cached = ScoopResults.Find(Edge.RequestId))
+		{
+			DeliverResultFromAuthority(*Cached);
+			return;
+		}
+	if (CommandType == ECatFishingCommandType::RequestScoop && !bResolvingCatch)
+	{
+		if (PendingScoopRequests.Contains(Edge.RequestId)) return;
+		if (UCatFishingResolutionSubsystem* Queue = GetWorld()->GetSubsystem<UCatFishingResolutionSubsystem>())
+		{
+			PendingScoopRequests.Add(Edge.RequestId);
+			Queue->Enqueue(ECatFishingResolution::Catch, Controller, Edge.RequestId,
+				[WeakThis = TWeakObjectPtr<ThisClass>(this), Edge]()
+				{
+					if (!WeakThis.IsValid()) return;
+					WeakThis->PendingScoopRequests.Remove(Edge.RequestId);
+					TGuardValue<bool> Guard(WeakThis->bResolvingCatch, true);
+					WeakThis->HandleAbilityCommandFromAuthority(ECatFishingCommandType::RequestScoop, Edge);
+				});
+			return;
+		}
+	}
 	FCatFishingCommandResult Result;
 	Result.CommandType = CommandType;
 	Result.RequestId = Edge.RequestId;
@@ -876,6 +890,13 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		}
 	}
 
+	if (CommandType == ECatFishingCommandType::CancelReleased)
+	{
+		ACatFishingRodActor* Rod = Fishing ? Fishing->FindRodOperatedBy(Controller->PlayerState) : nullptr;
+		if (ACatFishingSession* Session = Rod ? Fishing->FindActiveSessionByRod(Rod) : nullptr)
+			DeliverResultFromAuthority(Session->SetCancelHeldFromAuthority(Controller, false, Edge.RequestId));
+		return;
+	}
 	// 只有当前操竿权下的边沿才能改持续按键；无竿时仍接受 Release 清除物理持有状态。
 	TrackHeldFightInputFromAuthority(CommandType, Edge);
 	if (CommandType == ECatFishingCommandType::CancelFishing)
@@ -922,12 +943,25 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		// 本地 Ability 已给发起者播放挥网；服务器在真正接受本次尝试后把动作广播给其他客户端。
 		BroadcastCosmeticEventFromAuthority(CatFishingAbilityTags::Cosmetic_Fishing_ScoopSwing);
 		const ACatCharacter* ScoopingCharacter = Cast<ACatCharacter>(Controller->GetPawn());
-		ACatFishingSession* TargetSession = ScoopingCharacter
-			? Fishing->FindNearestScoopableSession(ScoopingCharacter->GetActorLocation(), 1500.0) : nullptr;
+		// 墓碑（2026-09-14，T15；钓鱼规则 §5.5）：F 绑定准星鱼身份，禁止重选最近 Session。
+		const bool bValidView = ScoopingCharacter && Edge.bHasCastViewRay
+			&& UCatFishingAimLibrary::IsCastViewRayValid(Edge.CastViewOrigin, Edge.CastViewDirection,
+				ScoopingCharacter->GetPawnViewLocation(), Controller->GetControlRotation().Vector());
+		AActor* Target = bValidView && IsValid(Edge.FishingTarget) && Edge.FishingTarget->GetWorld() == GetWorld()
+			&& UCatFishingAimLibrary::ResolveFishingViewTarget(Controller, Edge.CastViewOrigin, Edge.CastViewDirection) == Edge.FishingTarget
+			? Edge.FishingTarget.Get() : nullptr;
+		if (ACatFishPickupActor* Pickup = Cast<ACatFishPickupActor>(Target))
+		{
+			// Pickup 是本分支的唯一终态/硬直/回执口，避免一次 F 给 UI 发两份结果。
+			if (Pickup->ResolveFishingPickupFromAuthority(Controller, Edge.RequestId)) ScoopCooldownGate.Reset();
+			return;
+		}
+		const ACatFishEncounterActor* TargetFish = Cast<ACatFishEncounterActor>(Target);
+		ACatFishingSession* TargetSession = TargetFish ? Fishing->FindSession(TargetFish->GetPresentationState().FishingSessionId) : nullptr;
 		if (!TargetSession)
 		{
 			// 附近根本没有可抄的会话＝对着空水面挥了一网，按挥空罚硬直。
-			ApplyScoopMissStunFromAuthority(Controller, CooldownSeconds);
+			UCatGE_FishingScoopCooldown::ApplyMissFromAuthority(Controller);
 			Result.Error = ECatFishingCommandError::NotNearShore;
 			UE_LOG(LogCatFishing, Warning,
 				TEXT("Event=scoop_target_selection_failed Request=%s Reason=NoEligibleSession SearchOrigin=%s MaxDistanceCm=1500.000 %s"),
@@ -972,7 +1006,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		}
 		else
 		{
-			ApplyScoopMissStunFromAuthority(Controller, CooldownSeconds);
+			UCatGE_FishingScoopCooldown::ApplyMissFromAuthority(Controller);
 		}
 		const FCatFishingSessionSnapshot& UpdatedSnapshot = TargetSession->GetSnapshot();
 		Result.Revision = UpdatedSnapshot.Revision;
@@ -1303,14 +1337,9 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 						|| Snapshot.Phase == ECatFishingPhase::NearShore
 						|| Snapshot.Phase == ECatFishingPhase::ExhaustedReel
 						|| Snapshot.Phase == ECatFishingPhase::AutoHauling;
-					if (CommandType == ECatFishingCommandType::CutLine || bCuttablePhase)
+					if (bCuttablePhase)
 					{
-						FCatFishingSessionCommandContext Context;
-						Context.RequestId = Edge.RequestId;
-						Context.FishingSessionId = SessionId;
-						Context.ExpectedRevision = Snapshot.Revision;
-						Context.CastAttemptId = Snapshot.CastAttemptId;
-						DeliverResultFromAuthority(Session->CutLineFromAuthority(Controller, Context));
+						DeliverResultFromAuthority(Session->SetCancelHeldFromAuthority(Controller, true, Edge.RequestId));
 					}
 					else
 					{
@@ -1526,6 +1555,20 @@ void UCatFishingCommandComponent::ForwardLegacyScoop(const FGuid FishingSessionI
 	{
 		return;
 	}
+	if (!bResolvingCatch)
+	{
+		if (UCatFishingResolutionSubsystem* Queue = GetWorld()->GetSubsystem<UCatFishingResolutionSubsystem>())
+		{
+			Queue->Enqueue(ECatFishingResolution::Catch, Controller, Command.Context.RequestId,
+				[WeakThis = TWeakObjectPtr<ThisClass>(this), FishingSessionId, Command]()
+				{
+					if (!WeakThis.IsValid()) return;
+					TGuardValue<bool> Guard(WeakThis->bResolvingCatch, true);
+					WeakThis->ForwardLegacyScoop(FishingSessionId, Command);
+				});
+			return;
+		}
+	}
 	FCatFishingCommandResult Result;
 	Result.CommandType = ECatFishingCommandType::RequestScoop;
 	Result.RequestId = Command.Context.RequestId;
@@ -1562,7 +1605,7 @@ void UCatFishingCommandComponent::ForwardLegacyScoop(const FGuid FishingSessionI
 		}
 		else
 		{
-			ApplyScoopMissStunFromAuthority(Controller, CooldownSeconds);
+			UCatGE_FishingScoopCooldown::ApplyMissFromAuthority(Controller);
 		}
 		if (ACatFishingSession* Session = Fishing->FindSession(FishingSessionId))
 		{

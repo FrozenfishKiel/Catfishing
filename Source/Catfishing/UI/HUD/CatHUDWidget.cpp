@@ -1,4 +1,6 @@
 #include "UI/HUD/CatHUDWidget.h"
+#include "Styling/CoreStyle.h"
+#include "Fishing/Integration/CatFishingAimLibrary.h"
 
 #include "Components/Button.h"
 #include "Components/ProgressBar.h"
@@ -385,11 +387,41 @@ int32 UCatHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& Allott
 	const int32 MaxLayer = Super::NativePaint(
 		Args, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
 	const FVector2D LocalSize = AllottedGeometry.GetLocalSize();
+	// T16，钓鱼规则 §4.7：原生进度条消费服务器复制的保持区间，不依赖本轮不可编辑的 WBP 新插槽。
+	const UWorld* World = GetWorld();
+	const AGameStateBase* GameState = World ? World->GetGameState() : nullptr;
+	const double Now = GameState ? GameState->GetServerWorldTimeSeconds() : World ? World->GetTimeSeconds() : 0.0;
+	const double HoldEnd = LastHUDViewState.Fishing.CancelHoldEndsServerTime;
+	if (LastHUDViewState.bHasFishingSession && HoldEnd > 0.0)
+	{
+		const double Start = LastHUDViewState.Fishing.CancelHoldStartedServerTime;
+		const float Alpha = float(FMath::Clamp((Now - Start) / FMath::Max(0.01, HoldEnd - Start), 0.0, 1.0));
+		const FVector2D Left(LocalSize.X * 0.5f - 90.0f, LocalSize.Y * 0.65f);
+		const FPaintGeometry Geometry = AllottedGeometry.ToPaintGeometry();
+		TArray<FVector2D> Track{Left, Left + FVector2D(180.0f, 0.0f)};
+		FSlateDrawElement::MakeLines(OutDrawElements, MaxLayer + 1, Geometry, Track, ESlateDrawEffect::None, FLinearColor(0.15f, 0.15f, 0.15f), true, 8.0f);
+		Track[1] = Left + FVector2D(180.0f * Alpha, 0.0f);
+		FSlateDrawElement::MakeLines(OutDrawElements, MaxLayer + 2, Geometry, Track, ESlateDrawEffect::None, FLinearColor(1.0f, 0.7f, 0.25f), true, 8.0f);
+		FSlateDrawElement::MakeText(OutDrawElements, MaxLayer + 2,
+			AllottedGeometry.ToPaintGeometry(FVector2D(240, 28), FSlateLayoutTransform(Left + FVector2D(0, 12))),
+			FText::FromString(TEXT("收竿放弃 · 松手取消")), FCoreStyle::GetDefaultFontStyle("Regular", 14), ESlateDrawEffect::None, FLinearColor::White);
+	}
+	if (LastHUDViewState.bShowCrosshair)
+	{
+		FVector Origin, Direction;
+		APlayerController* Controller = GetOwningPlayer();
+		if (UCatFishingAimLibrary::TryGetLocalCastViewRay(Controller, Origin, Direction)
+			&& UCatFishingAimLibrary::ResolveFishingViewTarget(Controller, Origin, Direction))
+			FSlateDrawElement::MakeText(OutDrawElements, MaxLayer + 2,
+				AllottedGeometry.ToPaintGeometry(FVector2D(200, 28), FSlateLayoutTransform(LocalSize * 0.5f + FVector2D(16, 16))),
+				FText::FromString(TEXT("F 收鱼")), FCoreStyle::GetDefaultFontStyle("Regular", 14), ESlateDrawEffect::None, FLinearColor::White);
+	}
+
 	if (!LastHUDViewState.bShowCrosshair
 		|| LocalSize.X <= 0.0f || LocalSize.Y <= 0.0f
 		|| CrosshairArmLength <= 0.0f || CrosshairThickness <= 0.0f)
 	{
-		return MaxLayer;
+		return MaxLayer + 2;
 	}
 
 	const FVector2D Center = LocalSize * 0.5f;
@@ -419,7 +451,7 @@ int32 UCatHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& Allott
 	DrawArm(Center + FVector2D(Inner, 0.0f), Center + FVector2D(Outer, 0.0f));
 	DrawArm(Center + FVector2D(0.0f, -Outer), Center + FVector2D(0.0f, -Inner));
 	DrawArm(Center + FVector2D(0.0f, Inner), Center + FVector2D(0.0f, Outer));
-	return static_cast<int32>(CrosshairLayer);
+	return FMath::Max(static_cast<int32>(CrosshairLayer), MaxLayer + 2);
 }
 
 // 主页菜单入口流程：把点击转换为纯 UI 意图；HUD 不创建或持有菜单页面。

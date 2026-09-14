@@ -1,4 +1,7 @@
 #include "Items/Fish/CatFishPickupActor.h"
+#include "Fishing/Integration/CatFishingResolutionSubsystem.h"
+#include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
+#include "Fishing/Integration/CatFishingCommandComponent.h"
 
 #include "Algo/Unique.h"
 #include "Animation/AnimSequenceBase.h"
@@ -1010,10 +1013,11 @@ bool ACatFishPickupActor::IsAuthorityRequestSpatiallyValid(const AController* Re
 	const APawn* Pawn = RequestingController ? RequestingController->GetPawn() : nullptr;
 	const UCatInteractionSettings* Settings = GetDefault<UCatInteractionSettings>();
 	UWorld* World = GetWorld();
-	// 服务器复核＝统一半径＋技术余量；半径未配置时返回 0 并在这里 fail-closed，不退回旧的 350 厘米。
+	// 墓碑（2026-09-14，T15 验收回退）：§5.5 的 150cm 是玩法半径，不授权抹掉网络余量。
+	// 依 CatInteractionSettings 2026-09-12 统一半径裁决，服务器仍加技术容差，避免准星亮却按不动；身体→碰撞中心测量保留。
 	const double ServerDistance = Settings ? Settings->GetServerInteractionDistanceCentimeters() : 0.0;
 	if (!HasAuthority() || !Pawn || !Settings || !World || ServerDistance <= 0.0
-		|| FVector::Dist(Pawn->GetPawnViewLocation(), GetActorLocation()) > ServerDistance)
+		|| FVector::Dist(Pawn->GetActorLocation(), GetFishingCollisionCenter()) > ServerDistance)
 	{
 		return false;
 	}
@@ -1023,7 +1027,7 @@ bool ACatFishPickupActor::IsAuthorityRequestSpatiallyValid(const AController* Re
 	}
 	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(CatFishPickupLineOfSight), true, Pawn);
 	FHitResult Hit;
-	const bool bHit = World->LineTraceSingleByChannel(Hit, Pawn->GetPawnViewLocation(), GetActorLocation(),
+	const bool bHit = World->LineTraceSingleByChannel(Hit, Pawn->GetPawnViewLocation(), GetFishingCollisionCenter(),
 		Settings->TargetingTraceChannel, QueryParams);
 	return !bHit || Hit.GetActor() == this;
 }
@@ -1044,6 +1048,20 @@ bool ACatFishPickupActor::Interact_Implementation(AController* RequestingControl
 		return true;
 	}
 
+	if (UCatFishingResolutionSubsystem* Queue = GetWorld()->GetSubsystem<UCatFishingResolutionSubsystem>())
+	{
+		Queue->Enqueue(ECatFishingResolution::Catch, RequestingController, RequestId,
+			[WeakThis = TWeakObjectPtr<ThisClass>(this), Requester = TWeakObjectPtr<AController>(RequestingController), RequestId]()
+			{
+				if (WeakThis.IsValid() && Requester.IsValid()) WeakThis->ResolveFishingPickupFromAuthority(Requester.Get(), RequestId);
+			});
+		return true; // 仅受理；最终结果由仲裁回执给出。
+	}
+	return false;
+}
+
+bool ACatFishPickupActor::ResolveFishingPickupFromAuthority(AController* RequestingController, const FGuid RequestId)
+{
 	APlayerState* PlayerState = RequestingController ? RequestingController->PlayerState : nullptr;
 	const FString StableNetId = PlayerState && PlayerState->GetUniqueId().IsValid()
 		? PlayerState->GetUniqueId()->ToString() : FString();
@@ -1051,7 +1069,7 @@ bool ACatFishPickupActor::Interact_Implementation(AController* RequestingControl
 		*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 	if (PickupTerminalByRequester.Contains(CacheKey))
 	{
-		return true;
+		return PickupTerminalByRequester[CacheKey].bCommitted;
 	}
 	FCatDomainCommandResult Terminal;
 	Terminal.RequestId = RequestId;
@@ -1066,7 +1084,7 @@ bool ACatFishPickupActor::Interact_Implementation(AController* RequestingControl
 	{
 		Terminal.Error = ECatDomainCommandError::AlreadyResolved;
 	}
-	else if (!Character || !Condition || Condition->GetSnapshot().bDowned || !IsAuthorityRequestSpatiallyValid(RequestingController))
+	else if (!Character || UCatGE_FishingScoopCooldown::IsOperationBlocked(Character) || !Condition || Condition->GetSnapshot().bDowned || !IsAuthorityRequestSpatiallyValid(RequestingController))
 	{
 		Terminal.Error = ECatDomainCommandError::PermissionDenied;
 	}
@@ -1085,6 +1103,19 @@ bool ACatFishPickupActor::Interact_Implementation(AController* RequestingControl
 			: ECatDomainCommandError::DependencyUnavailable;
 	}
 	PickupTerminalByRequester.Add(CacheKey, Terminal);
+	if (!Terminal.bCommitted) UCatGE_FishingScoopCooldown::ApplyMissFromAuthority(RequestingController);
+	if (ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(RequestingController))
+	{
+		FCatFishingCommandResult Result;
+		Result.CommandType = ECatFishingCommandType::RequestScoop;
+		Result.RequestId = RequestId;
+		Result.bCommitted = Terminal.bCommitted;
+		Result.Error = Terminal.bCommitted ? ECatFishingCommandError::None : ECatFishingCommandError::StaleScoopTarget;
+		if (UCatFishingCommandComponent* Commands = Controller->FindComponentByClass<UCatFishingCommandComponent>()) Commands->DeliverResultFromAuthority(Result);
+	}
+	UE_LOG(LogCatFishContainers, Log, TEXT("Event=fish_pickup_resolved RequestId=%s FishInstanceId=%s Player=%s Committed=%d World=%s NetMode=%d Authority=1 LocalRole=%d"),
+		*RequestId.ToString(), *PresentationState.FishInstanceId.ToString(), *GetNameSafe(RequestingController), Terminal.bCommitted,
+		*GetNameSafe(GetWorld()), int32(GetNetMode()), int32(GetLocalRole()));
 	return Terminal.bCommitted;
 }
 
@@ -1209,4 +1240,9 @@ void ACatFishPickupActor::OnRep_PresentationState(const FCatFishPickupPresentati
 			*PresentationState.GroundNormal.ToCompactString(), PresentationState.VisualScale, *FishMesh->GetComponentScale().ToCompactString(),
 			*GetNameSafe(GetWorld()), GetNetMode(), *UEnum::GetValueAsString(GetLocalRole()));
 	}
+}
+
+FVector ACatFishPickupActor::GetFishingCollisionCenter() const
+{
+	return WorldCollision->Bounds.Origin;
 }

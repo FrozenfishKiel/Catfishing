@@ -1,4 +1,5 @@
 #include "Framework/Game/CatfishingGameModeBase.h"
+#include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
 
 #include "Equipment/Fragments/CatEquipmentFragment_Chum.h"
 #include "Camp/CatAltarActor.h"
@@ -805,7 +806,8 @@ bool ACatfishingGameModeBase::IsPieNoSessionAdmissionAllowed() const
 // 玩法命令 gate 流程：要求 authority、本局命令门开放、没有翻天过场且 Controller 命中 Active；退出与持久化收口不经过此门。
 bool ACatfishingGameModeBase::CanAcceptGameplayCommand(const AController* Controller) const
 {
-	return HasAuthority() && bRunCommandsOpen && !RunPublicState.DayTransition.bActive && IsControllerActive(Controller);
+	return HasAuthority() && bRunCommandsOpen && !RunPublicState.DayTransition.bActive
+		&& Controller && !UCatGE_FishingScoopCooldown::IsOperationBlocked(Controller->GetPawn()) && IsControllerActive(Controller);
 }
 
 // 操作准入与新咬钩分开：白天截止和夜晚不封锁抛收竿、松线、抄网或打窝。

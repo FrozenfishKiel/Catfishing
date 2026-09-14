@@ -1,4 +1,5 @@
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
+#include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
 
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Interaction/Grab/CatLightPropComponent.h"
@@ -98,6 +99,7 @@ void UCatPhysicsGrabComponent::ServerSetGrabInput_Implementation(const bool bLef
 
 void UCatPhysicsGrabComponent::ApplyGrabInput(const bool bLeft, const bool bHeld)
 {
+	if (bHeld && UCatGE_FishingScoopCooldown::IsOperationBlocked(GetOwner())) return;
 	FCatPhysicsGripState& State = bLeft ? LeftGrip : RightGrip;
 	if (!bHeld)
 	{

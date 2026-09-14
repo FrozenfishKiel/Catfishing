@@ -708,6 +708,22 @@ FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthorit
 	bFishBeached = bGroundResolved;
 	if (bGroundResolved)
 	{
+		if (!bWasBeached)
+		{
+			// T17：沿本步拖动段二分首个真实干地接触，避免固定步长度把鱼送过岸线才交付。
+			double WetAlpha = 0.0, DryAlpha = 1.0;
+			for (int32 Iteration = 0; Iteration < 12; ++Iteration)
+			{
+				const double Alpha = (WetAlpha + DryAlpha) * 0.5;
+				FVector Point, Normal;
+				AActor* GroundActor = nullptr;
+				if (TryResolveGroundedFishPosition(FMath::Lerp(State.FishWorldPosition, Step.ProposedFishWorldPosition, Alpha), Point, Normal, GroundActor))
+				{
+					DryAlpha = Alpha; GroundedPosition = Point; OutGroundNormal = Normal; OutGroundActor = GroundActor;
+				}
+				else WetAlpha = Alpha;
+			}
+		}
 		Motion.bSucceeded = true;
 		Motion.FishWorldPosition = GroundedPosition;
 		bOutBeachedThisStep = !bWasBeached;
@@ -899,6 +915,16 @@ void UCatFishingFightRunner::HandleFixedStep()
 			return;
 		}
 		State.CatStamina = ASC->GetTotalFightStamina();
+	}
+	// 墓碑（2026-09-14，T14；钓鱼规则 §4.6）：绿＋黄耗尽即结场，不再进入加速拖水等待危险深度。
+	if (SessionActor->bWaterResolutionPending) return;
+	if (State.bOperatorPresent && State.CatStamina <= 0.0)
+	{
+		const FCatFightOperatorRuntime* Primary = GetPrimaryOperator();
+		SessionActor->HandleCatEnteredDangerousWaterFromAuthority(0.0, Primary ? Primary->Character.Get() : nullptr);
+		UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_cat_resource_depleted SessionId=%s TotalStamina=%.3f World=%s NetMode=%d Authority=1 Result=QueuedCatInWater"),
+			*SessionActor->GetSnapshot().FishingSessionId.ToString(), State.CatStamina, *GetNameSafe(World), int32(World->GetNetMode()));
+		return;
 	}
 	bool bWaterDepartureRequested = false;
 	if (State.bOperatorPresent)
@@ -1329,5 +1355,36 @@ void UCatFishingFightRunner::HandleFixedStep()
 	PreviousFishLineTensionNewtons = Step.LineTensionNewtons;
 	PreviousFishEffortDirection = Step.FishEffortDirection;
 	PreviousFishExpectedSwimSpeedCentimetersPerSecond = Step.IntendedSwimSpeedCentimetersPerSecond;
+	// 实际 ASC 扣费后再次查总余额，不能等下一固定步或被放线回复救回资源归零。
+	if (State.bOperatorPresent && ASC && ASC->GetTotalFightStamina() <= 0.0)
+	{
+		const FCatFightOperatorRuntime* Primary = GetPrimaryOperator();
+		SessionActor->HandleCatEnteredDangerousWaterFromAuthority(0.0, Primary ? Primary->Character.Get() : nullptr);
+	}
+	else if (State.bOperatorPresent && !Step.bSlackRecoveryActive && !State.bFishExhausted)
+	{
+		const FCatFightOperatorRuntime* Primary = GetPrimaryOperator();
+		ACatCharacter* Character = Primary ? Primary->Character.Get() : nullptr;
+		const FCatWaterSpatialResult CatShore = Character ? Water->QueryShoreRelation(Character->GetBodyFootPointWorld(), WaterRegion) : FCatWaterSpatialResult{};
+		FVector MovementThisStep = FVector::ZeroVector;
+		for (const FCatFightOperatorMovementSample& Sample : FrozenOperatorMovementSamples)
+			MovementThisStep += Sample.ActualDisplacementCentimeters;
+		const FCatWaterSpatialResult PreviousShore = Character
+			? Water->QueryShoreRelation(Character->GetBodyFootPointWorld() - MovementThisStep, WaterRegion) : FCatWaterSpatialResult{};
+		// CatWaterGeometry 在岸线容差内明确返回 0；连续位移跨岸也视为本步曾到 0。
+		// 内部正值是离岸距离，不能把大水域投影内的整片干地误当岸线；不另加高度/危险水深门槛。
+		const bool bCatReachedShore = CatShore.bSucceeded && (CatShore.SignedDistanceToShoreCm == 0.0
+			|| (PreviousShore.bSucceeded && PreviousShore.SignedDistanceToShoreCm < 0.0 && CatShore.SignedDistanceToShoreCm > 0.0));
+		double TotalStrength = 0.0;
+		// T14：猫岸距归零＋实际外游＋总力量严格小于鱼力；有效松线没有拖拽前提。
+		const bool bOutward = FVector::DotProduct(Step.ResolvedFishVelocityCentimetersPerSecond, CatShore.WaterwardDirection) > 0.0;
+		if (bCatReachedShore && bOutward
+			&& SessionActor->TryResolvePrimaryCombinedStrength(TotalStrength) && TotalStrength < Config.FishStrength)
+		{
+			UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_position_water SessionId=%s ShoreCm=%.3f TotalStrength=%.3f FishStrength=%.3f World=%s NetMode=%d Authority=1 Result=QueuedCatInWater"),
+				*SessionActor->GetSnapshot().FishingSessionId.ToString(), CatShore.SignedDistanceToShoreCm, TotalStrength, Config.FishStrength, *GetNameSafe(World), int32(World->GetNetMode()));
+			SessionActor->HandleCatEnteredDangerousWaterFromAuthority(0.0, Character);
+		}
+	}
 	SessionActor->HandleFightRunnerStepFromAuthority(Step, State.FishStamina, State.MotionIntent);
 }

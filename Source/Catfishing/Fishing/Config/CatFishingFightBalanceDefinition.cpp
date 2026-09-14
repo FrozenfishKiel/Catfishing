@@ -28,8 +28,6 @@ bool UCatFishingFightBalanceDefinition::IsRuntimeDefinitionReady() const
 		&& IsFishingFightBalanceFiniteNonNegative(CatHoldStaminaMultiplier)
 		&& IsFishingFightBalanceFiniteNonNegative(CatLoadStaminaMultiplier)
 		&& IsFishingFightBalanceFiniteNonNegative(SlackStaminaRegenPerSecond)
-		&& FMath::IsFinite(FishExhaustionThreshold)
-		&& FishExhaustionThreshold >= 0.0 && FishExhaustionThreshold <= 1.0
 		&& FMath::IsFinite(DisplayTensionNewtons) && DisplayTensionNewtons > 0.0
 		&& IsFishingFightBalanceFiniteNonNegative(EscapeSlackCentimeters)
 		&& IsFishingFightBalanceFiniteNonNegative(StalemateRodWearPerFishStrength)

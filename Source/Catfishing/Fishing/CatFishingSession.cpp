@@ -1,4 +1,8 @@
 #include "Fishing/CatFishingSession.h"
+#include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
+#include "Fishing/Integration/CatFishingCommandComponent.h"
+#include "Fishing/Integration/CatFishingResolutionSubsystem.h"
+#include "Condition/CatConditionComponent.h"
 #include "Collection/CatRunFishCollectionComponent.h"
 #include "Inventory/CatInventorySettings.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
@@ -223,6 +227,7 @@ FCatDomainCommandResult ACatFishingSession::ResolveFightExchangeFromStateTree(co
 // 当前显式主控接管同一会话；物理抓握本身不会调用此入口或转让会话。
 bool ACatFishingSession::ResumePrimaryControlFromAuthority(AController* NewFisherController)
 {
+	ClearCancelHoldFromAuthority();
 	const FString NewStableNetId = ResolveStableNetId(NewFisherController);
 	ACatCharacter* NewCharacter = NewFisherController ? Cast<ACatCharacter>(NewFisherController->GetPawn()) : nullptr;
 	UCatAbilitySystemComponent* NewASC = NewCharacter ? NewCharacter->GetCatAbilitySystemComponent() : nullptr;
@@ -437,14 +442,14 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 		FCollisionQueryParams SightParams(SCENE_QUERY_STAT(CatScoopLineOfSight), true, ScoopingCharacter);
 		SightParams.AddIgnoredActor(Encounter);
 		bHasLineOfSight = !GetWorld()->LineTraceTestByChannel(ScoopingCharacter->GetPawnViewLocation(),
-			Encounter->GetActorLocation(), Settings->ScoopTraceChannel, SightParams);
+			Encounter->GetFishingCollisionCenter(), Settings->ScoopTraceChannel, SightParams);
 	}
 	const FVector GroundQueryLocation = GroundHit.bBlockingHit ? GroundHit.ImpactPoint : BodyFootLocation;
 	const FCatWaterSpatialResult GroundSpatial = Water && ScoopingCharacter && AttemptSnapshot.WaterRegion.IsValid()
 		? Water->QueryShoreRelation(GroundQueryLocation, AttemptSnapshot.WaterRegion)
 		: FCatWaterSpatialResult{};
 	const double FishRadius = FishDefinition ? FishDefinition->ScoopTargetRadiusCentimeters : 0.0;
-	const FVector FishLocation = Encounter ? Encounter->GetActorLocation() : FVector::ZeroVector;
+	const FVector FishLocation = Encounter ? Encounter->GetFishingCollisionCenter() : FVector::ZeroVector;
 	// 抄鱼与拾取共用单嘴约束；鱼护虽在背包中，其可见嘴部载体仍占用这一位置。
 	const bool bMouthFree = ScoopingCharacter && ScoopingCharacter->GetMouthCarriedActor() == nullptr;
 	// 高差单独算一遍：DoesScoopRayReachFish 内部也会因为高差返回 false，光看它分不清「没对准」还是「站太高」。
@@ -814,7 +819,8 @@ bool ACatFishingSession::ScheduleWaitingProbeFromStateTree()
 	double BaitRateMultiplier = 1.0;
 	double BaitMinimumDelayMultiplier = 1.0;
 	// 鱼饵按其配置的倍率修正基础上钩率与最小延迟。
-	if (const UCatEquipmentDefinition* Bait = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(AttemptSnapshot.BaitDefinitionId))
+	if (const UCatEquipmentDefinition* Bait = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(CastEquipment.IsValid()
+		? CastEquipment->GetCurrentFishingBaitDefinitionId(Snapshot.FishingSessionId) : NAME_None))
 	{
 		BaitRateMultiplier = Bait->FindFragment<UCatEquipmentFragment_Bait>()->BiteRateMultiplier;
 		BaitMinimumDelayMultiplier = Bait->FindFragment<UCatEquipmentFragment_Bait>()->MinimumBiteDelayMultiplier;
@@ -1073,6 +1079,25 @@ bool ACatFishingSession::OpenTrueBiteWindowFromAuthority()
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_bait_refund_boundary SessionId=%s World=%s NetMode=%d Authority=1 LocalRole=%d Result=TrueBiteEstablished"),
 		*Snapshot.FishingSessionId.ToString(), *GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()));
+	// 墓碑（2026-09-14，T13/T11；钓鱼规则 §4.5:209）：只在真咬读取 D0，响应窗移动不重算。
+	const UCatEquipmentDefinition* BiteRod = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(AttemptSnapshot.RodDefinitionId);
+	const UCatEquipmentFragment_Rod* BiteRodFragment = BiteRod ? BiteRod->FindFragment<UCatEquipmentFragment_Rod>() : nullptr;
+	TrueBiteDistanceCentimeters = FisherCharacter.IsValid()
+		? FVector::Distance(FisherCharacter->GetActorLocation(), Snapshot.FishEncounterActor->GetFishingCollisionCenter()) : -1.0;
+	if (!BiteRodFragment || !FMath::IsFinite(TrueBiteDistanceCentimeters) || TrueBiteDistanceCentimeters < 0.0)
+	{
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated, TEXT("True bite distance unavailable"));
+		return false;
+	}
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_true_bite_distance SessionId=%s D0Cm=%.3f LmaxCm=%.3f World=%s NetMode=%d Authority=1 LocalRole=%d"),
+		*Snapshot.FishingSessionId.ToString(), TrueBiteDistanceCentimeters, BiteRodFragment->MaximumLineLengthCentimeters,
+		*GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()));
+	if (TrueBiteDistanceCentimeters > BiteRodFragment->MaximumLineLengthCentimeters)
+	{
+		// 饵已提交，漂不丢；不能 Clamp 或先应用完美乘数把超长 D0 救回合法搏斗。
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Escaped, TEXT("True bite D0 exceeds Lmax"));
+		return false;
+	}
 	PublishBiteSignalFromAuthority();
 	// WindowEnds 必须在 EnterPhase 发布快照前写好，客户端第一次看到 TrueBiteWindow 时截止时间就是完整的。
 	const double PreviousWindowEnd = Snapshot.WindowEndsServerTime;
@@ -1140,11 +1165,11 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 	FrozenSelectionContext = FCatFishSelectionContext{};
 	FrozenSelectionContext.WaterRegion = AttemptSnapshot.WaterRegion;
 	// 再次采样打窝浓度（与上钩率采样同源），用于影响鱼种选择的品质/稀有度权重。
-	FrozenSelectionContext.ChumSample = Chum->SampleChumAtPoint(Snapshot.HookActor->GetActorLocation(),
+	FrozenSelectionContext.ChumSample = Chum->SampleChumAtPoint(AttemptSnapshot.ServerCorrectedLandingWorldPoint,
 		AttemptSnapshot.WaterRegion, World->GetTimeSeconds());
 	FrozenSelectionContext.TimeOfDay = BiteTimeOfDay;
 	FrozenSelectionContext.Weather = BiteWeather;
-	FrozenSelectionContext.BaitDefinitionId = AttemptSnapshot.BaitDefinitionId;
+	FrozenSelectionContext.BaitDefinitionId = Equipment->GetCurrentFishingBaitDefinitionId(Snapshot.FishingSessionId);
 	FrozenSelectionContext.ActivePlayerCount = PlayerCount;
 	FrozenSelectionContext.CombinedFishingStrength = FishingStrength;
 	FrozenSelectionContext.CombinedFightStamina = FightStamina;
@@ -1194,15 +1219,15 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 	const double SelectedVisualScale = FishPresentation
 		? FishPresentation->ComputeUniformVisualScale(FrozenSelectionResult.WeightKilograms) : 1.0;
 	UClass* FishClass = Presentation ? Presentation->FishEncounterActorClass.LoadSynchronous() : nullptr;
-	const FVector FishLocation = Snapshot.HookActor->GetActorLocation(); // 鱼在钩子所在位置咬钩。
+	const FVector FishLocation = AttemptSnapshot.ServerCorrectedLandingWorldPoint; // T13：合法实际落点冻结，漂表现不能改归属采样。
 	// 用 SpawnActorDeferred 而非直接 SpawnActor：需要先设置好初始 Transform/Owner，
 	// 再等下面显式调用 InitializeAuthoritativeIdentity 写好权威身份后才 FinishSpawning，
 	// 避免构造期蓝图逻辑读到一个身份尚未就绪的鱼 Actor。
 	ACatFishEncounterActor* Encounter = FishClass && FishClass->IsChildOf(ACatFishEncounterActor::StaticClass())
 		? World->SpawnActorDeferred<ACatFishEncounterActor>(FishClass, FTransform(FishLocation), this,
 			FisherCharacter.Get(), ESpawnActorCollisionHandlingMethod::AlwaysSpawn) : nullptr;
-	const double InitialLineLength = AttemptSnapshot.RodActor
-		? FVector::Distance(AttemptSnapshot.RodActor->GetRodTipWorldTransform().GetLocation(), FishLocation) : 0.0;
+	// 墓碑（2026-09-14，T13；钓鱼规则 §4.5）：试探期距离只供表现，不能成为入战 L0。
+	const double InitialLineLength = FVector::Distance(FisherCharacter->GetActorLocation(), FishLocation);
 	if (!Encounter)
 	{
 		SelectionResolution = ECatFishSelectionResolution::Failed;
@@ -1385,7 +1410,6 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	Config.ReelSpeedCentimetersPerSecond = FightBalance->ReelSpeedCentimetersPerSecond;
 	Config.FishFullEffortSpeedCentimetersPerSecond = Personality->FullEffortMovementSpeedCentimetersPerSecond;
 	Config.ExhaustedCatEscapeSpeedMultiplier = FightBalance->ExhaustedCatEscapeSpeedMultiplier;
-	Config.FishExhaustionThreshold = FightBalance->FishExhaustionThreshold;
 	Config.StrongConfrontationAlignmentThreshold = Personality->StrongConfrontationAlignmentThreshold;
 	Config.StrongConfrontationConfirmationSeconds = Personality->StrongConfrontationConfirmationSeconds;
 	Config.AngleStrengthExponent = Personality->AngleStrengthExponent;
@@ -1429,19 +1453,20 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	InitialState.CatStamina = AbilitySystem->GetTotalFightStamina();
 	InitialState.FishStamina = Snapshot.FishFightStaminaRemaining * FishStaminaScale;
 	const FVector RodTipWorldPosition = Rod->GetRodTipWorldTransform().GetLocation();
-	const double RequestedInitialLineLength = Encounter->GetPresentationState().CurrentLineLength * LineLengthScale;
+	const double RequestedInitialLineLength = TrueBiteDistanceCentimeters * LineLengthScale;
 	const double MinimumPhysicalLineLength = FMath::Abs(
 		Encounter->GetActorLocation().Z - RodTipWorldPosition.Z);
 	// 完美提竿会缩短初始线长，但“账面线长”绝不能直接变得比 Actor 的真实距离还短。
 	// 先把请求值限制在竿尖到当前水面的最短物理长度内，下面再用同一长度真正投影鱼的位置。
-	if (!FMath::IsFinite(RequestedInitialLineLength)
+	if (!FMath::IsFinite(RequestedInitialLineLength) || TrueBiteDistanceCentimeters < 0.0
+		|| TrueBiteDistanceCentimeters > Config.MaximumLineLengthCentimeters
+		|| RequestedInitialLineLength > Config.MaximumLineLengthCentimeters
 		|| MinimumPhysicalLineLength > Config.MaximumLineLengthCentimeters)
 	{
 		// 入场没有补过体力，也就没有体力要回滚（09-11 裁决④）。
 		return false;
 	}
-	InitialState.LineLengthCentimeters = FMath::Clamp(RequestedInitialLineLength,
-		MinimumPhysicalLineLength, Config.MaximumLineLengthCentimeters);
+	InitialState.LineLengthCentimeters = FMath::Max(RequestedInitialLineLength, MinimumPhysicalLineLength);
 	InitialState.FishWorldPosition = Encounter->GetActorLocation();
 	InitialState.MotionIntent = ECatFishMotionIntent::StrugglingOutward; // 刚上钩默认视为鱼在向外挣扎。
 	InitialState.CatAction = ECatFightCatAction::None;
@@ -1775,6 +1800,11 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 		// 鱼距超过最大线长与逃脱余量后直接逃脱，无需先进入 NearShore。
 		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Escaped, TEXT("Fish escaped"));
 	}
+	else if (Step.bFishBeached && FightRunner->IsFishBeachedForAuthority())
+	{
+		if (!SpawnExhaustedFishPickupFromAuthority(Snapshot.FishEncounterActor->GetActorLocation()))
+			HandleFightRunnerFailureFromAuthority(TEXT("ShoreContactPickupSpawn"));
+	}
 	else if (Step.Outcome == ECatFightStepOutcome::FishExhausted
 		&& Snapshot.Phase == ECatFishingPhase::HookedFight)
 	{
@@ -1800,7 +1830,6 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 	{
 		const ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
 		const ACatFishingRodActor* Rod = Snapshot.RodActor;
-		const UCatFishPickupSettings* ItemSettings = GetDefault<UCatFishPickupSettings>();
 		if (!Encounter || !Rod || !FightRunner)
 		{
 			HandleFightRunnerFailureFromAuthority(TEXT("ExhaustedReelDependency"));
@@ -1812,15 +1841,8 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 		{
 			return;
 		}
-		const double ConfiguredReachTolerance = ItemSettings
-			? ItemSettings->LandingCompletionDistanceToRodCentimeters : 0.0;
-		const double ReachTolerance = FMath::IsFinite(ConfiguredReachTolerance)
-			&& ConfiguredReachTolerance > 0.0
-			? FMath::Max(5.0, ConfiguredReachTolerance) : 5.0;
-		// 收线约束端点是竿尖，不是相隔一段杆长的握把。已到达干地的鱼也不应因刚松开左键而卡住交接。
-		const FVector PickupTarget = Rod->GetRodTipWorldTransform().GetLocation();
-		if (FVector::Dist2D(Encounter->GetActorLocation(), PickupTarget) <= ReachTolerance
-			&& !SpawnExhaustedFishPickupFromAuthority(Encounter->GetActorLocation()))
+		// 墓碑（2026-09-14，T17；钓鱼规则 §5.3）：删去距竿尖 75cm 的二次门，触岸处立即交付。
+		if (!SpawnExhaustedFishPickupFromAuthority(Encounter->GetActorLocation()))
 		{
 			HandleFightRunnerFailureFromAuthority(TEXT("ExhaustedFishPickupSpawn"));
 		}
@@ -1838,6 +1860,30 @@ void ACatFishingSession::HandleCatEnteredDangerousWaterFromAuthority(
 	ACatCharacter* Character = AffectedCharacter ? AffectedCharacter : FisherCharacter.Get();
 	if (!Character || !Snapshot.RodActor
 		|| !Snapshot.RodActor->IsPrimaryOperator(Character->GetPlayerState())) return;
+	if (!bResolvingWater)
+	{
+		if (bWaterResolutionPending) return;
+		if (UCatFishingResolutionSubsystem* Queue = GetWorld()->GetSubsystem<UCatFishingResolutionSubsystem>())
+		{
+			bWaterResolutionPending = true;
+			Queue->Enqueue(ECatFishingResolution::Water, Character->GetController(), Snapshot.FishingSessionId,
+				[WeakThis = TWeakObjectPtr<ThisClass>(this), WeakCharacter = TWeakObjectPtr<ACatCharacter>(Character), ImmersionDepthCentimeters]()
+				{
+					if (!WeakThis.IsValid() || !WeakCharacter.IsValid()) return;
+					WeakThis->bWaterResolutionPending = false;
+					if (UCatConditionComponent* Condition = WeakCharacter->GetConditionComponent()) Condition->SetWetFromAuthority(true);
+					if (WeakThis->IsTerminal())
+					{
+						// 同刻鱼已经进嘴，落水只补后果，不撤销实物／捕获登记。
+						WeakCharacter->Multicast_PlayCosmeticEvent(ResolveTerminalFisherPresentationTag(ECatFishingOutcome::CatInWater));
+						return;
+					}
+					TGuardValue<bool> Guard(WeakThis->bResolvingWater, true);
+					WeakThis->HandleCatEnteredDangerousWaterFromAuthority(ImmersionDepthCentimeters, WeakCharacter.Get());
+				});
+			return;
+		}
+	}
 	UE_LOG(LogCatFishing, Warning,
 		TEXT("Event=fishing_cat_entered_dangerous_water SessionId=%s DepthCm=%.2f Phase=%s Result=TerminalCatInWater World=%s Authority=%d LocalRole=%d %s"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), ImmersionDepthCentimeters,
@@ -1928,7 +1974,7 @@ bool ACatFishingSession::SpawnExhaustedFishPickupFromAuthority(const FVector& Su
 	return SpawnLandedFishPickupFromAuthority(SurfaceLocation,
 		Snapshot.FishEncounterActor
 			? Snapshot.FishEncounterActor->GetPresentationState().GroundNormal : FVector::UpVector,
-		TEXT("Grounded exhausted fish reached the rod tip as world pickup"));
+		TEXT("Exhausted fish touched shore as world pickup"));
 }
 
 // 图鉴首次条件冻结流程：把咬钩成立那一刻的水域、时段、天气一并交给实物鱼（图鉴 §3.1.5:132）。
@@ -2227,7 +2273,7 @@ bool ACatFishingSession::EvaluateStrengthCheckOrderFromAuthority(const TCHAR* Tr
 	return false;
 }
 
-// 碾压甩岸流程：把鱼直接送到持竿猫脚下的干地并交接成待拾取世界鱼（§4.2:178"飞上岸的鱼进入待拾取状态，
+// 碾压甩岸流程：沿钓线向猫身后固定距离找可达干地，失败才回脚下（§4.2:178"飞上岸的鱼进入待拾取状态，
 // 不直接进主钓手库存"）。它不是 AutoHauling——那条是鱼体力归零后的力竭拖岸，走 Runner 与 ExhaustedReel。
 bool ACatFishingSession::FlingFishAshoreFromAuthority()
 {
@@ -2260,42 +2306,55 @@ bool ACatFishingSession::FlingFishAshoreFromAuthority()
 	const FVector BackwardDirection = FVector(ToFisher.X, ToFisher.Y, 0.0).GetSafeNormal();
 	const UCatWaterQuerySubsystem* Water = World->GetSubsystem<UCatWaterQuerySubsystem>();
 	constexpr double MinimumDryGroundHeightCentimeters = 1.0;
-	// 依次试满距、2/3、1/3，最后退回脚下（0）；第一个落在干地上的点就用它。
-	const TArray<double>& DistanceFractions = GetDefault<UCatFishingSettings>()->GetOverpowerLandingDistanceFractions();
+	// 墓碑（2026-09-14，T17；钓鱼规则 §4.2）：原来只向下查地表，能把鱼交付到墙后／墙顶。
+	// 先扫完整通路限制可达身后距离，再从最远可达点向猫回收找最近干地；无可用干地按脚下兜底。
+	const double FlingDistance = GetDefault<UCatFishingSettings>()->GetOverpowerFlingDistanceCentimeters();
+	FCollisionQueryParams PathParams(SCENE_QUERY_STAT(CatOverpowerPath), false);
+	for (const AActor* Ignored : IgnoredActors) if (Ignored) PathParams.AddIgnoredActor(Ignored);
+	const FVector Clearance(0, 0, 50.0);
+	FHitResult Hit;
+	const bool bBlockedBeforeCat = World->SweepSingleByChannel(Hit,
+		Snapshot.FishEncounterActor->GetFishingCollisionCenter() + Clearance, FootPoint + Clearance,
+		FQuat::Identity, ItemSettings->LandingGroundTraceChannel, FCollisionShape::MakeSphere(5.0f), PathParams);
+	double ReachableDistance = bBlockedBeforeCat ? 0.0 : FlingDistance;
+	if (!bBlockedBeforeCat && World->SweepSingleByChannel(Hit, FootPoint + Clearance,
+		FootPoint + BackwardDirection * FlingDistance + Clearance, FQuat::Identity,
+		ItemSettings->LandingGroundTraceChannel, FCollisionShape::MakeSphere(5.0f), PathParams))
+		ReachableDistance = FMath::Max(0.0, FlingDistance * Hit.Time - 5.0);
 	FVector LandingPoint = FootPoint;
 	FVector LandingNormal = FVector::UpVector;
 	bool bFoundDryGround = false;
-	for (const double Fraction : DistanceFractions)
+	// 5cm 是空间搜索精度，不是玩法射程；保留配置采样点，并补连续回收避免漏掉窄岸。
+	TArray<double> Distances;
+	Distances.Add(ReachableDistance);
+	for (double Distance = ReachableDistance - 5.0; Distance > 0.0; Distance -= 5.0) Distances.Add(Distance);
+	for (double Fraction : GetDefault<UCatFishingSettings>()->GetOverpowerLandingDistanceFractions())
+		Distances.Add(FMath::Min(ReachableDistance, FlingDistance * Fraction));
+	Distances.Add(0.0);
+	Distances.Sort([](double A, double B) { return A > B; });
+	for (const double Distance : Distances)
 	{
-		const FVector Candidate = BackwardDirection.IsNearlyZero()
-			? FootPoint
-			: FootPoint + BackwardDirection * (GetDefault<UCatFishingSettings>()->GetOverpowerFlingDistanceCentimeters() * Fraction);
+		const FVector Candidate = FootPoint + BackwardDirection * Distance;
 		const FCatWorldSurfaceResult Surface = FCatWorldSurfaceResolver::ResolveHighestBlockingSurface(
 			World, Candidate, ItemSettings->LandingGroundTraceChannel, IgnoredActors);
-		const FVector Point = Surface.bSucceeded ? Surface.WorldPosition : Candidate;
-		// 同一 XY 的地表也可能是湖底：只接受确实高于水面的落点，否则鱼会"甩"进水里变成捡不到的对象。
+		if (!Surface.bSucceeded) continue;
+		const FVector Point = Surface.WorldPosition;
 		const FCatWaterImmersionResult Relation = Water && AttemptSnapshot.WaterRegion.IsValid()
-			? Water->QueryImmersionAtWorldPoint(Point, AttemptSnapshot.WaterRegion)
-			: FCatWaterImmersionResult{};
-		if (Relation.bSucceeded && Point.Z > Relation.WaterSurfaceWorldPoint.Z + MinimumDryGroundHeightCentimeters)
-		{
-			LandingPoint = Point;
-			LandingNormal = Surface.bSucceeded ? Surface.SurfaceNormal : FVector::UpVector;
-			bFoundDryGround = true;
-			break;
-		}
+			? Water->QueryImmersionAtWorldPoint(Point, AttemptSnapshot.WaterRegion) : FCatWaterImmersionResult{};
+		if (!Relation.bSucceeded || Point.Z <= Relation.WaterSurfaceWorldPoint.Z + MinimumDryGroundHeightCentimeters) continue;
+		// 再查到实际落点的路径，防止最高表面解析越过墙体或把墙顶当干地。
+		if (World->SweepSingleByChannel(Hit, FootPoint + Clearance, Point + Clearance, FQuat::Identity,
+			ItemSettings->LandingGroundTraceChannel, FCollisionShape::MakeSphere(5.0f), PathParams)) continue;
+		LandingPoint = Point;
+		LandingNormal = Surface.SurfaceNormal;
+		bFoundDryGround = true;
+		break;
 	}
-	if (!bFoundDryGround)
-	{
-		UE_LOG(LogCatFishing, Error,
-			TEXT("Event=fishing_overpower_fling_rejected SessionId=%s FootPoint=%s Backward=%s "
-				"FlingDistance=%.1f Reason=NoDryGroundAlongBackwardArc"),
-			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *FootPoint.ToCompactString(),
-			*BackwardDirection.ToCompactString(), GetDefault<UCatFishingSettings>()->GetOverpowerFlingDistanceCentimeters());
-		return false;
-	}
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_overpower_landing SessionId=%s Landing=%s ReachableCm=%.3f Result=%s World=%s NetMode=%d Authority=1 LocalRole=%d"),
+		*Snapshot.FishingSessionId.ToString(), *LandingPoint.ToCompactString(), ReachableDistance,
+		bFoundDryGround ? TEXT("NearestReachableDryGround") : TEXT("FootFallback"), *GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()));
 	return SpawnLandedFishPickupFromAuthority(LandingPoint, LandingNormal,
-		TEXT("Overpowered fish flung ashore at the operator's feet"));
+		TEXT("Overpowered fish delivered at reachable landing or foot fallback"));
 }
 
 // 苏醒计时流程：鱼一翻肚就起算（钓鱼规则 §5.3:260"拖动中计时照走"），到点仍没上岸就苏醒逃跑。
@@ -2323,6 +2382,20 @@ void ACatFishingSession::HandleExhaustedRevivalTimer()
 	{
 		return;
 	}
+	if (!bResolvingRevival)
+	{
+		if (UCatFishingResolutionSubsystem* Queue = GetWorld()->GetSubsystem<UCatFishingResolutionSubsystem>())
+		{
+			Queue->Enqueue(ECatFishingResolution::Revival, nullptr, Snapshot.FishingSessionId,
+				[WeakThis = TWeakObjectPtr<ThisClass>(this)]()
+				{
+					if (!WeakThis.IsValid()) return;
+					TGuardValue<bool> Guard(WeakThis->bResolvingRevival, true);
+					WeakThis->HandleExhaustedRevivalTimer();
+				});
+			return;
+		}
+	}
 	// "拖上岸或碾压甩上岸后不再苏醒"：鱼已经越过岸线就让收尾继续，不再重排计时。
 	if (FightRunner && FightRunner->IsFishBeachedForAuthority())
 	{
@@ -2341,6 +2414,7 @@ void ACatFishingSession::HandleExhaustedRevivalTimer()
 
 void ACatFishingSession::SuspendOperatorFromAuthority()
 {
+	ClearCancelHoldFromAuthority();
 	if (!HasAuthority() || IsTerminal()) return;
 	const ECatFishingPhase Phase = Snapshot.Phase;
 	const bool bFightUnattended = Phase == ECatFishingPhase::HookedFight
@@ -2539,6 +2613,85 @@ FCatFishingCommandResult ACatFishingSession::RequestHookFromAuthority(const FGui
 	return Result;
 }
 
+// 墓碑（2026-09-14，T16；钓鱼规则 §4.7、参数页）：玩家搏斗收竿由服务器计满 1.5 秒；旧立即终止只供权威内部清理。
+FCatFishingCommandResult ACatFishingSession::SetCancelHeldFromAuthority(AController* Controller, bool bHeld, FGuid RequestId)
+{
+	FCatFishingCommandResult Result;
+	Result.CommandType = ECatFishingCommandType::CancelFishing;
+	Result.RequestId = RequestId;
+	Result.FishingSessionId = Snapshot.FishingSessionId;
+	Result.CastAttemptId = Snapshot.CastAttemptId;
+	if (!HasAuthority() || !Controller || !RequestId.IsValid()) return Result;
+	if (!bHeld)
+	{
+		if (CancelHoldController == Controller) ClearCancelHoldFromAuthority();
+		Result.bCommitted = true; Result.Error = ECatFishingCommandError::None;
+		return Result;
+	}
+	if (IsTerminal() || !Snapshot.RodActor || !Snapshot.RodActor->IsPrimaryOperator(Controller->PlayerState)
+		|| UCatGE_FishingScoopCooldown::IsOperationBlocked(Controller->GetPawn()))
+	{
+		Result.Error = ECatFishingCommandError::NotFisher;
+		return Result;
+	}
+	if (!GetWorldTimerManager().IsTimerActive(CancelHoldTimer))
+	{
+		CancelHoldController = Controller;
+		CancelHoldControlEpoch = Snapshot.RodActor->GetControlEpoch();
+		CancelHoldRequestId = RequestId;
+		Snapshot.CancelHoldStartedServerTime = GetWorld()->GetTimeSeconds();
+		Snapshot.CancelHoldEndsServerTime = Snapshot.CancelHoldStartedServerTime + 1.5;
+		GetWorldTimerManager().SetTimer(CancelHoldTimer, this, &ThisClass::CompleteCancelHoldFromAuthority, 1.5f, false);
+		PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency);
+		UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_cancel_hold_started RequestId=%s SessionId=%s EndsAt=%.3f World=%s NetMode=%d Authority=1 LocalRole=%d"),
+			*RequestId.ToString(), *Snapshot.FishingSessionId.ToString(), Snapshot.CancelHoldEndsServerTime, *GetNameSafe(GetWorld()), int32(GetNetMode()), int32(GetLocalRole()));
+	}
+	Result.bCommitted = true; Result.Error = ECatFishingCommandError::None; // 只确认开始保持，终局另发回执。
+	return Result;
+}
+void ACatFishingSession::ClearCancelHoldFromAuthority()
+{
+	if (!HasAuthority()) return;
+	GetWorldTimerManager().ClearTimer(CancelHoldTimer);
+	if (Snapshot.CancelHoldEndsServerTime > 0.0)
+	{
+		UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_cancel_hold_cleared RequestId=%s SessionId=%s World=%s NetMode=%d Authority=1 LocalRole=%d"),
+			*CancelHoldRequestId.ToString(), *Snapshot.FishingSessionId.ToString(), *GetNameSafe(GetWorld()), int32(GetNetMode()), int32(GetLocalRole()));
+		Snapshot.CancelHoldStartedServerTime = Snapshot.CancelHoldEndsServerTime = 0.0;
+		PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency);
+	}
+	CancelHoldController.Reset();
+	CancelHoldRequestId.Invalidate();
+	CancelHoldControlEpoch = 0;
+}
+void ACatFishingSession::CompleteCancelHoldFromAuthority()
+{
+	AController* Controller = CancelHoldController.Get();
+	if (!Controller || IsTerminal() || !Snapshot.RodActor
+		|| !Snapshot.RodActor->IsPrimaryOperator(Controller->PlayerState)
+		|| Snapshot.RodActor->GetControlEpoch() != CancelHoldControlEpoch
+		|| UCatGE_FishingScoopCooldown::IsOperationBlocked(Controller->GetPawn()))
+	{
+		ClearCancelHoldFromAuthority(); return;
+	}
+	const double Remaining = Snapshot.CancelHoldEndsServerTime - GetWorld()->GetTimeSeconds();
+	if (Remaining > 0.0)
+	{
+		// TimerManager 与 World 浮点时间可相差一个舍入尾数；不足 1.5 秒只补等，不误取消保持。
+		GetWorldTimerManager().SetTimer(CancelHoldTimer, this, &ThisClass::CompleteCancelHoldFromAuthority,
+			float(FMath::Max(Remaining, 0.0001)), false);
+		return;
+	}
+	FCatFishingSessionCommandContext Context;
+	Context.RequestId = CancelHoldRequestId;
+	Context.FishingSessionId = Snapshot.FishingSessionId;
+	Context.CastAttemptId = Snapshot.CastAttemptId;
+	Context.ExpectedRevision = Snapshot.Revision;
+	const FCatFishingCommandResult Result = CutLineFromAuthority(Controller, Context);
+	if (UCatFishingCommandComponent* Commands = Controller->FindComponentByClass<UCatFishingCommandComponent>()) Commands->DeliverResultFromAuthority(Result);
+	ClearCancelHoldFromAuthority();
+}
+
 FCatFishingCommandResult ACatFishingSession::CancelFromAuthority(const FGuid RequestId)
 {
 	if (const FCatFishingCommandResult* Cached = CancelTerminalByRequest.Find(RequestId)) return *Cached;
@@ -2698,6 +2851,7 @@ void ACatFishingSession::AbortPreparedSessionFromAuthority()
 void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, const ECatFishingOutcome FinalOutcome,
 	const TCHAR* DiagnosticReason)
 {
+	ClearCancelHoldFromAuthority();
 	if (!HasAuthority() || IsTerminal())
 	{
 		return;
@@ -2865,6 +3019,7 @@ bool ACatFishingSession::IsTerminal() const
 // 既不补发捕获事务，也不回满任何人的搏斗体力。
 void ACatFishingSession::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	GetWorldTimerManager().ClearTimer(CancelHoldTimer);
 	if (FightRunner) FightRunner->Stop();
 	GetWorldTimerManager().ClearTimer(BiteWarningTimerHandle);
 	GetWorldTimerManager().ClearTimer(ProbeTimerHandle);

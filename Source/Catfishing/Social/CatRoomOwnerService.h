@@ -28,6 +28,7 @@ UCLASS()
 class CATFISHING_API UCatRoomOwnerService : public UWorldSubsystem
 {
 	GENERATED_BODY()
+	friend class FCatFishingR3ResolutionTest;
 
 public:
 	/** 只在 authority Game World 创建；客户端从 ACatfishingPlayerState::IsRoomOwner() 读复制结论，不在本地平行推断。 */
@@ -44,6 +45,8 @@ public:
 
 	/** 该 Controller 当前是不是房主；空 Controller、无身份或房主尚未确立一律 false。 */
 	bool IsRoomOwner(const AController* Controller) const;
+	/** 钓鱼同时间戳仲裁只读既有加入序；未登记不伪造席位。 */
+	int64 GetJoinSequence(const AController* Controller) const;
 
 	/**
 	 * 房主把某人踢出本局（联机社交 §3.1.1、§4 软性：一切社交僵局的兜底）。

@@ -117,8 +117,7 @@ public:
 	/** Only validates or revokes explicit primary control. Physical helpers never become Session members. */
 	bool ReconcilePrimaryControlFromPhysicalGrip(ACatFishingRodActor* Rod);
 
-	/** 抄网目标粗筛：按鱼与请求者的水平距离找最近的已上钩会话；精确范围仍由 Session 裁决。 */
-	ACatFishingSession* FindNearestScoopableSession(const FVector& WorldLocation, double MaxDistanceCentimeters);
+	// 墓碑（2026-09-14，T15；钓鱼规则 §5.5）：最近 Session 搜索已删除，准星目标由 CatFishingAimLibrary 统一解析。
 
 	/**
 	 * 空闲竿接管：会话唯一性属于鱼竿，主控可由不同玩家显式取得；

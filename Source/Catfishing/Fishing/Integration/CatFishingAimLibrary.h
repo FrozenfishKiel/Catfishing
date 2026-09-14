@@ -17,6 +17,8 @@ class CATFISHING_API UCatFishingAimLibrary : public UBlueprintFunctionLibrary
 	GENERATED_BODY()
 
 public:
+	/** 视角中心选鱼身份；资格仍由服务器按身体射线与碰撞中心复核。 */
+	static AActor* ResolveFishingViewTarget(APlayerController* Controller, const FVector& Origin, const FVector& Direction);
 	/** 显示鼠标时取鼠标射线，否则取当前镜头准星射线；仅在本地采集输入。 */
 	static bool TryGetLocalCastViewRay(APlayerController* Controller, FVector& OutOrigin, FVector& OutDirection);
 	/** 服务器限定输入射线的来源和朝向；落点仍须经过水域、竿尖射程及角色视线裁决。 */
@@ -53,8 +55,8 @@ public:
 	static float ChargeAlphaFromHeldSeconds(float HeldSeconds);
 
 	/**
-	 * 解析抄网唯一有效长度：玩家必须在服务器装备快照里选中一份完整 ScoopNet；有效长度取它与
-	 * 全局 Fishing 上限的较小值。服务器裁决与 debug 显示共用此入口，避免无装备时仍显示绿色范围。
+	 * 解析抄网唯一有效长度：玩家必须选中完整 ScoopNet；有效长度只读全局 Fishing 射程。
+	 * 服务器裁决与 debug 显示共用此入口，避免无装备时仍显示绿色范围。
 	 */
 	static bool TryResolveScoopReach(const UCatEquipmentComponent* Equipment, double& OutReachCentimeters);
 

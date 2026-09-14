@@ -12,8 +12,8 @@ class CATFISHING_API UCatFishPickupSettings : public UDeveloperSettings
 	GENERATED_BODY()
 
 public:
-	/** 上岸终态允许鱼离竿尖的完成距离，单位厘米；FishingSession 用它判断搏斗是否已经转成地面鱼。 */
-	UPROPERTY(Config, EditAnywhere, Category="LandedFish", meta=(ClampMin="1.0", Units="cm"))
+	/** 墓碑（2026-09-14，T17；钓鱼规则 §5.3）：触岸即交付，仅保留旧配置序列化入口。 */
+	UPROPERTY(Config, EditAnywhere, Category="LandedFish", meta=(DeprecatedProperty, DeprecationMessage="触岸处立即生成 Pickup；旧距竿尖门槛不再使用。"))
 	double LandingCompletionDistanceToRodCentimeters = 75.0;
 
 	/** 上岸落点向下探测使用的碰撞通道；FishingSession 和拾取 Actor 用它把鱼贴到可站立表面。 */

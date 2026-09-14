@@ -21,7 +21,8 @@ enum class ECatFishingCommandType : uint8
 	 * 主钓手按＝发起换人请求，再按＝取消；岸上替补按＝接手。请求无时限挂起，本竿结束自然失效。
 	 * 键位随装备栏重构另定（09-11 裁决①「E 换人」保留，指的是主钓手交接、不是已作废的辅助位）。
 	 */
-	RequestHandoff
+	RequestHandoff,
+	CancelReleased
 };
 
 UENUM(BlueprintType)

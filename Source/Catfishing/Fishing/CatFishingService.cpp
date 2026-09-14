@@ -264,18 +264,19 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 		return Finish(Result);
 	}
 	const FVector ViewOrigin = Character->GetPawnViewLocation();
-	// 射程起算点：现行实现是竿尖，设计 §3.1 的 D_click 是猫站立点。已登记的口径偏离，散布沿用同一起点保持自洽。
-	const FVector RangeOrigin = Rod->GetRodTipWorldTransform().GetLocation();
+	// 墓碑（2026-09-14，T13）：删除竿尖射程起点；钓鱼规则 §3.1 的 D_click 从猫站立点算。
+	// 竿尖只负责漂飞行表现，不给不同杆长额外射程。
+	const FVector RangeOrigin = Character->GetBodyFootPointWorld();
 	const FVector ToLandingFromView = ClickedWater.WaterSurfaceWorldPoint - ViewOrigin;
-	const FVector ToLandingFromRod = ClickedWater.WaterSurfaceWorldPoint - RangeOrigin;
+	const FVector ToLandingFromCat = ClickedWater.WaterSurfaceWorldPoint - RangeOrigin;
 	const UCatEquipmentFragment_Float* FloatFragment = FloatDefinition->FindFragment<UCatEquipmentFragment_Float>();
-	const double MaxRange = FMath::Min(RodDefinition->FindFragment<UCatEquipmentFragment_Rod>()->MaximumLineLengthCentimeters,
-		FloatFragment->MaximumCastDistanceCentimeters);
-	if (!FMath::IsFinite(MaxRange) || MaxRange <= 0.0 || ToLandingFromRod.Length() > MaxRange
-		|| ToLandingFromView.IsNearlyZero() || ToLandingFromRod.IsNearlyZero())
+	// 墓碑（2026-09-14，T13；钓鱼规则 §3.1/§4.5）：漂射程不再与竿 Lmax 取 min；线长超限由真咬 D0 独立结算鱼逃。
+	const double MaxRange = FloatFragment->MaximumCastDistanceCentimeters;
+	if (!FMath::IsFinite(MaxRange) || MaxRange <= 0.0 || ToLandingFromCat.Length() > MaxRange
+		|| ToLandingFromView.IsNearlyZero() || ToLandingFromCat.IsNearlyZero())
 	{
 		UE_LOG(LogCatFishing, Warning, TEXT("Event=cast_range_rejected World=%s Request=%s DistanceCm=%.2f MaximumCm=%.2f Rod=%s Float=%s Landing=%s %s"),
-			*GetNameSafe(World), *Command.RequestId.ToString(EGuidFormats::DigitsWithHyphens), ToLandingFromRod.Length(), MaxRange,
+			*GetNameSafe(World), *Command.RequestId.ToString(EGuidFormats::DigitsWithHyphens), ToLandingFromCat.Length(), MaxRange,
 			*RodState.RodDefinitionId.ToString(), *Loadout.FloatDefinitionId.ToString(),
 			*ClickedWater.WaterSurfaceWorldPoint.ToString(), *CatLogContext::BuildControllerFields(FisherController));
 		Result.Command.Error = ECatFishingCommandError::CastOutOfRange;
@@ -304,11 +305,11 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 		const double ScatterRadius = ScatterRadiusCentimeters * FMath::Sqrt(FMath::FRandRange(0.0, 1.0));
 		LandingCandidate += FVector(FMath::Cos(ScatterAngleRadians) * ScatterRadius,
 			FMath::Sin(ScatterAngleRadians) * ScatterRadius, 0.0);
-		const FVector ScatteredFromRod = LandingCandidate - RangeOrigin;
-		const double ScatteredDistance = ScatteredFromRod.Length();
+		const FVector ScatteredFromCat = LandingCandidate - RangeOrigin;
+		const double ScatteredDistance = ScatteredFromCat.Length();
 		if (ScatteredDistance > MaxRange && ScatteredDistance > UE_DOUBLE_SMALL_NUMBER)
 		{
-			LandingCandidate = RangeOrigin + ScatteredFromRod * (MaxRange / ScatteredDistance);
+			LandingCandidate = RangeOrigin + ScatteredFromCat * (MaxRange / ScatteredDistance);
 		}
 	}
 	const FCatWaterSpatialResult Water = LandingCandidate.Equals(ClickedWater.WaterSurfaceWorldPoint)
@@ -323,6 +324,12 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 			*UEnum::GetValueAsString(Water.Error), *CatLogContext::BuildControllerFields(FisherController));
 		Result.Command.Error = Water.Error == ECatWaterQueryError::AmbiguousRegion
 			? ECatFishingCommandError::AmbiguousWater : ECatFishingCommandError::InvalidWaterTarget;
+		return Finish(Result);
+	}
+	// 水面修正不能把实际落点推出猫站立点的射程；合法落点随后冻结进 AttemptSnapshot。
+	if (FVector::Distance(RangeOrigin, Water.WaterSurfaceWorldPoint) > MaxRange)
+	{
+		Result.Command.Error = ECatFishingCommandError::InvalidWaterTarget;
 		return Finish(Result);
 	}
 	FGuid SessionId = FGuid::NewGuid();
@@ -1611,34 +1618,8 @@ ACatFishingSession* UCatFishingService::FindActiveSessionByRod(const ACatFishing
 	return nullptr;
 }
 
-ACatFishingSession* UCatFishingService::FindNearestScoopableSession(const FVector& WorldLocation,
-	const double MaxDistanceCentimeters)
-{
-	CompactSessions();
-	ACatFishingSession* Best = nullptr;
-	double BestDistanceSquared = FMath::Square(FMath::Max(0.0, MaxDistanceCentimeters));
-	for (const TPair<FGuid, TWeakObjectPtr<ACatFishingSession>>& Pair : Sessions)
-	{
-		ACatFishingSession* Session = Pair.Value.Get();
-		const ACatFishEncounterActor* Fish = Session ? Session->GetSnapshot().FishEncounterActor : nullptr;
-		// 与 Session::RequestScoop 的阶段口径保持一致：搏斗中和近岸都可抢抄（鱼身上的圈一直存在）。
-		// 这里只做粗筛路由，真正的射线∩圆判定和嘴叼世界鱼交接都在 Session 内部。
-		const ECatFishingPhase Phase = Session ? Session->GetSnapshot().Phase : ECatFishingPhase::Created;
-		if (!Session || Session->IsTerminal() || !Fish
-			|| (Phase != ECatFishingPhase::HookedFight && Phase != ECatFishingPhase::NearShore
-				&& Phase != ECatFishingPhase::ExhaustedReel))
-		{
-			continue;
-		}
-		const double DistanceSquared = FVector::DistSquared2D(WorldLocation, Fish->GetActorLocation());
-		if (DistanceSquared <= BestDistanceSquared)
-		{
-			BestDistanceSquared = DistanceSquared;
-			Best = Session;
-		}
-	}
-	return Best;
-}
+// 墓碑（2026-09-14，T15；钓鱼规则 §5.5）：FindNearestScoopableSession 已无消费者，F 改传准星目标身份。
+
 
 // 显式接管编排：等口恢复当前钓手身份，HookedFight 同时重绑当前钓手的 Runner。
 bool UCatFishingService::ResumeSessionControl(ACatFishingSession* Session, AController* NewFisherController)

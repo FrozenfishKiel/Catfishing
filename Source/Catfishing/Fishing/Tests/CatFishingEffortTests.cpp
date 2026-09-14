@@ -763,11 +763,13 @@ bool FCatFishingPassiveDragCannotExhaustFishTest::RunTest(const FString& Paramet
 	return !HasAnyErrors();
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingZeroPriceCannotSnapFishStaminaTest,
-	"Catfishing.Unit.Fishing.Effort.ZeroFishPriceCannotTriggerExhaustionSnap",
+// 墓碑（2026-09-14，T14；钓鱼规则 §4.6）：ZeroFishPriceCannotTriggerExhaustionSnap 改名；
+// 鱼仅在体力 <=0 时翻肚，退役四条吸附断言；保留零价格、真实费用、猫操作耗体与实际扣尽的检查。
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingZeroPriceAndPositiveFishStaminaTest,
+	"Catfishing.Unit.Fishing.Effort.ZeroFishPriceAndPositiveStaminaRemainConservative",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-bool FCatFishingZeroPriceCannotSnapFishStaminaTest::RunTest(const FString& Parameters)
+bool FCatFishingZeroPriceAndPositiveFishStaminaTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 	using namespace CatFishingEffortTest;
@@ -788,13 +790,15 @@ bool FCatFishingZeroPriceCannotSnapFishStaminaTest::RunTest(const FString& Param
 			Movement.StaminaDrain > 0.0 && Result.CatReelStaminaDrain > 0.0 && Result.CatRodStaminaDrain > 0.0);
 	}
 	FCatFightSimulationConfig Priced = MakeConfig();
-	// 独立米价明确选为0.001点/m，仅用于验证真实小额扣费之后的阈值吸附。
+	// 独立米价明确选为0.001点/m，验证真实小额费用不额外吞掉剩余正体力。
 	Priced.FishStaminaPerUnfulfilledMeter = 0.001;
 	const auto Charged = Step(Priced, State, MakeHeldConstraint());
 	TestTrue(TEXT("正负载产生真实且小于剩余量的原始费用"),
 		Charged.bSucceeded && Charged.FishUncappedStaminaDrain > 0.0 && Charged.FishUncappedStaminaDrain < State.FishStamina);
-	TestEqual(TEXT("本步真实正扣费后仍可按阈值吸附剩余体力"), Charged.FishStaminaDrain, State.FishStamina, 1e-9);
-	TestEqual(TEXT("有效阈值吸附进入力竭结果"), Charged.Outcome, ECatFightStepOutcome::FishExhausted);
+	TestTrue(TEXT("本步按真实小额费用扣减且正余额保持为正"), Charged.FishStaminaDrain > 0.0
+		&& FMath::IsNearlyEqual(Charged.FishStaminaDrain, Charged.FishUncappedStaminaDrain, 1e-9)
+		&& State.FishStamina - Charged.FishStaminaDrain > 0.0);
+	TestEqual(TEXT("真实小额扣费后正余额不进入力竭"), Charged.Outcome, ECatFightStepOutcome::None);
 	{
 		// 1e-4 cm 虽然很小，仍比纯舍入容差大；0.001点/m 对应的真实小金额不能被过滤。
 		auto TinyGapConfig = Priced;
@@ -810,8 +814,10 @@ bool FCatFishingZeroPriceCannotSnapFishStaminaTest::RunTest(const FString& Param
 			FCatFishingFightSimulator::FinalizeResolvedStep(TinyGapConfig, TinyGapState, Rod, TinyGap))) return false;
 		TestEqual(TEXT("数值容差不抹去真实的小段缺失"), TinyGap.FishUnfulfilledDistanceCentimeters, 1e-4, 1e-10);
 		TestEqual(TEXT("极小正金额仍按0.001点每米收费"), TinyGap.FishUncappedStaminaDrain, 1e-9, 1e-14);
-		TestEqual(TEXT("真实小额扣费仍保留原有尾数吸附规则"), TinyGap.FishStaminaDrain, TinyGapState.FishStamina);
-		TestEqual(TEXT("真实小额扣费仍能进入力竭"), TinyGap.Outcome, ECatFightStepOutcome::FishExhausted);
+		TestTrue(TEXT("极小真实费用照扣且正余额保持为正"), TinyGap.FishStaminaDrain > 0.0
+			&& FMath::IsNearlyEqual(TinyGap.FishStaminaDrain, TinyGap.FishUncappedStaminaDrain, 1e-14)
+			&& TinyGapState.FishStamina - TinyGap.FishStaminaDrain > 0.0);
+		TestEqual(TEXT("极小真实扣费后正余额不进入力竭"), TinyGap.Outcome, ECatFightStepOutcome::None);
 	}
 	State.FishStamina = 1e-9;
 	State.CatAction = ECatFightCatAction::Slack;

@@ -262,3 +262,9 @@ FString UCatRoomOwnerService::ResolveStableNetId(const AController* Controller)
 	const APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
 	return PlayerState && PlayerState->GetUniqueId().IsValid() ? PlayerState->GetUniqueId()->ToString() : FString();
 }
+
+int64 UCatRoomOwnerService::GetJoinSequence(const AController* Controller) const
+{
+	const int64* Sequence = JoinSequenceByPlayer.Find(ResolveStableNetId(Controller));
+	return Sequence ? *Sequence : MAX_int64;
+}

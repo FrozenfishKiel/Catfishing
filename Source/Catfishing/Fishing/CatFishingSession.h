@@ -36,6 +36,8 @@ class CATFISHING_API ACatFishingSession : public AActor
 {
 	GENERATED_BODY()
 	friend class FCatRunTransientCleanupTest;
+	friend class FCatFishingR3BaitDistanceTest;
+	friend class FCatFishingR3HoldTest;
 
 public:
 	/** 创建唯一 StateTree 组件、开启只读 Snapshot 复制并关闭 Tick。 */
@@ -62,6 +64,8 @@ public:
 	bool BeginProbeFromStateTree();
 	FCatFishingCommandResult RequestHookFromAuthority(FGuid RequestId);
 	FCatFishingCommandResult CancelFromAuthority(FGuid RequestId);
+	FCatFishingCommandResult SetCancelHeldFromAuthority(AController* Controller, bool bHeld, FGuid RequestId);
+	void ClearCancelHoldFromAuthority();
 	/** 上钩后的主动止损写口；只接受当前钓手和精确 Revision，提交后鱼/饵丢失，不追加或退还鱼竿磨损。 */
 	FCatFishingCommandResult CutLineFromAuthority(AController* RequestingController,
 		const FCatFishingSessionCommandContext& Context);
@@ -162,6 +166,14 @@ private:
 	friend class FCatFishingFormalPhysicalRunnerTest;
 	friend class UCatFishingService;
 	bool bFixedStepMutationBoundary = false;
+	bool bResolvingWater = false;
+	bool bWaterResolutionPending = false;
+	bool bResolvingRevival = false;
+	FTimerHandle CancelHoldTimer;
+	TWeakObjectPtr<AController> CancelHoldController;
+	uint32 CancelHoldControlEpoch = 0;
+	FGuid CancelHoldRequestId;
+	void CompleteCancelHoldFromAuthority();
 	friend class FCatFishBehaviorStateTreeRuntimeTest;
 	friend class FCatFishingSlackAimCommandRoutingTest;
 	friend class FCatRodSessionDurabilityTest;
@@ -224,7 +236,7 @@ private:
 	 */
 	void PublishBiteSignalFromAuthority();
 
-	/** 碾压达标：把鱼直接甩到持竿猫脚下的干地并进待拾取，跳过/中断搏斗循环。 */
+	/** 碾压达标：沿钓线向猫身后固定距离找可达干地，找不到才脚下兜底，交付待拾取鱼。 */
 	bool FlingFishAshoreFromAuthority();
 
 	/** 岸上世界鱼的唯一生成口；力竭拖岸与碾压甩岸共用，负责收口装备事务、隐藏水中 Encounter 并写 Landed 终态。 */
@@ -317,6 +329,8 @@ private:
 
 	/** 鱼运行态在会话创建时冻结的真实重量，单位千克。 */
 	double FishWeightKilograms = 0.0;
+	/** 真咬成立时的鱼猫距离（cm）；负值表示尚未冻结，不能从试探表现回填。 */
+	double TrueBiteDistanceCentimeters = -1.0;
 
 	/**
 	 * 本场冻结的鱼体力初值：鱼表「体力系数」× 实际重量（钓鱼规则 §4.1:160），入场时再乘完美削减。
