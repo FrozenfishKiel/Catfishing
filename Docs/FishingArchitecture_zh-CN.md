@@ -1,5 +1,33 @@
 # 钓鱼核心架构（技术文档）
 
+## 2026-09-14：真咬扣饵、距离冻结与超时收口
+
+本节为现行规则，替代下文 09-11 检查点中的抛竿预扣、快速抖动退款边界、成功返饵和满包退款。来源为仓库设计快照 `Knowledge/Design/GDD 系统分册/钓鱼系统/钓鱼规则.md` §3.3、§4.1、§4.5（上游参照 `d986285d`）；按 Debug 当前库存、StateTree 和物理链适配，未整分支合并。
+
+- `BeginFishingUse` 只验证当前饵/漂并绑定竿实例，`bUseAccepted` 表示获得使用权，数量仍在原库存。`CommitFishingBaitDeferred` 只在真咬入口消费原抛竿者**当时选中实例**的 1 份饵；原子库存写入后先关闭记录，再广播。等待期换饵不重设计时器。
+- 试探或预警时收竿不损饵；真咬后任何终局都不返饵。`ReleaseFishingUse` 只解锁。捕获收口只读 `IsFishingBaitCommitted`，不在捕获时补扣。真咬超时为 `HookWindowExpired` 终局，不再循环免费咬钩。
+- `OpenTrueBiteWindowFromStateTree` 在库存通知前冻结鱼猫距 D₀（厘米），以当刻钩点作为咬钩点；当前鱼 Actor 仍在有效提竿后生成。先扣饵，再检查 D₀≤竿资产的 Lmax；超限直接 `Escaped`，保留浮漂库存。响应窗移动不重算 D₀，完美系数沿用现有性格配置。入场仍经过现有竿尖高度、水面投影和真实几何校正，确保实际鱼位置满足线长约束。
+- 离场托管只转移原竿实例和会话记录，不搬普通背包、也不制造退款。记录弱引用原扣饵来源；来源仍有效时读其当前选择，来源已销毁则明确拒绝并让会话终止。已真咬的扣费终态随记录迁移，后续磨损仍写原竿。
+- 鱼种选择时机、选鱼权重的采样时点、窝点抽扣库存、逐鱼响应窗及试探演出不在本轮迁移。现行响应时长仍读 `TrueBiteWindowSeconds`，不把参数表中尚未接入的 8～15 秒或新鱼行为当成已实现；竿/鱼资产数值、UI布局、存档格式和 Cook 入口未改。
+
+修改前基线：Debug `c31107a0`，已跟踪工作区干净；根目录未跟踪交接导出文档保持原样。先在隔离工作区完成体力快照校验并形成 `0323855` 检查点，再实施本组。初始新测试编译缺少 `CatInventoryItemInstance.h`，已补齐；该失败不是原项目基线失败。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 使用权、调用方和结果 | `FishingService::BeginCast` → `Equipment::BeginFishingUse`；`CatFishingUseResults.h` | 原 Begin 预扣1；现只验有饵并锁竿，单位仍为份 | 所有 C++ 调用方改读 `bUseAccepted`；删除 `bBaitFrozen` | 先接收方、再调用方与回执 | 重复Begin、缺饵、最后一份、借竿、通知中离场 | 已迁移所有调用方；BaitRestock、OwnedRodLifecycle 与 BorrowedRod 审计通过，资产扫描0引用 |
+| 真咬数量写入 | `Session::OpenTrueBiteWindowFromStateTree` → `CommitFishingBaitDeferred` → `Inventory::ConsumeItemAtSlotInternal` | 原冻结抛竿饵；现扣原抛竿者当前选择 | 单一写口，先写数量并置已提交，再通知；捕获仅只读核对 | 写入→记录→选择/版本→复制 | 换饵、缺饵、回调重入、真咬重放 | 已删除预警与捕获补扣；BaitConfirmation 3/3通过，覆盖正式选饵、缺饵、重入、取消与满包；正式StateTree预警不扣/真咬扣通过 |
+| 终局、托管和持久化 | `ReleaseFishingUse`；`PreserveFishingResourcesForEquipmentShutdown` → `MoveFishingResourcesToCustodian` | 原退款、待退记录和托管退款格；现无退款，饵留原背包 | 删除全部退款字段、重试委托、离场待退扫描及专用扩容；保留原竿精确身份/磨损 | 迁移实例与记录→重绑Session→通知 | 满包释放、背包导出、原宿主销毁与保留竿 | 退款链全部删除；OwnedRodLifecycle 的离场导出/原宿主销毁/托管无补饵通过；借竿磨损与满包释放通过 |
+| D₀与入场计算 | `OpenTrueBiteWindowFromStateTree` → `ResolveHookSelectionFromAuthority` → `TryEnterHookedFightFromAuthority` | 原提竿时量竿尖距离；现真咬量鱼猫距 | 私有 `TrueBiteDistanceCentimeters=-1`；不复制不持久化；超限在完美折减前拒绝 | 冻结时点→扣饵→超限判断→窗口→物理投影 | 等于/大于Lmax、响应窗移动、完美与几何 | BiteTimingWorld 的D₀冻结、等于/大于Lmax、浮漂保留通过；OwnerRodHold真实输入→提竿→Runner通过 |
+| 超时、网络和表现消费者 | `HandleTrueBiteWindowExpired/FinalizeSession` → Session/Hook既有快照；`/Game/Data/StateTrees/ST_FishingSession` | 原WindowExpired回Waiting；现真咬超时直接终局 | 保留未真咬夜间竞态使用的WindowExpired→Waiting；真咬超时清全部计时器并停树 | 清理→原回执/复制→原HUD/漂终局 | 正式树、真实输入/Runner、WBP加载与联机回归 | 正式StateTree真咬超时终局、计时器清理及WBP绑定通过；GroupListenThreeClients在既有助手抓握断言失败，未证明本轮多人全链完成；真人画面和新包双端日志未验证 |
+| 资产、脚本、默认值、文档和旧代码 | `Content/Plugins`二进制包、现有钓鱼指南、唯一差距清单 | 旧结果字段可能有蓝图消费者；旧文字描述退款和循环 | 检查全部包后删旧字段；更新当前说明，历史验收注明只对应旧检查点 | 引用检查→清理→加载/回归；无资产生成或Cook改动 | `BaitAssetReferences.json`、diff/编译；保留正式资产值 | 1,996包扫描0引用/0错误，未发现LFS指针；旧字段及退款链均删除，无暂留兼容入口 |
+
+验证目录：`Saved/Integration/FishingBiteTiming-20260914/Saved/BiteValidation/`。`VerifiedEditorBuild.log`、补齐测试前提后的 `BaitFixtureBuild.log` 及 `VerifiedGameBuild.log` 编译成功；`VerifiedReport/index.json` 82项中79通过、3失败，修正缺饵夹具（避免库存正常自动选中备用饵）后 `BaitConfirmation/index.json` 3/3通过。按测试路径取最新结果的 `CombinedEvidence.json` 合计82项、80通过、2失败。换饵测试同时补齐了正式背包使用入口及资产定义要求的解锁资格，未修改生产权限闸门。
+
+剩余两项：① `EquipmentItemPickupRejectsFullBagAndPreventsReentrantDoubleGrant` 的“成功拾取销毁世界物”断言，在修改前已构建版本 `c1d732f` 同样复现（`PickupBaseline/index.json`）；该版本与本轮基线的 Inventory 源码无差异，实际入账一次的断言通过，世界物销毁状态断言未通过。② `GroupListenThreeClients` 的 `parking retains the independent helper body grip on both endpoints` 断言，与本文件旧清理节/差距清单已有抓握失败记录一致；本轮未修复或关闭该问题。
+
+contract：Editor/Game编译、引用清理、单次账单和库存不重扣等通过。runtime_behavior：测试世界中的正式StateTree、真实库存、借竿/离场、真咬超时/距离、真实持竿输入与Runner通过；多人组测试仍有上述缺口。presentation_delivery：现有正式WBP/Hook状态消费者通过相关测试，但NullRHI不证明真人画面；未Cook、未运行新Development包房主/客户端。实际本轮日志为验证目录内 `VerifiedTests.log`、`BaitConfirmation.log`，无 `-log` 参数也已落盘，它们是编辑器验证日志，不能冒充打包日志。本组不据此关闭 Fishing/Equipment/Delivery 模块。默认落盘事件：`fishing_use_bound`、`fishing_current_bait_committed`、`fishing_bait_commit_rejected`、`fishing_true_bite_distance`、`fishing_use_released`；沿用终局事件及 SessionId、World、NetMode、Authority、LocalRole 关联。运行层与表现交付层分别验收。
+
+
 ## 2026-09-14：删除无消费者的旧入口与 StateTree 节点
 
 当前生产链继续使用 CommandComponent → FishingService → Session → 固定步 FightRunner；助手通过物理抓握传力。旧协作拒绝链、重复抄网转发、旧交换节点与旧咬钩兼容节点已删除。下文历史检查点中“保留旧协作/交换反射入口”的记录仅描述当时状态，以本节为准。
@@ -23,7 +51,7 @@ presentation_delivery：未运行 Cook、打包双端默认日志或正式 WBP/�
 
 ## 2026-09-11：共享鱼竿与按快速抖动划界的退饵
 
-当前规则：鱼竿是可共享的同一物品实例，没有部署者专属操作或收纳权限。R 放下当前竿，空手时拿起 250cm 内无人操作的竿；无目标时仍从自己的背包部署。X 有鱼线时先收线，无鱼线时收进按键者的背包。单竿同时只有一个显式主控，普通物理帮助不会自动接任。抛出立即扣实际抛竿者 1 份鱼饵；快速抖动 `BiteWarning` 开始前收线退还，上鱼成功（Caught/Landed）也退还；快速抖动开始后普通收线不退，即使漏过窗口重新回到 Waiting。退款始终给原扣饵者，接管不会新扣饵。下文历史检查点中的“仅本人竿”“仅主人 X”及“提竿才确认饵消耗”不再是当前规则。
+历史检查点（饵料规则已由顶部09-14节替代）：鱼竿是可共享的同一物品实例，没有部署者专属操作或收纳权限。R 放下当前竿，空手时拿起 250cm 内无人操作的竿；无目标时仍从自己的背包部署。X 有鱼线时先收线，无鱼线时收进按键者的背包。单竿同时只有一个显式主控，普通物理帮助不会自动接任。抛出立即扣实际抛竿者 1 份鱼饵；快速抖动 `BiteWarning` 开始前收线退还，上鱼成功（Caught/Landed）也退还；快速抖动开始后普通收线不退，即使漏过窗口重新回到 Waiting。退款始终给原扣饵者，接管不会新扣饵。下文历史检查点中的“仅本人竿”“仅主人 X”及“提竿才确认饵消耗”不再是当前规则。
 
 本轮发现：试玩日志 `打包/Windows/Catfishing/Saved/Logs/Catfishing.log` 的 17:38–17:39 多次 R 已到服务器，却因筛掉另一玩家的附近竿而转入 PlaceRod，得到 `NoUsableInventoryRod`。未发现按离开时长拒绝拾取的计时规则。开始时工作区已有 Character/Physics、PlayerController、GameMode、Online 与网络测试并行改动，保留并单独审查本轮差异。修改前 FirstRod 自动化基线 1 项通过；新构建/运行结果见本节交付记录。
 

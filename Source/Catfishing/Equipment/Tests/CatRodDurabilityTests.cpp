@@ -138,7 +138,7 @@ namespace CatRodDurabilityTests
 			if (!Test.TestTrue(TEXT("freezes fishing use of the deployed rod"), Equipment->BeginFishingUse(SessionId,
 				Loadout.RodItemInstanceId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId,
 				Loadout.RodDefinitionId, Loadout.BaitDefinitionId, Loadout.FloatDefinitionId,
-				Loadout.Revision).bBaitFrozen)) return false;
+				Loadout.Revision).bUseAccepted)) return false;
 			return !bCommitBait || Test.TestTrue(TEXT("commits this session bait"),
 				Equipment->CommitFishingBaitDeferred(SessionId).bApplied);
 		}

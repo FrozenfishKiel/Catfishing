@@ -155,7 +155,7 @@ bool FCatFishingFormalPhysicalRunnerTest::RunTest(const FString& Parameters)
 		const FGuid SessionId = FGuid::NewGuid();
 		if (!TestTrue(TEXT("reserves the actual deployed rod and bait/float instances"), Equipment->BeginFishingUse(SessionId,
 			Loadout.RodItemInstanceId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId,
-			Loadout.RodDefinitionId, Loadout.BaitDefinitionId, Loadout.FloatDefinitionId, Loadout.Revision).bBaitFrozen)
+			Loadout.RodDefinitionId, Loadout.BaitDefinitionId, Loadout.FloatDefinitionId, Loadout.Revision).bUseAccepted)
 			|| !TestTrue(TEXT("commits the hooked bait through its resource transaction"), Equipment->CommitFishingBaitDeferred(SessionId).bApplied)) return false;
 		ON_SCOPE_EXIT { Equipment->ReleaseFishingUse(SessionId); };
 		double InitialDurability = 0;

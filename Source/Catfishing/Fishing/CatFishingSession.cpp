@@ -522,7 +522,7 @@ bool ACatFishingSession::PrepareSessionFromAuthority(const FCatFishingAttemptSna
 	AttemptSnapshot = Attempt;
 	// Fish identity remains deliberately empty until a valid left-click commits the hook inside TrueBiteWindow.
 	FisherCharacter = InFisherCharacter;
-	CastEquipment = InFisherCharacter->GetEquipmentComponent(); // 冻结饵料/会话协调器；它已记录真实竿宿主，物理抓握不重新绑定。
+	CastEquipment = InFisherCharacter->GetEquipmentComponent(); // 绑定扣饵来源/会话协调器；它已记录真实竿宿主，物理抓握不重新绑定。
 	bool bRodBroken = false;
 	if (!CastEquipment.IsValid() || !CastEquipment->GetFishingRodDurability(
 		Attempt.FishingSessionId, Snapshot.RodDurabilityRemaining, bRodBroken) || bRodBroken)
@@ -716,17 +716,6 @@ void ACatFishingSession::HandleBiteWarningTimer()
 		RefreshBiteAvailabilityFromAuthority();
 		return;
 	}
-	UCatEquipmentComponent* Equipment = CastEquipment.Get();
-	const FCatFishingUseOperationResult Commit = Equipment
-		? Equipment->CommitFishingBaitDeferred(Snapshot.FishingSessionId) : FCatFishingUseOperationResult{};
-	if (!Equipment || !Equipment->IsFishingUseActive(Snapshot.FishingSessionId)
-		|| (!Commit.bApplied && Commit.Error != ECatDomainCommandError::AlreadyResolved))
-	{
-		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated, TEXT("Warning bait commit failed"));
-		return;
-	}
-	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_bait_refund_boundary SessionId=%s World=%s NetMode=%d Authority=1 LocalRole=%d Result=FastWarningStarted"),
-		*Snapshot.FishingSessionId.ToString(), *GetNameSafe(GetWorld()), int32(GetNetMode()), int32(GetLocalRole()));
 	Snapshot.HookActor->SetBobberPresentationModeFromAuthority(ECatFishingBobberPresentationMode::BiteWarning);
 }
 
@@ -748,7 +737,7 @@ bool ACatFishingSession::OpenTrueBiteWindowFromStateTree()
 {
 	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
 	UWorld* World = GetWorld();
-	if (!HasAuthority() || IsTerminal() || Snapshot.Phase != ECatFishingPhase::Probe || !Settings || !World
+	if (!HasAuthority() || IsTerminal() || bOpeningTrueBiteWindow || Snapshot.Phase != ECatFishingPhase::Probe || !Settings || !World
 		|| !Snapshot.HookActor || SelectionResolution != ECatFishSelectionResolution::None
 		|| Snapshot.FishEncounterActor || FishDefinition
 		|| !FMath::IsFinite(Settings->TrueBiteWindowSeconds) || Settings->TrueBiteWindowSeconds <= 0.0)
@@ -756,6 +745,7 @@ bool ACatFishingSession::OpenTrueBiteWindowFromStateTree()
 		return false;
 	}
 
+	TGuardValue<bool> OpeningGuard(bOpeningTrueBiteWindow, true);
 	// 防止白天计时器已排队、StateTree 到夜晚才消费的竞态；复用 Probe -> Waiting 事件边。
 	const ACatfishingGameModeBase* Mode = World->GetAuthGameMode<ACatfishingGameModeBase>();
 	if (!Mode || !Mode->CanGenerateNewFishingBites())
@@ -765,14 +755,38 @@ bool ACatFishingSession::OpenTrueBiteWindowFromStateTree()
 		return true;
 	}
 
-	// 正常路径已在快速抖动预警时确认；同步进入 Probe 的路径在下沉前复核同一记录。
+	// 真咬成立时才消费当前饵；预警、试探和抛竿准入均不扣数量。
+	// 先采样该时点，库存通知中的移动不能改变 D0。
+	TrueBiteDistanceCentimeters = FisherCharacter.IsValid()
+		? FVector::Distance(FisherCharacter->GetActorLocation(), Snapshot.HookActor->GetActorLocation()) : -1.0;
 	UCatEquipmentComponent* Equipment = CastEquipment.Get();
 	const FCatFishingUseOperationResult BaitCommit = Equipment
 		? Equipment->CommitFishingBaitDeferred(Snapshot.FishingSessionId) : FCatFishingUseOperationResult{};
-	if (!Equipment || !Equipment->IsFishingUseActive(Snapshot.FishingSessionId)
+	if (IsTerminal()) return false;
+	// 关闭记录后的通知可把协调器迁移到托管，后续只能重读当前绑定。
+	Equipment = CastEquipment.Get();
+	if (!Equipment || !Equipment->IsFishingBaitCommitted(Snapshot.FishingSessionId)
 		|| (!BaitCommit.bApplied && BaitCommit.Error != ECatDomainCommandError::AlreadyResolved))
 	{
 		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated, TEXT("Bite bait commit failed"));
+		return false;
+	}
+	// 扣饵通知可能同步结束/迁移会话；不得用已经失效的资源继续打开窗口。
+	if (IsTerminal() || Snapshot.Phase != ECatFishingPhase::Probe || !IsValid(Snapshot.HookActor)) return false;
+	const UCatEquipmentDefinition* BiteRod = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(AttemptSnapshot.RodDefinitionId);
+	const UCatEquipmentFragment_Rod* RodFragment = BiteRod ? BiteRod->FindFragment<UCatEquipmentFragment_Rod>() : nullptr;
+	if (!RodFragment || !FMath::IsFinite(TrueBiteDistanceCentimeters) || TrueBiteDistanceCentimeters < 0.0
+		|| !FMath::IsFinite(RodFragment->MaximumLineLengthCentimeters) || RodFragment->MaximumLineLengthCentimeters <= 0.0)
+	{
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated, TEXT("True bite distance unavailable"));
+		return false;
+	}
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_true_bite_distance SessionId=%s D0Cm=%.3f LmaxCm=%.3f FishPoint=HookAtBite World=%s NetMode=%d Authority=1 LocalRole=%d Fisher=%s"),
+		*Snapshot.FishingSessionId.ToString(), TrueBiteDistanceCentimeters, RodFragment->MaximumLineLengthCentimeters,
+		*GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()), *GetNameSafe(FisherCharacter.Get()));
+	if (TrueBiteDistanceCentimeters > RodFragment->MaximumLineLengthCentimeters)
+	{
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Escaped, TEXT("True bite D0 exceeds Lmax"));
 		return false;
 	}
 	// WindowEnds 必须在 EnterPhase 发布快照前写好，客户端第一次看到 TrueBiteWindow 时截止时间就是完整的。
@@ -823,7 +837,7 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 	UCatChumFieldSubsystem* Chum = World ? World->GetSubsystem<UCatChumFieldSubsystem>() : nullptr;
 	const ACatfishingGameState* GameState = World ? World->GetGameState<ACatfishingGameState>() : nullptr;
 	UCatFishingService* Service = World ? World->GetSubsystem<UCatFishingService>() : nullptr;
-	UCatEquipmentComponent* Equipment = CastEquipment.Get(); // 饵料预留在抛竿者装备上，选鱼/消耗确认必须用同一组件。
+	UCatEquipmentComponent* Equipment = CastEquipment.Get(); // 会话协调器可能已托管；鱼饵来源仍由其记录指向原抛竿者。
 	if (!Chum || !GameState || !Service || !Equipment)
 	{
 		SelectionResolution = ECatFishSelectionResolution::Failed;
@@ -901,8 +915,7 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 	ACatFishEncounterActor* Encounter = FishClass && FishClass->IsChildOf(ACatFishEncounterActor::StaticClass())
 		? World->SpawnActorDeferred<ACatFishEncounterActor>(FishClass, FTransform(FishLocation), this,
 			FisherCharacter.Get(), ESpawnActorCollisionHandlingMethod::AlwaysSpawn) : nullptr;
-	const double InitialLineLength = AttemptSnapshot.RodActor
-		? FVector::Distance(AttemptSnapshot.RodActor->GetRodTipWorldTransform().GetLocation(), FishLocation) : 0.0;
+	const double InitialLineLength = TrueBiteDistanceCentimeters;
 	if (!Encounter)
 	{
 		SelectionResolution = ECatFishSelectionResolution::Failed;
@@ -956,15 +969,10 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 
 void ACatFishingSession::HandleTrueBiteWindowExpired()
 {
-	// 漏按只结束当前“咬钩机会”，不结束整次架杆会话。StateTree 收到事件后从 Probe 叶子回到 Waiting，
-	// Waiting 的调度 Task 会清空窗口表现、派生下一轮随机种子并重新开始慢浮/预警计时。
 	if (HasAuthority() && !IsTerminal() && Snapshot.Phase == ECatFishingPhase::TrueBiteWindow)
 	{
 		bTrueBiteWindowAcceptingHook = false;
-		if (StateTreeComponent) StateTreeComponent->SendStateTreeEvent(CatFishingGameplayTags::WindowExpired,
-			FConstStructView(), TEXT("CatFishing"));
-		UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_bite_opportunity_expired SessionId=%s Opportunity=%u"),
-			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), BiteOpportunitySequence);
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::HookWindowExpired, TEXT("True bite response timed out"));
 	}
 }
 
@@ -980,7 +988,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	UStateTree* FishBehaviorStateTree = Settings ? Settings->FishBehaviorStateTree.LoadSynchronous() : nullptr;
 	const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(
 		AttemptSnapshot.RodDefinitionId);
-	UCatEquipmentComponent* Equipment = CastEquipment.Get(); // 钓鱼用途/饵料预留始终属于原始抛竿者，物理抓握不改变结算对象。
+	UCatEquipmentComponent* Equipment = CastEquipment.Get(); // 钓鱼使用记录及扣饵来源始终绑定原始抛竿者，物理抓握不改变结算对象。
 	UCatAbilitySystemComponent* AbilitySystem = FisherCharacter.IsValid()
 		? FisherCharacter->GetCatAbilitySystemComponent() : nullptr;
 	ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
@@ -1087,12 +1095,14 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	InitialState.CatStamina = AbilitySystem->GetTotalFightStamina();
 	InitialState.FishStamina = Snapshot.FishFightStaminaRemaining * FishStaminaScale;
 	const FVector RodTipWorldPosition = Rod->GetRodTipWorldTransform().GetLocation();
-	const double RequestedInitialLineLength = Encounter->GetPresentationState().CurrentLineLength * LineLengthScale;
+	const double RequestedInitialLineLength = TrueBiteDistanceCentimeters * LineLengthScale;
 	const double MinimumPhysicalLineLength = FMath::Abs(
 		Encounter->GetActorLocation().Z - RodTipWorldPosition.Z);
 	// 完美提竿会缩短初始线长，但“账面线长”绝不能直接变得比 Actor 的真实距离还短。
 	// 先把请求值限制在竿尖到当前水面的最短物理长度内，下面再用同一长度真正投影鱼的位置。
-	if (!FMath::IsFinite(RequestedInitialLineLength)
+	if (!FMath::IsFinite(RequestedInitialLineLength) || TrueBiteDistanceCentimeters < 0.0
+		|| TrueBiteDistanceCentimeters > Config.MaximumLineLengthCentimeters
+		|| RequestedInitialLineLength > Config.MaximumLineLengthCentimeters
 		|| MinimumPhysicalLineLength > Config.MaximumLineLengthCentimeters)
 	{
 		return false;
@@ -1485,9 +1495,8 @@ bool ACatFishingSession::CommitCatchEquipmentFromAuthority()
 	{
 		return false;
 	}
-	const FCatFishingUseOperationResult Bait = Equipment->CommitFishingBaitDeferred(Snapshot.FishingSessionId);
-	// 每步磨损已经写回同一鱼竿实例；捕获仅收口饵料，不能再重复扣耐久。
-	return Bait.bApplied || Bait.Error == ECatDomainCommandError::AlreadyResolved;
+	// 磨损已逐步写回，鱼饵已在真咬消费；捕获不得成为第二个补扣入口。
+	return Equipment->IsFishingBaitCommitted(Snapshot.FishingSessionId);
 }
 
 bool ACatFishingSession::SpawnExhaustedFishPickupFromAuthority(const FVector& SurfaceLocation)
@@ -1722,7 +1731,7 @@ FCatFishingCommandResult ACatFishingSession::RequestHookFromAuthority(const FGui
 			return Result;
 		}
 
-		// 到这里才存在本次鱼定义与性格；也就是说鱼种选择与 Actor 生成严格发生在合法左键之后，退饵边界已在快速抖动开始时关闭。
+		// 到这里才存在本次鱼定义与性格；也就是说鱼种选择与 Actor 生成严格发生在合法左键之后，鱼饵已在真咬成立时消费。
 		const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
 		const UCatBitePersonalityDefinition* Bite = FishDefinition && Settings
 			? Settings->FindBitePersonality(FishDefinition->BitePersonalityId) : nullptr;
@@ -1972,9 +1981,7 @@ void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, cons
 	// 释放原始抛竿者装备上属于本 Session 的钓具预留；其他鱼竿的并行预留保持不变。
 	if (UCatEquipmentComponent* Equipment = CastEquipment.Get())
 	{
-		Equipment->ReleaseFishingUse(Snapshot.FishingSessionId,
-			FinalPhase == ECatFishingPhase::Resolved
-			&& (FinalOutcome == ECatFishingOutcome::Caught || FinalOutcome == ECatFishingOutcome::Landed));
+		Equipment->ReleaseFishingUse(Snapshot.FishingSessionId);
 	}
 	if (StateTreeComponent && StateTreeComponent->IsRunning())
 	{

@@ -213,7 +213,7 @@ private:
 	FString CatchFisherStableNetId;
 
 	/**
-	 * 抛钩时冻结的会话协调组件：鱼饵预留属于原抛钩者，竿宿主/实例由其 FishingUseRecord 冻结。
+	 * 抛钩时冻结的会话协调组件：扣饵来源属于原抛钩者，竿宿主/实例由其 FishingUseRecord 冻结。
 	 * 接力不改物资归属；原身体销毁时 Service 将精确未结记录移入服务器托管组件并重绑定此入口。
 	 */
 	TWeakObjectPtr<UCatEquipmentComponent> CastEquipment;
@@ -242,6 +242,9 @@ private:
 	bool bCaptureResolved = false;
 
 	FCatFishingAttemptSnapshot AttemptSnapshot;
+	/** 真咬当刻鱼猫距离（厘米）；-1 表示尚未成立，响应窗内移动不重算。 */
+	double TrueBiteDistanceCentimeters = -1.0;
+	bool bOpeningTrueBiteWindow = false;
 	FCatFishSelectionContext FrozenSelectionContext;
 	FCatFishSelectionResult FrozenSelectionResult;
 	ECatFishSelectionResolution SelectionResolution = ECatFishSelectionResolution::None;

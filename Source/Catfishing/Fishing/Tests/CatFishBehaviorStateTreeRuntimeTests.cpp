@@ -328,7 +328,7 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		const FGuid SessionId = FGuid::NewGuid();
 		if (!TestTrue(TEXT("会话预留真实鱼竿和饵漂"), Equipment->BeginFishingUse(SessionId,
 			RodItemId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId,
-			Loadout.RodDefinitionId, Loadout.BaitDefinitionId, Loadout.FloatDefinitionId, Loadout.Revision).bBaitFrozen)
+			Loadout.RodDefinitionId, Loadout.BaitDefinitionId, Loadout.FloatDefinitionId, Loadout.Revision).bUseAccepted)
 			|| !TestTrue(TEXT("会话完成中鱼扣饵"), Equipment->CommitFishingBaitDeferred(SessionId).bApplied)) return false;
 		if (!TestTrue(TEXT("鱼竿绑定真实操作者及库存实例"), Rod->InitializeAuthoritativeIdentity(
 			FGuid::NewGuid(), RodItemId, Loadout.RodDefinitionId, NAME_None, Player, nullptr, true, false))) return false;

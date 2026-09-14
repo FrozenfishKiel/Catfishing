@@ -27,7 +27,7 @@
 // 专项审计用例保持独立过滤器；断言目标行为，失败表示待修复缺陷，不能作为交付绿灯。
 // 装备测试仅证明 authority 运行行为；下面的 PIE 测试才包含真实 NetDriver 复制。
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatBorrowedRodReservationAudit,
-	"Catfishing.Audit.FishingMultiplayer.BorrowedRodCanReserveFisherBait",
+	"Catfishing.Audit.FishingMultiplayer.BorrowedRodBindsWithoutReservingFisherBait",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FCatBorrowedRodReservationAudit::RunTest(const FString& Parameters)
@@ -108,23 +108,26 @@ bool FCatBorrowedRodReservationAudit::RunTest(const FString& Parameters)
 		FisherLoadout.BaitItemInstanceId, FisherLoadout.FloatItemInstanceId, FisherLoadout.RodDefinitionId,
 		FisherLoadout.BaitDefinitionId, FisherLoadout.FloatDefinitionId, FisherLoadout.Revision,
 		CatFishingTest::Inventory(OwnerEquipment));
-	AddInfo(FString::Printf(TEXT("Event=multiplayer_borrowed_rod_probe Reserved=%s Error=%s"),
-		Borrowed.bBaitFrozen ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Borrowed.Error)));
+	AddInfo(FString::Printf(TEXT("Event=multiplayer_borrowed_rod_probe UseAccepted=%s Error=%s"),
+		Borrowed.bUseAccepted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Borrowed.Error)));
 	// 对照组走同一生产入口，证明不是装备夹具缺配置导致一切抛竿均失败。
 	const auto CurrentLoadout = FisherEquipment->GetSnapshot();
 	const FGuid OwnSessionId = FGuid::NewGuid();
 	const auto Own = FisherEquipment->BeginFishingUse(OwnSessionId, CurrentLoadout.RodItemInstanceId,
 		CurrentLoadout.BaitItemInstanceId, CurrentLoadout.FloatItemInstanceId, CurrentLoadout.RodDefinitionId,
 		CurrentLoadout.BaitDefinitionId, CurrentLoadout.FloatDefinitionId, CurrentLoadout.Revision);
-	TestTrue(TEXT("control: own deployed rod can reserve bait"), Own.bBaitFrozen);
-	TestTrue(TEXT("shared rod: another fisher can reserve their own bait for the owner's rod"), Borrowed.bBaitFrozen);
-	if (Borrowed.bBaitFrozen)
+	TestTrue(TEXT("control: own deployed rod binds its use record"), Own.bUseAccepted);
+	TestTrue(TEXT("shared rod: another fisher binds use without reserving bait"), Borrowed.bUseAccepted);
+	TestEqual(TEXT("two casts leave all fisher bait available before true bite"), CatFishingTest::Inventory(FisherEquipment)->CountVisibleInventoryQuantityByDefinitionId(TEXT("AuditBait")), 4);
+	if (Borrowed.bUseAccepted)
 	{
 		TestTrue(TEXT("borrowed session locks the original owner rod"), OwnerEquipment->IsFishingRodInUse(OwnerRodId));
 		TestFalse(TEXT("borrowed rod is not rebound to fisher inventory"), FisherEquipment->IsFishingRodInUse(OwnerRodId));
 		const double OwnerBeforeWear = OwnerEquipment->GetSnapshot().RodDurability;
 		const double FisherBeforeWear = FisherEquipment->GetSnapshot().RodDurability;
 		TestTrue(TEXT("borrowed session commits its fisher bait"), FisherEquipment->CommitFishingBaitDeferred(BorrowedSessionId).bApplied);
+		TestEqual(TEXT("borrowed true bite spends exactly one caster bait"), CatFishingTest::Inventory(FisherEquipment)->CountVisibleInventoryQuantityByDefinitionId(TEXT("AuditBait")), 3);
+		TestEqual(TEXT("borrowed true bite preserves all deployer bait"), CatFishingTest::Inventory(OwnerEquipment)->CountVisibleInventoryQuantityByDefinitionId(TEXT("AuditBait")), 4);
 		const auto Wear = FisherEquipment->ApplyFishingRodWear(BorrowedSessionId, 1, 7.0);
 		TestTrue(TEXT("borrowed rod applies exact wear"), Wear.bApplied);
 		TestEqual(TEXT("owner read model follows the worn original instance"), OwnerEquipment->GetSnapshot().RodDurability, OwnerBeforeWear - 7.0);
@@ -132,7 +135,7 @@ bool FCatBorrowedRodReservationAudit::RunTest(const FString& Parameters)
 		TestTrue(TEXT("borrowed session closes its independent transaction"),
 			FisherEquipment->ReleaseFishingUse(BorrowedSessionId).bApplied);
 	}
-	if (Own.bBaitFrozen)
+	if (Own.bUseAccepted)
 	{
 		TestTrue(TEXT("own control releases its independent reservation"),
 			FisherEquipment->ReleaseFishingUse(OwnSessionId).bApplied);

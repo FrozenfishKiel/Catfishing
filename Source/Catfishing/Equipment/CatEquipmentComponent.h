@@ -87,24 +87,26 @@ public:
 	bool RefreshLoadoutFromInventoryComponentFromAuthority();
 
 
-	/** Fishing 会话开始前按 SessionId 申请当前钓鱼选择使用权；Begin 从操作者库存暂存一份鱼饵，并把世界鱼竿归属库存记录为耐久写回目标。 */
+	/** Fishing 会话开始前按 SessionId 申请当前钓鱼选择使用权；Begin 只验有饵，不扣数量，并把世界鱼竿归属库存记录为耐久写回目标。 */
 	FCatFishingUseFreezeResult BeginFishingUse(FGuid FishingSessionId, FGuid RodItemInstanceId,
 		FGuid BaitItemInstanceId, FGuid FloatItemInstanceId, FName RodDefinitionId,
 		FName BaitDefinitionId, FName FloatDefinitionId, int64 ExpectedRevision,
 		UCatInventoryComponent* RodInventoryComponent = nullptr);
-	/** 确认消耗 Begin 已暂存的鱼饵；正式库存数量已经在 Begin 扣减，本函数只收口会话内的饵料事务。 */
+	/** 真咬时从原抛竿者当前选中的正式鱼饵实例扣一份；同会话重放不重复扣。 */
 	FCatFishingUseOperationResult CommitFishingBaitDeferred(FGuid FishingSessionId);
 	/** 按递增累计磨损的差额立即扣减 Begin 绑定的鱼竿实例；重复序号不重扣，Release 不回滚。 */
 	FCatFishingUseOperationResult ApplyFishingRodWear(FGuid FishingSessionId, int64 WearSequence,
 		double AbsoluteTotal);
 	/** 从该会话绑定的正式库存鱼竿实例读取耐久，不读取当前选择的另一根竿。 */
 	bool GetFishingRodDurability(FGuid FishingSessionId, double& OutDurability, bool& OutBroken) const;
-	/** 结束使用记录；快速抖动前退饵，上鱼成功可返还已确认消耗的一份。重放不重复返还。 */
-	FCatFishingUseOperationResult ReleaseFishingUse(FGuid FishingSessionId, bool bReturnCaughtBait = false);
+	/** 结束使用记录并解除竿锁；不改变鱼饵数量，无退款或延迟退款。 */
+	FCatFishingUseOperationResult ReleaseFishingUse(FGuid FishingSessionId);
 	/** 当前是否有仍未结束的 Fishing 使用记录；失败预算用它避开进行中的钓鱼结算。 */
 	bool HasActiveFishingUse() const;
 	/** 指定 Fishing 会话是否仍处于活动状态；Commit/Release 用它防止已结束会话重复改写。 */
 	bool IsFishingUseActive(FGuid FishingSessionId) const;
+	/** 捕获收口只检查真咬已扣饵，不允许在捕获时补扣当前选择。 */
+	bool IsFishingBaitCommitted(FGuid FishingSessionId) const;
 
 	/** 本机随身库存或钓鱼选择变化通知；不携带可写指针或客户端授权。 */
 	FCatEquipmentSnapshotChanged OnSnapshotChanged;
@@ -113,7 +115,7 @@ private:
 	/** 仅验证钓具选择是否仍由当前 InventoryComponent 中的实例支撑；导出与恢复共用，authority 和活动事务由各自入口控制。 */
 	bool ValidatePersistentSnapshotPayload(const FCatEquipmentLoadoutSnapshot& Candidate, FText& OutFailure) const;
 
-	/** 单个 Fishing 会话的短生命周期使用记录；它只保存 Begin 阶段冻结的饵料和鱼竿磨损，不给库存拖放提供通用占用规则。 */
+	/** 单个 Fishing 会话的短生命周期使用记录；它只保存 原扣饵来源和鱼竿磨损，不给库存拖放提供通用占用规则。 */
 	struct FCatFishingUseRecord
 	{
 		/** Begin 冻结的鱼竿实例 ID；后续磨损必须写回这根正式库存实例，不能按当前选择重新选竿。 */
@@ -122,21 +124,15 @@ private:
 		FName RodDefinitionId = NAME_None;
 		/** 世界鱼竿背后的正式库存组件；借竿时属于部署者，磨损查询和写入都只从这里找同一实例。 */
 		TWeakObjectPtr<UCatInventoryComponent> RodInventory;
-		/** Begin 扣除的一份鱼饵定义；确认消耗后仍作上鱼退款凭证，实际返还后清空。 */
-		FName FrozenBaitDefinitionId = NAME_None;
+		/** 原抛竿者的装备选择来源；托管不复制背包，真咬读取该来源当前的饵。 */
+		TWeakObjectPtr<UCatEquipmentComponent> BaitSourceEquipment;
 		/** 已接收的竿磨损序号；磨损事件按递增序号提交，重复或跳号不会改耐久。 */
 		int64 LastWearSequence = 0;
 		/** 已按差额写入绑定实例的累计磨损；仅用于序号去重，不是另一份剩余耐久。 */
 		double AbsoluteRodWear = 0.0;
-		/** 当前记录是否仍持有 Begin 移出的那份鱼饵；Commit 消耗或 Release 归还后清掉，防止同一份饵重复收口。 */
-		bool bBaitQuantityFrozen = false;
-		/** 鱼饵是否已经被本会话确认消耗；重复结算只返回终态，暂存物保持关闭状态。 */
+		/** 已完成一次真咬扣饵；通知前置为 true，防止回调重入重复消费。 */
 		bool bBaitCommitted = false;
-		/** 成功上鱼的退款资格；满包后仍保留，后续 Release 重试不丢失裁决。 */
-		bool bReturnCaughtBait = false;
-		/** 终局已请求退饵但背包暂时无空间；库存变化时重试同一记录。 */
-		bool bReturnPending = false;
-		/** 释放结算是否完成；待退款也已结束玩法，但保留此标志为 false 以继续结算。 */
+		/** 会话已关闭；释放只解锁鱼竿，不回滚鱼饵。 */
 		bool bReleased = false;
 	};
 
@@ -156,7 +152,7 @@ private:
 		const UCatEquipmentDefinition* PreferredDefinition, FName PreferredDefinitionId);
 	/** 组装 Fishing Begin 回包；只读取会话记录和绑定鱼竿实例，不创建新记录或改写库存。 */
 	FCatFishingUseFreezeResult MakeFishingUseFreezeResult(FGuid FishingSessionId,
-		ECatDomainCommandError Error, bool bBaitFrozen, const FCatFishingUseRecord* Record = nullptr) const;
+		ECatDomainCommandError Error, bool bUseAccepted, const FCatFishingUseRecord* Record = nullptr) const;
 	/** 组装 Fishing 后续操作回包；Commit、Wear 和 Release 共用它输出同一份诊断口径。 */
 	FCatFishingUseOperationResult MakeFishingUseOperationResult(FGuid FishingSessionId,
 		ECatDomainCommandError Error, bool bApplied, const FCatFishingUseRecord* Record = nullptr) const;
@@ -206,16 +202,9 @@ private:
 	/** 库存命令载荷签名；普通入库和 Use/UnUse 共用它防止同一 RequestId 被换定义、数量或实例后再次利用。 */
 	TMap<FString, FString> TerminalPayloadByKey;
 
-	/** 失败预算命令首次完整终态缓存；重放不会再次扣饵或耐久。 */
-
-
 	/** 当前 Character 生命周期内按 SessionId 隔离的 Fishing 使用冻结记录；不复制也不持久化。 */
 	TMap<FGuid, FCatFishingUseRecord> FishingUseRecords;
-	void WatchPendingBaitReturns();
-	void RetryPendingBaitReturns();
-	FDelegateHandle PendingBaitReturnHandle;
-	TWeakObjectPtr<UCatInventoryComponent> PendingBaitReturnInventory;
-	bool bRetryingBaitReturns = false;
+
 	/** 抄网选择复制日志只在定义或实例变化时输出，不参与玩法裁决。 */
 	FName LastLoggedScoopNetDefinitionId = NAME_None;
 	/** 最近一次已记录的抄网实例 ID；只用于减少重复日志，不代表装备选择状态。 */

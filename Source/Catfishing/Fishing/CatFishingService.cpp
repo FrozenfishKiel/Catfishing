@@ -290,7 +290,7 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 			? ECatFishingCommandError::EquipmentRevisionConflict : ECatFishingCommandError::DependencyUnavailable;
 		return Finish(Result);
 	}
-	// Begin 已推进装备版本；失败回滚必须回传 Release 后版本，客户端才会刷新到归还鱼饵后的背包快照。
+	// Begin 已推进装备版本；失败必须回传 Release 后版本，客户端才能观察到鱼竿使用权解除。
 	const TWeakObjectPtr<UCatEquipmentComponent> CastingEquipment = Equipment;
 	const auto ReleaseFishingUseAndFinish = [CastingEquipment, &Finish, &Result, SessionId](
 		const ECatFishingCommandError Error)
@@ -1013,7 +1013,7 @@ bool UCatFishingService::PreserveFishingResourcesForEquipmentShutdown(UCatEquipm
 			{
 				if (It->GetWorld() != World) continue;
 				for (const auto& Use : It->FishingUseRecords)
-					if (!Use.Value.bReleased && !Use.Value.bReturnPending && Use.Value.RodInventory.Get(true) == Inventory
+					if (!Use.Value.bReleased && Use.Value.RodInventory.Get(true) == Inventory
 						&& Use.Value.RodItemInstanceId == ItemId && !FindSession(Use.Key))
 						bPendingSessionRegistration = true;
 			}
@@ -1022,9 +1022,6 @@ bool UCatFishingService::PreserveFishingResourcesForEquipmentShutdown(UCatEquipm
 			ReboundRods.AddUnique(Rod);
 		}
 	}
-	// 已终局的满包退款也必须随扣饵者离场托管，不能因 Session 已注销而丢失。
-	for (const auto& Pair : Equipment->FishingUseRecords)
-		if (Pair.Value.bReturnPending && !Pair.Value.bReleased) SessionIds.AddUnique(Pair.Key);
 	if (SessionIds.IsEmpty() && RodItemIds.IsEmpty()) return false;
 	const FString OriginalId = Equipment->FishingResourceOwnerStableId;
 	FActorSpawnParameters Spawn;
@@ -1061,8 +1058,6 @@ bool UCatFishingService::PreserveFishingResourcesForEquipmentShutdown(UCatEquipm
 	// 跨组件锁、Session 和竿查询均已切换；通知重入只会看到转移完成后的单一记录。
 	Equipment->PublishSnapshot();
 	Target->PublishSnapshot();
-	Target->WatchPendingBaitReturns();
-	Target->RetryPendingBaitReturns();
 	return true;
 }
 

@@ -212,7 +212,7 @@ Root
 
 4. **`ExhaustedReelHold` 状态不要再放 `Enter Phase`。** C++ 在搏斗 Runner 结束时已经 EnterPhase(ExhaustedReel) 过了，重复进入只会白白递增 Revision。旧资产中的叶子状态即使仍命名为 `NearShore` 也能兼容运行，但建议改名避免误解。
 
-5. **`WindowExpired` 必须接回 `Waiting`。** 漏按只关闭这一轮响应窗，不释放竿、线或饵料预约；Waiting 重入后会清空窗口并重新调度。`EarlyHook` / `Interrupted` 才由 C++ 直接终止并停树，不需要资产终态。
+5. **`WindowExpired` 接回 `Waiting` 仅服务未真咬的夜间竞态。** 已成立的真咬超时由 C++ 直接写 `HookWindowExpired` 终局、解锁竿并停树，不再发送该事件重试咬钩。`EarlyHook` / `Interrupted` 同样由 C++ 终止，不需要资产终态。鱼饵只在真咬扣当前选择1份，任何终局不返还。
 
 6. **`Cat Fishing Start Fight Runner` 是幂等的。** `RequestHook` 在发 `HookAccepted` 之前就已经启动了 Runner，这个节点检测到已在运行会直接返回 Succeeded，不会重复启动。
 

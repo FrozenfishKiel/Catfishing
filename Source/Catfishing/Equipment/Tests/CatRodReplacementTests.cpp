@@ -85,7 +85,7 @@ namespace CatRodReplacementTests
 			const FGuid SessionId = FGuid::NewGuid();
 			if (!Test.TestTrue(TEXT("绑定原鱼竿钓鱼会话"), Equipment->BeginFishingUse(SessionId,
 				OldItemId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId, Loadout.RodDefinitionId,
-				Loadout.BaitDefinitionId, Loadout.FloatDefinitionId, Equipment->GetSnapshot().Revision).bBaitFrozen)) return false;
+				Loadout.BaitDefinitionId, Loadout.FloatDefinitionId, Equipment->GetSnapshot().Revision).bUseAccepted)) return false;
 			if (!Test.TestTrue(TEXT("提交鱼饵"), Equipment->CommitFishingBaitDeferred(SessionId).bApplied)) return false;
 			if (!Test.TestTrue(TEXT("耗尽 T1 实例耐久"), Equipment->ApplyFishingRodWear(
 				SessionId, 1, Loadout.RodDurability + 1).bRodBroken)) return false;
