@@ -379,6 +379,18 @@ void UCatFrontendPageController::RequestStartRoomGame()
 	UE_LOG(LogCatUI, Log, TEXT("Event=frontend_room_start_requested RequestId=%s"), *Result.RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 }
 
+void UCatFrontendPageController::RequestToggleRoomReady()
+{
+	UCatFrontendRoomModel* Room = RoomModel.Get();
+	if (!Room) { return; }
+	const FCatOnlineSnapshot Snapshot = Room->GetSnapshot();
+	const FCatOnlineRoomMember* Local = Snapshot.RoomMembers.FindByPredicate([](const auto& M) { return M.bIsLocalPlayer; });
+	if (!Local || Local->bIsLobbyOwner) { return; }
+	const FCatOnlineResult Result = Room->SetReady(!Local->bIsReady);
+	SetLocalResultText(Result.bAccepted ? FText::GetEmpty() : Room->GetLastResultText(), Room);
+	HandleRoomModelChanged();
+}
+
 // 设置应用流程：SettingsModel 负责真实字段提交；失败以设置来源显示结果，成功清局部提示后回菜单，不把应用结果带到存档或房间。
 void UCatFrontendPageController::RequestApplyFrontendSettings()
 {

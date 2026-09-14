@@ -13,6 +13,7 @@ class UCatSaveSubsystem;
 class UEnhancedInputComponent;
 class UInputAction;
 class ULocalPlayer;
+struct FCatOnlineFriendHandle;
 enum class ECatLakeMainMenuAction : uint8;
 
 /** 局内 ESC 菜单控制器；它拥有菜单打开态、输入绑定，并把保存、设置、回主菜单和本地 Quit 分别转交给权威系统。 */
@@ -77,6 +78,8 @@ public:
 	void RequestSelectControlsSettingsFromWidget();
 
 private:
+	void RequestPartyInvite(FCatOnlineFriendHandle Handle);
+	UPROPERTY(Transient) TObjectPtr<class UCatFrontendRoomModel> PartyModel;
 	/** 菜单打开态是模态输入恢复的唯一闸口；所有入口都经这里成对处理视口、焦点、鼠标和移动锁。 */
 	void SetMenuOpen(bool bOpen);
 

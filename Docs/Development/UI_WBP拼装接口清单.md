@@ -241,6 +241,10 @@ Root 会在五个子 WBP 的 WidgetTree 内按名称解析以下关键控件：�
 
 当前代码已经有编辑器生成和校验入口：`UCatFrontendWidgetAuthoringLibrary::CreateMissingLakeMainMenuWidgetBlueprint()` 会在 `/Game/UI/Save` 下重建 `WBP_CatLakeMainMenu` 并核验父类与控件名。手工重拼后可以参考 `ValidateLakeMainMenuWidgetContract()` 的控件清单做复查。
 
+2026-09-14 组队页补充：原生作者器提供基础菜单骨架，重建后须运行 `Scripts/style_lake_party.py` 补回组队页、派对样式及行类引用；完整 `Scripts/generate_frontend_widgets.py` 已串联该脚本。`LakePartyPanel` 属于原有 `LakeMainMenuPageSwitcher`，按钮为 `PartyButton`、`PartyBackButton`、`PartyRefreshButton`、`PartyCopyLinkButton`；好友与成员列表分别使用 `PartyFriendsScrollBox`、`PartyMembersScrollBox`。`PartySearchTextBox` 仅过滤展示。Controller 创建同类 `CatFrontendRoomModel`，订阅同一个 GameInstance Online 来源，不复制 Session 状态。`PauseRequestButton` 按用户要求只提示暂未开放，不调用暂停。
+
+房间席位由 `Scripts/style_frontend_room.py` 维护，旧通用页面样式脚本不再改写 Room/PlayerSlot。`WBP_CatRoomPlayerSlot` 的 `PlayerNameText`、`PlayerRoleText`、`PlayerSlotStateText` 保留；新增 `CharacterPreviewImage`、`ReadyMark`、`EmptySeatMark`。预览类、idle 动画和 UI 材质由 WBP 默认值硬引用；按用户最终要求复制 `BP_CuteCatCharacter` 的模型材质到本地展示 Actor，正面循环播放 `SK_CuteCat_Anim_Armature_idle_A_0`，不生成游戏 Character。`ReadyRoomButton` 经 Root→Controller→RoomModel→Online 发布当前成员的准备状态，未准备时隐藏勾选。Steam `CAT_PLAYER_READY` 表示个人准备，`CAT_GAME_READY` 仍只表示玩法地图可以连接；禁止混用。
+
 ## HUD：`WBP_CatHUD`
 
 源码入口：`Source/Catfishing/UI/HUD/CatHUDWidget.h`

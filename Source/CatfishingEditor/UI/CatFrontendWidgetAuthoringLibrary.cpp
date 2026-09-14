@@ -1,4 +1,6 @@
 #include "CatFrontendWidgetAuthoringLibrary.h"
+#include "UI/Save/CatLakeMainMenuController.h"
+#include "GameFramework/PlayerController.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "UI/Frontend/CatFrontendRootWidget.h"
@@ -909,6 +911,7 @@ namespace CatFrontendWidgetAuthoring
 		Actions->AddChild(Space);
 		SetBoxSlot(Space, true);
 		SetBoxSlot(AddButton(Tree, Actions, TEXT("StartRoomGameButton"), TEXT("开始游戏")), false);
+		SetBoxSlot(AddButton(Tree, Actions, TEXT("ReadyRoomButton"), TEXT("准备")), false);
 		return true;
 	}
 
@@ -1741,6 +1744,7 @@ namespace CatFrontendWidgetAuthoring
 			{ TEXT("RefreshFriendsButton"), UButton::StaticClass() },
 			{ TEXT("LeaveRoomButton"), UButton::StaticClass() },
 			{ TEXT("StartRoomGameButton"), UButton::StaticClass() },
+			{ TEXT("ReadyRoomButton"), UButton::StaticClass() },
 			{ TEXT("CopyInviteCodeButton"), UButton::StaticClass() }
 		};
 		const FRequiredWidgetControl LoadingControls[] = {
@@ -1820,6 +1824,26 @@ bool UCatFrontendWidgetAuthoringLibrary::CompileStyledFrontendWidget(UBlueprint*
 	});
 	FKismetEditorUtilities::CompileBlueprint(WidgetBlueprint);
 	return WidgetBlueprint->Status != BS_Error;
+}
+
+UUserWidget* UCatFrontendWidgetAuthoringLibrary::CreateWidgetPreview(UObject* WorldContext, TSubclassOf<UUserWidget> WidgetClass, APlayerController* Player)
+{
+	return Player && WidgetClass && WorldContext && WorldContext->GetWorld() == Player->GetWorld()
+		? CreateWidget<UUserWidget>(Player, WidgetClass) : nullptr;
+}
+
+UCatLakeMainMenuController* UCatFrontendWidgetAuthoringLibrary::BindLakeMenuPreview(UCatLakeMainMenuWidget* View, APlayerController* Player)
+{
+	if (!View || !Player || !Player->GetLocalPlayer()) { return nullptr; }
+	auto* Controller = NewObject<UCatLakeMainMenuController>(View);
+	if (!Controller->Bind(Player->GetLocalPlayer(), Player, View)) { return nullptr; }
+	Controller->ToggleMenu();
+	return Controller;
+}
+
+void UCatFrontendWidgetAuthoringLibrary::ReleaseLakeMenuPreview(UCatLakeMainMenuController* Controller)
+{
+	if (Controller) { Controller->Unbind(); }
 }
 
 bool UCatFrontendWidgetAuthoringLibrary::CreateMissingFrontendWidgetBlueprints(bool bJoinPageOnly, bool bRebuildJoinPage)

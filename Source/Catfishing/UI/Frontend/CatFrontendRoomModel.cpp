@@ -3,6 +3,7 @@
 #include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"
 #include "Online/CatOnlineSubsystem.h"
+#include "Online/CatOnlineRoomReadiness.h"
 
 namespace CatFrontendRoomModelText
 {
@@ -11,6 +12,10 @@ namespace CatFrontendRoomModelText
 	{
 		switch (Error)
 		{
+		case ECatOnlineError::RoomMembersNotReady:
+			return FText::FromString(TEXT("等待其他队员准备后，房主即可开始。"));
+		case ECatOnlineError::RoomReadinessUnavailable:
+			return FText::FromString(TEXT("尚未确认准备状态，请等待 Steam 同步后重试。"));
 		case ECatOnlineError::InvalidJoinLink:
 			return FText::FromString(TEXT("请输入本游戏的 Steam 邀请链接或完整房间 ID。"));
 		case ECatOnlineError::JoinTargetUnavailable:
@@ -164,6 +169,15 @@ FCatOnlineResult UCatFrontendRoomModel::RefreshFriends()
 	return Result;
 }
 
+FCatOnlineResult UCatFrontendRoomModel::SetReady(bool bReady)
+{
+	FCatOnlineResult Result;
+	if (UCatOnlineSubsystem* Source = Online.Get()) { Result = Source->RequestSetRoomReady(bReady); }
+	else { Result.RequestId = FGuid::NewGuid(); Result.Error = ECatOnlineError::OnlineSubsystemUnavailable; }
+	CaptureResult(Result);
+	return Result;
+}
+
 // 邀请好友流程：先保留 opaque 句柄的所有权边界，再把请求交给 Online；无效句柄、非 Host 和平台拒绝都由 Online 返回结构化结果，不在 UI 层推断原因。
 FCatOnlineResult UCatFrontendRoomModel::InviteFriend(const FCatOnlineFriendHandle FriendHandle)
 {
@@ -205,7 +219,8 @@ bool UCatFrontendRoomModel::CanStartGame() const
 		&& Snapshot.WorldState == ECatOnlineWorldState::Frontend
 		&& Snapshot.SessionState == ECatOnlineSessionState::Host
 		&& Snapshot.ActiveOperation == ECatOnlineOperation::None
-		&& !Snapshot.bIsGameplayLoadPending;
+		&& !Snapshot.bIsGameplayLoadPending
+		&& CatOnlineRoomReadiness::CanHostStart(Snapshot.RoomMembers, Snapshot.CurrentPlayers, Snapshot.MaxPlayers);
 }
 
 // Online 通知流程：先读取唯一快照，错误优先，其次为已接受邀请的有界等待和真实 Join 提交生成文本，其他状态清除失效文本；最后广播，Controller 再读取房间事实决定显示，不要求玩家再次确认邀请。

@@ -32,6 +32,7 @@ public:
 
 	/** 仅房主提交正式开始游戏意图；Online 会验证已加载的 Save 状态并在预载完成后旅行。 */
 	FCatOnlineResult StartGame();
+	FCatOnlineResult SetReady(bool bReady);
 
 	/** 请求刷新 Steam 好友缓存；好友数据变化通过 OnChanged 通知，失败信息通过 GetLastResultText 读取。 */
 	FCatOnlineResult RefreshFriends();

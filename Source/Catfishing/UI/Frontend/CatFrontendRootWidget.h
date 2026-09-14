@@ -20,6 +20,12 @@ class UCatFrontendPageController;
 class UCatFrontendRoomModel;
 class UCatFrontendSaveModel;
 class UCatFrontendSettingsModel;
+class ACatFrontendCharacterPreview;
+class ACharacter;
+class UAnimSequence;
+class UMaterialInterface;
+class UMaterialInstanceDynamic;
+DECLARE_MULTICAST_DELEGATE_OneParam(FCatRoomFriendInviteRequested, FCatOnlineFriendHandle);
 
 /** 存档列表的一行原生 View；它只保存当前渲染行的稳定 SlotId，并把选择点击原样交给 Root，不保存或修改世界存档。 */
 UCLASS(Abstract)
@@ -68,6 +74,8 @@ class CATFISHING_API UCatFrontendRoomFriendRowWidget : public UUserWidget
 public:
 	/** 用 RoomModel 的真实好友摘要配置本行；写入名称、在线状态和 opaque 句柄，邀请按钮不解析 Steam 身份。 */
 	void ConfigureRow(UCatFrontendRootWidget* InRootWidget, const FCatOnlineFriendSummary& Summary);
+	/** 局内组队页沿用同一好友行，仅将邀请意图转交其 Controller。 */
+	FCatRoomFriendInviteRequested OnInviteRequested;
 
 protected:
 	/** WidgetTree 建立后绑定本行邀请按钮；缺失时记录资产合同错误，本行不会用页面级默认好友替代。 */
@@ -123,12 +131,31 @@ class CATFISHING_API UCatFrontendRoomPlayerSlotWidget : public UUserWidget
 
 public:
 	/** 用 RoomModel 的真实成员摘要配置本行；成员名称和房主标记均来自当前 Snapshot，空位由 Root 显式决定是否创建。 */
+	UFUNCTION(BlueprintCallable, Category="Room Presentation")
 	void ConfigureRow(const FCatOnlineRoomMember& Member);
 
 	/** 配置一个明确的真实空槽表现；只有 Snapshot 给出可验证容量时 Root 才创建，不用静态假玩家占位。 */
+	UFUNCTION(BlueprintCallable, Category="Room Presentation")
 	void ConfigureEmptySlot();
+	UFUNCTION(BlueprintCallable, Category="Room Presentation")
+	void SetPreviewActive(bool bActive);
+	FGuid GetMemberId() const { return DisplayedMemberId; }
+
+protected:
+	virtual void NativeDestruct() override;
+	UPROPERTY(EditDefaultsOnly, Category="Room Preview") TSubclassOf<ACharacter> PreviewCharacterClass;
+	UPROPERTY(EditDefaultsOnly, Category="Room Preview") TObjectPtr<UAnimSequence> PreviewAnimation;
+	UPROPERTY(EditDefaultsOnly, Category="Room Preview") TObjectPtr<UMaterialInterface> PreviewMaterial;
 
 private:
+	void ReleasePreview();
+	FGuid DisplayedMemberId;
+	bool bPreviewActive = false;
+	UPROPERTY(Transient) TObjectPtr<ACatFrontendCharacterPreview> PreviewActor;
+	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> PreviewBrush;
+	UPROPERTY(meta=(BindWidgetOptional)) TObjectPtr<UImage> CharacterPreviewImage;
+	UPROPERTY(meta=(BindWidgetOptional)) TObjectPtr<UWidget> ReadyMark;
+	UPROPERTY(meta=(BindWidgetOptional)) TObjectPtr<UWidget> EmptySeatMark;
 	/** 行内的成员名称文本；WBP_CatRoomPlayerSlot 必须提供，配置成员或空槽时写入。 */
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UTextBlock> PlayerNameText;
@@ -281,6 +308,7 @@ public:
 	/** 房主开始游戏意图；Controller 只提交正式 Start 请求，全局加载遮罩由 LocalPlayer UI 根据 Online 快照显示。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
 	void RequestStartRoomGame();
+	UFUNCTION() void RequestToggleRoomReady();
 
 	/** 设置应用意图；具体草稿字段由 SettingsModel 定义，Root 仅把用户确认转交 Controller。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
@@ -623,6 +651,7 @@ private:
 	/** RoomPage 子 WidgetTree 中的开始按钮；仅 RoomModel 确认当前用户可开始时可用，Root 不伪造本地主机权限。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UButton> StartRoomGameButton;
+	UPROPERTY(Transient) TObjectPtr<UButton> ReadyRoomButton;
 
 	/** RoomPage 子 WidgetTree 中的邀请码复制按钮；没有真实 joinlobby URI 时禁用，点击不构造备用码。 */
 	UPROPERTY(Transient)

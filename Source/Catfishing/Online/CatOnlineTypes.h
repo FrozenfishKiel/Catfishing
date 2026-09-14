@@ -186,7 +186,9 @@ enum class ECatOnlineError : uint8
 	InvalidJoinLink,
 	JoinTargetUnavailable,
 	JoinTargetTimedOut,
-	SessionFull
+	SessionFull,
+	RoomMembersNotReady,
+	RoomReadinessUnavailable
 };
 
 /** 对 UI 暴露的搜索句柄；Value 只在当前 GameInstance 的 Online 子系统内部可解析。 */
@@ -310,11 +312,22 @@ struct FCatOnlineRoomMember
 {
 	GENERATED_BODY()
 
+	/** 当前 Lobby 内稳定的匿名成员键；名称重复或列表重排不改变席位身份。 */
+	UPROPERTY(BlueprintReadOnly)
+	FGuid MemberId;
+
+	UPROPERTY(BlueprintReadOnly)
+	bool bIsLocalPlayer = false;
+
+	/** Steam 成员元数据的观察值；缺失默认未准备。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bIsReady = false;
+
 	/** 平台公开的成员显示名；Steam Friends 接口读取，不能作为稳定身份或权限凭据。 */
 	UPROPERTY(BlueprintReadOnly)
 	FString DisplayName;
 
-	/** 此成员是否是 Steam Lobby 当前 owner；平台 owner 与本地创建者角色同时供 UI 展示，开始权限仍以后者为准。 */
+	/** 此成员是否是 Steam Lobby 当前 owner；开始要求本地 Host 同时为当前 owner，并满足成员准备规则。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bIsLobbyOwner = false;
 };

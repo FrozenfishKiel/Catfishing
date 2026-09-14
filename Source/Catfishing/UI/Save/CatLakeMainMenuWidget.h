@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "Online/CatOnlineTypes.h"
 #include "CatLakeMainMenuWidget.generated.h"
 
 class UButton;
@@ -12,6 +13,11 @@ class USlider;
 class UTextBlock;
 class UWidgetSwitcher;
 class UCatFrontendSettingsModel;
+class UCatFrontendRoomModel;
+class UCatFrontendRoomFriendRowWidget;
+class UCatFrontendRoomPlayerSlotWidget;
+class UScrollBox;
+class UEditableTextBox;
 
 /** 局内主菜单的一次玩家意图；Widget 只声明按钮语义，真正保存、设置、回主菜单或退出进程由 Controller 裁决。 */
 UENUM(BlueprintType)
@@ -54,11 +60,16 @@ enum class ECatLakeMainMenuAction : uint8
 	SelectAudioSettings,
 
 	/** 请求切到控制设置分类；当前只显示正式不可用说明，不生成临时键位配置。 */
-	SelectControlsSettings
+	SelectControlsSettings,
+	OpenParty,
+	CloseParty,
+	RefreshParty,
+	PausePlaceholder
 };
 
 /** 局内菜单按钮点击通知；订阅者收到后读取 Action 并调用各自权威系统。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatLakeMainMenuActionRequested, ECatLakeMainMenuAction);
+DECLARE_MULTICAST_DELEGATE_OneParam(FCatLakePartyInviteRequested, FCatOnlineFriendHandle);
 
 /** 局内菜单的只读显示状态；按钮可用性和反馈文本来自 Controller，不从 Widget 反推业务状态。 */
 USTRUCT(BlueprintType)
@@ -107,6 +118,16 @@ public:
 
 	/** 解除局内设置页的 Model 订阅和显示映射；Controller 拆除菜单时调用，不应用或保存任何草稿。 */
 	void ResetLakeMenuSettings();
+	void InitializePartyModel(UCatFrontendRoomModel* Model);
+	void ResetPartyModel();
+	void ShowPartyPanel();
+	bool IsShowingPartyPanel() const;
+	FCatLakePartyInviteRequested OnPartyInviteRequested;
+	UFUNCTION() void RequestOpenParty();
+	UFUNCTION() void RequestCloseParty();
+	UFUNCTION() void RequestRefreshParty();
+	UFUNCTION() void RequestPausePlaceholder();
+	UFUNCTION() void RequestCopyPartyLink();
 
 	/** 接收 Controller 的最新只读状态并刷新按钮、状态文本和蓝图扩展点；Widget 不缓存 Save、Settings、Online 或 Quit 来源。 */
 	void RenderMenu(const FCatLakeMainMenuViewState& ViewState);
@@ -205,6 +226,25 @@ protected:
 	void BP_RenderSettings();
 
 private:
+	void RefreshPartyPanel();
+	void ForwardPartyInvite(FCatOnlineFriendHandle Handle);
+	UFUNCTION() void HandlePartySearchChanged(const FText& Text);
+	TWeakObjectPtr<UCatFrontendRoomModel> PartyModel;
+	FDelegateHandle PartyModelChangedHandle;
+	UPROPERTY(EditDefaultsOnly, Category="Party") TSubclassOf<UCatFrontendRoomFriendRowWidget> PartyFriendRowClass;
+	UPROPERTY(EditDefaultsOnly, Category="Party") TSubclassOf<UCatFrontendRoomPlayerSlotWidget> PartyMemberRowClass;
+	UPROPERTY(meta=(BindWidgetOptional)) TObjectPtr<UPanelWidget> LakePartyPanel;
+	UPROPERTY(meta=(BindWidgetOptional)) TObjectPtr<UButton> PartyButton;
+	UPROPERTY(meta=(BindWidgetOptional)) TObjectPtr<UButton> PartyBackButton;
+	UPROPERTY(meta=(BindWidgetOptional)) TObjectPtr<UButton> PartyRefreshButton;
+	UPROPERTY(meta=(BindWidgetOptional)) TObjectPtr<UButton> PartyCopyLinkButton;
+	UPROPERTY(meta=(BindWidgetOptional)) TObjectPtr<UButton> PauseRequestButton;
+	UPROPERTY(meta=(BindWidgetOptional)) TObjectPtr<UScrollBox> PartyFriendsScrollBox;
+	UPROPERTY(meta=(BindWidgetOptional)) TObjectPtr<UScrollBox> PartyMembersScrollBox;
+	UPROPERTY(meta=(BindWidgetOptional)) TObjectPtr<UEditableTextBox> PartySearchTextBox;
+	UPROPERTY(meta=(BindWidgetOptional)) TObjectPtr<UTextBlock> PartyStatusText;
+	UPROPERTY(meta=(BindWidgetOptional)) TObjectPtr<UTextBlock> PartyCountText;
+	UPROPERTY(meta=(BindWidgetOptional)) TObjectPtr<UTextBlock> PartyAccessText;
 	/** 绑定 Designer 里同名按钮到统一意图入口；缺少某个按钮时只跳过该资产控件，不创建第二套表现入口。 */
 	void BindDesignerButtons();
 

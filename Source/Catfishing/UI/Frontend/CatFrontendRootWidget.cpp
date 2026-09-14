@@ -1,6 +1,11 @@
 #include "UI/Frontend/CatFrontendRootWidget.h"
 
 #include "Components/Button.h"
+#include "Components/Image.h"
+#include "Engine/World.h"
+#include "Engine/TextureRenderTarget2D.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "UI/Frontend/CatFrontendCharacterPreview.h"
 #include "Components/Border.h"
 #include "Components/CheckBox.h"
 #include "Components/ComboBoxString.h"
@@ -86,6 +91,10 @@ void UCatFrontendRoomFriendRowWidget::ConfigureRow(UCatFrontendRootWidget* InRoo
 			? (Summary.bIsPlayingThisGame ? TEXT("在线，正在游玩") : TEXT("在线")) : TEXT("离线")));
 	}
 	if (InviteFriendButton) { InviteFriendButton->SetIsEnabled(Summary.bIsOnline && FriendHandle.IsValid()); }
+	if (auto* Label = Cast<UTextBlock>(GetWidgetFromName(TEXT("InviteFriendButtonLabel"))))
+	{
+		Label->SetText(FText::FromString(Summary.bHasInvited ? TEXT("已发送") : TEXT("邀请")));
+	}
 }
 
 // 好友行初始化流程：WidgetTree 建立后只绑定自身邀请按钮；缺失时记录资产合同错误，不降级为页面级默认好友邀请。
@@ -107,22 +116,73 @@ void UCatFrontendRoomFriendRowWidget::HandleInviteClicked()
 	{
 		Root->RequestInviteFriend(FriendHandle);
 	}
+	else if (FriendHandle.IsValid()) { OnInviteRequested.Broadcast(FriendHandle); }
 }
 
 // 成员行配置流程：写入 Snapshot 已确认的成员名称和 Lobby owner 标记；不从本地角色或静态列表推导房主。
 void UCatFrontendRoomPlayerSlotWidget::ConfigureRow(const FCatOnlineRoomMember& Member)
 {
+	if (DisplayedMemberId != Member.MemberId) { ReleasePreview(); }
+	DisplayedMemberId = Member.MemberId;
 	if (PlayerNameText) { PlayerNameText->SetText(FText::FromString(Member.DisplayName)); }
-	if (PlayerRoleText) { PlayerRoleText->SetText(FText::FromString(Member.bIsLobbyOwner ? TEXT("房主") : TEXT("成员"))); }
-	if (PlayerSlotStateText) { PlayerSlotStateText->SetText(FText::FromString(TEXT("已加入房间"))); }
+	if (PlayerRoleText) { PlayerRoleText->SetText(FText::FromString(Member.bIsLobbyOwner ? TEXT("房主") : Member.bIsLocalPlayer ? TEXT("你") : TEXT(""))); }
+	if (PlayerSlotStateText) { PlayerSlotStateText->SetText(FText::GetEmpty()); }
+	if (ReadyMark) { ReadyMark->SetVisibility(Member.bIsReady ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Hidden); }
+	if (EmptySeatMark) { EmptySeatMark->SetVisibility(ESlateVisibility::Hidden); }
+	SetPreviewActive(bPreviewActive);
 }
 
 // 空槽配置流程：只在 Root 已从真实容量确认剩余名额时调用，明确展示空位而不生成虚构成员或 ready 状态。
 void UCatFrontendRoomPlayerSlotWidget::ConfigureEmptySlot()
 {
-	if (PlayerNameText) { PlayerNameText->SetText(FText::FromString(TEXT("空位"))); }
+	DisplayedMemberId.Invalidate();
+	ReleasePreview();
+	if (ReadyMark) { ReadyMark->SetVisibility(ESlateVisibility::Hidden); }
+	if (EmptySeatMark) { EmptySeatMark->SetVisibility(ESlateVisibility::HitTestInvisible); }
+	if (PlayerNameText) { PlayerNameText->SetText(FText::GetEmpty()); }
 	if (PlayerRoleText) { PlayerRoleText->SetText(FText::GetEmpty()); }
 	if (PlayerSlotStateText) { PlayerSlotStateText->SetText(FText::FromString(TEXT("等待加入"))); }
+}
+
+void UCatFrontendRoomPlayerSlotWidget::SetPreviewActive(bool bActive)
+{
+	bPreviewActive = bActive;
+	if (!bActive || !DisplayedMemberId.IsValid()) { ReleasePreview(); return; }
+	if (PreviewActor || !CharacterPreviewImage || !GetWorld()) { return; }
+	static uint32 PreviewSerial = 0;
+	const FVector Location(float((PreviewSerial++) % 128) * 1200.f, 0, -100000.f);
+	FActorSpawnParameters Params;
+	Params.ObjectFlags |= RF_Transient;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	PreviewActor = GetWorld()->SpawnActor<ACatFrontendCharacterPreview>(Location, FRotator::ZeroRotator, Params);
+	if (!PreviewActor || !PreviewMaterial || !PreviewActor->InitializePreview(PreviewCharacterClass, PreviewAnimation))
+	{
+		UE_LOG(LogCatUI, Warning, TEXT("Event=frontend_character_preview_failed World=%s Member=%s Reason=AssetUnavailable"), *GetNameSafe(GetWorld()), *DisplayedMemberId.ToString());
+		ReleasePreview();
+		return;
+	}
+	PreviewBrush = UMaterialInstanceDynamic::Create(PreviewMaterial, this);
+	PreviewBrush->SetTextureParameterValue(TEXT("CharacterTexture"), PreviewActor->GetTexture());
+	CharacterPreviewImage->SetBrushFromMaterial(PreviewBrush);
+	CharacterPreviewImage->SetVisibility(ESlateVisibility::HitTestInvisible);
+}
+
+void UCatFrontendRoomPlayerSlotWidget::ReleasePreview()
+{
+	if (PreviewActor)
+	{
+		UE_LOG(LogCatUI, Log, TEXT("Event=frontend_character_preview_released World=%s Member=%s Actor=%s"), *GetNameSafe(GetWorld()), *DisplayedMemberId.ToString(), *PreviewActor->GetName());
+		PreviewActor->Destroy();
+		PreviewActor = nullptr;
+	}
+	PreviewBrush = nullptr;
+	if (CharacterPreviewImage) { CharacterPreviewImage->SetBrushFromMaterial(nullptr); CharacterPreviewImage->SetVisibility(ESlateVisibility::Hidden); }
+}
+
+void UCatFrontendRoomPlayerSlotWidget::NativeDestruct()
+{
+	ReleasePreview();
+	Super::NativeDestruct();
 }
 
 // 协作者装配流程：
@@ -324,6 +384,7 @@ void UCatFrontendRootWidget::RequestLeaveRoom() { if (PageController) { PageCont
 
 // 房主开始点击流程：交给有效 Controller 提交 Start 并消费真实预载事实；全局加载遮罩由 LocalPlayer UI 响应 Online 快照显示。
 void UCatFrontendRootWidget::RequestStartRoomGame() { if (PageController) { PageController->RequestStartRoomGame(); } HandleRoomModelChanged(); }
+void UCatFrontendRootWidget::RequestToggleRoomReady() { if (PageController) { PageController->RequestToggleRoomReady(); } }
 
 // 设置应用点击流程：交给有效 Controller 请求提交草稿并决定留页或返回，再回填设置控件和反馈；设备切换终态仍由 SettingsModel 通知。
 void UCatFrontendRootWidget::RequestApplyFrontendSettings() { if (PageController) { PageController->RequestApplyFrontendSettings(); } HandleSettingsModelChanged(); }
@@ -428,6 +489,7 @@ void UCatFrontendRootWidget::ResolvePageControls()
 	RefreshFriendsButton = FindPageControl<UButton>(RoomPage, TEXT("RefreshFriendsButton"), TEXT("RoomPage"));
 	LeaveRoomButton = FindPageControl<UButton>(RoomPage, TEXT("LeaveRoomButton"), TEXT("RoomPage"));
 	StartRoomGameButton = FindPageControl<UButton>(RoomPage, TEXT("StartRoomGameButton"), TEXT("RoomPage"));
+	ReadyRoomButton = FindPageControl<UButton>(RoomPage, TEXT("ReadyRoomButton"), TEXT("RoomPage"));
 	CopyInviteCodeButton = FindPageControl<UButton>(RoomPage, TEXT("CopyInviteCodeButton"), TEXT("RoomPage"));
 	FrontendSettingsResultTextBlock = FindPageControl<UTextBlock>(FrontendSettingsPage, TEXT("FrontendSettingsResultTextBlock"), TEXT("FrontendSettingsPage"));
 	FindPageControl<UPanelWidget>(FrontendSettingsPage, TEXT("GameSettingsPanel"), TEXT("FrontendSettingsPage"));
@@ -514,6 +576,7 @@ void UCatFrontendRootWidget::BindPageControls()
 	if (RefreshFriendsButton) { RefreshFriendsButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestRefreshFriends); }
 	if (LeaveRoomButton) { LeaveRoomButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestLeaveRoom); }
 	if (StartRoomGameButton) { StartRoomGameButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestStartRoomGame); }
+	if (ReadyRoomButton) { ReadyRoomButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestToggleRoomReady); }
 	if (CopyInviteCodeButton) { CopyInviteCodeButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestCopyRoomInviteCode); }
 }
 
@@ -567,6 +630,7 @@ void UCatFrontendRootWidget::UnbindPageControls()
 	if (RefreshFriendsButton) { RefreshFriendsButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestRefreshFriends); }
 	if (LeaveRoomButton) { LeaveRoomButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestLeaveRoom); }
 	if (StartRoomGameButton) { StartRoomGameButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestStartRoomGame); }
+	if (ReadyRoomButton) { ReadyRoomButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestToggleRoomReady); }
 	if (CopyInviteCodeButton) { CopyInviteCodeButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestCopyRoomInviteCode); }
 }
 
@@ -793,7 +857,7 @@ void UCatFrontendRootWidget::RebuildSaveRows()
 }
 
 // 房间行重建流程：
-// 1. 先读取 RoomModel 的唯一快照并清空失效好友/成员行，输入筛选只影响当前显示，不写回 Online。
+// 1. 读取 RoomModel 的唯一快照，重建好友列表；成员席位按稳定标识复用，输入筛选不写回 Online。
 // 2. 每个好友行保存其 opaque FriendHandle，成员行只消费已确认 Lobby 成员；行实例跟随 Root WidgetTree，不在 GameInstance 下残留。
 // 3. 只有 Snapshot 给出正容量时才补显示空槽，避免把未知成员数量扩展为假玩家。
 void UCatFrontendRootWidget::RebuildRoomRows()
@@ -826,7 +890,6 @@ void UCatFrontendRootWidget::RebuildRoomRows()
 	}
 	if (PlayersScrollBox)
 	{
-		PlayersScrollBox->ClearChildren();
 		const TSubclassOf<UCatFrontendRoomPlayerSlotWidget> PlayerRowClass = LoadClass<UCatFrontendRoomPlayerSlotWidget>(nullptr,
 			TEXT("/Game/UI/Frontend/WBP_CatRoomPlayerSlot.WBP_CatRoomPlayerSlot_C"));
 		if (!PlayerRowClass)
@@ -834,22 +897,42 @@ void UCatFrontendRootWidget::RebuildRoomRows()
 			UE_LOG(LogCatUI, Error, TEXT("Event=frontend_row_class_missing Row=RoomPlayer"));
 			return;
 		}
-		for (const FCatOnlineRoomMember& Member : Snapshot.RoomMembers)
+		const int32 Capacity = FMath::Max(Snapshot.RoomMembers.Num(), Snapshot.MaxPlayers);
+		if (PlayersScrollBox->GetChildrenCount() != Capacity)
 		{
-			UCatFrontendRoomPlayerSlotWidget* Row = CreateWidget<UCatFrontendRoomPlayerSlotWidget>(this, PlayerRowClass);
-			if (Row)
+			for (UWidget* Child : PlayersScrollBox->GetAllChildren())
 			{
-				Row->ConfigureRow(Member);
-				PlayersScrollBox->AddChild(Row);
+				if (auto* Row = Cast<UCatFrontendRoomPlayerSlotWidget>(Child)) { Row->SetPreviewActive(false); }
+			}
+			PlayersScrollBox->ClearChildren();
+			for (int32 Index = 0; Index < Capacity; ++Index)
+			{
+				if (auto* Row = CreateWidget<UCatFrontendRoomPlayerSlotWidget>(this, PlayerRowClass))
+				{
+					Row->ConfigureEmptySlot();
+					PlayersScrollBox->AddChild(Row);
+				}
 			}
 		}
-		for (int32 SlotIndex = Snapshot.RoomMembers.Num(); SlotIndex < Snapshot.MaxPlayers; ++SlotIndex)
+		// 仅缓存控件与成员的展示关联；重排和准备刷新不重建角色，离开的成员才释放席位。
+		TSet<FGuid> Assigned;
+		TArray<UCatFrontendRoomPlayerSlotWidget*> EmptyRows;
+		for (UWidget* Child : PlayersScrollBox->GetAllChildren())
 		{
-			UCatFrontendRoomPlayerSlotWidget* Row = CreateWidget<UCatFrontendRoomPlayerSlotWidget>(this, PlayerRowClass);
-			if (Row)
+			if (auto* Row = Cast<UCatFrontendRoomPlayerSlotWidget>(Child))
 			{
-				Row->ConfigureEmptySlot();
-				PlayersScrollBox->AddChild(Row);
+				const auto* Member = Snapshot.RoomMembers.FindByPredicate([&](const auto& M) { return M.MemberId == Row->GetMemberId(); });
+				if (Member && Member->MemberId.IsValid()) { Row->ConfigureRow(*Member); Assigned.Add(Member->MemberId); }
+				else { Row->ConfigureEmptySlot(); EmptyRows.Add(Row); }
+				Row->SetPreviewActive(IsShowingRoom());
+			}
+		}
+		int32 EmptyIndex = 0;
+		for (const auto& Member : Snapshot.RoomMembers)
+		{
+			if (!Assigned.Contains(Member.MemberId) && EmptyRows.IsValidIndex(EmptyIndex))
+			{
+				EmptyRows[EmptyIndex++]->ConfigureRow(Member);
 			}
 		}
 	}
@@ -861,7 +944,14 @@ void UCatFrontendRootWidget::ClearDynamicRows()
 	if (JoinFriendsScrollBox) { JoinFriendsScrollBox->ClearChildren(); }
 	if (SaveRowsScrollBox) { SaveRowsScrollBox->ClearChildren(); }
 	if (FriendsScrollBox) { FriendsScrollBox->ClearChildren(); }
-	if (PlayersScrollBox) { PlayersScrollBox->ClearChildren(); }
+	if (PlayersScrollBox)
+	{
+		for (UWidget* Child : PlayersScrollBox->GetAllChildren())
+		{
+			if (auto* Row = Cast<UCatFrontendRoomPlayerSlotWidget>(Child)) { Row->SetPreviewActive(false); }
+		}
+		PlayersScrollBox->ClearChildren();
+	}
 }
 
 // 房间表现刷新流程：从 Snapshot 写入真实 joinlobby URI、访问策略和开始可用性；无法确认 Lobby 或策略时明确显示不可用而不生成替代值。
@@ -881,6 +971,23 @@ void UCatFrontendRootWidget::RefreshRoomPresentation()
 		RoomAccessPolicyText->SetText(FText::FromString(AccessText));
 	}
 	if (StartRoomGameButton) { StartRoomGameButton->SetIsEnabled(RoomModel && RoomModel->CanStartGame()); }
+	if (StartRoomGameButton) { StartRoomGameButton->SetVisibility(Snapshot.bIsHost ? ESlateVisibility::Visible : ESlateVisibility::Collapsed); }
+	const auto* Local = Snapshot.RoomMembers.FindByPredicate([](const auto& M) { return M.bIsLocalPlayer; });
+	if (ReadyRoomButton)
+	{
+		ReadyRoomButton->SetVisibility(!Snapshot.bIsHost ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+		ReadyRoomButton->SetIsEnabled(Local && Snapshot.WorldState == ECatOnlineWorldState::Frontend && Snapshot.ActiveOperation == ECatOnlineOperation::None);
+		if (auto* Label = Cast<UTextBlock>(RoomPage->GetWidgetFromName(TEXT("ReadyRoomButtonLabel"))))
+		{
+			Label->SetText(FText::FromString(Local && Local->bIsReady ? TEXT("取消准备") : TEXT("准备")));
+		}
+	}
+	if (auto* Hint = RoomPage ? Cast<UTextBlock>(RoomPage->GetWidgetFromName(TEXT("RoomReadinessHint"))) : nullptr)
+	{
+		Hint->SetText(FText::FromString(Snapshot.bIsHost
+			? (RoomModel && RoomModel->CanStartGame() ? TEXT("队员已准备，出发吧。") : TEXT("等待其他队员准备 · 房主点击开始即视为准备"))
+			: TEXT("准备好后，等待房主开始游戏")));
+	}
 	if (CopyInviteCodeButton) { CopyInviteCodeButton->SetIsEnabled(!Snapshot.JoinLobbyUri.IsEmpty()); }
 }
 
@@ -1003,6 +1110,13 @@ void UCatFrontendRootWidget::ShowPage(UWidget* Page, const TCHAR* PageName)
 	}
 	const bool bPageChanged = FrontendPageSwitcher->GetActiveWidget() != Page;
 	FrontendPageSwitcher->SetActiveWidget(Page);
+	if (PlayersScrollBox)
+	{
+		for (UWidget* Child : PlayersScrollBox->GetAllChildren())
+		{
+			if (auto* Row = Cast<UCatFrontendRoomPlayerSlotWidget>(Child)) { Row->SetPreviewActive(Page == RoomPage); }
+		}
+	}
 	if (UWidget* Scrim = GetWidgetFromName(TEXT("FrontendSaveDeleteScrim")))
 	{
 		Scrim->SetVisibility(ESlateVisibility::Collapsed);

@@ -5,6 +5,10 @@
 #include "CatFrontendWidgetAuthoringLibrary.generated.h"
 
 class UBlueprint;
+class APlayerController;
+class UUserWidget;
+class UCatLakeMainMenuWidget;
+class UCatLakeMainMenuController;
 
 /**
  * 正式 Frontend WBP 的编辑器构造入口；只在编辑器中创建或修正目标资产并保存，不向运行时模块泄漏 UMGEditor API。
@@ -16,6 +20,13 @@ class CATFISHINGEDITOR_API UCatFrontendWidgetAuthoringLibrary : public UBlueprin
 	GENERATED_BODY()
 
 public:
+	/** 编辑器检查通过原生 CreateWidget 初始化正式 WBP；Python 的内部 Create 节点不可调用。 */
+	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Preview")
+	static UUserWidget* CreateWidgetPreview(UObject* WorldContext, TSubclassOf<UUserWidget> WidgetClass, APlayerController* Player);
+	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Preview")
+	static UCatLakeMainMenuController* BindLakeMenuPreview(UCatLakeMainMenuWidget* View, APlayerController* Player);
+	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Preview")
+	static void ReleaseLakeMenuPreview(UCatLakeMainMenuController* Controller);
 	/** 样式脚本新增控件后补齐 UE 编辑器变量 GUID 再编译；保留已有 GUID，不重建控件树。 */
 	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Frontend")
 	static bool CompileStyledFrontendWidget(UBlueprint* Blueprint);

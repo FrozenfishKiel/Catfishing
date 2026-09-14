@@ -11,6 +11,8 @@
 #include "Inventory/CatInventorySettings.h"
 #include "Logging/CatLog.h"
 #include "Online/CatOnlineSettings.h"
+#include "Online/CatOnlineRoomReadiness.h"
+#include "Misc/SecureHash.h"
 #include "Run/CatRunSettings.h"
 #include "Save/CatSaveSubsystem.h"
 #include "Settings/CatGameUserSettings.h"
@@ -51,11 +53,12 @@ namespace CatOnlineNames
 	static const FString ProjectId(TEXT("Catfishing"));
 	/** 协议键阻止网络合同不匹配的构建进入当前房间。 */
 	static const FName ProtocolSetting(TEXT("CAT_PROTOCOL_VERSION"));
-	static const FString ProtocolVersion(TEXT("1"));
+	static const FString ProtocolVersion(TEXT("2"));
 	/** Steam Lobby 元数据里的可展示名称；值由 Steam Lobby 写入，缺失时 UI 回退到 OSS 房主显示名。 */
 	static const ANSICHAR* RoomNameLobbyKey = "CAT_ROOM_NAME";
 	/** Steam Lobby 的 Host ready 元数据；只有 Lake 的 GameNetDriver 已创建后才由 Host 写入，Client 用它决定何时预载并连接。 */
 	static const ANSICHAR* LobbyReadyKey = "CAT_GAME_READY";
+	static const ANSICHAR* PlayerReadyKey = "CAT_PLAYER_READY";
 	/** Host ready 失败后等待下一次发布尝试的秒数；PostLoadMap 与 Lobby 轮询用它写入单调时间，轮询只在 Steam Lobby 可写时消费以避免 NULL 后端刷屏。 */
 	static constexpr double HostLobbyReadyRetrySeconds = 2.0;
 	/** 平台已确认邀请等待前台和本地身份的最长秒数；接受时冻结期限，持续未就绪也不能重新开始计时。 */
@@ -327,7 +330,7 @@ void UCatOnlineSubsystem::RefreshRoomSnapshotFacts()
 	const uint64 NumericLobbyId = FCString::Strtoui64(*CandidateLobbyId, &ParseEnd, 10);
 	const CSteamID LobbyId(NumericLobbyId);
 	if (CandidateLobbyId.IsEmpty() || !ParseEnd || *ParseEnd != TEXT('\0') || !LobbyId.IsLobby()
-		|| !SteamAPI_IsSteamRunning() || !SteamMatchmaking() || !SteamFriends())
+		|| !SteamAPI_IsSteamRunning() || !SteamMatchmaking() || !SteamFriends() || !SteamUser())
 	{
 		return;
 	}
@@ -338,10 +341,22 @@ void UCatOnlineSubsystem::RefreshRoomSnapshotFacts()
 		CurrentRoomName = UTF8_TO_TCHAR(LobbyRoomName);
 	}
 	const int32 MemberCount = SteamMatchmaking()->GetNumLobbyMembers(LobbyId);
-	if (MemberCount < 0)
+	const CSteamID LocalId = SteamUser()->GetSteamID();
+	bool bLocalMember = false;
+	for (int32 Index = 0; Index < MemberCount; ++Index)
+	{
+		bLocalMember |= SteamMatchmaking()->GetLobbyMemberByIndex(LobbyId, Index) == LocalId;
+	}
+	if (MemberCount <= 0 || !bLocalMember)
 	{
 		return;
 	}
+	if (ReadinessInitializedLobbyId != CandidateLobbyId)
+	{
+		SteamMatchmaking()->SetLobbyMemberData(LobbyId, CatOnlineNames::PlayerReadyKey, "0");
+		ReadinessInitializedLobbyId = CandidateLobbyId;
+	}
+	RoomCurrentPlayers = MemberCount;
 
 	CurrentLobbyId = CandidateLobbyId;
 	const CSteamID LobbyOwner = SteamMatchmaking()->GetLobbyOwner(LobbyId);
@@ -357,12 +372,13 @@ void UCatOnlineSubsystem::RefreshRoomSnapshotFacts()
 			continue;
 		}
 		const char* PersonaName = SteamFriends()->GetFriendPersonaName(MemberId);
-		if (!PersonaName || PersonaName[0] == '\0')
-		{
-			continue;
-		}
 		FCatOnlineRoomMember& Member = RoomMembers.AddDefaulted_GetRef();
-		Member.DisplayName = UTF8_TO_TCHAR(PersonaName);
+		Member.DisplayName = PersonaName && PersonaName[0] ? UTF8_TO_TCHAR(PersonaName) : TEXT("玩家");
+		const FString Identity = CandidateLobbyId + TEXT(":") + LexToString(MemberId.ConvertToUint64());
+		FGuid::ParseExact(FMD5::HashAnsiString(*Identity), EGuidFormats::Digits, Member.MemberId);
+		Member.bIsLocalPlayer = MemberId == LocalId;
+		const char* Ready = SteamMatchmaking()->GetLobbyMemberData(LobbyId, MemberId, CatOnlineNames::PlayerReadyKey);
+		Member.bIsReady = Ready && FCStringAnsi::Strcmp(Ready, "1") == 0;
 		Member.bIsLobbyOwner = MemberId == LobbyOwner;
 	}
 #endif
@@ -388,6 +404,7 @@ void UCatOnlineSubsystem::StopLobbyFactPolling()
 		FTSTicker::GetCoreTicker().RemoveTicker(LobbyFactPollHandle);
 	}
 	LobbyFactPollHandle.Reset();
+	ReadinessInitializedLobbyId.Reset();
 	bLobbyReadyObserved = false;
 	NextHostLobbyReadyPublishAttemptTime = 0.0;
 	ClientGameplayStartAttempts = 0;
@@ -436,7 +453,10 @@ bool UCatOnlineSubsystem::TickLobbyFacts(const float DeltaSeconds)
 		for (int32 Index = 0; Index < RoomMembers.Num(); ++Index)
 		{
 			if (PreviousMembers[Index].DisplayName != RoomMembers[Index].DisplayName
-				|| PreviousMembers[Index].bIsLobbyOwner != RoomMembers[Index].bIsLobbyOwner)
+				|| PreviousMembers[Index].bIsLobbyOwner != RoomMembers[Index].bIsLobbyOwner
+				|| PreviousMembers[Index].MemberId != RoomMembers[Index].MemberId
+				|| PreviousMembers[Index].bIsLocalPlayer != RoomMembers[Index].bIsLocalPlayer
+				|| PreviousMembers[Index].bIsReady != RoomMembers[Index].bIsReady)
 			{
 				bMembersChanged = true;
 				break;
@@ -456,6 +476,16 @@ bool UCatOnlineSubsystem::TickLobbyFacts(const float DeltaSeconds)
 	}
 	if (bFactsChanged)
 	{
+		for (const FCatOnlineRoomMember& Member : RoomMembers)
+		{
+			const FCatOnlineRoomMember* Old = PreviousMembers.FindByPredicate([&](const auto& M) { return M.MemberId == Member.MemberId; });
+			if (!Old || Old->bIsReady != Member.bIsReady)
+			{
+				UE_LOG(LogCatOnline, Log, TEXT("Event=online_member_ready_observed World=%s NetMode=%d Lobby=%s Member=%s Local=%d Owner=%d Ready=%d"),
+					*GetNameSafe(GetWorld()), GetWorld() ? int32(GetWorld()->GetNetMode()) : -1,
+					*FMD5::HashAnsiString(*CurrentLobbyId), *Member.MemberId.ToString(), Member.bIsLocalPlayer, Member.bIsLobbyOwner, Member.bIsReady);
+			}
+		}
 		BroadcastSnapshot(TEXT("online_lobby_facts_changed"));
 	}
 	return true;
@@ -1216,7 +1246,8 @@ void UCatOnlineSubsystem::FailJoinResolution(ECatOnlineError Error)
 // 好友邀请流程：先验证当前仍是前台 Host 房间和本代 opaque 句柄，再调用 OSS 的真实 Session Invite；平台接受后仅标记本代已发送，不把邀请发送误写成好友已加入或已接受。
 FCatOnlineResult UCatOnlineSubsystem::RequestInviteFriend(const FCatOnlineFriendHandle FriendHandle)
 {
-	if (ActiveOperation != ECatOnlineOperation::None || WorldState != ECatOnlineWorldState::Frontend
+	if (ActiveOperation != ECatOnlineOperation::None
+		|| (WorldState != ECatOnlineWorldState::Frontend && WorldState != ECatOnlineWorldState::Lake)
 		|| SessionRole != ECatOnlineSessionRole::Host || SessionState != ECatOnlineSessionState::Host)
 	{
 		return RejectRequest(ECatOnlineError::InvalidState);
@@ -1252,7 +1283,50 @@ FCatOnlineResult UCatOnlineSubsystem::RequestInviteFriend(const FCatOnlineFriend
 	return Result;
 }
 
-// 房主开始流程：先在 Frontend 验证 Host Session、无并发操作和 Save 已加载许可；再冻结操作 epoch 并提交统一 Start 预载管线，任何同步拒绝、失败回调或失效 epoch 都不会进入 ServerTravel。
+// 成员准备流程：只写本地账号的 Lobby 成员数据，回读确认后发布快照。
+FCatOnlineResult UCatOnlineSubsystem::RequestSetRoomReady(const bool bReady)
+{
+	if (ActiveOperation != ECatOnlineOperation::None) { return RejectRequest(ECatOnlineError::CommandAlreadyPending); }
+	if (WorldState != ECatOnlineWorldState::Frontend
+		|| (SessionState != ECatOnlineSessionState::Host && SessionState != ECatOnlineSessionState::Client))
+	{
+		return RejectRequest(ECatOnlineError::InvalidState);
+	}
+	RefreshRoomSnapshotFacts();
+	const FCatOnlineRoomMember* Local = RoomMembers.FindByPredicate([](const auto& M) { return M.bIsLocalPlayer; });
+	if (!Local || CurrentLobbyId.IsEmpty()) { return RejectRequest(ECatOnlineError::RoomReadinessUnavailable); }
+	const FGuid MemberId = Local->MemberId;
+	const FGuid RequestId = FGuid::NewGuid();
+	UE_LOG(LogCatOnline, Log, TEXT("Event=online_member_ready_requested RequestId=%s World=%s NetMode=%d Lobby=%s Member=%s Ready=%d"),
+		*RequestId.ToString(), *GetNameSafe(GetWorld()), GetWorld() ? int32(GetWorld()->GetNetMode()) : -1,
+		*FMD5::HashAnsiString(*CurrentLobbyId), *MemberId.ToString(), bReady);
+#if WITH_STEAMWORKS
+	if (SteamAPI_IsSteamRunning() && SteamMatchmaking())
+	{
+		SteamMatchmaking()->SetLobbyMemberData(CSteamID(FCString::Strtoui64(*CurrentLobbyId, nullptr, 10)),
+			CatOnlineNames::PlayerReadyKey, bReady ? "1" : "0");
+		RefreshRoomSnapshotFacts();
+		Local = RoomMembers.FindByPredicate([&](const auto& M) { return M.bIsLocalPlayer && M.MemberId == MemberId; });
+		if (Local && Local->bIsReady == bReady)
+		{
+			FCatOnlineResult Result;
+			Result.RequestId = RequestId;
+			Result.bAccepted = true;
+			LastError = ECatOnlineError::None;
+			UE_LOG(LogCatOnline, Log, TEXT("Event=online_member_ready_confirmed RequestId=%s World=%s NetMode=%d Lobby=%s Member=%s Ready=%d"),
+				*RequestId.ToString(), *GetNameSafe(GetWorld()), GetWorld() ? int32(GetWorld()->GetNetMode()) : -1,
+				*FMD5::HashAnsiString(*CurrentLobbyId), *MemberId.ToString(), bReady);
+			BroadcastSnapshot(TEXT("online_member_ready_confirmed"));
+			return Result;
+		}
+	}
+#endif
+	UE_LOG(LogCatOnline, Warning, TEXT("Event=online_member_ready_rejected RequestId=%s World=%s NetMode=%d Member=%s Reason=ReadbackUnavailable"),
+		*RequestId.ToString(), *GetNameSafe(GetWorld()), GetWorld() ? int32(GetWorld()->GetNetMode()) : -1, *MemberId.ToString());
+	return RejectRequest(ECatOnlineError::RoomReadinessUnavailable);
+}
+
+// 房主开始流程：验证已加载存档和其他成员准备，房主准备回读成功后进入唯一 Start 预载管线。
 FCatOnlineResult UCatOnlineSubsystem::RequestStartHostedGame()
 {
 	if (ActiveOperation != ECatOnlineOperation::None)
@@ -1271,6 +1345,16 @@ FCatOnlineResult UCatOnlineSubsystem::RequestStartHostedGame()
 	{
 		return RejectRequest(ECatOnlineError::SaveNotLoaded);
 	}
+	RefreshRoomSnapshotFacts();
+	if (!CatOnlineRoomReadiness::CanHostStart(RoomMembers, RoomCurrentPlayers, RoomMaxPlayers))
+	{
+		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_start_not_ready World=%s NetMode=%d Lobby=%s Members=%d"),
+			*GetNameSafe(GetWorld()), GetWorld() ? int32(GetWorld()->GetNetMode()) : -1,
+			*FMD5::HashAnsiString(*CurrentLobbyId), RoomMembers.Num());
+		return RejectRequest(ECatOnlineError::RoomMembersNotReady);
+	}
+	const FCatOnlineResult ReadyResult = RequestSetRoomReady(true);
+	if (!ReadyResult.bAccepted) { return ReadyResult; }
 
 	FCatOnlineResult Result = BeginOperation(ECatOnlineOperation::Start, ECatOnlineSessionState::Host);
 	if (!Result.bAccepted)
@@ -1338,6 +1422,13 @@ void UCatOnlineSubsystem::HandleGameplayPackagePreloadComplete(const FName& Pack
 		*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1, *UEnum::GetValueAsString(OperationRole));
 	if (OperationRole == ECatOnlineSessionRole::Host)
 	{
+		RefreshRoomSnapshotFacts();
+		if (!CatOnlineRoomReadiness::CanHostStart(RoomMembers, RoomCurrentPlayers, RoomMaxPlayers))
+		{
+			PreloadedGameplayWorld = nullptr;
+			FinishOperationFailure(ECatOnlineError::RoomMembersNotReady);
+			return;
+		}
 		if (!BeginHostTravelToGameplayMap())
 		{
 			PreloadedGameplayWorld = nullptr;

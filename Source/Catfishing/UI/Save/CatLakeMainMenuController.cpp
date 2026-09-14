@@ -13,6 +13,7 @@
 #include "Save/CatSaveSubsystem.h"
 #include "UI/CatUISettings.h"
 #include "UI/Frontend/CatFrontendSettingsModel.h"
+#include "UI/Frontend/CatFrontendRoomModel.h"
 #include "UI/Save/CatLakeMainMenuWidget.h"
 
 namespace CatLakeMainMenuText
@@ -111,6 +112,10 @@ bool UCatLakeMainMenuController::Bind(ULocalPlayer* InLocalPlayer, APlayerContro
 		InView->InitializeLakeMenuSettings(SettingsModel);
 	}
 	InView->OnActionRequested.AddUObject(this, &ThisClass::HandleMenuActionRequested);
+	PartyModel = NewObject<UCatFrontendRoomModel>(this);
+	PartyModel->Initialize(InLocalPlayer);
+	InView->InitializePartyModel(PartyModel);
+	InView->OnPartyInviteRequested.AddUObject(this, &ThisClass::RequestPartyInvite);
 	if (UCatSaveSubsystem* Save = GetSaveSubsystem())
 	{
 		SaveChangedHandle = Save->OnChanged.AddUObject(this, &ThisClass::HandleSaveChanged);
@@ -138,6 +143,8 @@ void UCatLakeMainMenuController::Unbind()
 	if (UCatLakeMainMenuWidget* View = BoundView.Get())
 	{
 		View->ResetLakeMenuSettings();
+		View->ResetPartyModel();
+		View->OnPartyInviteRequested.RemoveAll(this);
 		View->OnActionRequested.RemoveAll(this);
 		View->RemoveFromParent();
 	}
@@ -159,6 +166,7 @@ void UCatLakeMainMenuController::Unbind()
 		SettingsModel = nullptr;
 	}
 	SaveChangedHandle.Reset();
+	if (PartyModel) { PartyModel->Shutdown(); PartyModel = nullptr; }
 	SaveCompletedHandle.Reset();
 	OnlineChangedHandle.Reset();
 	BoundLocalPlayer.Reset();
@@ -562,6 +570,21 @@ void UCatLakeMainMenuController::HandleMenuActionRequested(const ECatLakeMainMen
 	}
 	switch (Action)
 	{
+	case ECatLakeMainMenuAction::OpenParty:
+		if (UCatLakeMainMenuWidget* View = BoundView.Get()) { View->ShowPartyPanel(); }
+		if (PartyModel) { PartyModel->RefreshFriends(); }
+		UE_LOG(LogCatUI, Log, TEXT("Event=ui_lake_party_opened World=%s Controller=%s"), *GetNameSafe(GetWorld()), *GetNameSafe(BoundPlayerController.Get()));
+		break;
+	case ECatLakeMainMenuAction::CloseParty:
+		if (UCatLakeMainMenuWidget* View = BoundView.Get()) { View->ShowCommandMenu(); }
+		break;
+	case ECatLakeMainMenuAction::RefreshParty:
+		if (PartyModel) { PartyModel->RefreshFriends(); }
+		break;
+	case ECatLakeMainMenuAction::PausePlaceholder:
+		LastStatusText = FText::FromString(TEXT("申请暂停暂未开放。游戏仍在进行。"));
+		UpdateView();
+		break;
 	case ECatLakeMainMenuAction::Close:
 		RequestCloseFromWidget();
 		break;
@@ -611,6 +634,16 @@ void UCatLakeMainMenuController::HandleMenuActionRequested(const ECatLakeMainMen
 void UCatLakeMainMenuController::HandleSaveChanged()
 {
 	UpdateView();
+}
+
+void UCatLakeMainMenuController::RequestPartyInvite(FCatOnlineFriendHandle Handle)
+{
+	if (!PartyModel || bReturnToMainMenuPending) { return; }
+	const FCatOnlineResult Result = PartyModel->InviteFriend(Handle);
+	const APlayerController* Controller = BoundPlayerController.Get();
+	UE_LOG(LogCatUI, Log, TEXT("Event=ui_lake_party_invite_requested RequestId=%s World=%s NetMode=%d Controller=%s FriendHandle=%s Accepted=%d Error=%s"),
+		*Result.RequestId.ToString(), *GetNameSafe(GetWorld()), Controller ? int32(Controller->GetNetMode()) : -1,
+		*GetNameSafe(Controller), *Handle.Value.ToString(), Result.bAccepted, *UEnum::GetValueAsString(Result.Error));
 }
 
 // 保存完成流程：只匹配本菜单发起的手动保存；成功使用玩家可读完成文案，失败再展示 Save 子系统的具体原因。

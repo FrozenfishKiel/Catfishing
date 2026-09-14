@@ -1,4 +1,4 @@
-"""统一加入、房间、设置及其动态行外观，保留原页面结构与业务绑定。"""
+"""统一加入、设置和好友行外观；房间布局由 style_frontend_room.py 维护。"""
 from pathlib import Path
 import hashlib
 import runpy
@@ -8,8 +8,8 @@ import unreal
 base = runpy.run_path(str(Path(__file__).with_name("style_frontend_save.py")))
 color, slate, widget, font, button_style, ensure, attach = (base[k] for k in
     ("color", "slate", "widget", "font", "button_style", "ensure", "attach"))
-NAMES = ("WBP_CatFrontendJoin", "WBP_CatFrontendRoom", "WBP_CatFrontendSettings",
-         "WBP_CatJoinFriendRow", "WBP_CatRoomFriendRow", "WBP_CatRoomPlayerSlot")
+NAMES = ("WBP_CatFrontendJoin", "WBP_CatFrontendSettings",
+         "WBP_CatJoinFriendRow", "WBP_CatRoomFriendRow")
 
 
 def controls(bp):
@@ -111,8 +111,8 @@ def main():
                     bar.set_editor_property(key,brush_tint(bar.get_editor_property(key),color(.23,.40,.32)))
                 o.set_editor_property('widget_bar_style',bar)
 
-        if bp.get_name() in NAMES[:3]:
-            prefix={'WBP_CatFrontendJoin':'Join','WBP_CatFrontendRoom':'Room','WBP_CatFrontendSettings':'Settings'}[bp.get_name()]
+        if bp.get_name() in NAMES[:2]:
+            prefix={'WBP_CatFrontendJoin':'Join','WBP_CatFrontendSettings':'Settings'}[bp.get_name()]
             shade=widget(bp,prefix+'RootShade',unreal.Border)
             shade.set_brush_color(color(0,0,0,0))
             shade.set_padding(unreal.Margin(68,48,68,48))
@@ -126,7 +126,6 @@ def main():
             surface.get_parent().set_min_desired_height(84)
             surface.get_editor_property('slot').set_padding(unreal.Margin(0,0,0,8))
         panels={'WBP_CatFrontendJoin':('JoinFriendsColumn','JoinLinkColumn'),
-                'WBP_CatFrontendRoom':('FriendsColumn','PlayersColumn'),
                 'WBP_CatFrontendSettings':('SettingsDetailsScrollBox','SettingsDescriptionBounds')}
         for name in panels.get(bp.get_name(),()): panel(bp,name)
         if bp.get_name()=='WBP_CatFrontendSettings':

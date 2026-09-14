@@ -83,6 +83,7 @@ public:
 
 	/** 请求由房主开始游戏并消费可能同步结案的快照；正式 Start 预载或旅行由全局遮罩接管，失败保留 RoomModel 的正式反馈。 */
 	void RequestStartRoomGame();
+	void RequestToggleRoomReady();
 
 	/** 请求应用设置草稿；具体字段和提交结果由 SettingsModel 定义，Controller 只维持页面流程。 */
 	void RequestApplyFrontendSettings();

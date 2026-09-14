@@ -61,6 +61,8 @@ public:
 			break;
 		case 4:
 			if (Snapshot.ActiveOperation != ECatOnlineOperation::None) { return false; }
+			// Create 完成与 Steam 成员投影到达可能相隔一次 Lobby 轮询，等待真实成员而非绕过准备门。
+			if (Snapshot.RoomMembers.IsEmpty()) { return false; }
 			if (!Test->TestTrue(TEXT("Start through production frontend entry"), Online->RequestStartHostedGame().bAccepted)) { return true; }
 			++Phase;
 			break;
