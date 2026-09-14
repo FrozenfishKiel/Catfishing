@@ -220,11 +220,19 @@ columns:
     type: text
     publish: excluded
     note: 落 PresentationDefinition.FightWaterSurfaceCue（槽位 2026-09-12 已开，VFX 资产未做）
+  - name: 试探期
+    classification: declarative
+    type: number
+    publish: ProbeDurationSeconds
+    note: 2026-09-14 李前臻授权暂定，按稀有度档给（普通 1.5／少见 2.0／稀有 2.5／珍稀 3.0）；出处钓鱼规则 §3.4，未填才落 2~4 秒随机兜底；待试玩校准
+  - name: 真咬响应窗
+    classification: declarative
+    type: number
+    publish: TrueBiteWindowSeconds
+    note: 2026-09-14 李前臻授权暂定，按稀有度档给（普通 9／少见 11／稀有 13／珍稀 15）；设计区间 8~15 见钓鱼规则 §3.4:141；待试玩校准
 
 # 代码有、表里没有的字段：谁定值、要不要在表里加列
 code_only_fields:
-  ProbeDurationSeconds: T10 接收鱼表「试探期」秒数（列未建、16 条待张佳）；0 才随机 2～4 秒，负数/非有限拒绝。导入见 Scripts/prepare_fish_runtime_migration.py，不读 Bite 模板
-  TrueBiteWindowSeconds: T10 普通响应窗逐鱼秒数（钓鱼规则 §3.4 为 8～15 秒，16 条待钱成澔/张佳落表）；缺值时显式沿用旧全局 3 秒并 Warning，与试探及完美 1 秒独立
   bEatingTimedEffectConfigured: 属主确认食用限时 GE 绑定的显式标记；False 为迁移缺口，True 且空 GE 表示确认无效果
   EatingTimedEffect: T02 每鱼独立限时 GameplayEffect 类，Condition 进食提交后由 ASC 应用；同鱼刷新、异鱼并存；正式 GE/GameplayCue 绑定待钱成澔与张佳
   EatingTimedEffectDurationSeconds: T02 食用 GE 基础秒数，应用时乘成长时长倍率；不覆盖猫神祝福，正式绑定未迁移
