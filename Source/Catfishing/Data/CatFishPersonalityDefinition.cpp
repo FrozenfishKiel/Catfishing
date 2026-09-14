@@ -3,7 +3,7 @@
 bool UCatBitePersonalityDefinition::IsRuntimeDefinitionReady() const
 {
 	// 时长事实源在参数页；0 表示未覆盖，正值按秒覆盖，负数与非有限值属于错误配置。
-	return !BitePersonalityId.IsNone() && FMath::IsFinite(ProbeDurationSeconds) && ProbeDurationSeconds >= 0.0
+	return !BitePersonalityId.IsNone()
 		&& FMath::IsFinite(TrueBiteWindowSeconds) && TrueBiteWindowSeconds > 0.0
 		&& FMath::IsFinite(PerfectHookWindowSeconds) && PerfectHookWindowSeconds > 0.0
 		&& PerfectHookWindowSeconds <= TrueBiteWindowSeconds;

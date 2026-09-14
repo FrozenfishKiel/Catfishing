@@ -146,6 +146,9 @@ struct FCatFishingSessionSnapshot
 	/** 真咬窗口的服务器截止时间；未配置窗口时保持零。 */
 	UPROPERTY(BlueprintReadOnly)
 	double WindowEndsServerTime = 0.0;
+	/** 完美预表现和服务器判定共用的截止时间（基础 1 秒 + 成长）。 */
+	UPROPERTY(BlueprintReadOnly)
+	double PerfectWindowEndsServerTime = 0.0;
 	/** 权威放弃保持区间；0 表示未保持，单位服务器世界秒。 */
 	UPROPERTY(BlueprintReadOnly) double CancelHoldStartedServerTime = 0.0;
 	UPROPERTY(BlueprintReadOnly) double CancelHoldEndsServerTime = 0.0;

@@ -62,7 +62,7 @@ public:
 	bool TryGetTerminalReplicationWindow(double& OutWindowSeconds) const;
 	/** 同步加载唯一正式搏斗平衡资产；缺失、关闭或字段非法时返回空，不回退到 C++/ini 第二套数值。 */
 	const UCatFishingFightBalanceDefinition* LoadFightBalanceDefinition() const;
-	const UCatBitePersonalityDefinition* FindBitePersonality(FName PersonalityId) const;
+	// T10：旧 Bite 查询已删除，三窗口由鱼定义/基础完美窗解析。
 	const UCatFightPersonalityDefinition* FindFightPersonality(FName PersonalityId) const;
 
 	/**
@@ -96,7 +96,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Runtime", meta = (DisplayName = "搏斗平衡数据资产"))
 	TSoftObjectPtr<UCatFishingFightBalanceDefinition> FightBalanceDefinition;
 
-	/** 真咬响应窗口秒数；0 表示 Unset，资产 Task 不应启动计时。 */
+	/** 仅逐鱼普通响应窗未迁移时使用的旧值；带 Warning，不作为正式鱼种数据。0 则拒绝。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (ClampMin = "0"))
 	double TrueBiteWindowSeconds = 0.0;
 
@@ -112,13 +112,7 @@ public:
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (ClampMin = "0.0"))
 	double WorldwideBiteSignalStabilityThreshold = 1.0;
-	/**
-	 * 试探期停留时长的区间，逐场随机取值。钓鱼规则 §3.4(:141)「试探期 2～4 秒随机，
-	 * 占位，快照，参数页为准」——设计把这个数归参数页而不是逐鱼资产，所以事实源在这里。
-	 * 逐鱼 Bite 资产上的 ProbeDurationSeconds 若配了正值则优先（留给将来做逐鱼差异），
-	 * 没配就用本区间；两者都不可用才 fail-closed。
-	 * 09-09 晚裁的「正式口径逐鱼配」指的是食性／发力段长／休息段长／游速系数四列，不含本项。
-	 */
+	/** 鱼表试探期未填（0）时使用的随机兜底区间，钓鱼规则 §3.4；不参与普通或完美响应窗。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (Units = "s"))
 	FVector2D ProbeDurationRangeSeconds = FVector2D(2.0, 4.0);
 	/** 无窝时落水到真咬的目标平均秒数；替代旧的每秒频率调参，计入等待上限。 */

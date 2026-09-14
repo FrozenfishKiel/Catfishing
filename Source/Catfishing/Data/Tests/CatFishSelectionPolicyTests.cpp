@@ -112,13 +112,14 @@ bool FCatFishSelectionOptionalEligibilityGateTest::RunTest(const FString& Parame
 		FCatFishEligibilityPolicy::PassesActivePlayerCount(*Definition, 1));
 	TestTrue(TEXT("participant gate accepts the configured minimum"),
 		FCatFishEligibilityPolicy::PassesActivePlayerCount(*Definition, 2));
-	// 空数组＝这条鱼不受该轴约束。鱼表格现在还没有时段/天气两列，若把空数组读成"永不出现"，
-	// 开关一打开整份目录会同时消失，"开关打开后链路是通的"就不成立。
+	// 墓碑（T23，鱼册逐鱼条件接口及批7 C组 fail-closed 要求）：删除空数组即不限的旧断言。
+	AddExpectedMessage(TEXT("Event=fish_eligibility_unconfigured"), ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains, 2);
 	Definition->TimeOfDay.Empty();
 	Definition->Weather.Empty();
-	TestTrue(TEXT("enabled time gate treats an unauthored axis as unconstrained"),
+	TestFalse(TEXT("enabled time gate rejects an unauthored axis"),
 		FCatFishEligibilityPolicy::PassesTimeOfDay(*Definition, ECatEnvironmentTimeOfDay::Dusk, true));
-	TestTrue(TEXT("enabled weather gate treats an unauthored axis as unconstrained"),
+	TestFalse(TEXT("enabled weather gate rejects an unauthored axis"),
 		FCatFishEligibilityPolicy::PassesWeather(*Definition, ECatEnvironmentWeather::Rain, true));
 	return !HasAnyErrors();
 }
@@ -410,6 +411,35 @@ bool FCatPerfectHookReductionRarityTierTest::RunTest(const FString& Parameters)
 		TestEqual(*FString::Printf(TEXT("%s 正式完美力量系数"),Name),Reduction.FishStrengthMultiplier,bTop ? 0.85 : 0.8,1e-8);
 		TestEqual(*FString::Printf(TEXT("%s 正式完美体力系数"),Name),Reduction.FishStaminaMultiplier,bTop ? 0.9 : 0.85,1e-8);
 	}
+	return !HasAnyErrors();
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishBasePoolInvalidMappingTest,
+	"Catfishing.Unit.Data.FishSelection.BasePoolRejectsAmbiguousOrInvalidMapping",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FCatFishBasePoolInvalidMappingTest::RunTest(const FString&)
+{
+	auto* Settings = NewObject<UCatFishCatalogSettings>();
+	auto* Fish = CatFishSelectionPolicyTestsPrivate::MakeFishDefinition(TEXT("TestFish"), 1.0,
+		CatFishSelectionPolicyTestsPrivate::MakePresentationDefinition());
+	Settings->Definitions = {Fish};
+	FCatFishSelectionContext Context;
+	Context.WaterRegion.RegionId = TEXT("TestLake");
+	Context.ActivePlayerCount = 1;
+	FCatFishBasePoolEntry Entry;
+	Entry.FishDefinitionId = Fish->FishDefinitionId;
+	Entry.Probability = 1.0;
+	Settings->BasePool = {Entry, Entry};
+	AddExpectedMessage(TEXT("Event=fish_selection_base_pool_invalid"), ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains, 3);
+	TestFalse(TEXT("重复 ID 不能暗中叠概率"), Settings->SelectFromBasePool(Context, TEXT("Test")).bSelected);
+	Settings->BasePool.SetNum(1);
+	Settings->BasePool[0].Probability = -1.0;
+	TestFalse(TEXT("非法权重拒绝整份映射"), Settings->SelectFromBasePool(Context, TEXT("Test")).bSelected);
+	Settings->BasePool[0].Probability = 1.0;
+	Settings->BasePool[0].FishDefinitionId = TEXT("NotInCatalog");
+	TestFalse(TEXT("未知成员拒绝，不回全鱼池"), Settings->SelectFromBasePool(Context, TEXT("Test")).bSelected);
 	return !HasAnyErrors();
 }
 

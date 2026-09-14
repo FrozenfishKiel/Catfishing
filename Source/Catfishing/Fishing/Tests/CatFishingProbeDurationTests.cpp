@@ -19,7 +19,7 @@ bool FCatFishingProbeDurationOverrideTest::RunTest(const FString& Parameters)
 	UCatFishingSettings* Settings = GetMutableDefault<UCatFishingSettings>();
 	if (!TestFalse(TEXT("正式 Bite 目录已配置"), Settings->BitePersonalities.IsEmpty())) return false;
 	auto* FormalBite = Settings->BitePersonalities[0].LoadSynchronous();
-	if (!TestNotNull(TEXT("正式 Bite 可加载"), FormalBite)) return false;
+	if (!TestNotNull(TEXT("旧 Bite 兼容资产可加载"), FormalBite)) return false;
 	auto* Bite = NewObject<UCatBitePersonalityDefinition>();
 	Bite->BitePersonalityId = FormalBite->BitePersonalityId;
 	Bite->TrueBiteWindowSeconds = FormalBite->TrueBiteWindowSeconds;
@@ -35,17 +35,18 @@ bool FCatFishingProbeDurationOverrideTest::RunTest(const FString& Parameters)
 	First->FishDefinition = Fish;
 	Replay->FishDefinition = Fish;
 
+	// 墓碑（T10，钓鱼规则 §3.4）：覆盖字段由 Bite 模板迁到鱼定义；保留同种子与边界断言。
 	// 正值刻意放在区间外，证明生产解析器真的使用覆盖值，而不是刚好落在随机区间。
-	Bite->ProbeDurationSeconds = 6.25;
+	Fish->ProbeDurationSeconds = 6.25;
 	TestTrue(TEXT("正覆盖通过资产就绪校验"), Bite->IsRuntimeDefinitionReady());
-	TestTrue(TEXT("正式目录查找不会过滤正覆盖"), Settings->FindBitePersonality(Fish->BitePersonalityId) == Bite);
+	TestTrue(TEXT("旧模板保留不影响鱼定义解析"), Settings->BitePersonalities.Contains(Bite));
 	double FirstSeconds = 0.0;
 	TestTrue(TEXT("试探停留秒数可解析"), First->TryResolveProbeDurationSeconds(FirstSeconds));
 	TestEqual(TEXT("传给试探计时器的秒数等于逐鱼正覆盖"), FirstSeconds, 6.25);
 
-	Bite->ProbeDurationSeconds = 0.0;
+	Fish->ProbeDurationSeconds = 0.0;
 	TestTrue(TEXT("未配覆盖仍是就绪资产"), Bite->IsRuntimeDefinitionReady());
-	TestTrue(TEXT("正式目录保留未配覆盖资产，区间回退可达"), Settings->FindBitePersonality(Fish->BitePersonalityId) == Bite);
+	TestTrue(TEXT("旧模板兼容引用仍保留，缺值只从鱼定义裁决"), Settings->BitePersonalities.Contains(Bite));
 	for (const uint64 Seed : {0ull, 1ull, 42ull, 78629ull, 0x123456789abcdef0ull})
 	{
 		First->CurrentBiteRandomSeed = Seed;
@@ -59,11 +60,24 @@ bool FCatFishingProbeDurationOverrideTest::RunTest(const FString& Parameters)
 		First->TryResolveProbeDurationSeconds(RepeatedSeconds);
 		TestEqual(TEXT("同会话重读不推进随机流"), FirstSeconds, RepeatedSeconds);
 	}
+	// 三个窗口分别读取：改变鱼种普通响应，不影响试探；Bite 模板旧值不能覆盖鱼表。
+	Fish->ProbeDurationSeconds = 3.25;
+	Fish->TrueBiteWindowSeconds = 12.0;
+	double Response = 0.0;
+	TestTrue(TEXT("普通响应读鱼种"), First->TryResolveTrueBiteWindowSeconds(Response));
+	TestEqual(TEXT("普通响应为鱼种 12 秒"), Response, 12.0);
+	First->TryResolveProbeDurationSeconds(FirstSeconds);
+	TestEqual(TEXT("普通响应不混入试探期"), FirstSeconds, 3.25);
+	Fish->TrueBiteWindowSeconds = 0.0;
+	TGuardValue<double> LegacyResponse(Settings->TrueBiteWindowSeconds, 3.0);
+	TestTrue(TEXT("普通响应缺值仍有显式迁移兜底"), First->TryResolveTrueBiteWindowSeconds(Response));
+	TestEqual(TEXT("普通响应兜底不是试探随机或完美 1 秒"), Response, 3.0);
+	Fish->TrueBiteWindowSeconds = -1.0;
+	TestFalse(TEXT("非法普通响应拒绝而非兜底"), First->TryResolveTrueBiteWindowSeconds(Response));
 	for (const double Invalid : {-1.0, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()})
 	{
-		Bite->ProbeDurationSeconds = Invalid;
-		TestFalse(TEXT("负数与非有限覆盖拒绝"), Bite->IsRuntimeDefinitionReady());
-		TestNull(TEXT("错误覆盖不能进入选鱼目录"), Settings->FindBitePersonality(Fish->BitePersonalityId));
+		Fish->ProbeDurationSeconds = Invalid;
+		TestFalse(TEXT("负数与非有限鱼种覆盖拒绝，不走兜底"), First->TryResolveProbeDurationSeconds(FirstSeconds));
 	}
 	return !HasAnyErrors();
 }

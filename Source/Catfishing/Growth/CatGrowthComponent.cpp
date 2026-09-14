@@ -1,4 +1,7 @@
 #include "Growth/CatGrowthComponent.h"
+#include "Inventory/CatBackPackComponent.h"
+#include "Fishing/CatFishingSession.h"
+#include "EngineUtils.h"
 
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Character/CatCharacter.h"
@@ -113,9 +116,10 @@ FCatDomainCommandResult UCatGrowthComponent::ChooseOfferedOptionFromAuthority(AC
 	RefreshCurrentOffer();
 	PublishSnapshot();
 	UE_LOG(LogCatCharacter, Log,
-		TEXT("Event=growth_choice_committed Character=%s Option=%s AppliedDelta=%.4f Completed=%d Pending=%d Revision=%lld"),
+		TEXT("Event=growth_choice_committed Character=%s Option=%s AppliedDelta=%.4f Completed=%d Pending=%d Revision=%lld RequestId=%s World=%s NetMode=%d Authority=1 LocalRole=%d"),
 		*GetNameSafe(GetOwner()), *UEnum::GetValueAsString(OptionId), AppliedDelta,
-		Snapshot.CompletedChoiceCount, Snapshot.PendingChoiceCount, Snapshot.Revision);
+		Snapshot.CompletedChoiceCount, Snapshot.PendingChoiceCount, Snapshot.Revision, *RequestId.ToString(),
+		*GetNameSafe(GetWorld()), GetWorld()->GetNetMode(), GetOwner()->GetLocalRole());
 	Result.bCommitted = true;
 	Result.Error = ECatDomainCommandError::None;
 	Result.Revision = Snapshot.Revision;
@@ -228,7 +232,7 @@ double UCatGrowthComponent::AccumulateStack(const ECatGrowthOptionId OptionId, c
 	return NewTotal - PreviousTotal;
 }
 
-// 生效流程：只处理由本组件直接拥有写口的三项。
+// 生效流程：属性三项沿用写口，背包及已存在的等待/完美窗当场通知；持续计算消费者直接读累计量。
 // 力量与搏斗体力上限写进 ASC（体力上限提升时当场按差值补满，见升级效果页 §2）；移速改物理身体的速度缩放。
 // 其余各项（放线回体、buff 时长、背包格数、完美窗、后勤扩容、咬钩间隔、渔获重量、竿磨损）
 // 由各自的消费系统读 GetTotalMagnitude，本组件不替它们保存第二份数值。
@@ -253,6 +257,17 @@ void UCatGrowthComponent::ApplyOptionEffect(const ECatGrowthOptionId OptionId, c
 		{
 			ASC->ApplyMaxFightStaminaDelta(static_cast<float>(AppliedDelta));
 		}
+		break;
+	case ECatGrowthOptionId::InventorySlots:
+		if (Character)
+			if (auto* Backpack = Cast<UCatBackPackComponent>(Character->GetInventoryComponent()))
+				Backpack->InitializePlayerInventorySlotCapacityFromAuthority();
+		break;
+	case ECatGrowthOptionId::PerfectWindow:
+	case ECatGrowthOptionId::BiteInterval:
+		if (GetWorld())
+			for (TActorIterator<ACatFishingSession> It(GetWorld()); It; ++It)
+				It->RefreshGrowthFromAuthority(Character, OptionId, AppliedDelta);
 		break;
 	case ECatGrowthOptionId::MoveSpeed:
 		if (Character)

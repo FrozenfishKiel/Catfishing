@@ -96,7 +96,7 @@ public:
 
 	/**
 	 * 测试期默认关闭；开启后才按 FishDefinition.TimeOfDay 过滤候选鱼。
-	 * 开关打开后链路是通的：鱼定义 TimeOfDay 为空数组＝该鱼不受时段约束（而不是「永不出现」），
+	 * T23：开启后鱼定义 TimeOfDay 为空数组＝未配置，拒绝并 Warning（不得当作不受约束），
 	 * 候选被筛空时还有基础池兜底。默认值仍是 False——开启节点待策划给（台账 D-31）。
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Selection|Eligibility")

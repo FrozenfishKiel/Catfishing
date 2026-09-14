@@ -142,6 +142,12 @@ protected:
 	virtual void OnRep_ReplicatedMovement() override;
 
 private:
+	friend class FCatFishThrowReceiverTest;
+	UFUNCTION() void HandleThrownFishHit(UPrimitiveComponent* Component, AActor* Other,
+		UPrimitiveComponent* OtherComponent, FVector Impulse, const FHitResult& Hit);
+	void DisarmThrowEffect();
+	bool bThrowEffectArmed = false;
+	TWeakObjectPtr<ACatCharacter> ThrowingCharacter;
 	friend class ACatFishingSession;
 	friend class FCatFishPickupMouthCarryAndGuardStoreTest;
 

@@ -8,7 +8,7 @@
 /**
  * 咬钩节奏的测试期模板。
  * 2026-09-09 晚裁「四套性格模板是测试用，正式口径逐鱼配」；咬钩节奏那几列还没进鱼表格，
- * 所以本资产暂时仍是取值来源。鱼表补列后随 Bite_* 资产一并退役。
+ * T10 已移除生产时间消费者，仅保留旧资产反射兼容；最终鱼资产迁移后再核查退役。
  */
 UCLASS(BlueprintType)
 class CATFISHING_API UCatBitePersonalityDefinition : public UPrimaryDataAsset
@@ -17,10 +17,10 @@ class CATFISHING_API UCatBitePersonalityDefinition : public UPrimaryDataAsset
 public:
 	bool IsRuntimeDefinitionReady() const;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly) FName BitePersonalityId = NAME_None;
-	/** 可选的逐鱼试探期覆盖（秒）；0/留空按参数页 UCatFishingSettings::ProbeDurationRangeSeconds 随机。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0", Units="s")) double ProbeDurationSeconds = 0.0;
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0")) double TrueBiteWindowSeconds = 0.0;
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0")) double PerfectHookWindowSeconds = 0.0;
+	/** 墓碑（T10，钓鱼规则 §3.4）：只为旧 Bite 资产保留反射，生产改读鱼定义。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(DeprecatedProperty, ClampMin="0", Units="s")) double ProbeDurationSeconds = 0.0;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(DeprecatedProperty, ClampMin="0")) double TrueBiteWindowSeconds = 0.0;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(DeprecatedProperty, ClampMin="0")) double PerfectHookWindowSeconds = 0.0;
 	/**
 	 * 以下三项完美削减倍率已退为过渡字段：正式口径按鱼册稀有度档取，
 	 * 见 UCatFishCatalogSettings::ResolvePerfectHookReduction（2026-09-09 晚裁「四套性格模板是测试用」）。

@@ -1,4 +1,5 @@
 #include "Items/Fish/CatFishPickupActor.h"
+#include "Condition/CatFishThrowEffectActor.h"
 #include "Fishing/Integration/CatFishingResolutionSubsystem.h"
 #include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
@@ -50,6 +51,8 @@ ACatFishPickupActor::ACatFishPickupActor()
 	WorldCollision->SetCollisionResponseToAllChannels(ECR_Ignore);
 	WorldCollision->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Block);
 	WorldCollision->SetCollisionResponseToChannel(ECC_WorldDynamic, ECR_Block);
+	WorldCollision->SetNotifyRigidBodyCollision(true);
+	WorldCollision->OnComponentHit.AddDynamic(this, &ThisClass::HandleThrownFishHit);
 	InteractionSphere = CreateDefaultSubobject<USphereComponent>(TEXT("InteractionSphere"));
 	InteractionSphere->SetupAttachment(WorldCollision);
 	InteractionSphere->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
@@ -337,6 +340,7 @@ bool ACatFishPickupActor::BeginMouthCarryFromAuthority(ACatCharacter* Character,
 	Character->OnDestroyed.AddDynamic(this, &ThisClass::HandleAuthorityCarrierDestroyed);
 	SetOwner(Character);
 	SetInstigator(Character);
+	DisarmThrowEffect();
 	PresentationState.State = ECatFishPickupState::Carried;
 	PresentationState.CarriedByPlayerState = PlayerState;
 	// 从物理丢弃态拾回时先停止刚体；否则 Chaos 会在附着后继续把根组件移出嘴部。
@@ -567,6 +571,7 @@ void ACatFishPickupActor::RetryAttachmentReconcile()
 // 不选择落点、不启用物理，调用方在完成自己的预检后决定固定落地或轻抛。
 void ACatFishPickupActor::EndMouthCarryFromAuthority()
 {
+	DisarmThrowEffect();
 	if (ACatCharacter* Character = AuthorityCarrier.Get())
 	{
 		Character->OnDestroyed.RemoveDynamic(this, &ThisClass::HandleAuthorityCarrierDestroyed);
@@ -687,6 +692,15 @@ bool ACatFishPickupActor::DropFromAuthority(AController* RequestingController)
 					* Settings->DropForwardSpeed + FVector(0.0, 0.0, Settings->DropUpwardSpeed));
 				ForceNetUpdate();
 				Character->ForceNetUpdate();
+				bThrowEffectArmed = FishDefinition->ThrowEffect.Kind != ECatFishThrowEffectKind::None;
+				ThrowingCharacter = Character;
+				if (bThrowEffectArmed)
+				{
+					WorldCollision->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
+					WorldCollision->IgnoreActorWhenMoving(Character, true);
+					UE_LOG(LogCatFishContainers, Log, TEXT("Event=fish_throw_armed FishInstanceId=%s Thrower=%s World=%s NetMode=%d Authority=1 LocalRole=%d"),
+						*PresentationState.FishInstanceId.ToString(), *GetNameSafe(Character), *GetNameSafe(GetWorld()), GetNetMode(), GetLocalRole());
+				}
 				bDropped = true;
 				Error = ECatDomainCommandError::None;
 				Reason = TEXT("Dropped");
@@ -1245,4 +1259,33 @@ void ACatFishPickupActor::OnRep_PresentationState(const FCatFishPickupPresentati
 FVector ACatFishPickupActor::GetFishingCollisionCenter() const
 {
 	return WorldCollision->Bounds.Origin;
+}
+
+void ACatFishPickupActor::DisarmThrowEffect()
+{
+	bThrowEffectArmed = false;
+	if (WorldCollision)
+	{
+		WorldCollision->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+		if (ThrowingCharacter.IsValid()) WorldCollision->IgnoreActorWhenMoving(ThrowingCharacter.Get(), false);
+	}
+	ThrowingCharacter.Reset();
+}
+
+void ACatFishPickupActor::HandleThrownFishHit(UPrimitiveComponent*, AActor* Other,
+	UPrimitiveComponent*, FVector, const FHitResult& Hit)
+{
+	if (!HasAuthority() || !bThrowEffectArmed || Other == ThrowingCharacter.Get()) return;
+	DisarmThrowEffect(); // 第一次非投掷者命中消费机会；弹跳不能重复施加。
+	if (!FishDefinition) return;
+	const FCatFishThrowEffect& Effect = FishDefinition->ThrowEffect;
+	ACatCharacter* Target = Cast<ACatCharacter>(Other);
+	if (Effect.Kind == ECatFishThrowEffectKind::KnockbackStartle && !Target) return;
+	auto* Receiver = GetWorld()->SpawnActor<ACatFishThrowEffectActor>(Hit.ImpactPoint, FRotator::ZeroRotator);
+	if (!Receiver || !Receiver->InitializeFromAuthority(Effect, Target, PresentationState.FishInstanceId))
+	{
+		if (Receiver) Receiver->Destroy();
+		UE_LOG(LogCatFishContainers, Warning, TEXT("Event=fish_throw_rejected FishInstanceId=%s World=%s NetMode=%d Authority=1 LocalRole=%d Reason=EffectConfigurationUnavailable"),
+			*PresentationState.FishInstanceId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), GetLocalRole());
+	}
 }

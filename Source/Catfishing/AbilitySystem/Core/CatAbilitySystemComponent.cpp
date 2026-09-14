@@ -1,4 +1,6 @@
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "Data/CatFishDefinition.h"
+#include "Growth/CatGrowthComponent.h"
 
 #include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
@@ -482,4 +484,53 @@ void UCatAbilitySystemComponent::OnRemoveAbility(FGameplayAbilitySpec& AbilitySp
 {
 	UnregisterAbilityInput(AbilitySpec.Handle);
 	Super::OnRemoveAbility(AbilitySpec);
+}
+
+double UCatAbilitySystemComponent::ResolveEatingEffectDuration(const double BaseSeconds) const
+{
+	const auto* Growth = GetAvatarActor() ? GetAvatarActor()->FindComponentByClass<UCatGrowthComponent>() : nullptr;
+	const double Bonus = Growth ? Growth->GetTotalMagnitude(ECatGrowthOptionId::BuffDuration) : 0.0;
+	return BaseSeconds * (1.0 + Bonus);
+}
+
+bool UCatAbilitySystemComponent::ApplyFishTimedEffectFromAuthority(const UCatFishDefinition* Fish, const FGuid RequestId)
+{
+	if (!IsOwnerActorAuthoritative() || !GetAvatarActor() || !Fish || !RequestId.IsValid()) return false;
+	auto Reject = [&](const TCHAR* Reason)
+	{
+		UE_LOG(LogCatCharacter, Warning, TEXT("Event=fish_timed_effect_unavailable Fish=%s RequestId=%s Actor=%s World=%s NetMode=%d Authority=1 LocalRole=%d Reason=%s"),
+			*Fish->FishDefinitionId.ToString(), *RequestId.ToString(), *GetNameSafe(GetAvatarActor()), *GetNameSafe(GetWorld()), GetWorld()->GetNetMode(), GetAvatarActor()->GetLocalRole(), Reason);
+		return false;
+	};
+	if (!Fish->bEatingTimedEffectConfigured) return Reject(TEXT("OwnerBindingUnset"));
+	if (!Fish->EatingTimedEffect) return true; // 已确认无效果，与缺配不同。
+	const UGameplayEffect* Definition = Fish->EatingTimedEffect->GetDefaultObject<UGameplayEffect>();
+	const double Duration = ResolveEatingEffectDuration(Fish->EatingTimedEffectDurationSeconds);
+	if (!FMath::IsFinite(Duration) || Duration <= 0.0 || Duration > MAX_flt
+		|| Definition->DurationPolicy != EGameplayEffectDurationType::HasDuration
+		|| Definition->GetStackingType() != EGameplayEffectStackingType::None)
+		return Reject(TEXT("InvalidDurationOrCrossFishStacking"));
+	if (const FActiveGameplayEffectHandle* Handle = FishTimedEffectHandles.Find(Fish->FishDefinitionId))
+	{
+		if (FActiveGameplayEffect* Active = ActiveGameplayEffects.GetActiveGameplayEffect(*Handle))
+		{
+			if (Active->Spec.Def != Definition) return Reject(TEXT("LiveFishBindingChanged"));
+			// 原 GE 就地刷新，不重新执行数值、不瞬时叠双份；引擎接口同步计时器、复制及 OnTimeChanged。
+			Active->Spec.Duration = static_cast<float>(Duration);
+			ModifyActiveEffectStartTime(*Handle, GetWorld()->GetTimeSeconds() - Active->StartWorldTime);
+			UE_LOG(LogCatCharacter, Log, TEXT("Event=fish_timed_effect_refreshed Fish=%s RequestId=%s Actor=%s DurationSeconds=%.3f World=%s NetMode=%d Authority=1 LocalRole=%d"),
+				*Fish->FishDefinitionId.ToString(), *RequestId.ToString(), *GetNameSafe(GetAvatarActor()), Duration,
+				*GetNameSafe(GetWorld()), GetWorld()->GetNetMode(), GetAvatarActor()->GetLocalRole());
+			return true;
+		}
+	}
+	FGameplayEffectSpec Spec(Definition, MakeEffectContext(), 1.0f);
+	Spec.SetDuration(static_cast<float>(Duration), true);
+	const FActiveGameplayEffectHandle Handle = ApplyGameplayEffectSpecToSelf(Spec);
+	if (!Handle.IsValid()) return Reject(TEXT("GameplayEffectRejected"));
+	FishTimedEffectHandles.Add(Fish->FishDefinitionId, Handle);
+	UE_LOG(LogCatCharacter, Log, TEXT("Event=fish_timed_effect_applied Fish=%s RequestId=%s Actor=%s DurationSeconds=%.3f World=%s NetMode=%d Authority=1 LocalRole=%d"),
+		*Fish->FishDefinitionId.ToString(), *RequestId.ToString(), *GetNameSafe(GetAvatarActor()), Duration,
+		*GetNameSafe(GetWorld()), GetWorld()->GetNetMode(), GetAvatarActor()->GetLocalRole());
+	return true;
 }

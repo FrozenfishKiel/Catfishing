@@ -2,6 +2,9 @@
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 #include "Fishing/CatFishingSession.h"
+#include "Data/CatFishDefinition.h"
+#include "TimerManager.h"
+#include "Growth/CatGrowthComponent.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/Integration/CatFishingResolutionSubsystem.h"
 #include "Fishing/Integration/CatFishingAimLibrary.h"
@@ -91,6 +94,11 @@ bool FCatFishingR3BaitDistanceTest::RunTest(const FString& Parameters)
 		Session->Snapshot.Phase = ECatFishingPhase::Probe;
 		Session->Snapshot.FishEncounterActor = Fish;
 		Session->SelectionResolution = ECatFishSelectionResolution::Selected;
+		// T10 夹具迁移墓碑（钓鱼规则 §3.4）：选鱼边界现在必须提供鱼种普通响应窗；原扣饵/距离断言全部保留。
+		Session->FishDefinition = NewObject<UCatFishDefinition>();
+		Session->FishDefinition->FishDefinitionId = TEXT("TestTimingFish");
+		Session->FishDefinition->TrueBiteWindowSeconds = 12.0;
+
 		Session->CastEquipment = F.Equipment;
 		Session->FisherCharacter = F.Cat;
 		Session->AttemptSnapshot.RodDefinitionId = L.RodDefinitionId;
@@ -105,6 +113,10 @@ bool FCatFishingR3BaitDistanceTest::RunTest(const FString& Parameters)
 		if (bOverlong) TestEqual(TEXT("超长鱼逃"), Session->GetSnapshot().Outcome, ECatFishingOutcome::Escaped);
 		else
 		{
+			TestEqual(TEXT("实际普通响应计时器使用鱼种 12 秒"),
+				double(World->GetTimerManager().GetTimerRemaining(Session->TrueBiteTimerHandle)), 12.0);
+			TestEqual(TEXT("实际完美窗保持基础 1 秒"),
+				Session->Snapshot.PerfectWindowEndsServerTime - Session->Snapshot.PhaseStartedServerTime, 1.0);
 			TestEqual(TEXT("真咬 D0 使用移动后的鱼猫距离"), Session->TrueBiteDistanceCentimeters, 700.0);
 			F.Cat->SetActorLocation(FVector(500, 0, 0));
 			TestEqual(TEXT("响应窗移动不改冻结 D0"), Session->TrueBiteDistanceCentimeters, 700.0);
@@ -256,4 +268,33 @@ bool FCatFishingR3PositiveFishStaminaTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("正余额不翻肚"), Step.Outcome, ECatFightStepOutcome::None);
 	return !HasAnyErrors();
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatGrowthWearDeliveryTest,
+	"Catfishing.Unit.Growth.CatchWearChoiceReachesEquipmentTransaction",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FCatGrowthWearDeliveryTest::RunTest(const FString&)
+{
+	CatR3Tests::FFixture F;
+	if (!F.Init(*this)) return false;
+	auto* Growth = F.Cat->GetGrowthComponent();
+	Growth->Snapshot.CompletedChoiceCount = 4;
+	Growth->Snapshot.PendingChoiceCount = 1;
+	Growth->Snapshot.CurrentOffer = {ECatGrowthOptionId::RodWear};
+	Growth->Snapshot.OfferSerial = 1;
+	TestTrue(TEXT("选择命令产生竿磨损减免"), Growth->ChooseOfferedOptionFromAuthority(F.Controller,
+		FGuid::NewGuid(), ECatGrowthOptionId::RodWear, 1).bCommitted);
+	auto* Session = F.Wrapper.GetTestWorld()->SpawnActor<ACatFishingSession>();
+	Session->Snapshot.FishingSessionId = F.SessionId;
+	Session->FisherCharacter = F.Cat;
+	Session->CastEquipment = F.Equipment;
+	Session->AttemptSnapshot.RodItemInstanceId = F.Equipment->GetSnapshot().RodItemInstanceId;
+	double Before = 0.0, After = 0.0;
+	bool Broken = false;
+	TestTrue(TEXT("真实竿耐久可读取"), F.Equipment->GetFishingRodDurability(F.SessionId, Before, Broken));
+	TestTrue(TEXT("收鱼生产扣费成功"), Session->CommitCatchEquipmentFromAuthority());
+	TestTrue(TEXT("真实竿耐久回执可读取"), F.Equipment->GetFishingRodDurability(F.SessionId, After, Broken));
+	TestTrue(TEXT("每条 -1 经成长后只扣 0.9，未回补竿"), FMath::IsNearlyEqual(Before - After, 0.9, 0.000001));
+	return !HasAnyErrors();
+}
+
 #endif

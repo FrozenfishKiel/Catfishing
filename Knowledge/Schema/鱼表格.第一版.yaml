@@ -223,18 +223,23 @@ columns:
 
 # 代码有、表里没有的字段：谁定值、要不要在表里加列
 code_only_fields:
+  ProbeDurationSeconds: T10 接收鱼表「试探期」秒数（列未建、16 条待张佳）；0 才随机 2～4 秒，负数/非有限拒绝。导入见 Scripts/prepare_fish_runtime_migration.py，不读 Bite 模板
+  TrueBiteWindowSeconds: T10 普通响应窗逐鱼秒数（钓鱼规则 §3.4 为 8～15 秒，16 条待钱成澔/张佳落表）；缺值时显式沿用旧全局 3 秒并 Warning，与试探及完美 1 秒独立
+  bEatingTimedEffectConfigured: 属主确认食用限时 GE 绑定的显式标记；False 为迁移缺口，True 且空 GE 表示确认无效果
+  EatingTimedEffect: T02 每鱼独立限时 GameplayEffect 类，Condition 进食提交后由 ASC 应用；同鱼刷新、异鱼并存；正式 GE/GameplayCue 绑定待钱成澔与张佳
+  EatingTimedEffectDurationSeconds: T02 食用 GE 基础秒数，应用时乘成长时长倍率；不覆盖猫神祝福，正式绑定未迁移
   FishStrength: 已 Deprecated；输入包仍列为必填字段，说明输入包晚于 D-20/D-21 的改动，重生成时要去掉
   FoodSafety: Unset/Safe/Toxic/Inedible 四档，由 吃鱼效果 文案人工翻译；不可食用档 2026-09-12 已加
-  ThrowEffect: 逐鱼投掷效果（Kind/半径/时长），由 吃鱼效果 列里写成投掷规格的那两行人工翻译（咸鱼击退炸毛、臭臭鱼驱散）；半径与时长两个数未裁
+  ThrowEffect: 逐鱼投掷效果（Kind/半径/时长/ReactionMontage），由 吃鱼效果 列里写成投掷规格的那两行人工翻译（咸鱼击退炸毛、臭臭鱼驱散）；半径与时长未裁、正式猫反应 Montage 未绑定；CatFishPickupActor 命中后接 CatFishThrowEffectActor，缺配拒绝并 Warning
   BodyClass: 由 名字 是否为湖心巨影推出（Standard/Giant）；可不加列
   SacrificeContribution: 设计按实际体重档取（参数页供奉值行），不该是定额字段；对表已列为待办
   CaptureImprintEventId: 印记触发清单归印记册，不进鱼表
   SpawnWeight: 设计的抽鱼权重在 钓鱼规则 §2.3（分布+窝料+饵），表里无此列；程序侧口径需与鱼册对齐
-  TimeOfDay: 设计只说「时段做机会向修正」，无逐鱼数据；旁路开关（D-31）
-  Weather: 同上
+  TimeOfDay: T23 逐鱼时段数据待张佳；开关 D-31 保持关闭，开启后空数组拒绝并 Warning，基础池同样遵循
+  Weather: T23 逐鱼天气数据待张佳；开关 D-31 保持关闭，开启后空数组拒绝并 Warning
   MinimumFightParticipants: 设计「单人局不出需要多人的鱼」，巨影=多人；可由 BodyClass 推出
-  BitePersonalityId: 四套 Bite_* 模板，与表的 P/Q/R 列关系未定
-  FightPersonalityId: 四套 Fight_* 模板，同上
+  BitePersonalityId: T10 退为旧资产反射兼容；生产三窗口不再读取 Bite 模板，正式资产待终版统一迁移
+  FightPersonalityId: 四套 Fight_* 仍作为现有搏斗链及未填行为字段的测试兜底；D-30 与未审鱼行为页本轮不切换
   PoisonIncrease: 从 吃鱼效果 文案人工翻译；缺结构化列
   bTankDisplayEligible: 工程开关
   bEnableRuntimeDefinition: 工程开关
@@ -242,3 +247,13 @@ code_only_fields:
   PresentationDefinition: 资产绑定
 
 editor_backflow: 未接。资产字段被人在编辑器里改了不会回到表；改数一律先改表再重生成（README 的三方合并链条尚不存在）
+
+# 本组只准备接收映射；不把专表占位成员/权重写成已批准配置。
+runtime_migration_receiver:
+  script: Scripts/prepare_fish_runtime_migration.py
+  outputs: Saved/Migration/Batch7C/fish-runtime-patch.json
+  editor_import: import_into_editor_memory（仅改已加载对象，不保存 Content，先校验全体稳定身份）
+  optional_columns: {试探期: ProbeDurationSeconds, 真咬响应窗: TrueBiteWindowSeconds, 时段: TimeOfDay, 天气: Weather}
+  base_pool: 已批准的 fish_id/权重专表映射到 CatFishCatalogSettings.BasePool 的 FishDefinitionId/Probability；拒绝占位列、未知ID、重复ID、非正及非有限权重
+  base_pool_owner: 张佳
+  deferred: D-30 两步抽样/整数窝归属、D-31 开启节点、未审鱼行为均不切换

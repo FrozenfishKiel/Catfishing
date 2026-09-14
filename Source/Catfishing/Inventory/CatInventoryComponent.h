@@ -447,6 +447,7 @@ public:
 	 * 只有猫身上的背包受约束——「携带上限」讲的是一只猫身上能带多少，营地公库、鱼护和商店货架不在其内。
 	 */
 	virtual bool EnforcesCarryLimits() const { return false; }
+	int32 GetEffectiveCarryLimit(ECatInventoryCarryCategory Category) const;
 
 	/** 读取这份库存在团队装备库里声明的角色；商店交付按它把竿漂与消耗品分到两个去处。 */
 	ECatTeamStorageRole GetTeamStorageRole() const { return TeamStorageRole; }

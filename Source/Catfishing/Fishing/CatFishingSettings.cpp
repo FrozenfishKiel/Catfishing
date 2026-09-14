@@ -66,11 +66,10 @@ const TArray<double>& UCatFishingSettings::GetOverpowerLandingDistanceFractions(
 	return LegacyDefaults;
 }
 
-// 运行 gate 流程：要求产品显式开启总开关、提供 StateTree 软引用、有限正响应窗/终态复制窗与近岸验证；任一为 Unset 都阻止会话创建。
+// 运行 gate 流程：要求产品显式开启总开关、提供 StateTree 软引用、有限正终态复制窗（普通响应窗由已选鱼定义解析）与近岸验证；任一为 Unset 都阻止会话创建。
 bool UCatFishingSettings::IsRuntimeReady() const
 {
 	return bEnableFishingRuntime && !FishingSessionStateTree.IsNull() && !FishBehaviorStateTree.IsNull()
-		&& FMath::IsFinite(TrueBiteWindowSeconds) && TrueBiteWindowSeconds > 0.0
 		&& LoadFightBalanceDefinition()
 		&& FMath::IsFinite(HeldRodMaximumAngularSpeedDegreesPerSecond)
 		&& HeldRodMaximumAngularSpeedDegreesPerSecond > 0.0
@@ -89,21 +88,7 @@ const UCatFishingFightBalanceDefinition* UCatFishingSettings::LoadFightBalanceDe
 	return Definition && Definition->IsRuntimeDefinitionReady() ? Definition : nullptr;
 }
 
-const UCatBitePersonalityDefinition* UCatFishingSettings::FindBitePersonality(const FName PersonalityId) const
-{
-	if (PersonalityId.IsNone()) return nullptr;
-	const UCatBitePersonalityDefinition* Match = nullptr;
-	for (const TSoftObjectPtr<UCatBitePersonalityDefinition>& Entry : BitePersonalities)
-	{
-		const UCatBitePersonalityDefinition* Candidate = Entry.LoadSynchronous();
-		if (Candidate && Candidate->BitePersonalityId == PersonalityId && Candidate->IsRuntimeDefinitionReady())
-		{
-			if (Match) return nullptr;
-			Match = Candidate;
-		}
-	}
-	return Match;
-}
+// 墓碑（T10）：FindBitePersonality 已无生产消费者；Bite_* 资产与反射类型留待编辑器迁移。
 
 // 逐鱼行为参数解析流程：先取这条鱼的测试期模板（可能为空），再交给 Resolver 用鱼表四列逐列覆盖。
 // 这里不做任何数值判断，只保证「鱼表优先、模板兜底」这条口径只有一个实现。

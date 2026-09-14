@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Growth/CatGrowthTypes.h"
 #include "GameFramework/Actor.h"
 #include "GameplayTagContainer.h"
 #include "Fishing/CatFishingTypes.h"
@@ -40,6 +41,8 @@ class CATFISHING_API ACatFishingSession : public AActor
 	friend class FCatFishingR3HoldTest;
 
 public:
+	/** 成长选择后更新已存在的个人等待/完美窗，不重抽鱼或重置机会。 */
+	void RefreshGrowthFromAuthority(const ACatCharacter* Character, ECatGrowthOptionId OptionId, double AppliedDelta);
 	/** 创建唯一 StateTree 组件、开启只读 Snapshot 复制并关闭 Tick。 */
 	ACatFishingSession();
 
@@ -158,6 +161,8 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	friend class FCatGrowthRuntimeConsumersTest;
+	friend class FCatGrowthWearDeliveryTest;
 	friend class FCatRunFishCollectionHandoffTest;
 	friend class FCatFishingPhysicalGripGraphTest;
 	friend class FCatFishingOperatorRunnerIntegrationTest;
@@ -286,6 +291,8 @@ private:
 	bool OpenTrueBiteWindowFromAuthority();
 	/** 按秒解析本场试探时长：逐鱼正覆盖优先，否则按冻结种子取参数页区间；两者均不可用才返回 false。 */
 	bool TryResolveProbeDurationSeconds(double& OutProbeSeconds) const;
+	bool TryResolveTrueBiteWindowSeconds(double& OutSeconds) const;
+	double GetFisherGrowthMagnitude(ECatGrowthOptionId OptionId) const;
 	void HandleTrueBiteWindowExpired();
 	/** 咬钩计时到点那一刻冻结选择上下文、选鱼、生成鱼影 Encounter；饵的数量在真咬成立时才扣。 */
 	FCatFishSelectionCommitResult ResolveHookSelectionFromAuthority();

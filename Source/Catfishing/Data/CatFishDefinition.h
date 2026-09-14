@@ -79,6 +79,9 @@ USTRUCT(BlueprintType)
 struct FCatFishThrowEffect
 {
 	GENERATED_BODY()
+	/** 正式猫反应动画（惊吓/捂鼻），不从鱼动画或任意现有 Montage 猜选；缺配时投掷效果拒绝并告警。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Throw")
+	TSoftObjectPtr<class UAnimMontage> ReactionMontage;
 
 	/** 效果族；None 表示这条鱼投出去只是掉在地上。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Throw")
@@ -108,6 +111,23 @@ class CATFISHING_API UCatFishDefinition : public UCatInventoryItemDefinition
 	GENERATED_BODY()
 
 public:
+	/** 食用限时效果是否已由属主确认；true + 空 GE 明确表示无该效果，false 为迁移缺口。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Use|TimedEffect")
+	bool bEatingTimedEffectConfigured = false;
+	/** 每种鱼独立的一份限时 GE；要求 HasDuration、无跨鱼堆叠。数值及 GameplayCue 由正式资产提供。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Use|TimedEffect")
+	TSubclassOf<class UGameplayEffect> EatingTimedEffect;
+	/** 基础时长（秒），不是成长后时长；0 为未配。祝福不走食用链。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Use|TimedEffect", meta=(ClampMin="0", Units="s"))
+	double EatingTimedEffectDurationSeconds = 0.0;
+	/** 鱼表「试探期」，秒；0/缺列才使用 2～4 秒随机兜底，非法值拒绝。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Bite", meta=(ClampMin="0", Units="s"))
+	double ProbeDurationSeconds = 0.0;
+
+	/** 鱼种普通响应窗，秒；0 表示待属主给值，迁移期带 Warning 使用旧全局值。与试探/完美窗独立。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Bite", meta=(ClampMin="0", Units="s"))
+	double TrueBiteWindowSeconds = 0.0;
+
 	/** 构造鱼定义资产；库存侧的展示、ID 和实例类型都从鱼表字段覆盖读取。 */
 	UCatFishDefinition(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 
@@ -265,11 +285,11 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing", meta = (ClampMin = "0.0", DisplayName = "体力系数"))
 	double FishFightStaminaPerKilogram = 0.0;
 
-	/**
-	 * 试探/真咬节奏的测试期模板 ID；Fishing StateTree 消费模板而不改变三阶段规则。
-	 * 2026-09-09 晚裁「四套性格模板是测试用，正式口径逐鱼配」——咬钩节奏那几列尚未进鱼表格，
-	 * 所以本字段暂时仍是正式取值来源，等鱼表补列后随 Bite_* 资产一并退役。
-	 */
+	/** T10：只保留旧鱼资产的 Bite 模板身份反射；试探与普通响应读本鱼秒数字段，完美基础 1 秒。 */
+
+
+
+
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Personality")
 	FName BitePersonalityId = NAME_None;
 

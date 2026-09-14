@@ -11,6 +11,11 @@ class CATFISHING_API UCatAbilitySystemComponent : public UAbilitySystemComponent
 	GENERATED_BODY()
 
 public:
+	/** 食用提交后的限时效果接收端：同鱼种刷新同一 GE，异鱼并存。 */
+	bool ApplyFishTimedEffectFromAuthority(const class UCatFishDefinition* Fish, FGuid RequestId);
+	/** 只有食用调用方使用成长倍率；祝福保留其独立入口与时长。 */
+	double ResolveEatingEffectDuration(double BaseSeconds) const;
+
 	/** 从任意 Actor 解析项目 ASC；调用方只拿到 Cat ASC 能力面，不需要知道当前身体类如何实现 AbilitySystemInterface。 */
 	static UCatAbilitySystemComponent* FindCatAbilitySystemFromActor(AActor* Actor);
 
@@ -107,6 +112,9 @@ protected:
 	virtual void OnRemoveAbility(FGameplayAbilitySpec& AbilitySpec) override;
 
 private:
+	// 仅 authority 的鱼种到活跃 GE 索引；时长、复制、到期由 GAS 唯一持有，不跨局保存。
+	TMap<FName, FActiveGameplayEffectHandle> FishTimedEffectHandles;
+
 	/** 输入标签到 Ability Spec 的索引；PlayerController 只提交标签，具体 Ability 由此处解析。 */
 	TMap<FGameplayTag, TArray<FGameplayAbilitySpecHandle>> SpecHandlesByInputTag;
 

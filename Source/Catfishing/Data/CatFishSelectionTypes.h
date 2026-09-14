@@ -11,7 +11,7 @@ class UCatFishDefinition;
 /**
  * 鱼种候选的可扩展条件门。测试期可让未验收条件保持旁路；正式启用时只切换配置，
  * 不改变挑战档、窝料/鱼饵权重和最终归一化流程。
- * 时段与天气两门的空数组读作「不受该轴约束」，见 .cpp 的流程注释。
+ * T23：时段与天气过滤开启后，空数组按未配置拒绝并 Warning；关闭开关仍遵守 D-31。
  */
 struct CATFISHING_API FCatFishEligibilityPolicy
 {
@@ -53,6 +53,8 @@ struct FCatFishSelectionContext
 	 * 选鱼链不再读它；等 Fishing 侧改用自己的平衡资产字段后可整条删除。
 	 */
 	double StrengthPerKilogram = 0.0;
+	/** 抛竿者成长的重量上浮比例；抽样时夹到本鱼种上限，后续力量与实物共用该重量。 */
+	double CatchWeightBonus = 0.0;
 	int32 RandomSeed = 0;
 };
 

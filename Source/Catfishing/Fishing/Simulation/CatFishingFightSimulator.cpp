@@ -42,6 +42,8 @@ bool FCatFightSimulationConfig::IsValid() const
 		&& IsFiniteNonNegative(CatHoldStaminaMultiplier)
 		&& IsFiniteNonNegative(CatLoadStaminaMultiplier)
 		&& IsFiniteNonNegative(SlackStaminaRegenPerSecond)
+		&& IsFiniteNonNegative(SlackStaminaGrowthPerSecond)
+		&& FMath::IsFinite(RodWearMultiplier) && RodWearMultiplier >= 0.0 && RodWearMultiplier <= 1.0
 		&& IsFiniteNonNegative(StalemateRodWearPerFishStrength)
 		&& IsFiniteNonNegative(FishFullEffortRodWearPerSecond)
 		&& FMath::IsFinite(TautRodWearMultiplier) && TautRodWearMultiplier >= 1.0
@@ -633,7 +635,7 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 	if (bSlackRecovery)
 	{
 		Result.CatStaminaDrain = -FMath::Min(FMath::Max(0.0, Config.CatStaminaMaximum - State.CatStamina),
-			Config.SlackStaminaRegenPerSecond * Dt);
+			(Config.SlackStaminaRegenPerSecond + Config.SlackStaminaGrowthPerSecond) * Dt);
 	}
 
 	if (bChargeFishIntent)
@@ -672,7 +674,7 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 	// 鱼力竭后的收尾只保留线长约束和拖拽位移：死鱼不再施力，猫的收线力也不能独自磨竿，
 	// 否则拉鱼干仍会耗尽耐久；拖落水期间同样不新增磨损，避免尚未落水就被断竿替代。
 	const double RodWearDelta = !State.bFishExhausted && !bExhaustedCatEscape && bLineRestraining
-		? Config.FishStrength * Config.StalemateRodWearPerFishStrength * Dt : 0.0;
+		? Config.FishStrength * Config.StalemateRodWearPerFishStrength * Config.RodWearMultiplier * Dt : 0.0;
 	Result.RodWearDelta = RodWearDelta;
 	Result.AbsoluteRodWear = State.AbsoluteRodWear + RodWearDelta;
 	Result.Trace.RodWearDelta = RodWearDelta;

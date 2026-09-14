@@ -6,6 +6,7 @@
 #include "Character/CatCharacter.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Fishing/CatFishingSession.h"
+#include "Data/CatFishDefinition.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Inventory/CatInventoryComponent.h"
@@ -189,6 +190,11 @@ bool FCatFishingBaitTerminalConsumptionTest::RunTest(const FString& Parameters)
 			// 在选鱼完成边界提供 Encounter；真咬提交、计时和终局结算执行生产入口。
 			Session->Snapshot.FishEncounterActor = Fixture.WorldWrapper.GetTestWorld()->SpawnActor<ACatFishEncounterActor>();
 			Session->SelectionResolution = ECatFishSelectionResolution::Selected;
+			// T10 夹具迁移墓碑（钓鱼规则 §3.4）：选鱼边界现在必须提供鱼种普通响应窗；原扣饵/距离断言全部保留。
+			Session->FishDefinition = NewObject<UCatFishDefinition>();
+			Session->FishDefinition->FishDefinitionId = TEXT("TestTimingFish");
+			Session->FishDefinition->TrueBiteWindowSeconds = 12.0;
+
 			Session->bStartupInProgress = true;
 			if (!TestTrue(TEXT("真咬成立并提交饵"), Session->OpenTrueBiteWindowFromAuthority())) return false;
 			Session->bStartupInProgress = false;

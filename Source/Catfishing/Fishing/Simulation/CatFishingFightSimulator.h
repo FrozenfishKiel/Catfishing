@@ -77,6 +77,8 @@ struct CATFISHING_API FCatFightSimulationConfig
 	double CatLoadStaminaMultiplier = 1.0;
 	/** 放线回体速率，基础为 0；猫册三选一「放线回体速度」是唯一把它抬起来的来源。 */
 	double SlackStaminaRegenPerSecond = 0.0;
+	double SlackStaminaGrowthPerSecond = 0.0;
+	double RodWearMultiplier = 1.0;
 	/** 线绷紧每秒按本场鱼力扣的竿耐久系数；名字沿用旧「僵持」口径，实际闸门是线绷紧。 */
 	double StalemateRodWearPerFishStrength = 0.05;
 	/** 竿定义给的满出力每秒磨损。设计无此项，磨损模型已不消费它，待竿片段一并删除。 */

@@ -25,8 +25,9 @@ namespace CatFishCatalogSettingsPrivate
 		const uint32 Seed = HashCombineFast(GetTypeHash(Context.RandomSeed),
 			GetTypeHash(Definition.FishDefinitionId));
 		FRandomStream WeightRandom(static_cast<int32>(Seed));
-		return WeightRandom.FRandRange(static_cast<float>(Definition.MinimumWeightKilograms),
-			static_cast<float>(Definition.MaximumWeightKilograms));
+		return FMath::Min(Definition.MaximumWeightKilograms, (1.0 + Context.CatchWeightBonus)
+			* WeightRandom.FRandRange(static_cast<float>(Definition.MinimumWeightKilograms),
+			static_cast<float>(Definition.MaximumWeightKilograms)));
 	}
 
 	static double CalculateChallengeRatio(const double FishStrength,
@@ -116,7 +117,8 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 	const FCatFishSelectionContext& Context) const
 {
 	FCatFishSelectionResult Result;
-	if (!Context.WaterRegion.IsValid() || !Context.ChumSample.bSucceeded
+	if (!FMath::IsFinite(Context.CatchWeightBonus) || Context.CatchWeightBonus < 0.0
+		|| !Context.WaterRegion.IsValid() || !Context.ChumSample.bSucceeded
 		|| !(Context.ChumSample.WaterRegion == Context.WaterRegion)
 		|| Context.ActivePlayerCount < 1 || Context.ActivePlayerCount > 8
 		|| !FMath::IsFinite(Context.CombinedFishingStrength) || Context.CombinedFishingStrength <= 0.0
@@ -308,6 +310,18 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectFromBasePool(const FCatFi
 	};
 	TArray<FBasePoolCandidate> Candidates;
 	double TotalProbability = 0.0;
+	TSet<FName> SeenIds;
+	for (const FCatFishBasePoolEntry& Entry : BasePool)
+	{
+		if (Entry.FishDefinitionId.IsNone() || !FMath::IsFinite(Entry.Probability) || Entry.Probability <= 0.0
+			|| SeenIds.Contains(Entry.FishDefinitionId) || !FindRuntimeDefinition(Entry.FishDefinitionId))
+		{
+			UE_LOG(LogCatFishing, Warning, TEXT("Event=fish_selection_base_pool_invalid Region=%s Fish=%s Reason=InvalidOrDuplicateMapping Result=Rejected"),
+				*Context.WaterRegion.RegionId.ToString(), *Entry.FishDefinitionId.ToString());
+			return Result;
+		}
+		SeenIds.Add(Entry.FishDefinitionId);
+	}
 	for (const FCatFishBasePoolEntry& Entry : BasePool)
 	{
 		if (Entry.FishDefinitionId.IsNone() || !FMath::IsFinite(Entry.Probability) || Entry.Probability <= 0.0)
@@ -343,7 +357,7 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectFromBasePool(const FCatFi
 	{
 		UE_LOG(LogCatFishing, Warning,
 			TEXT("Event=fish_selection_base_pool_unavailable Region=%s Reason=%s ConfiguredEntries=%d ")
-			TEXT("UsableEntries=%d Note=BasePoolRosterIsStillADesignTodo"),
+			TEXT("UsableEntries=%d Note=AwaitingApprovedBasePoolMapping"),
 			*Context.WaterRegion.RegionId.ToString(), FallbackReason, BasePool.Num(), Candidates.Num());
 		return Result;
 	}

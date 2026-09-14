@@ -60,6 +60,8 @@ public:
 	FCatGrowthSnapshotChanged OnSnapshotChanged;
 
 private:
+	friend class FCatGrowthRuntimeConsumersTest;
+	friend class FCatGrowthWearDeliveryTest;
 	/** 客户端收到完整 Snapshot 后只供表现读取；不会在 RepNotify 自动消费三选一。 */
 	UFUNCTION()
 	void OnRep_Snapshot();

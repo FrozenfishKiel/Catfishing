@@ -339,7 +339,9 @@ void UCatHUDModel::Refresh()
 	NewState.bShowHookSuccessFeedback = NewState.bHasFishingCommandResult
 		&& NewState.LastFishingCommandResult.CommandType == ECatFishingCommandType::RequestHook
 		&& NewState.LastFishingCommandResult.Error == ECatFishingCommandError::None;
-	NewState.BitePromptText = FText::FromString(TEXT("鱼儿咬钩啦！提竿"));
+	NewState.BitePromptText = FText::FromString(NewState.bShowBitePrompt
+		&& ServerNowSeconds <= NewState.Fishing.PerfectWindowEndsServerTime
+		? TEXT("就是现在！完美提竿") : TEXT("鱼儿咬钩啦！提竿"));
 	NewState.HookSuccessFeedbackText = FText::FromString(TEXT("提竿成功！"));
 	// 墓碑（2026-09-14）：删除绿零即濒死的口径；Knowledge/Design/设计修改记录.md
 	// 2026-09-13 裁决②。绿黄渲染字段保持原义，提示和文本使用总量，不重复计算黄条。

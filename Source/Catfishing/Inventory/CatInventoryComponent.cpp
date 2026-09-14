@@ -1,4 +1,5 @@
 #include "Inventory/CatInventoryComponent.h"
+#include "Growth/CatGrowthComponent.h"
 
 #include "GameFramework/Pawn.h"
 #include "Character/CatCharacter.h"
@@ -3008,10 +3009,8 @@ bool UCatInventoryComponent::SimulateAddItemDefinition(TArray<FSimulatedInventor
 	// 已带份数从**模拟格**里数，不从正式库存数：同一批里两行同类饵必须互相看得见彼此已经占掉的份额。
 	if (EnforcesCarryLimits())
 	{
-		const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
 		const ECatInventoryCarryCategory Category = UCatInventorySettings::ResolveCarryCategory(ItemDefinition);
-		const int32 Limit = InventorySettings != nullptr
-			? InventorySettings->GetCarryLimitForCategory(Category) : MAX_int32;
+		const int32 Limit = GetEffectiveCarryLimit(Category);
 		if (Category != ECatInventoryCarryCategory::None && Limit != MAX_int32)
 		{
 			int32 SimulatedCategoryTotal = 0;
@@ -3180,10 +3179,8 @@ int32 UCatInventoryComponent::GetRemainingCarryAllowanceForDefinition(
 	{
 		return MAX_int32;
 	}
-	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
 	const ECatInventoryCarryCategory Category = UCatInventorySettings::ResolveCarryCategory(ItemDefinition);
-	const int32 Limit = InventorySettings != nullptr
-		? InventorySettings->GetCarryLimitForCategory(Category) : MAX_int32;
+	const int32 Limit = GetEffectiveCarryLimit(Category);
 	if (Category == ECatInventoryCarryCategory::None || Limit == MAX_int32)
 	{
 		return MAX_int32;
@@ -3259,4 +3256,13 @@ bool UCatInventoryComponent::ExchangeReservedBaitInternal(const int32 CurrentSlo
 	if (bFullyAdded && Remaining == 0) return true;
 	ReplaceInventoryEntriesFromAuthority(Before, Before.Num(), false);
 	return false;
+}
+
+int32 UCatInventoryComponent::GetEffectiveCarryLimit(const ECatInventoryCarryCategory Category) const
+{
+	const int32 Base = GetDefault<UCatInventorySettings>()->GetCarryLimitForCategory(Category);
+	if (!EnforcesCarryLimits() || Category == ECatInventoryCarryCategory::None || Base == MAX_int32) return MAX_int32;
+	const auto* Growth = GetOwner() ? GetOwner()->FindComponentByClass<UCatGrowthComponent>() : nullptr;
+	const double Bonus = Growth ? Growth->GetTotalMagnitude(ECatGrowthOptionId::SupplyCapacity) : 0.0;
+	return static_cast<int32>(FMath::Min(double(MAX_int32), double(Base) + Bonus));
 }

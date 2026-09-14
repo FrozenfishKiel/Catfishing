@@ -1,4 +1,5 @@
 #include "Fishing/Simulation/CatFishingFightRunner.h"
+#include "Growth/CatGrowthComponent.h"
 
 #include "AbilitySystem/Config/CatPhysicalEffortSettings.h"
 #include "Character/CatCharacterMovementComponent.h"
@@ -85,6 +86,9 @@ bool UCatFishingFightRunner::InitializeFromAuthority(const FCatFishingFightRunne
 		return false;
 	}
 	Config.PrimaryOperatorCatStrength = 0.0;
+	Config.SlackStaminaGrowthPerSecond = 0.0;
+	if (const auto* OwnerSession = Session.Get())
+		Config.RodWearMultiplier = 1.0 + OwnerSession->GetFisherGrowthMagnitude(ECatGrowthOptionId::RodWear);
 	RefreshCatAction();
 	bInitialized = true;
 	return true;
@@ -248,6 +252,9 @@ bool UCatFishingFightRunner::UpdateOperatorIntentAndProperties()
 	FrozenOperatorTotalStamina = FrozenOperatorTotalCapacity = 0.0;
 	bFrozenOperatorUnderLoad = false;
 	Config.PrimaryOperatorCatStrength = 0.0;
+	Config.SlackStaminaGrowthPerSecond = 0.0;
+	if (const auto* OwnerSession = Session.Get())
+		Config.RodWearMultiplier = 1.0 + OwnerSession->GetFisherGrowthMagnitude(ECatGrowthOptionId::RodWear);
 	OperatorSupportAlignment = 0.0;
 	if (!State.bOperatorPresent)
 	{
@@ -258,6 +265,8 @@ bool UCatFishingFightRunner::UpdateOperatorIntentAndProperties()
 	auto* Character = OperatorState.Character.Get();
 	const auto* Physical = Character ? Character->GetPhysicalBodyComponent() : nullptr;
 	if (!ASC || !Physical || !Physical->GetBody()) return false;
+	if (const auto* Growth = Character->GetGrowthComponent())
+		Config.SlackStaminaGrowthPerSecond = Growth->GetTotalMagnitude(ECatGrowthOptionId::SlackStaminaRegen);
 	const double Strength = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
 	// 墓碑（2026-09-14）：不再冻结单独绿段并以绿上限封顶；Knowledge/Design/设计修改记录.md
 	// 2026-09-13 裁决②。总量用于模拟/出力/扣费，两段分开冻结防止等量换段绕过结算校验。
@@ -360,7 +369,7 @@ bool UCatFishingFightRunner::ApplyOperatorStaminaChanges(const FCatFightStepResu
 	// 放线回体基础为 0（钓鱼规则 §4.5）；这条通道只在猫册三选一给出速率时才有值，
 	// 搏斗外的 5 点/秒自然恢复不走这里，归 CatPhysicalEffortComponent 的周期回体 GE。
 	const double Recovery = Step.bSlackRecoveryActive && !bRecoveryLoaded
-		? FMath::Min(FrozenOperatorGreenMaximum - FrozenOperatorGreenStamina, Config.SlackStaminaRegenPerSecond * Config.FixedStepSeconds) : 0.0;
+		? FMath::Min(FrozenOperatorGreenMaximum - FrozenOperatorGreenStamina, (Config.SlackStaminaRegenPerSecond + Config.SlackStaminaGrowthPerSecond) * Config.FixedStepSeconds) : 0.0;
 	LastOperatorStaminaDrain = Paid - Recovery;
 	const float AttributeDelta = static_cast<float>(-LastOperatorStaminaDrain);
 	if (AttributeDelta != 0.0f && !ASC->ApplyFishingStaminaDelta(AttributeDelta)) return false;

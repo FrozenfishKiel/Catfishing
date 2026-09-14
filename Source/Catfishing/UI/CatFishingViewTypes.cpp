@@ -10,6 +10,7 @@ FCatFishingViewState FCatFishingViewState::FromSnapshot(const FCatFishingSession
 	View.Outcome = Snapshot.Outcome;
 	View.PhaseStartedServerTime = Snapshot.PhaseStartedServerTime;
 	View.WindowEndsServerTime = Snapshot.WindowEndsServerTime;
+	View.PerfectWindowEndsServerTime = Snapshot.PerfectWindowEndsServerTime;
 	View.CancelHoldStartedServerTime = Snapshot.CancelHoldStartedServerTime;
 	View.CancelHoldEndsServerTime = Snapshot.CancelHoldEndsServerTime;
 	View.FishDefinitionId = Snapshot.FishDefinitionId;

@@ -111,6 +111,7 @@ public:
 	bool TestFishBehaviorConditionFromStateTree(ECatFishBehaviorCondition Condition) const;
 
 private:
+	friend class FCatGrowthRuntimeConsumersTest;
 	virtual void BeginDestroy() override;
 	friend class FCatFishingSlackAimCommandRoutingTest;
 	friend class FCatFishingExhaustedPickupHandoffTest;

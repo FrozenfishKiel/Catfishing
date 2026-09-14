@@ -1,4 +1,5 @@
 #include "Fishing/CatFishingSession.h"
+#include "Growth/CatGrowthComponent.h"
 #include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Fishing/Integration/CatFishingResolutionSubsystem.h"
@@ -325,6 +326,8 @@ bool ACatFishingSession::ResumePrimaryControlFromAuthority(AController* NewFishe
 	FisherStableNetId = NewStableNetId;
 	if (bFightStaminaInitialized) StaminaOwner = NewCharacter;
 	FisherCharacter = NewCharacter;
+	// 当前提竿者的完美窗跟随操作位；不重新开始普通响应计时，也不延长其截止时间。
+	RefreshGrowthFromAuthority(NewCharacter, ECatGrowthOptionId::PerfectWindow, 0.0);
 	Snapshot.FisherPlayerState = NewFisherController->PlayerState;
 	// 主控一换，上一块「谁来接一下」的牌子就作废：那是上一任主钓手挂的，新主控没表过态。
 	// 这里直接清字段而不调 ClearHandoffRequestFromAuthority，是因为下面统一发布一次快照，不重复发两遍。
@@ -852,10 +855,11 @@ bool ACatFishingSession::ScheduleWaitingProbeFromStateTree()
 	double WaitSeconds = 0.0;
 	if (!Distribution.TrySample(static_cast<double>(Random.FRand()), WaitSeconds))
 		return RejectSchedule(TEXT("InvalidWaitSample"));
+	WaitSeconds *= 1.0 + GetFisherGrowthMagnitude(ECatGrowthOptionId::BiteInterval);
 	const FCatFishingCastTrajectory& Flight = Snapshot.HookActor->GetPresentationState().CastTrajectory;
 	const double RemainingFlightSeconds = FMath::Max(0.0,
 		Flight.StartedServerTime + Flight.DurationSeconds - GetWorld()->GetTimeSeconds());
-	const double WarningDelay = RemainingFlightSeconds + WaitSeconds - Distribution.WarningSeconds;
+	const double WarningDelay = RemainingFlightSeconds + FMath::Max(0.0, WaitSeconds - Distribution.WarningSeconds);
 	const double Delay = RemainingFlightSeconds + WaitSeconds;
 	GetWorldTimerManager().ClearTimer(BiteWarningTimerHandle);
 	GetWorldTimerManager().ClearTimer(ProbeTimerHandle);
@@ -926,35 +930,43 @@ void ACatFishingSession::HandleProbeTimer()
 	StateTreeComponent->SendStateTreeEvent(CatFishingGameplayTags::ProbeTriggered, FConstStructView(), TEXT("CatFishing"));
 }
 
-// 试探期停留时长读取流程（钓鱼规则 §3.4:141「试探期 2～4 秒随机，占位，快照，**参数页为准**」）：
-// 设计把这个数归参数页，所以正式事实源是 UCatFishingSettings::ProbeDurationRangeSeconds，
-// 逐鱼 Bite 资产上的 ProbeDurationSeconds 是可选覆盖；四份正式 Bite 资产已序列化该字段，新资产可留 0。
-// 注意别把它和 09-09 晚裁的「正式口径逐鱼配」混为一谈——那条指的是食性／发力段长／休息段长／
-// 游速系数四列，不含试探期。留 0 时必须允许资产通过就绪校验，否则新资产会在选鱼时被过滤，根本到不了区间回退。
+// 墓碑（2026-09-14，T10；钓鱼规则 §3.4）：Bite 模板不再拥有逐鱼试探期。
+// 只有鱼定义留 0 才随机兜底；错误值不能伪装成未填。
 bool ACatFishingSession::TryResolveProbeDurationSeconds(double& OutProbeSeconds) const
 {
 	OutProbeSeconds = 0.0;
-	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
-	if (!Settings)
+	if (!FishDefinition || !FMath::IsFinite(FishDefinition->ProbeDurationSeconds)
+		|| FishDefinition->ProbeDurationSeconds < 0.0) return false;
+	if (FishDefinition->ProbeDurationSeconds > 0.0)
 	{
-		return false;
-	}
-	if (const UCatBitePersonalityDefinition* Bite = FishDefinition
-		? Settings->FindBitePersonality(FishDefinition->BitePersonalityId) : nullptr;
-		Bite && FMath::IsFinite(Bite->ProbeDurationSeconds) && Bite->ProbeDurationSeconds > 0.0)
-	{
-		OutProbeSeconds = Bite->ProbeDurationSeconds;
+		OutProbeSeconds = FishDefinition->ProbeDurationSeconds;
 		return true;
 	}
-	const FVector2D& Range = Settings->ProbeDurationRangeSeconds;
-	if (!FMath::IsFinite(Range.X) || !FMath::IsFinite(Range.Y) || Range.X <= 0.0 || Range.Y < Range.X)
-	{
-		return false;
-	}
-	// 与本场其它随机同源：用这一竿已冻结的种子，回放与联机两端才一致。
+	const FVector2D& Range = GetDefault<UCatFishingSettings>()->ProbeDurationRangeSeconds;
+	if (!FMath::IsFinite(Range.X) || !FMath::IsFinite(Range.Y) || Range.X <= 0.0 || Range.Y < Range.X) return false;
 	FRandomStream ProbeRandom(static_cast<int32>(CurrentBiteRandomSeed ^ 0x50726F62ull));
 	OutProbeSeconds = ProbeRandom.FRandRange(Range.X, Range.Y);
 	return true;
+}
+
+bool ACatFishingSession::TryResolveTrueBiteWindowSeconds(double& OutSeconds) const
+{
+	OutSeconds = 0.0;
+	if (!FishDefinition || !FMath::IsFinite(FishDefinition->TrueBiteWindowSeconds)
+		|| FishDefinition->TrueBiteWindowSeconds < 0.0) return false;
+	OutSeconds = FishDefinition->TrueBiteWindowSeconds;
+	if (OutSeconds > 0.0 && (OutSeconds < 8.0 || OutSeconds > 15.0)) return false; // 钓鱼规则 §3.4
+	if (OutSeconds == 0.0) OutSeconds = GetDefault<UCatFishingSettings>()->TrueBiteWindowSeconds;
+	return FMath::IsFinite(OutSeconds) && OutSeconds > 0.0;
+}
+
+double ACatFishingSession::GetFisherGrowthMagnitude(const ECatGrowthOptionId OptionId) const
+{
+	const bool bCastOwned = OptionId == ECatGrowthOptionId::BiteInterval || OptionId == ECatGrowthOptionId::CatchWeight;
+	const AActor* OwnerActor = bCastOwned
+		? (CastEquipment.IsValid() ? CastEquipment->GetOwner() : nullptr) : FisherCharacter.Get();
+	const UCatGrowthComponent* Growth = OwnerActor ? OwnerActor->FindComponentByClass<UCatGrowthComponent>() : nullptr;
+	return Growth ? Growth->GetTotalMagnitude(OptionId) : 0.0;
 }
 
 // 试探期进入流程（钓鱼规则 §3.4:141 演出时序）：
@@ -1024,6 +1036,9 @@ bool ACatFishingSession::BeginProbeFromStateTree()
 	}
 
 	GetWorldTimerManager().ClearTimer(ProbeStayTimerHandle);
+	UE_CLOG(FishDefinition->ProbeDurationSeconds == 0.0, LogCatFishing, Warning,
+		TEXT("Event=fish_probe_duration_unconfigured SessionId=%s Fish=%s FallbackSeconds=%.3f Reason=AwaitingPerFishData"),
+		*Snapshot.FishingSessionId.ToString(), *FishDefinition->FishDefinitionId.ToString(), ProbeSeconds);
 	GetWorldTimerManager().SetTimer(ProbeStayTimerHandle, this, &ThisClass::HandleProbeStayTimer, ProbeSeconds, false);
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_probe_started SessionId=%s Opportunity=%u Fish=%s WeightKg=%.3f VisualScale=%.3f ")
@@ -1059,11 +1074,12 @@ void ACatFishingSession::HandleProbeStayTimer()
 // 再写 WindowEnds 与 TrueBiteWindow 阶段并起响应计时。鱼与鱼影在试探期就已经存在，这里不再创建任何东西。
 bool ACatFishingSession::OpenTrueBiteWindowFromAuthority()
 {
+	double ResponseSeconds = 0.0;
 	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
 	UWorld* World = GetWorld();
 	if (!HasAuthority() || IsTerminal() || Snapshot.Phase != ECatFishingPhase::Probe || !Settings || !World
 		|| SelectionResolution != ECatFishSelectionResolution::Selected || !Snapshot.FishEncounterActor
-		|| !FMath::IsFinite(Settings->TrueBiteWindowSeconds) || Settings->TrueBiteWindowSeconds <= 0.0)
+		|| !TryResolveTrueBiteWindowSeconds(ResponseSeconds))
 	{
 		return false;
 	}
@@ -1101,7 +1117,15 @@ bool ACatFishingSession::OpenTrueBiteWindowFromAuthority()
 	PublishBiteSignalFromAuthority();
 	// WindowEnds 必须在 EnterPhase 发布快照前写好，客户端第一次看到 TrueBiteWindow 时截止时间就是完整的。
 	const double PreviousWindowEnd = Snapshot.WindowEndsServerTime;
-	Snapshot.WindowEndsServerTime = World->GetTimeSeconds() + Settings->TrueBiteWindowSeconds;
+	Snapshot.WindowEndsServerTime = World->GetTimeSeconds() + ResponseSeconds;
+	Snapshot.PerfectWindowEndsServerTime = World->GetTimeSeconds() + FMath::Min(ResponseSeconds,
+		1.0 + GetFisherGrowthMagnitude(ECatGrowthOptionId::PerfectWindow));
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_windows_resolved SessionId=%s Fish=%s ConfiguredProbeSeconds=%.3f ResponseSeconds=%.3f PerfectSeconds=%.3f World=%s NetMode=%d Authority=1 LocalRole=%d"),
+		*Snapshot.FishingSessionId.ToString(), *FishDefinition->FishDefinitionId.ToString(), FishDefinition->ProbeDurationSeconds,
+		ResponseSeconds, Snapshot.PerfectWindowEndsServerTime - World->GetTimeSeconds(), *GetNameSafe(World), GetNetMode(), GetLocalRole());
+	UE_CLOG(FishDefinition->TrueBiteWindowSeconds == 0.0, LogCatFishing, Warning,
+		TEXT("Event=fish_response_window_unconfigured SessionId=%s Fish=%s FallbackSeconds=%.3f Reason=AwaitingPerFishData"),
+		*Snapshot.FishingSessionId.ToString(), *FishDefinition->FishDefinitionId.ToString(), ResponseSeconds);
 	if (!EnterPhaseFromStateTree(ECatFishingPhase::TrueBiteWindow).bApplied)
 	{
 		Snapshot.WindowEndsServerTime = PreviousWindowEnd;
@@ -1110,7 +1134,7 @@ bool ACatFishingSession::OpenTrueBiteWindowFromAuthority()
 	bTrueBiteWindowAcceptingHook = true;
 	GetWorldTimerManager().ClearTimer(TrueBiteTimerHandle);
 	GetWorldTimerManager().SetTimer(TrueBiteTimerHandle, this, &ThisClass::HandleTrueBiteWindowExpired,
-		Settings->TrueBiteWindowSeconds, false);
+		ResponseSeconds, false);
 	return true;
 }
 
@@ -1178,6 +1202,7 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 		? Settings->LoadFightBalanceDefinition() : nullptr;
 	FrozenSelectionContext.StrengthPerKilogram = FightBalance
 		? FightBalance->StrengthPerKilogram : 0.0;
+	FrozenSelectionContext.CatchWeightBonus = GetFisherGrowthMagnitude(ECatGrowthOptionId::CatchWeight);
 	FrozenSelectionContext.RandomSeed = static_cast<int32>(CurrentBiteRandomSeed);
 	const UCatFishCatalogSettings* Catalog = GetDefault<UCatFishCatalogSettings>();
 	// 按冻结上下文从鱼类图鉴中选出本次的鱼种（含权重/稀有度/条件判定，具体算法在 Catalog 内部）。
@@ -1199,11 +1224,10 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 		FrozenSelectionContext.ChumSample.ContributingFieldCount);
 	UCatFishDefinition* SelectedDefinition = FrozenSelectionResult.bSelected
 		? Catalog->FindRuntimeDefinition(FrozenSelectionResult.FishDefinitionId) : nullptr;
-	const UCatBitePersonalityDefinition* Bite = SelectedDefinition && Settings
-		? Settings->FindBitePersonality(SelectedDefinition->BitePersonalityId) : nullptr;
+	// T10：鱼种时间字段/明确兜底接替 Bite 模板，不再以模板存在性阻断生产。
 	const UCatFightPersonalityDefinition* Fight = SelectedDefinition && Settings
 		? Settings->FindFightPersonality(SelectedDefinition->FightPersonalityId) : nullptr;
-	if (!SelectedDefinition || !Bite || !Fight)
+	if (!SelectedDefinition || !Fight)
 	{
 		// 没选出鱼、或性格模板缺失：判为"当前条件下没有合格鱼"，走空军终局而不是异常终止。
 		SelectionResolution = ECatFishSelectionResolution::NoEligibleFish;
@@ -1924,7 +1948,8 @@ bool ACatFishingSession::CommitCatchEquipmentFromAuthority()
 	// 所以此处**必须**再扣，原先"捕获仅收口饵料，不能再重复扣耐久"的口径是错的。
 	// 磨损接口按累计绝对值写回，序号必须严格 +1：直接用刚拿到的记录值做基准，不另存第二份账。
 	const FCatFishingUseOperationResult Wear = Equipment->ApplyFishingRodWear(Snapshot.FishingSessionId,
-		Bait.WearSequence + 1, Bait.AbsoluteRodWear + GetDefault<UCatFishingSettings>()->GetCatchCompletionRodWearPoints());
+		Bait.WearSequence + 1, Bait.AbsoluteRodWear + GetDefault<UCatFishingSettings>()->GetCatchCompletionRodWearPoints()
+		* (1.0 + GetFisherGrowthMagnitude(ECatGrowthOptionId::RodWear)));
 	if (!Wear.bApplied)
 	{
 		UE_LOG(LogCatFishing, Error,
@@ -1954,7 +1979,7 @@ bool ACatFishingSession::CommitCatchEquipmentFromAuthority()
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_catch_rod_wear_applied SessionId=%s RodItemInstanceId=%s WearSequence=%lld WearPoints=%.3f RodDurability=%.3f Broken=%s"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-		*AttemptSnapshot.RodItemInstanceId.ToString(), Wear.WearSequence, GetDefault<UCatFishingSettings>()->GetCatchCompletionRodWearPoints(),
+		*AttemptSnapshot.RodItemInstanceId.ToString(), Wear.WearSequence, Wear.AbsoluteRodWear - Bait.AbsoluteRodWear,
 		Wear.RemainingRodDurability, Wear.bRodBroken ? TEXT("true") : TEXT("false"));
 	return true;
 }
@@ -2582,12 +2607,9 @@ FCatFishingCommandResult ACatFishingSession::RequestHookFromAuthority(const FGui
 
 		// 鱼种与 Encounter 在试探期开始那一刻就已经存在（BeginProbeFromStateTree），这里只判完美并启动搏斗；
 		// 退饵边界在真咬成立那一刻关闭（OpenTrueBiteWindowFromAuthority 已扣饵）。
-		const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
-		const UCatBitePersonalityDefinition* Bite = FishDefinition && Settings
-			? Settings->FindBitePersonality(FishDefinition->BitePersonalityId) : nullptr;
-		// 服务器完全按自己的时间戳判定是否"完美"，不接受客户端上报的反应时间，杜绝作弊。
-		Snapshot.bPerfectHook = Bite && FMath::IsFinite(SinceBite) && SinceBite >= 0.0
-			&& SinceBite <= Bite->PerfectHookWindowSeconds;
+		// 基础 1 秒 + 成长秒数与复制预表现共用同一权威截止时间，不读取 Bite 模板。
+		Snapshot.bPerfectHook = FMath::IsFinite(SinceBite) && SinceBite >= 0.0
+			&& GetWorld()->GetTimeSeconds() <= Snapshot.PerfectWindowEndsServerTime;
 		Result.bCommitted = TryEnterHookedFightFromAuthority(); // 真正的搏斗初始化在这里发生。
 		if (Result.bCommitted)
 		{
@@ -3207,5 +3229,41 @@ void ACatFishingSession::ScheduleTerminalDestroy()
 			}
 			Encounter->SetLifeSpan(TerminalLifeSpan);
 		}
+	}
+}
+
+void ACatFishingSession::RefreshGrowthFromAuthority(const ACatCharacter* Character,
+	const ECatGrowthOptionId OptionId, const double AppliedDelta)
+{
+	const AActor* GrowthOwner = OptionId == ECatGrowthOptionId::BiteInterval
+		? (CastEquipment.IsValid() ? CastEquipment->GetOwner() : nullptr) : FisherCharacter.Get();
+	if (!HasAuthority() || IsTerminal() || GrowthOwner != Character) return;
+	if (OptionId == ECatGrowthOptionId::PerfectWindow && Snapshot.Phase == ECatFishingPhase::TrueBiteWindow)
+	{
+		Snapshot.PerfectWindowEndsServerTime = FMath::Min(Snapshot.WindowEndsServerTime,
+			Snapshot.PhaseStartedServerTime + 1.0 + GetFisherGrowthMagnitude(OptionId));
+		PublishSnapshot(ECatFishingSnapshotMutation::Discrete);
+	}
+	if (OptionId == ECatGrowthOptionId::BiteInterval && Snapshot.Phase == ECatFishingPhase::Waiting
+		&& GetWorldTimerManager().IsTimerActive(ProbeTimerHandle))
+	{
+		const double NewScale = 1.0 + GetFisherGrowthMagnitude(OptionId);
+		const double OldScale = NewScale - AppliedDelta;
+		const auto* Hook = Snapshot.HookActor.Get();
+		const double FlightRemaining = Hook ? FMath::Max(0.0, Hook->GetPresentationState().CastTrajectory.StartedServerTime
+			+ Hook->GetPresentationState().CastTrajectory.DurationSeconds - GetWorld()->GetTimeSeconds()) : 0.0;
+		const double Remaining = GetWorldTimerManager().GetTimerRemaining(ProbeTimerHandle);
+		const double Delay = FMath::Max(UE_DOUBLE_KINDA_SMALL_NUMBER, FlightRemaining
+			+ FMath::Max(0.0, Remaining - FlightRemaining) * NewScale / OldScale);
+		// 保留已发出的预警；尚未发出的预警按与咬钩相同的提前量重排。
+		if (GetWorldTimerManager().IsTimerActive(BiteWarningTimerHandle))
+		{
+			const double Lead = Remaining - GetWorldTimerManager().GetTimerRemaining(BiteWarningTimerHandle);
+			GetWorldTimerManager().SetTimer(BiteWarningTimerHandle, this, &ThisClass::HandleBiteWarningTimer,
+				FMath::Max(UE_DOUBLE_KINDA_SMALL_NUMBER, Delay - Lead), false);
+		}
+		GetWorldTimerManager().SetTimer(ProbeTimerHandle, this, &ThisClass::HandleProbeTimer, Delay, false);
+		UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_growth_wait_rescheduled SessionId=%s OldRemainingSeconds=%.3f NewRemainingSeconds=%.3f Scale=%.3f World=%s NetMode=%d Authority=1 LocalRole=%d"),
+			*Snapshot.FishingSessionId.ToString(), Remaining, Delay, NewScale, *GetNameSafe(GetWorld()), GetNetMode(), GetLocalRole());
 	}
 }

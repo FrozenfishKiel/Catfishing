@@ -30,20 +30,10 @@
 #include "Fishing/Presentation/CatFishingCameraComponent.h"
 #include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatBackPackComponent.h"
-#include "Inventory/CatInventorySettings.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "Items/Fish/CatFishPickupActor.h"
 #include "FishContainers/CatFishGuardActor.h"
 #include "Net/UnrealNetwork.h"
-
-namespace
-{
-	// 初始随身库存容量迁移流程：角色创建正式库存时默认读 InventorySettings；旧 EquipmentSettings 被测试或诊断改值时保留一次兼容覆盖。
-	int32 ResolveInitialPlayerInventorySlotCapacity()
-	{
-		return GetDefault<UCatInventorySettings>()->GetPlayerInventorySlotCapacity();
-	}
-}
 
 // 构造流程：一次创建 Character-owned ASC/AttributeSet、离散身体状态、吃鱼成长、正式随身库存和局内装备组件；只开启组件复制，ActorInfo、属性初值与 Ability 仍由显式 runtime gate 启动。
 ACatCharacter::ACatCharacter(const FObjectInitializer& ObjectInitializer)
@@ -355,7 +345,8 @@ void ACatCharacter::PossessedBy(AController* NewController)
 	{
 		if (InventoryComponent)
 		{
-			InventoryComponent->SetInventorySlotCountFromAuthority(ResolveInitialPlayerInventorySlotCapacity());
+			// T02：首次和重新占有共用背包的基础值＋本局成长，不能覆盖已扩出的格数。
+			CastChecked<UCatBackPackComponent>(InventoryComponent)->InitializePlayerInventorySlotCapacityFromAuthority();
 		}
 		if (AbilitySystemComponent)
 		{

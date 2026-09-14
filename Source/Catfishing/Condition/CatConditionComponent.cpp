@@ -210,6 +210,8 @@ FCatDomainCommandResult UCatConditionComponent::ConsumeCommittedFish(const FGuid
 		}
 		else
 		{
+			// T02：实物鱼已提交后执行逐鱼限时 GE；缺绑定只拒绝该效果并告警，不虚构属主数值。
+			ASC->ApplyFishTimedEffectFromAuthority(FishDefinition, RequestId);
 			// 黄色体力：来源＝特定鱼种的食用效果（数值成长页 §4）。护盾无上限，正向直接累加。
 			if (FMath::IsFinite(FishDefinition->YellowStaminaGrant) && FishDefinition->YellowStaminaGrant > 0.0)
 			{
@@ -226,7 +228,7 @@ FCatDomainCommandResult UCatConditionComponent::ConsumeCommittedFish(const FGuid
 			{
 				if (ConditionSettings->HasStench())
 				{
-					ApplyStenchFromAuthority(ConditionSettings->StenchSeconds);
+					ApplyStenchFromAuthority(ASC->ResolveEatingEffectDuration(ConditionSettings->StenchSeconds));
 				}
 				else
 				{
