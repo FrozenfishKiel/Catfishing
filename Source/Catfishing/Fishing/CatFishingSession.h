@@ -185,6 +185,10 @@ private:
 	friend class FCatFishingBiteTimingWorldTest;
 	friend class FCatFishingBaitTerminalConsumptionTest;
 	friend class FCatFishingProbeDurationOverrideTest;
+	friend class FCatFishingCatalogTimingDefaultsTest;
+	friend class FCatFishingCatalogTimingOverridesTest;
+	friend class FCatFishingCatalogTimingTimersTest;
+	friend class FCatFishingPerfectLineProductionTest;
 	friend class FCatFishingSessionReplicationContractTest;
 	friend class FCatFishingSessionSnapshotVersionMutationRulesTest;
 	friend class FCatFishingSessionTerminationOutcomeTest;
@@ -289,9 +293,9 @@ private:
 	void HandleProbeStayTimer();
 	/** 真咬窗口的唯一打开口；试探期停留结束后由计时器调用，写 TrueBiteWindow 阶段并起响应计时。 */
 	bool OpenTrueBiteWindowFromAuthority();
-	/** 按秒解析本场试探时长：逐鱼正覆盖优先，否则按冻结种子取参数页区间；两者均不可用才返回 false。 */
-	bool TryResolveProbeDurationSeconds(double& OutProbeSeconds) const;
-	bool TryResolveTrueBiteWindowSeconds(double& OutSeconds) const;
+	/** 按秒解析试探：逐鱼正值优先，其次档位默认，两层缺配才取冻结种子的旧区间；非法值拒绝。 */
+	bool TryResolveProbeDurationSeconds(double& OutProbeSeconds, const TCHAR** OutSource = nullptr) const;
+	bool TryResolveTrueBiteWindowSeconds(double& OutSeconds, const TCHAR** OutSource = nullptr) const;
 	double GetFisherGrowthMagnitude(ECatGrowthOptionId OptionId) const;
 	void HandleTrueBiteWindowExpired();
 	/** 咬钩计时到点那一刻冻结选择上下文、选鱼、生成鱼影 Encounter；饵的数量在真咬成立时才扣。 */

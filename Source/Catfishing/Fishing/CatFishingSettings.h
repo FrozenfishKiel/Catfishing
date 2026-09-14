@@ -96,7 +96,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Runtime", meta = (DisplayName = "搏斗平衡数据资产"))
 	TSoftObjectPtr<UCatFishingFightBalanceDefinition> FightBalanceDefinition;
 
-	/** 仅逐鱼普通响应窗未迁移时使用的旧值；带 Warning，不作为正式鱼种数据。0 则拒绝。 */
+	/** 仅逐鱼与鱼目录档位默认均缺配时使用的旧值；带 Warning，正式目录不应走到。0 则拒绝。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (ClampMin = "0"))
 	double TrueBiteWindowSeconds = 0.0;
 
@@ -112,7 +112,7 @@ public:
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (ClampMin = "0.0"))
 	double WorldwideBiteSignalStabilityThreshold = 1.0;
-	/** 鱼表试探期未填（0）时使用的随机兜底区间，钓鱼规则 §3.4；不参与普通或完美响应窗。 */
+	/** 鱼表试探期及鱼目录档位默认均未填（0）时使用的随机兜底区间；不参与普通或完美响应窗。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (Units = "s"))
 	FVector2D ProbeDurationRangeSeconds = FVector2D(2.0, 4.0);
 	/** 无窝时落水到真咬的目标平均秒数；替代旧的每秒频率调参，计入等待上限。 */

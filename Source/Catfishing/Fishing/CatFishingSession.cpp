@@ -931,33 +931,47 @@ void ACatFishingSession::HandleProbeTimer()
 }
 
 // 墓碑（2026-09-14，T10；钓鱼规则 §3.4）：Bite 模板不再拥有逐鱼试探期。
-// 只有鱼定义留 0 才随机兜底；错误值不能伪装成未填。
-bool ACatFishingSession::TryResolveProbeDurationSeconds(double& OutProbeSeconds) const
+// 2026-09-14 暂定正式值：资产留 0 先取目录档位默认，两层均缺配才随机兜底；错误值不能伪装成未填。
+bool ACatFishingSession::TryResolveProbeDurationSeconds(double& OutProbeSeconds, const TCHAR** OutSource) const
 {
 	OutProbeSeconds = 0.0;
-	if (!FishDefinition || !FMath::IsFinite(FishDefinition->ProbeDurationSeconds)
-		|| FishDefinition->ProbeDurationSeconds < 0.0) return false;
-	if (FishDefinition->ProbeDurationSeconds > 0.0)
+	if (OutSource) *OutSource = TEXT("Unavailable");
+	if (!FishDefinition) return false;
+	const double Resolved = GetDefault<UCatFishCatalogSettings>()->ResolveBiteTiming(*FishDefinition).ProbeDurationSeconds;
+	if (!FMath::IsFinite(Resolved) || Resolved < 0.0) return false;
+	if (Resolved > 0.0)
 	{
-		OutProbeSeconds = FishDefinition->ProbeDurationSeconds;
+		OutProbeSeconds = Resolved;
+		if (OutSource) *OutSource = FishDefinition->ProbeDurationSeconds == 0.0 ? TEXT("RarityDefault") : TEXT("Asset");
 		return true;
 	}
 	const FVector2D& Range = GetDefault<UCatFishingSettings>()->ProbeDurationRangeSeconds;
 	if (!FMath::IsFinite(Range.X) || !FMath::IsFinite(Range.Y) || Range.X <= 0.0 || Range.Y < Range.X) return false;
 	FRandomStream ProbeRandom(static_cast<int32>(CurrentBiteRandomSeed ^ 0x50726F62ull));
 	OutProbeSeconds = ProbeRandom.FRandRange(Range.X, Range.Y);
+	if (OutSource) *OutSource = TEXT("LegacyFallback");
 	return true;
 }
 
-bool ACatFishingSession::TryResolveTrueBiteWindowSeconds(double& OutSeconds) const
+bool ACatFishingSession::TryResolveTrueBiteWindowSeconds(double& OutSeconds, const TCHAR** OutSource) const
 {
 	OutSeconds = 0.0;
-	if (!FishDefinition || !FMath::IsFinite(FishDefinition->TrueBiteWindowSeconds)
-		|| FishDefinition->TrueBiteWindowSeconds < 0.0) return false;
-	OutSeconds = FishDefinition->TrueBiteWindowSeconds;
-	if (OutSeconds > 0.0 && (OutSeconds < 8.0 || OutSeconds > 15.0)) return false; // 钓鱼规则 §3.4
-	if (OutSeconds == 0.0) OutSeconds = GetDefault<UCatFishingSettings>()->TrueBiteWindowSeconds;
-	return FMath::IsFinite(OutSeconds) && OutSeconds > 0.0;
+	if (OutSource) *OutSource = TEXT("Unavailable");
+	if (!FishDefinition) return false;
+	const double Resolved = GetDefault<UCatFishCatalogSettings>()->ResolveBiteTiming(*FishDefinition).TrueBiteWindowSeconds;
+	if (!FMath::IsFinite(Resolved) || Resolved < 0.0) return false;
+	if (Resolved > 0.0)
+	{
+		if (Resolved < 8.0 || Resolved > 15.0) return false; // 钓鱼规则 §3.4：资产和档位默认使用同一设计区间。
+		OutSeconds = Resolved;
+		if (OutSource) *OutSource = FishDefinition->TrueBiteWindowSeconds == 0.0 ? TEXT("RarityDefault") : TEXT("Asset");
+		return true;
+	}
+	const double Fallback = GetDefault<UCatFishingSettings>()->TrueBiteWindowSeconds;
+	if (!FMath::IsFinite(Fallback) || Fallback <= 0.0) return false;
+	OutSeconds = Fallback;
+	if (OutSource) *OutSource = TEXT("LegacyFallback");
+	return true;
 }
 
 double ACatFishingSession::GetFisherGrowthMagnitude(const ECatGrowthOptionId OptionId) const
@@ -972,7 +986,7 @@ double ACatFishingSession::GetFisherGrowthMagnitude(const ECatGrowthOptionId Opt
 // 试探期进入流程（钓鱼规则 §3.4:141 演出时序）：
 // ①咬钩计时到点这一刻就冻结上下文并抽鱼，同时按真鱼体型生成水里的鱼影 Encounter；
 // ②给这一竿的钓手揭开图鉴剪影层，永不撤销；
-// ③浮漂保持轻点（EnterPhase 里 Probe 对应 BiteWarning 表现），停留逐鱼覆盖或参数页区间解析的秒数；
+// ③浮漂保持轻点（EnterPhase 里 Probe 对应 BiteWarning 表现），依次取逐鱼值、档位默认或旧区间兜底秒数；
 // ④停留到点才由 HandleProbeStayTimer 把浮漂转猛沉、打开真咬响应窗。
 // 墓碑：2026-09-12 之前本函数叫 OpenTrueBiteWindowFromStateTree，进 Probe 就直接开真咬窗，
 // 鱼与鱼影要等合法左键之后才创建——提竿前水里什么都没有，玩家没法凭鱼影决定要不要提。
@@ -1012,10 +1026,15 @@ bool ACatFishingSession::BeginProbeFromStateTree()
 	}
 
 	double ProbeSeconds = 0.0;
-	if (!TryResolveProbeDurationSeconds(ProbeSeconds))
+	const TCHAR* ProbeSource = TEXT("Unavailable");
+	if (!TryResolveProbeDurationSeconds(ProbeSeconds, &ProbeSource))
 	{
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_bite_timing_rejected SessionId=%s Fish=%s RarityTierId=%s Window=Probe Result=InvalidDuration World=%s NetMode=%d Authority=1 LocalRole=%d"),
+			*Snapshot.FishingSessionId.ToString(), *FishDefinition->FishDefinitionId.ToString(), *FishDefinition->RarityTierId.ToString(),
+			*GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()));
 		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated,
-			TEXT("Probe duration unavailable: no valid override or settings range"));
+			TEXT("Probe duration invalid or unavailable"));
 		return false;
 	}
 
@@ -1036,16 +1055,18 @@ bool ACatFishingSession::BeginProbeFromStateTree()
 	}
 
 	GetWorldTimerManager().ClearTimer(ProbeStayTimerHandle);
-	UE_CLOG(FishDefinition->ProbeDurationSeconds == 0.0, LogCatFishing, Warning,
-		TEXT("Event=fish_probe_duration_unconfigured SessionId=%s Fish=%s FallbackSeconds=%.3f Reason=AwaitingPerFishData"),
-		*Snapshot.FishingSessionId.ToString(), *FishDefinition->FishDefinitionId.ToString(), ProbeSeconds);
+	UE_CLOG(FCString::Strcmp(ProbeSource, TEXT("LegacyFallback")) == 0, LogCatFishing, Warning,
+		TEXT("Event=fish_probe_duration_unconfigured SessionId=%s Fish=%s RarityTierId=%s FallbackSeconds=%.3f Reason=MissingAssetAndRarityDefault World=%s NetMode=%d Authority=1 LocalRole=%d"),
+		*Snapshot.FishingSessionId.ToString(), *FishDefinition->FishDefinitionId.ToString(), *FishDefinition->RarityTierId.ToString(),
+		ProbeSeconds, *GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()));
 	GetWorldTimerManager().SetTimer(ProbeStayTimerHandle, this, &ThisClass::HandleProbeStayTimer, ProbeSeconds, false);
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_probe_started SessionId=%s Opportunity=%u Fish=%s WeightKg=%.3f VisualScale=%.3f ")
-		TEXT("ProbeSeconds=%.3f TimeOfDay=%s Weather=%s"),
+		TEXT("ProbeSeconds=%.3f TimeOfDay=%s Weather=%s RarityTierId=%s ProbeSource=%s World=%s NetMode=%d Authority=1 LocalRole=%d"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), BiteOpportunitySequence,
 		*Snapshot.FishDefinitionId.ToString(), FishWeightKilograms, FishVisualScale, ProbeSeconds,
-		*UEnum::GetValueAsString(BiteTimeOfDay), *UEnum::GetValueAsString(BiteWeather));
+		*UEnum::GetValueAsString(BiteTimeOfDay), *UEnum::GetValueAsString(BiteWeather),
+		*FishDefinition->RarityTierId.ToString(), ProbeSource, *GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()));
 	return true;
 }
 
@@ -1075,12 +1096,21 @@ void ACatFishingSession::HandleProbeStayTimer()
 bool ACatFishingSession::OpenTrueBiteWindowFromAuthority()
 {
 	double ResponseSeconds = 0.0;
+	const TCHAR* ResponseSource = TEXT("Unavailable");
 	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
 	UWorld* World = GetWorld();
 	if (!HasAuthority() || IsTerminal() || Snapshot.Phase != ECatFishingPhase::Probe || !Settings || !World
-		|| SelectionResolution != ECatFishSelectionResolution::Selected || !Snapshot.FishEncounterActor
-		|| !TryResolveTrueBiteWindowSeconds(ResponseSeconds))
+		|| SelectionResolution != ECatFishSelectionResolution::Selected || !Snapshot.FishEncounterActor)
 	{
+		return false;
+	}
+	if (!TryResolveTrueBiteWindowSeconds(ResponseSeconds, &ResponseSource))
+	{
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_bite_timing_rejected SessionId=%s Fish=%s RarityTierId=%s Window=TrueBite Result=InvalidDuration World=%s NetMode=%d Authority=1 LocalRole=%d"),
+			*Snapshot.FishingSessionId.ToString(), *Snapshot.FishDefinitionId.ToString(),
+			FishDefinition ? *FishDefinition->RarityTierId.ToString() : TEXT("None"),
+			*GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()));
 		return false;
 	}
 	UCatEquipmentComponent* Equipment = CastEquipment.Get();
@@ -1120,12 +1150,14 @@ bool ACatFishingSession::OpenTrueBiteWindowFromAuthority()
 	Snapshot.WindowEndsServerTime = World->GetTimeSeconds() + ResponseSeconds;
 	Snapshot.PerfectWindowEndsServerTime = World->GetTimeSeconds() + FMath::Min(ResponseSeconds,
 		1.0 + GetFisherGrowthMagnitude(ECatGrowthOptionId::PerfectWindow));
-	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_windows_resolved SessionId=%s Fish=%s ConfiguredProbeSeconds=%.3f ResponseSeconds=%.3f PerfectSeconds=%.3f World=%s NetMode=%d Authority=1 LocalRole=%d"),
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_windows_resolved SessionId=%s Fish=%s ConfiguredProbeSeconds=%.3f ResponseSeconds=%.3f PerfectSeconds=%.3f RarityTierId=%s ResponseSource=%s World=%s NetMode=%d Authority=1 LocalRole=%d"),
 		*Snapshot.FishingSessionId.ToString(), *FishDefinition->FishDefinitionId.ToString(), FishDefinition->ProbeDurationSeconds,
-		ResponseSeconds, Snapshot.PerfectWindowEndsServerTime - World->GetTimeSeconds(), *GetNameSafe(World), GetNetMode(), GetLocalRole());
-	UE_CLOG(FishDefinition->TrueBiteWindowSeconds == 0.0, LogCatFishing, Warning,
-		TEXT("Event=fish_response_window_unconfigured SessionId=%s Fish=%s FallbackSeconds=%.3f Reason=AwaitingPerFishData"),
-		*Snapshot.FishingSessionId.ToString(), *FishDefinition->FishDefinitionId.ToString(), ResponseSeconds);
+		ResponseSeconds, Snapshot.PerfectWindowEndsServerTime - World->GetTimeSeconds(), *FishDefinition->RarityTierId.ToString(),
+		ResponseSource, *GetNameSafe(World), GetNetMode(), GetLocalRole());
+	UE_CLOG(FCString::Strcmp(ResponseSource, TEXT("LegacyFallback")) == 0, LogCatFishing, Warning,
+		TEXT("Event=fish_response_window_unconfigured SessionId=%s Fish=%s RarityTierId=%s FallbackSeconds=%.3f Reason=MissingAssetAndRarityDefault World=%s NetMode=%d Authority=1 LocalRole=%d"),
+		*Snapshot.FishingSessionId.ToString(), *FishDefinition->FishDefinitionId.ToString(), *FishDefinition->RarityTierId.ToString(),
+		ResponseSeconds, *GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()));
 	if (!EnterPhaseFromStateTree(ECatFishingPhase::TrueBiteWindow).bApplied)
 	{
 		Snapshot.WindowEndsServerTime = PreviousWindowEnd;
@@ -1208,7 +1240,7 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 	// 按冻结上下文从鱼类图鉴中选出本次的鱼种（含权重/稀有度/条件判定，具体算法在 Catalog 内部）。
 	FrozenSelectionResult = Catalog->SelectRuntimeDefinition(FrozenSelectionContext);
 	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=fishing_fish_selection_resolved SessionId=%s Selected=%s FishId=%s FightBalanceId=%s WeightKg=%.3f BaseFishStrength=%.3f StrengthPerKg=%.3f EligibleCandidates=%d PositiveWeightCandidates=%d NormalizedProbability=%.6f TimeFilter=%s WeatherFilter=%s TimeOfDay=%s Weather=%s ActivePlayers=%d ChumFields=%d"),
+		TEXT("Event=fishing_fish_selection_resolved SessionId=%s Selected=%s FishId=%s FightBalanceId=%s WeightKg=%.3f BaseFishStrength=%.3f StrengthPerKg=%.3f EligibleCandidates=%d PositiveWeightCandidates=%d NormalizedProbability=%.6f TimeFilter=%s WeatherFilter=%s TimeOfDay=%s Weather=%s ActivePlayers=%d ChumFields=%d FromBasePool=%d RandomSeed=%d Region=%s World=%s NetMode=%d Authority=1 LocalRole=%d"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphensLower),
 		FrozenSelectionResult.bSelected ? TEXT("true") : TEXT("false"),
 		*FrozenSelectionResult.FishDefinitionId.ToString(),
@@ -1221,7 +1253,9 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 		Catalog->bEnableWeatherEligibilityFilter ? TEXT("Enabled") : TEXT("Bypassed"),
 		*UEnum::GetValueAsString(FrozenSelectionContext.TimeOfDay),
 		*UEnum::GetValueAsString(FrozenSelectionContext.Weather), FrozenSelectionContext.ActivePlayerCount,
-		FrozenSelectionContext.ChumSample.ContributingFieldCount);
+		FrozenSelectionContext.ChumSample.ContributingFieldCount, FrozenSelectionResult.bFromBasePool,
+		FrozenSelectionContext.RandomSeed, *FrozenSelectionContext.WaterRegion.RegionId.ToString(), *GetNameSafe(World),
+		int32(GetNetMode()), int32(GetLocalRole()));
 	UCatFishDefinition* SelectedDefinition = FrozenSelectionResult.bSelected
 		? Catalog->FindRuntimeDefinition(FrozenSelectionResult.FishDefinitionId) : nullptr;
 	// T10：鱼种时间字段/明确兜底接替 Bite 模板，不再以模板存在性阻断生产。

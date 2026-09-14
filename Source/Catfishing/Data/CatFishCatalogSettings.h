@@ -9,6 +9,19 @@
 
 class UCatFishDefinition;
 
+/** 逐鱼窗口的配置默认值，单位秒；键沿用资产 RarityTierId，不翻译设计表的新档位。 */
+USTRUCT()
+struct FCatFishBiteTimingDefaults
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, Config, meta = (ClampMin = "0.0", Units = "s"))
+	double ProbeDurationSeconds = 0.0;
+
+	UPROPERTY(EditAnywhere, Config, meta = (ClampMin = "0.0", Units = "s"))
+	double TrueBiteWindowSeconds = 0.0;
+};
+
 /**
  * 完美提竿的入场削减系数（钓鱼规则 §3.4）；按鱼册稀有度档取，入场时直接乘到本场实际值，
  * 此后运动求解、负载、消耗、碾压判定全用削后值。未配置的档位退回 1.0，只会不削减，绝不放大。
@@ -33,7 +46,7 @@ struct FCatPerfectHookReduction
 
 /**
  * 无窝料基础池的一个名额（鱼表格子表「基础池」）。
- * 基础池是「候选为空或总权重为零」时的兜底名册（2026-09-08 补缺口轮，设计修改记录.md:263）：
+ * 基础池是空窝、候选为空或总权重为零时的兜底名册（鱼册 §3.1.2、设计修改记录 2026-09-14④）：
  * 它不参与窝料/鱼饵/挑战度那套加权，只按自己的固定概率抽。
  */
 USTRUCT()
@@ -41,11 +54,11 @@ struct FCatFishBasePoolEntry
 {
 	GENERATED_BODY()
 
-	/** 名册成员的鱼种稳定 ID；必须能在 Definitions 里解析出一条就绪鱼定义，否则该名额被跳过。 */
+	/** 名册成员的鱼种稳定 ID；必须能在 Definitions 里解析出唯一就绪鱼定义，否则拒绝名册。 */
 	UPROPERTY(EditAnywhere, Config)
 	FName FishDefinitionId = NAME_None;
 
-	/** 该成员在基础池里的相对概率（子表「基础池概率（占位）」列）；<= 0 的名额不参与抽取。 */
+	/** 该成员在基础池里的相对概率（子表「基础池概率」列，已提为暂定正式）；<= 0 拒绝名册。 */
 	UPROPERTY(EditAnywhere, Config, meta = (ClampMin = "0.0"))
 	double Probability = 0.0;
 };
@@ -62,6 +75,13 @@ public:
 
 	FCatFishSelectionResult SelectRuntimeDefinition(const FCatFishSelectionContext& Context) const;
 
+	/** 两字段独立解析：只有资产为 0 才取档位默认；非法值原样交由会话拒绝，0 仍表示缺配。 */
+	FCatFishBiteTimingDefaults ResolveBiteTiming(const UCatFishDefinition& Definition) const;
+
+	/** 暂定正式默认表；逐鱼资产迁移后正值自动覆盖，不写回资产，也不包含完美窗。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Bite")
+	TMap<FName, FCatFishBiteTimingDefaults> BiteTimingDefaultsByRarityTier;
+
 	/**
 	 * 按本鱼的 RarityTierId 取完美提竿削减系数；命中 RarePerfectHookRarityTierIds 的按稀有鱼取，其余档按普通鱼取。
 	 * 削减系数不挂性格模板（四套 Bite_* 模板 2026-09-09 裁为测试用），也不逐鱼配。
@@ -75,8 +95,8 @@ public:
 	double ResolveDietOutwardSegmentProbability(ECatFishDiet Diet) const;
 
 	/**
-	 * 从无窝料基础池抽一条鱼；SelectRuntimeDefinition 在「候选为空」与「总权重为零」两处调用它，
-	 * 是这两种情形下唯一的出鱼路径。它不读窝料/鱼饵/挑战度，只按名册自己的概率抽。
+	 * 从无窝料基础池抽一条鱼；SelectRuntimeDefinition 在空窝、候选为空、总权重为零时调用它，
+	 * 是这些情形下唯一的出鱼路径。它不读窝料/鱼饵/挑战度，只按名册自己的概率抽。
 	 */
 	FCatFishSelectionResult SelectFromBasePool(const FCatFishSelectionContext& Context,
 		const TCHAR* FallbackReason) const;
@@ -108,8 +128,8 @@ public:
 
 	/**
 	 * 无窝料基础池名册（鱼表格子表「基础池」）。
-	 * 候选为空或总权重为零时从这里抽一条，保证「空窝不空钩」（2026-09-08 李前臻裁）。
-	 * 名册本身是设计侧待办（张佳），默认空——空名册时选鱼仍然返回未选中，只是会多记一条 Warning。
+	 * 空窝、候选为空或总权重为零时从这里抽一条，保证「空窝不空钩」（2026-09-08 李前臻裁）。
+	 * 2026-09-14 暂定正式四条已填入 Game ini；空名册仍返回未选中并记 Warning。
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Selection|BasePool")
 	TArray<FCatFishBasePoolEntry> BasePool;

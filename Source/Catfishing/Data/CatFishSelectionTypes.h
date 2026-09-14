@@ -48,9 +48,9 @@ struct FCatFishSelectionContext
 	double CombinedFishingStrength = 0.0;
 	double CombinedFightStamina = 0.0;
 	/**
-	 * 已退出鱼力量主链：鱼的个体力量改按 UCatFishDefinition::FishStrengthPerKilogram 逐鱼换算
-	 *（2026-09-09 八问④撤回工程自补的全局 K）。本字段只剩搏斗侧做功计价的同源校验用途，
-	 * 选鱼链不再读它；等 Fishing 侧改用自己的平衡资产字段后可整条删除。
+	 * 正式鱼力量优先按 UCatFishDefinition::FishStrengthPerKilogram 逐鱼换算。
+	 * 本字段保留既有资产迁移兜底及搏斗计价的同源校验：普通池与基础池的逐鱼 K 未迁移时均读取它。
+	 * 待逐鱼 K 全部迁移且搏斗不再依赖本字段时再删除，不可把当前仍有消费者的字段标成退出主链。
 	 */
 	double StrengthPerKilogram = 0.0;
 	/** 抛竿者成长的重量上浮比例；抽样时夹到本鱼种上限，后续力量与实物共用该重量。 */

@@ -120,6 +120,7 @@ private:
 	friend class FCatFishingOperatorRunnerIntegrationTest;
 	friend class FCatFishingPhysicalCouplingTest;
 	friend class FCatFishingFormalPhysicalRunnerTest;
+	friend class FCatFishingPerfectLineProductionTest;
 	friend class FCatFishingMotionDiagnosticTest;
 	friend class FCatFishBehaviorStateTreeRuntimeTest;
 	void HandleFixedStep();

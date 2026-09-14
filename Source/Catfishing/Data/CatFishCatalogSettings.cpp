@@ -8,6 +8,16 @@ namespace CatFishCatalogSettingsPrivate
 {
 	// 墓碑（2026-09-13，D-29）：移除挑战三带、选带权重及连续挑战倍率；硬安全上限仍独立保留。
 
+	static double ResolveStrengthPerKilogram(const UCatFishDefinition& Definition,
+		const FCatFishSelectionContext& Context, int32& UnsetCount)
+	{
+		// 复用既有迁移口径，普通池与基础池不能对同一份未迁资产作相反裁决。
+		if (FMath::IsFinite(Definition.FishStrengthPerKilogram) && Definition.FishStrengthPerKilogram > 0.0)
+			return Definition.FishStrengthPerKilogram;
+		++UnsetCount;
+		return Context.StrengthPerKilogram;
+	}
+
 	static bool PassesWaterRegionGate(const UCatFishDefinition& Definition, const FName RegionId)
 	{
 		return Definition.IsRuntimeDefinitionReady() && Definition.RegionIds.Contains(RegionId);
@@ -113,6 +123,19 @@ FCatPerfectHookReduction UCatFishCatalogSettings::ResolvePerfectHookReduction(
 	return Reduction;
 }
 
+FCatFishBiteTimingDefaults UCatFishCatalogSettings::ResolveBiteTiming(const UCatFishDefinition& Definition) const
+{
+	FCatFishBiteTimingDefaults Result;
+	Result.ProbeDurationSeconds = Definition.ProbeDurationSeconds;
+	Result.TrueBiteWindowSeconds = Definition.TrueBiteWindowSeconds;
+	if (const FCatFishBiteTimingDefaults* Defaults = BiteTimingDefaultsByRarityTier.Find(Definition.RarityTierId))
+	{
+		if (Result.ProbeDurationSeconds == 0.0) Result.ProbeDurationSeconds = Defaults->ProbeDurationSeconds;
+		if (Result.TrueBiteWindowSeconds == 0.0) Result.TrueBiteWindowSeconds = Defaults->TrueBiteWindowSeconds;
+	}
+	return Result;
+}
+
 FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 	const FCatFishSelectionContext& Context) const
 {
@@ -139,8 +162,13 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 		double BaseFishStrength = 0.0;
 		double FinalWeight = 0.0;
 	};
+	// 墓碑（2026-09-14，鱼册 §3.1.2、设计修改记录④）：正式曲线在零浓度处必须为 1，
+	// 因此空窝不会自然触发 ZeroTotalWeight。显式走已批准基础池，非空窝的加权公式保持原样。
+	const FCatChumVector& Chum = Context.ChumSample.EffectiveChumVector;
+	if (Chum.Fishy == 0.0 && Chum.Fragrant == 0.0 && Chum.Fermented == 0.0)
+		return SelectFromBasePool(Context, TEXT("EmptyChum"));
 	TArray<FCandidate> Candidates;
-	// 只统计"力量系数K 尚未落到资产"这一种跳过原因：它是内容缺口而不是生态条件不合，必须能被单独看见。
+	// 单独统计逐鱼 K 尚未落到资产的迁移缺口；这些鱼仍可使用有效的全局兜底。
 	int32 UnsetStrengthCoefficientCount = 0;
 	for (const TSoftObjectPtr<UCatFishDefinition>& DefinitionRef : Definitions)
 	{
@@ -153,22 +181,12 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 		// 先确定本鱼种在本次咬钩机会里的个体重量，再用同一重量推导力量和挑战度；选中后复用该重量。
 		const double WeightKilograms = CatFishCatalogSettingsPrivate::SampleIndividualWeight(
 			*Definition, Context);
-		// 鱼力量按逐鱼「力量系数K」换算（钓鱼规则 §4.1）。0 力量绝不能混进抽取池
-		//（会被挑战度判成「最轻松」的候选），但**也不能因为没配就把候选跳掉**：
-		// FishStrengthPerKilogram 是 2026-09-12 新增的列，现有 16 份鱼资产一份都还没填，
-		// 跳光候选 → 落基础池 → 基础池名册仍是设计侧待办（空的）→ 抽不到鱼 → 试探期进不去
-		// → 钓鱼主链整条断掉。所以未配置时回退到迁移前的全局系数（Context.StrengthPerKilogram，
-		// 09-11 退出主链但字段保留正是为此），只在连它都没有时才真跳过。
-		// 资产补完该列后这条回退自然失效，警告也随之消失。
-		double StrengthPerKilogram = Definition->FishStrengthPerKilogram;
+		// 逐鱼 K 未迁移时沿用既有全局兜底；资产补值后自动优先逐鱼值，两者都无效才跳过。
+		const double StrengthPerKilogram = CatFishCatalogSettingsPrivate::ResolveStrengthPerKilogram(
+			*Definition, Context, UnsetStrengthCoefficientCount);
 		if (!FMath::IsFinite(StrengthPerKilogram) || StrengthPerKilogram <= 0.0)
 		{
-			++UnsetStrengthCoefficientCount;
-			StrengthPerKilogram = Context.StrengthPerKilogram;
-			if (!FMath::IsFinite(StrengthPerKilogram) || StrengthPerKilogram <= 0.0)
-			{
-				continue;
-			}
+			continue;
 		}
 		const double BaseFishStrength = WeightKilograms * StrengthPerKilogram;
 		// 挑战度是第一道实际玩法门：超出安全上限的个体不会再进入任何生态条件或权重计算。
@@ -309,6 +327,7 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectFromBasePool(const FCatFi
 		double BaseFishStrength = 0.0;
 	};
 	TArray<FBasePoolCandidate> Candidates;
+	int32 UnsetStrengthCoefficientCount = 0;
 	double TotalProbability = 0.0;
 	TSet<FName> SeenIds;
 	for (const FCatFishBasePoolEntry& Entry : BasePool)
@@ -340,7 +359,8 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectFromBasePool(const FCatFi
 			continue;
 		}
 		const double WeightKilograms = CatFishCatalogSettingsPrivate::SampleIndividualWeight(*Definition, Context);
-		const double StrengthPerKilogram = Definition->FishStrengthPerKilogram;
+		const double StrengthPerKilogram = CatFishCatalogSettingsPrivate::ResolveStrengthPerKilogram(
+			*Definition, Context, UnsetStrengthCoefficientCount);
 		if (!FMath::IsFinite(WeightKilograms) || WeightKilograms <= 0.0
 			|| !FMath::IsFinite(StrengthPerKilogram) || StrengthPerKilogram <= 0.0)
 		{
@@ -353,11 +373,17 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectFromBasePool(const FCatFi
 		Candidate.BaseFishStrength = WeightKilograms * StrengthPerKilogram;
 		TotalProbability += Entry.Probability;
 	}
+	if (UnsetStrengthCoefficientCount > 0)
+	{
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fish_selection_strength_coefficient_unset Region=%s RandomSeed=%d Source=BasePool UnsetEntries=%d Global=%.3f Note=MigrationFallbackUntilFishAssetsCarryPerFishK"),
+			*Context.WaterRegion.RegionId.ToString(), Context.RandomSeed, UnsetStrengthCoefficientCount, Context.StrengthPerKilogram);
+	}
 	if (Candidates.IsEmpty() || !FMath::IsFinite(TotalProbability) || TotalProbability <= 0.0)
 	{
 		UE_LOG(LogCatFishing, Warning,
 			TEXT("Event=fish_selection_base_pool_unavailable Region=%s Reason=%s ConfiguredEntries=%d ")
-			TEXT("UsableEntries=%d Note=AwaitingApprovedBasePoolMapping"),
+			TEXT("UsableEntries=%d Note=NoUsableBasePoolEntries"),
 			*Context.WaterRegion.RegionId.ToString(), FallbackReason, BasePool.Num(), Candidates.Num());
 		return Result;
 	}
@@ -388,8 +414,8 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectFromBasePool(const FCatFi
 	Result.PositiveWeightCandidateCount = Candidates.Num();
 	UE_LOG(LogCatFishing, Display,
 		TEXT("Event=fish_selection_base_pool_used Region=%s Reason=%s Fish=%s WeightKg=%.3f Probability=%.4f ")
-		TEXT("PoolCandidates=%d"),
+		TEXT("PoolCandidates=%d RandomSeed=%d"),
 		*Context.WaterRegion.RegionId.ToString(), FallbackReason, *Result.FishDefinitionId.ToString(),
-		Result.WeightKilograms, Result.SelectedNormalizedProbability, Candidates.Num());
+		Result.WeightKilograms, Result.SelectedNormalizedProbability, Candidates.Num(), Context.RandomSeed);
 	return Result;
 }

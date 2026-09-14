@@ -157,12 +157,18 @@ bool FCatFishSelectionBasePoolFallbackTest::RunTest(const FString& Parameters)
 	Context.Weather = ECatEnvironmentWeather::Clear;
 	Context.ActivePlayerCount = 1;
 	// 队伍战力远低于这条鱼：挑战度超过 MaximumChallengeRatio，普通候选池会被筛空。
+	// 墓碑（2026-09-14，鱼册 §3.1.2／设计修改记录④）：零窝料现在直接走基础池。
+	// 本夹具继续验证「非空窝的候选筛空」入口，提供中性窝料，保留全部原断言。
+	Context.ChumSample.EffectiveChumVector.Fishy = 1.0;
 	// 基础池刻意不读挑战度，所以它仍然能把这条鱼抽出来——这正是「空窝不空钩」要保住的那条路。
 	Context.CombinedFishingStrength = 1.0;
 	Context.CombinedFightStamina = 1.0;
 	Context.RandomSeed = 20260912;
 
 	// 名册没填时保持未选中，但必须留下可查的原因，而不是静默空钩。
+	// 墓碑（2026-09-14，设计修改记录④）：正式 ini 已有四条基础池，不能再假设新建配置对象继承空名册。
+	// 仅显式准备本段的未配置夹具，保留未选中与随后填入名册可选中的原断言。
+	Settings->BasePool.Reset();
 	AddExpectedMessage(TEXT("Event=fish_selection_base_pool_unavailable"), ELogVerbosity::Warning,
 		EAutomationExpectedMessageFlags::Contains, 1);
 	const FCatFishSelectionResult WithoutRoster = Settings->SelectRuntimeDefinition(Context);
@@ -229,6 +235,10 @@ bool FCatFishSelectionPostFilterNormalizationTest::RunTest(const FString& Parame
 	Context.CombinedFightStamina = 10.0;
 	Context.RandomSeed = 20260901;
 	// 跨原轻松/高风险带，仍必须用原始权重 1:3 一起归一化，不能先选带或乘挑战倍率。
+	// 墓碑（2026-09-14，鱼册 §3.1.2／设计修改记录④）：空窝用基础池，归一化夹具改为非空窝。
+	// 两条测试鱼的偏好三轴均为0，故中性窝料不会改变原有1:3权重、挑战门或任何期望值。
+	Context.ChumSample.EffectiveChumVector.Fishy = 1.0;
+	Settings->BasePool.Reset(); // 本用例的无可用候选分支明确使用空名册，不继承正式四条资产。
 	LightFish->FishStrengthPerKilogram = 5.0;
 	HeavyFish->FishStrengthPerKilogram = 12.0;
 
@@ -257,7 +267,7 @@ bool FCatFishSelectionPostFilterNormalizationTest::RunTest(const FString& Parame
 	TestEqual(TEXT("normalization excludes unsafe fish"), BelowCeiling.SelectedNormalizedProbability, 1.0, UE_DOUBLE_SMALL_NUMBER);
 	Settings->MaximumChallengeRatio = 1.35;
 
-	// 力量系数K 未配置的鱼直接退出候选，不回退任何全局系数，也不带着 0 力量混进抽取池。
+	// 本夹具全局K为0：逐鱼与迁移兜底均缺配时退出候选，不能带着0力量进池。
 	AddExpectedMessage(TEXT("Event=fish_selection_strength_coefficient_unset"), ELogVerbosity::Warning);
 	// 候选被筛空之后会落基础池；本用例没配名册，所以兜底也拿不出鱼，这条是预期日志不是失败。
 	// 次数取 -1（出现与否都不判定）：下面两次选鱼各会走一次兜底，用例关心的是选不出鱼，不是报了几次。
@@ -298,8 +308,8 @@ bool FCatFormalFishSelectionWeightStrengthTest::RunTest(const FString& Parameter
 	Context.CombinedFishingStrength = 50.0;
 	Context.CombinedFightStamina = 60.0;
 	Context.RandomSeed = 20260903;
-	// 逐鱼「力量系数K」在鱼表格里，值要经编辑器落到 Fish_*.uasset；没落之前选鱼链 fail-closed，一条都选不出来。
-	// 先确认这个内容缺口，避免把"资产待补值"报成选鱼逻辑错误；补值后本用例才继续校验 重量 x K 口径。
+	// 本用例专测逐鱼 K；资产尚未迁移时，既有全局兜底由 FormalEmptyChumSelectsAllFourBasePoolFish 实测。
+	// 墓碑（2026-09-14）：不能再把「逐鱼 K 未填」描述成整个生产选鱼链 fail-closed。
 	bool bAnyStrengthCoefficientAuthored = false;
 	for (const TSoftObjectPtr<UCatFishDefinition>& Entry : Settings->Definitions)
 	{
@@ -312,8 +322,8 @@ bool FCatFormalFishSelectionWeightStrengthTest::RunTest(const FString& Parameter
 	}
 	if (!bAnyStrengthCoefficientAuthored)
 	{
-		AddWarning(TEXT("正式鱼表资产尚未填入鱼表格「力量系数K」列；选鱼链按 fail-closed 跳过全部候选，"
-			"补值落到 Fish_*.uasset 后本用例才会校验「重量 x K」口径。"));
+		AddWarning(TEXT("正式鱼表资产尚未填入逐鱼「力量系数K」；生产链已有全局迁移兜底，"
+			"本用例待资产补值后校验逐鱼K，当前兜底另有正式空窝测试覆盖。"));
 		return !HasAnyErrors();
 	}
 	// 正式目录里可能只有一部分鱼补了 K，未补的那些会各自记一条内容缺口警告，不是用例失败。
@@ -323,7 +333,7 @@ bool FCatFormalFishSelectionWeightStrengthTest::RunTest(const FString& Parameter
 	// 这条期待连同过渡逻辑一起删。
 	AddExpectedMessage(TEXT("Event=fish_fight_stamina_legacy_flat_value_converted"), ELogVerbosity::Warning,
 		EAutomationExpectedMessageFlags::Contains, -1);
-	// 正式目录若被条件门筛空会落基础池；名册目前是空的，兜底同样会报。出现与否都不判定。
+	// 正式目录若被条件门筛空会落基础池；基础池也无可用鱼时才报。出现与否都不判定。
 	AddExpectedMessage(TEXT("Event=fish_selection_base_pool_unavailable"), ELogVerbosity::Warning,
 		EAutomationExpectedMessageFlags::Contains, -1);
 	const FCatFishSelectionResult First = Settings->SelectRuntimeDefinition(Context);

@@ -13,6 +13,7 @@
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Equipment/CatEquipmentComponent.h"
+#include "Equipment/CatEquipmentDefinition.h"
 #include "Character/CatCharacter.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
@@ -20,12 +21,20 @@
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "Framework/Game/CatfishingPlayerState.h"
 #include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventorySettings.h"
 #include "Inventory/CatInventoryItemInstance.h"
 #include "Items/Fish/CatFishPickupActor.h"
 #include "Data/CatFishCatalogSettings.h"
 #include "Social/CatRoomOwnerService.h"
 #include "OnlineSubsystemTypes.h"
 #include "Fishing/Simulation/CatFishingFightSimulator.h"
+#include "Fishing/Config/CatFishingFightBalanceDefinition.h"
+#include "Fishing/Simulation/CatFishingFightRunner.h"
+#include "Environment/CatWaterQuerySubsystem.h"
+#include "Environment/Tests/CatWaterTestFixtures.h"
+#include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
+#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
+#include "UI/CatFishingViewTypes.h"
 
 namespace CatR3Tests
 {
@@ -294,6 +303,144 @@ bool FCatGrowthWearDeliveryTest::RunTest(const FString&)
 	TestTrue(TEXT("收鱼生产扣费成功"), Session->CommitCatchEquipmentFromAuthority());
 	TestTrue(TEXT("真实竿耐久回执可读取"), F.Equipment->GetFishingRodDurability(F.SessionId, After, Broken));
 	TestTrue(TEXT("每条 -1 经成长后只扣 0.9，未回补竿"), FMath::IsNearlyEqual(Before - After, 0.9, 0.000001));
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingCatalogTimingTimersTest,
+	"Catfishing.Unit.Fishing.BiteTiming.FormalRarityDefaultsReachResponseTimersAndSeparatePerfectWindow",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FCatFishingCatalogTimingTimersTest::RunTest(const FString& Parameters)
+{
+	const auto* Catalog = GetDefault<UCatFishCatalogSettings>();
+	for (const auto& Ref : Catalog->Definitions)
+	{
+		CatR3Tests::FFixture F;
+		if (!F.Init(*this)) return false;
+		auto* World = F.Wrapper.GetTestWorld();
+		auto* Session = World->SpawnActor<ACatFishingSession>();
+		auto* Encounter = World->SpawnActor<ACatFishEncounterActor>();
+		auto* Fish = Ref.LoadSynchronous();
+		if (!Fish || !Session || !Encounter) return false;
+		Session->FishDefinition = Fish;
+		Session->Snapshot.FishingSessionId = F.SessionId;
+		Session->Snapshot.FishDefinitionId = Fish->FishDefinitionId;
+		Session->Snapshot.Phase = ECatFishingPhase::Probe;
+		Session->Snapshot.FishEncounterActor = Encounter;
+		Session->SelectionResolution = ECatFishSelectionResolution::Selected;
+		Session->CastEquipment = F.Equipment;
+		Session->FisherCharacter = F.Cat;
+		Session->AttemptSnapshot.RodDefinitionId = F.Equipment->GetSnapshot().RodDefinitionId;
+		Session->AttemptSnapshot.RodItemInstanceId = F.Equipment->GetSnapshot().RodItemInstanceId;
+		Session->bStartupInProgress = true;
+		F.Cat->SetActorLocation(FVector(0, 0, 100));
+		Encounter->SetActorLocation(FVector(1000, 0, 0));
+		if (!TestTrue(TEXT("正式鱼默认值进入真实真咬开窗入口"), Session->OpenTrueBiteWindowFromAuthority())) return false;
+		const double Expected = Catalog->ResolveBiteTiming(*Fish).TrueBiteWindowSeconds;
+		TestEqual(TEXT("计时器真正使用配置响应秒数"), double(World->GetTimerManager().GetTimerRemaining(Session->TrueBiteTimerHandle)), Expected);
+		TestEqual(TEXT("复制快照使用相同响应秒数"), Session->Snapshot.WindowEndsServerTime - Session->Snapshot.PhaseStartedServerTime, Expected);
+		TestEqual(TEXT("完美窗独立保持1秒"), Session->Snapshot.PerfectWindowEndsServerTime - Session->Snapshot.PhaseStartedServerTime, 1.0);
+		const auto View = FCatFishingViewState::FromSnapshot(Session->Snapshot);
+		TestEqual(TEXT("UI收到同一响应截止时间"), View.WindowEndsServerTime, Session->Snapshot.WindowEndsServerTime);
+		TestEqual(TEXT("UI收到独立完美截止时间"), View.PerfectWindowEndsServerTime, Session->Snapshot.PerfectWindowEndsServerTime);
+		TestEqual(TEXT("真咬成立只扣一份饵"), F.Cat->GetInventoryComponent()->CountVisibleInventoryQuantityByDefinitionId(TEXT("BugBait")), 1);
+		World->GetTimerManager().ClearTimer(Session->TrueBiteTimerHandle);
+		F.Equipment->ReleaseFishingUse(F.SessionId);
+	}
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingPerfectLineProductionTest,
+	"Catfishing.Unit.Fishing.Timing.FormalPerfectLineMultiplierReachesFightRunnerAndFishPosition",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
+{
+	const auto* Catalog = GetDefault<UCatFishCatalogSettings>();
+	TestEqual(TEXT("读取正式ini完美线长倍率"), Catalog->PerfectInitialLineLengthMultiplier, 0.9);
+	for (const bool bPerfect : {false, true})
+	{
+		CatR3Tests::FFixture F;
+		if (!F.Init(*this)) return false;
+		auto* World = F.Wrapper.GetTestWorld();
+		FCatWaterGeometryBuildInput Geometry;
+		Geometry.RegionId = TEXT("River");
+		Geometry.WaterPointVerticalToleranceCm = 100;
+		Geometry.BankHeightToleranceCm = 50;
+		Geometry.BoundaryToleranceCm = 1;
+		Geometry.MaxLandingCorrectionCm = 100;
+		Geometry.MinimumWaterInsetCm = 1;
+		auto& Boundary = Geometry.Boundaries.AddDefaulted_GetRef();
+		Boundary.BoundaryId = TEXT("TimingLineWater");
+		Boundary.Vertices = {{-5000, -5000}, {5000, -5000}, {5000, 5000}, {-5000, 5000}};
+		const auto L = F.Equipment->GetSnapshot();
+		const auto* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(L.RodDefinitionId);
+		const auto* Fish = Catalog->FindRuntimeDefinition(TEXT("RiverPatternFish"));
+		const auto* Balance = GetDefault<UCatFishingSettings>()->LoadFightBalanceDefinition();
+		if (!TestTrue(TEXT("正式鱼、竿、平衡资产齐全"), RodDefinition && Fish && Balance)) return false;
+		auto* Rod = World->SpawnActor<ACatFishingRodActor>(RodDefinition->UseActorClass.LoadSynchronous());
+		F.Cat->GetCharacterMovement()->DisableMovement();
+		F.Cat->SetActorLocation(FVector(0, 0, 100));
+		if (!TestTrue(TEXT("真实鱼竿绑定并建立握持"), Rod && Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(), L.RodItemInstanceId,
+			L.RodDefinitionId, NAME_None, F.Player, F.Player, true, false)
+			&& Rod->BeginPhysicalHoldFromAuthority(F.Player, true)
+			&& Rod->GetPhysicalRodComponent()->CommitPrimaryHold(F.Player))) return false;
+		// 竿尖与水面同高，隔离水面吸附补足物理线长的既有安全修正，直接验证倍率消费。
+		const double SurfaceZ = Rod->GetRodTipWorldTransform().GetLocation().Z;
+		Geometry.PlaneToWorld = FTransform(FVector(0, 0, SurfaceZ));
+		const auto Built = FCatWaterGeometry::Build(Geometry);
+		auto* Region = World->SpawnActorDeferred<ACatWaterRegion>(ACatWaterRegion::StaticClass(), FTransform::Identity);
+		if (!TestTrue(TEXT("真实水面几何可用"), Built.bSucceeded && Region)) return false;
+		FCatWaterRegionTestAccess::InjectBakedGeometry(*Region, Built.Cache);
+		Region->FinishSpawning(FTransform::Identity);
+		auto* Session = World->SpawnActor<ACatFishingSession>();
+		auto* Encounter = World->SpawnActor<ACatFishEncounterActor>();
+		const FVector InitialFishPosition(1000, 0, Built.Cache.PlaneToWorld.GetLocation().Z);
+		Encounter->SetActorLocation(InitialFishPosition);
+		const double D0 = FVector::Distance(F.Cat->GetActorLocation(), Encounter->GetActorLocation());
+		const FGuid CastId = FGuid::NewGuid();
+		if (!TestTrue(TEXT("真实鱼实体接收本场身份"), Encounter->InitializeAuthoritativeIdentity(F.SessionId, CastId, Fish->FishDefinitionId, D0, 1.0))) return false;
+		Session->FishDefinition = const_cast<UCatFishDefinition*>(Fish);
+		Session->FishWeightKilograms = 2.0;
+		Session->Snapshot.FishingSessionId = F.SessionId;
+		Session->Snapshot.CastAttemptId = CastId;
+		Session->Snapshot.FishDefinitionId = Fish->FishDefinitionId;
+		Session->Snapshot.FishEncounterActor = Encounter;
+		Session->Snapshot.RodActor = Rod;
+		Session->Snapshot.FisherPlayerState = F.Player;
+		Session->Snapshot.Phase = ECatFishingPhase::TrueBiteWindow;
+		Session->Snapshot.bPerfectHook = bPerfect;
+		Session->Snapshot.FishStrength = 20.0;
+		Session->Snapshot.FishFightStaminaRemaining = 100.0;
+		Session->SelectionResolution = ECatFishSelectionResolution::Selected;
+		Session->FrozenSelectionResult.BaseFishStrength = 20.0;
+		Session->FrozenSelectionContext.StrengthPerKilogram = Balance->StrengthPerKilogram;
+		Session->AttemptSnapshot.RodActor = Rod;
+		Session->AttemptSnapshot.RodDefinitionId = L.RodDefinitionId;
+		Session->AttemptSnapshot.RodItemInstanceId = L.RodItemInstanceId;
+		Session->AttemptSnapshot.CastAttemptId = CastId;
+		Session->AttemptSnapshot.WaterRegion = Built.Cache.Handle;
+		Session->AttemptSnapshot.ServerCorrectedLandingWorldPoint = Encounter->GetActorLocation();
+		Session->TrueBiteDistanceCentimeters = D0;
+		Session->FisherCharacter = F.Cat;
+		Session->CastEquipment = F.Equipment;
+		Session->bStartupInProgress = true;
+		// 冻结一个常规搏斗样本，猫力低于完美后的鱼力，避免瞬断/碾压绕过入场。
+		F.Cat->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 10.0f);
+		if (!TestTrue(TEXT("生产搏斗入口启动真实Runner"), Session->TryEnterHookedFightFromAuthority() && Session->IsFightRunnerRunning())) return false;
+		const double Expected = D0 * (bPerfect ? 0.9 : 1.0);
+		const double Actual = Session->FightRunner->State.LineLengthCentimeters;
+		const double Distance = FVector::Distance(Rod->GetRodTipWorldTransform().GetLocation(), Encounter->GetActorLocation());
+		TestEqual(TEXT("实际入场线长完美乘0.9，非完美乘1"), Actual, Expected, 0.01);
+		if (bPerfect)
+			TestEqual(TEXT("完美时实际鱼Actor投影到缩短的线长"), Distance, Expected, 0.01);
+		else
+		{
+			TestTrue(TEXT("非完美保持原鱼位置，允许既有松线"), Encounter->GetActorLocation().Equals(InitialFishPosition, 0.01));
+			TestTrue(TEXT("实际鱼始终在合法线长内"), Distance <= Actual + 0.01);
+		}
+		AddInfo(FString::Printf(TEXT("Event=formal_perfect_line_verified Perfect=%d D0Cm=%.3f ExpectedCm=%.3f RunnerLineCm=%.3f ActorDistanceCm=%.3f"), bPerfect, D0, Expected, Actual, Distance));
+		Session->FightRunner->Stop();
+		F.Equipment->ReleaseFishingUse(F.SessionId);
+	}
 	return !HasAnyErrors();
 }
 

@@ -120,11 +120,11 @@ public:
 	/** 基础时长（秒），不是成长后时长；0 为未配。祝福不走食用链。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Use|TimedEffect", meta=(ClampMin="0", Units="s"))
 	double EatingTimedEffectDurationSeconds = 0.0;
-	/** 鱼表「试探期」，秒；0/缺列才使用 2～4 秒随机兜底，非法值拒绝。 */
+	/** 鱼表「试探期」，秒；0 先取鱼目录档位默认，仍缺配才随机兜底；非法值拒绝。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Bite", meta=(ClampMin="0", Units="s"))
 	double ProbeDurationSeconds = 0.0;
 
-	/** 鱼种普通响应窗，秒；0 表示待属主给值，迁移期带 Warning 使用旧全局值。与试探/完美窗独立。 */
+	/** 鱼种普通响应窗，秒；0 先取鱼目录档位默认，仍缺配才带 Warning 使用旧全局值。与试探/完美窗独立。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Bite", meta=(ClampMin="0", Units="s"))
 	double TrueBiteWindowSeconds = 0.0;
 
@@ -224,9 +224,10 @@ public:
 	FName CaptureImprintEventId = NAME_None;
 
 	/**
-	 * 稀有度轴的稳定内容 ID（鱼表格「稀有度」列，五档 普通／少见／稀有／珍稀／事件），与 BodyClass 协作轴完全独立。
+	 * 稀有度轴的内容 ID，与 BodyClass 协作轴独立。资产仍为 Common/Uncommon/Rare/Event 旧口径，
+	 * 尚未迁移到鱼表的普通／少见／稀有／珍稀四档，不能按字面翻译。
 	 * 它是价值判断，不进抽鱼概率（分布由 SpawnWeight、窝料轴与鱼饵偏好表达，鱼册 §2）；
-	 * 玩法上唯一消费它的是完美提竿削减分档，见 UCatFishCatalogSettings::ResolvePerfectHookReduction。
+	 * 鱼目录用它解析完美提竿削减分档及两项窗口的配置默认值。
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Distribution")
 	FName RarityTierId = NAME_None;
