@@ -199,7 +199,7 @@ UObject* UCatFrontendRootWidget::GetVisibleFeedbackSource() const
 	const UWidget* ActiveWidget = FrontendPageSwitcher ? FrontendPageSwitcher->GetActiveWidget() : nullptr;
 	if (ActiveWidget && ActiveWidget == SaveListPage) { return SaveModel; }
 	if (ActiveWidget && ActiveWidget == FrontendSettingsPage) { return SettingsModel; }
-	if (ActiveWidget && ActiveWidget == RoomPage) { return RoomModel; }
+	if (ActiveWidget && (ActiveWidget == RoomPage || ActiveWidget == JoinPage)) { return RoomModel; }
 	return nullptr;
 }
 
@@ -208,6 +208,7 @@ void UCatFrontendRootWidget::RefreshFlowFeedback()
 {
 	const FText SaveFeedback = PageController ? PageController->GetLastResultText(SaveModel) : FText::GetEmpty();
 	const FText RoomFeedback = PageController ? PageController->GetLastResultText(RoomModel) : FText::GetEmpty();
+	if (JoinResultText) { JoinResultText->SetText(!RoomFeedback.IsEmpty() ? RoomFeedback : RoomModel ? RoomModel->GetLastResultText() : FText::GetEmpty()); }
 	const FText SettingsFeedback = PageController ? PageController->GetLastResultText(SettingsModel) : FText::GetEmpty();
 	if (SaveResultTextBlock) { SaveResultTextBlock->SetText(!SaveFeedback.IsEmpty() ? SaveFeedback : SaveModel ? SaveModel->GetLastResultText() : FText::GetEmpty()); }
 	if (RoomResultTextBlock) { RoomResultTextBlock->SetText(!RoomFeedback.IsEmpty() ? RoomFeedback : RoomModel ? RoomModel->GetLastResultText() : FText::GetEmpty()); }
@@ -311,7 +312,7 @@ void UCatFrontendRootWidget::RequestCopyRoomInviteCode()
 	if (!Snapshot.JoinLobbyUri.IsEmpty())
 	{
 		FPlatformApplicationMisc::ClipboardCopy(*Snapshot.JoinLobbyUri);
-		if (RoomResultTextBlock) { RoomResultTextBlock->SetText(FText::FromString(TEXT("邀请码已复制。"))); }
+		if (RoomResultTextBlock) { RoomResultTextBlock->SetText(FText::FromString(TEXT("邀请链接已复制。"))); }
 	}
 }
 
@@ -357,6 +358,14 @@ void UCatFrontendRootWidget::NativeDestruct()
 // 子树解析流程：UMG 的 BindWidget 不会穿透嵌套 UserWidget，因此只对每个所属页面树查找自己的必需控件并记录缺口。
 void UCatFrontendRootWidget::ResolvePageControls()
 {
+	JoinFriendsScrollBox = FindPageControl<UScrollBox>(JoinPage, TEXT("JoinFriendsScrollBox"), TEXT("JoinPage"));
+	JoinLinkTextBox = FindPageControl<UEditableTextBox>(JoinPage, TEXT("JoinLinkTextBox"), TEXT("JoinPage"));
+	JoinResultText = FindPageControl<UTextBlock>(JoinPage, TEXT("JoinResultText"), TEXT("JoinPage"));
+	JoinEmptyText = FindPageControl<UTextBlock>(JoinPage, TEXT("JoinEmptyText"), TEXT("JoinPage"));
+	JoinLinkButton = FindPageControl<UButton>(JoinPage, TEXT("JoinLinkButton"), TEXT("JoinPage"));
+	PasteJoinLinkButton = FindPageControl<UButton>(JoinPage, TEXT("PasteJoinLinkButton"), TEXT("JoinPage"));
+	RefreshJoinFriendsButton = FindPageControl<UButton>(JoinPage, TEXT("RefreshJoinFriendsButton"), TEXT("JoinPage"));
+	JoinBackButton = FindPageControl<UButton>(JoinPage, TEXT("JoinBackButton"), TEXT("JoinPage"));
 	FindPageControl<UPanelWidget>(MenuPage, TEXT("MenuCommands"), TEXT("MenuPage"));
 	FindPageControl<UPanelWidget>(MenuPage, TEXT("ExitConfirmationOverlay"), TEXT("MenuPage"));
 	FindPageControl<UTextBlock>(MenuPage, TEXT("MenuSubtitleText"), TEXT("MenuPage"));
@@ -426,6 +435,10 @@ WidgetType* UCatFrontendRootWidget::FindPageControl(UUserWidget* Page, const FNa
 // 按钮绑定流程：逐个给已解析的实际页面按钮添加唯一动态委托；缺失控件已经由解析阶段记录，绝不创建原生替身。
 void UCatFrontendRootWidget::BindPageControls()
 {
+	if (JoinLinkButton) { JoinLinkButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestSubmitJoinLink); }
+	if (PasteJoinLinkButton) { PasteJoinLinkButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestPasteJoinLink); }
+	if (RefreshJoinFriendsButton) { RefreshJoinFriendsButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestRefreshFriends); }
+	if (JoinBackButton) { JoinBackButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestCancel); }
 	if (StartGameButton) { StartGameButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestStartGameFlow); }
 	if (JoinPartyButton) { JoinPartyButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestJoinParty); }
 	if (FrontendSettingsButton) { FrontendSettingsButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestOpenFrontendSettings); }
@@ -471,6 +484,10 @@ void UCatFrontendRootWidget::BindPageControls()
 // 按钮解绑流程：逐个移除本 Root 注册的动态委托；空指针和重复拆除安全跳过，防止 Widget 重建叠加点击回调。
 void UCatFrontendRootWidget::UnbindPageControls()
 {
+	if (JoinLinkButton) { JoinLinkButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestSubmitJoinLink); }
+	if (PasteJoinLinkButton) { PasteJoinLinkButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestPasteJoinLink); }
+	if (RefreshJoinFriendsButton) { RefreshJoinFriendsButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestRefreshFriends); }
+	if (JoinBackButton) { JoinBackButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestCancel); }
 	if (StartGameButton) { StartGameButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestStartGameFlow); }
 	if (JoinPartyButton) { JoinPartyButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestJoinParty); }
 	if (FrontendSettingsButton) { FrontendSettingsButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestOpenFrontendSettings); }
@@ -571,6 +588,7 @@ void UCatFrontendRootWidget::HandleRoomModelChanged()
 	HandleSaveModelChanged();
 	RefreshRoomPresentation();
 	RebuildRoomRows();
+	RefreshJoinPresentation();
 	BP_RenderRoom();
 }
 
@@ -795,6 +813,7 @@ void UCatFrontendRootWidget::RebuildRoomRows()
 // 动态行释放流程：逐个清空运行期填充的 ScrollBox，让存档、好友和玩家行随 Root 的 WidgetTree 释放；该路径不读取或修改任何业务 Model。
 void UCatFrontendRootWidget::ClearDynamicRows()
 {
+	if (JoinFriendsScrollBox) { JoinFriendsScrollBox->ClearChildren(); }
 	if (SaveRowsScrollBox) { SaveRowsScrollBox->ClearChildren(); }
 	if (FriendsScrollBox) { FriendsScrollBox->ClearChildren(); }
 	if (PlayersScrollBox) { PlayersScrollBox->ClearChildren(); }
@@ -807,7 +826,7 @@ void UCatFrontendRootWidget::RefreshRoomPresentation()
 	if (RoomInviteCodeText)
 	{
 		RoomInviteCodeText->SetText(Snapshot.JoinLobbyUri.IsEmpty()
-			? FText::FromString(TEXT("邀请码暂不可用")) : FText::FromString(Snapshot.JoinLobbyUri));
+			? FText::FromString(TEXT("邀请链接暂不可用")) : FText::FromString(Snapshot.JoinLobbyUri));
 	}
 	if (RoomAccessPolicyText)
 	{
@@ -938,4 +957,73 @@ void UCatFrontendRootWidget::ShowPage(UWidget* Page, const TCHAR* PageName)
 		return;
 	}
 	FrontendPageSwitcher->SetActiveWidget(Page);
+}
+
+void UCatFrontendRootWidget::ShowJoin()
+{
+	ShowPage(JoinPage, TEXT("JoinPage"));
+	RefreshJoinPresentation();
+	RefreshFlowFeedback();
+	if (JoinLinkTextBox) { JoinLinkTextBox->SetKeyboardFocus(); }
+}
+void UCatFrontendRootWidget::RequestJoinFriend(FCatOnlineFriendHandle FriendHandle)
+{
+	if (PageController) { PageController->RequestJoinFriend(FriendHandle); }
+}
+void UCatFrontendRootWidget::RequestSubmitJoinLink()
+{
+	if (PageController && JoinLinkTextBox) { PageController->RequestJoinLink(JoinLinkTextBox->GetText().ToString()); }
+}
+void UCatFrontendRootWidget::RequestPasteJoinLink()
+{
+	FString Input;
+	FPlatformApplicationMisc::ClipboardPaste(Input);
+	if (JoinLinkTextBox) { JoinLinkTextBox->SetText(FText::FromString(Input.Left(160).TrimStartAndEnd())); JoinLinkTextBox->SetKeyboardFocus(); }
+}
+void UCatFrontendRootWidget::RefreshJoinPresentation()
+{
+	const FCatOnlineSnapshot Snapshot = RoomModel ? RoomModel->GetSnapshot() : FCatOnlineSnapshot();
+	const bool bIdle = RoomModel && Snapshot.SessionState == ECatOnlineSessionState::NoSession
+		&& Snapshot.ActiveOperation == ECatOnlineOperation::None && !Snapshot.bIsAcceptedInvitePending;
+	if (JoinLinkButton) { JoinLinkButton->SetIsEnabled(bIdle); }
+	if (PasteJoinLinkButton) { PasteJoinLinkButton->SetIsEnabled(bIdle); }
+	if (JoinLinkTextBox) { JoinLinkTextBox->SetIsEnabled(bIdle); }
+	if (RefreshJoinFriendsButton) { RefreshJoinFriendsButton->SetIsEnabled(bIdle && !Snapshot.bFriendsRefreshPending); }
+	if (JoinBackButton) { JoinBackButton->SetIsEnabled(bIdle); }
+	if (JoinFriendsScrollBox)
+	{
+		JoinFriendsScrollBox->ClearChildren();
+		JoinFriendsScrollBox->SetIsEnabled(bIdle && !Snapshot.bFriendsRefreshPending);
+		const auto RowClass = LoadClass<UCatFrontendJoinFriendRowWidget>(nullptr, TEXT("/Game/UI/Frontend/WBP_CatJoinFriendRow.WBP_CatJoinFriendRow_C"));
+		if (!RowClass) { UE_LOG(LogCatUI, Error, TEXT("Event=frontend_row_class_missing Row=JoinFriend")); }
+		else for (const FCatOnlineFriendSummary& Friend : Snapshot.Friends)
+		{
+			if (!Friend.bHasGameLobby) { continue; }
+			if (UCatFrontendJoinFriendRowWidget* Row = CreateWidget<UCatFrontendJoinFriendRowWidget>(this, RowClass))
+			{ Row->ConfigureRow(this, Friend); JoinFriendsScrollBox->AddChild(Row); }
+		}
+		if (JoinEmptyText)
+		{
+			JoinEmptyText->SetVisibility(JoinFriendsScrollBox->GetChildrenCount() == 0 ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+			JoinEmptyText->SetText(FText::FromString(Snapshot.bFriendsRefreshPending ? TEXT("正在查询好友…") : TEXT("暂无好友房间。\n让朋友先创建房间，或通过 Steam 邀请你。")));
+		}
+	}
+	RefreshFlowFeedback();
+}
+void UCatFrontendJoinFriendRowWidget::NativeOnInitialized()
+{
+	Super::NativeOnInitialized();
+	if (JoinFriendButton) { JoinFriendButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleJoinClicked); }
+}
+void UCatFrontendJoinFriendRowWidget::ConfigureRow(UCatFrontendRootWidget* Root, const FCatOnlineFriendSummary& Friend)
+{
+	RootWidget = Root;
+	FriendHandle = Friend.Handle;
+	if (FriendNameText) { FriendNameText->SetText(FText::FromString(Friend.DisplayName)); }
+	if (FriendStatusText) { FriendStatusText->SetText(FText::FromString(TEXT("正在房间中 · 加入时确认权限"))); }
+	if (JoinFriendButton) { JoinFriendButton->SetIsEnabled(Friend.bHasGameLobby); }
+}
+void UCatFrontendJoinFriendRowWidget::HandleJoinClicked()
+{
+	if (UCatFrontendRootWidget* Root = RootWidget.Get()) { Root->RequestJoinFriend(FriendHandle); }
 }

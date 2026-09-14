@@ -91,11 +91,34 @@ void UCatFrontendPageController::RequestStartGameFlow()
 	if (UCatFrontendSaveModel* Save = SaveModel.Get()) { Save->RefreshSlotSummaries(); }
 }
 
-// 加入队伍流程：产品尚未定义搜索或加入规则，因此只保存可读反馈；不调用 RoomModel，避免制造离线或本地替身房间。
+// 加入页只服务空闲前台；已有房间或存档操作不能被另一次加入抢占。
 void UCatFrontendPageController::RequestJoinParty()
 {
-	SetLocalResultText(FText::FromString(TEXT("加入队伍功能尚未开放。")));
-	if (UCatFrontendRootWidget* Root = RootWidget.Get()) { Root->ShowMenu(); }
+	if (bWaitingForSaveLoad || bWaitingForRoomCreation || (SaveModel.IsValid() && SaveModel->IsBusy())) { return; }
+	if (UCatFrontendRoomModel* Room = RoomModel.Get())
+	{
+		const FCatOnlineSnapshot Snapshot = Room->GetSnapshot();
+		if (Snapshot.SessionState != ECatOnlineSessionState::NoSession || Snapshot.ActiveOperation != ECatOnlineOperation::None || Snapshot.bIsAcceptedInvitePending)
+		{ HandleRoomModelChanged(); return; }
+		if (bStartGameFlowActive && !ReleaseUnjoinedSave()) { return; }
+		bStartGameFlowActive = false;
+		SelectedSlotId = NAME_None;
+		SetLocalResultText(FText::GetEmpty());
+		if (UCatFrontendRootWidget* Root = RootWidget.Get()) { Root->ShowJoin(); }
+		Room->RefreshFriends();
+	}
+}
+
+void UCatFrontendPageController::RequestJoinFriend(FCatOnlineFriendHandle FriendHandle)
+{
+	SetLocalResultText(FText::GetEmpty());
+	if (UCatFrontendRoomModel* Room = RoomModel.Get()) { Room->JoinFriend(FriendHandle); }
+}
+
+void UCatFrontendPageController::RequestJoinLink(const FString& Input)
+{
+	SetLocalResultText(FText::GetEmpty());
+	if (UCatFrontendRoomModel* Room = RoomModel.Get()) { Room->JoinLink(Input); }
 }
 
 // 设置打开流程：清除上一业务面的局部提示并显示正式设置页；各 Model 的真实结果不改写，草稿仍由 SettingsModel 保有。

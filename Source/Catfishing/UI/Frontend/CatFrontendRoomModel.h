@@ -35,6 +35,8 @@ public:
 
 	/** 请求刷新 Steam 好友缓存；好友数据变化通过 OnChanged 通知，失败信息通过 GetLastResultText 读取。 */
 	FCatOnlineResult RefreshFriends();
+	FCatOnlineResult JoinFriend(FCatOnlineFriendHandle FriendHandle);
+	FCatOnlineResult JoinLink(const FString& Input);
 
 	/** 用好友行的 opaque 句柄请求平台邀请；Model 不解释或保存 Steam 身份。 */
 	FCatOnlineResult InviteFriend(FCatOnlineFriendHandle FriendHandle);

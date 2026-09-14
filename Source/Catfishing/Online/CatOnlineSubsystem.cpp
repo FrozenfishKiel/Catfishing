@@ -24,6 +24,7 @@
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/PlatformTime.h"
+#include "HAL/PlatformProcess.h"
 #include "Interfaces/OnlineIdentityInterface.h"
 #include "Interfaces/OnlinePresenceInterface.h"
 #include "OnlineSubsystem.h"
@@ -1073,6 +1074,14 @@ void UCatOnlineSubsystem::RefreshFriendSnapshotFacts()
 		Summary.DisplayName = Friend->GetDisplayName();
 		Summary.bIsOnline = Presence.bIsOnline;
 		Summary.bIsPlayingThisGame = Presence.bIsPlayingThisGame;
+#if WITH_STEAMWORKS
+		FriendGameInfo_t GameInfo{};
+		if (SteamFriends() && SteamUtils() && SteamFriends()->GetFriendGamePlayed(
+			CSteamID(FCString::Strtoui64(*Friend->GetUserId()->ToString(), nullptr, 10)), &GameInfo))
+		{
+			Summary.bHasGameLobby = GameInfo.m_gameID.AppID() == SteamUtils()->GetAppID() && GameInfo.m_steamIDLobby.IsValid() && GameInfo.m_steamIDLobby.IsLobby();
+		}
+#endif
 	}
 }
 
@@ -1105,7 +1114,7 @@ void UCatOnlineSubsystem::HandleReadFriendsListComplete(const int32 LocalUserNum
 // 好友刷新提交流程：只允许一个 Friends 回调悬挂，避免两个 OSS 缓存结果交错；接口可用时冻结 Friends 代际并提交 ReadFriendsList，最终数组只由完成回调写入。
 FCatOnlineResult UCatOnlineSubsystem::RequestRefreshFriends()
 {
-	if (bFriendsRefreshPending)
+	if (bFriendsRefreshPending || ActiveOperation != ECatOnlineOperation::None || PendingAcceptedInvite.IsValid())
 	{
 		return RejectRequest(ECatOnlineError::CommandAlreadyPending);
 	}
@@ -1120,6 +1129,8 @@ FCatOnlineResult UCatOnlineSubsystem::RequestRefreshFriends()
 	Result.RequestId = FGuid::NewGuid();
 	const uint64 SubmittedEpoch = ++FriendsRefreshEpoch;
 	bFriendsRefreshPending = true;
+	LastError = ECatOnlineError::None;
+	BroadcastSnapshot(TEXT("online_friends_refresh_started"));
 	const bool bQueued = FriendsInterface->ReadFriendsList(0, EFriendsLists::ToString(EFriendsLists::Default),
 		FOnReadFriendsListComplete::CreateUObject(this, &ThisClass::HandleReadFriendsListComplete, SubmittedEpoch));
 	if (!bQueued && bFriendsRefreshPending && FriendsRefreshEpoch == SubmittedEpoch)
@@ -1131,6 +1142,75 @@ FCatOnlineResult UCatOnlineSubsystem::RequestRefreshFriends()
 		BroadcastSnapshot(TEXT("online_friends_refresh_rejected"));
 	}
 	return Result;
+}
+
+// 加入查询只占用唯一 Online 操作；定向查询不受公开房间搜索和地域过滤影响。
+FCatOnlineResult UCatOnlineSubsystem::RequestJoinFriend(const FCatOnlineFriendHandle FriendHandle)
+{
+	if (ActiveOperation != ECatOnlineOperation::None || PendingAcceptedInvite.IsValid()) { return RejectRequest(ECatOnlineError::CommandAlreadyPending); }
+	if (WorldState != ECatOnlineWorldState::Frontend || SessionState != ECatOnlineSessionState::NoSession) { return RejectRequest(ECatOnlineError::InvalidState); }
+	const FUniqueNetIdPtr* Id = FriendsByHandle.Find(FriendHandle.Value);
+	if (!Id || !Id->IsValid()) { return RejectRequest(ECatOnlineError::InvalidHandle); }
+	const FUniqueNetIdPtr FriendId = *Id;
+	FCatOnlineResult Result = BeginOperation(ECatOnlineOperation::ResolveJoin, ECatOnlineSessionState::Searching);
+	if (!Result.bAccepted) { return Result; }
+	JoinResolveDeadline = FPlatformTime::Seconds() + 30.0;
+	OperationSessionInterface = GetWorldSessionInterface();
+	if (!OperationSessionInterface.IsValid()) { FailJoinResolution(GetSessionInterfaceError()); Result.bAccepted = false; Result.Error = LastError; return Result; }
+	const uint64 Epoch = OperationEpoch;
+	FindJoinFriendHandle = OperationSessionInterface->AddOnFindFriendSessionCompleteDelegate_Handle(0,
+		FOnFindFriendSessionCompleteDelegate::CreateUObject(this, &ThisClass::HandleFindJoinFriendComplete, Epoch));
+	BroadcastSnapshot(TEXT("online_join_friend_query"));
+	const bool bQueued = OperationSessionInterface->FindFriendSession(0, *FriendId);
+	if (!bQueued && ActiveOperation == ECatOnlineOperation::ResolveJoin && OperationEpoch == Epoch)
+	{ FailJoinResolution(ECatOnlineError::JoinTargetUnavailable); Result.bAccepted = false; Result.Error = LastError; }
+	return Result;
+}
+
+void UCatOnlineSubsystem::HandleFindJoinFriendComplete(int32 LocalUserNum, bool bSuccess,
+	const TArray<FOnlineSessionSearchResult>& Results, uint64 Epoch)
+{
+	if (LocalUserNum != 0 || Epoch != OperationEpoch || ActiveOperation != ECatOnlineOperation::ResolveJoin || !FindJoinFriendHandle.IsValid())
+	{ UE_LOG(LogCatOnline, Warning, TEXT("Event=online_join_friend_callback_ignored Epoch=%llu CurrentEpoch=%llu"), Epoch, OperationEpoch); return; }
+	if (!bSuccess || Results.Num() != 1 || !Results[0].IsValid()) { FailJoinResolution(ECatOnlineError::JoinTargetUnavailable); return; }
+	const FOnlineSessionSearchResult Target = Results[0];
+	if (!HasCompatibleSessionSettings(Target.Session.SessionSettings)) { FailJoinResolution(ECatOnlineError::SessionCompatibilityMismatch); return; }
+	if (Target.Session.NumOpenPublicConnections <= 0) { FailJoinResolution(ECatOnlineError::SessionFull); return; }
+	// 同一 RequestId/epoch 从解析转入 Join；过渡中不广播可提交新命令的空闲状态。
+	const FCatOnlineResult Result = RequestJoinInternal(Target);
+	if (!Result.bAccepted && ActiveOperation == ECatOnlineOperation::ResolveJoin) { FailJoinResolution(Result.Error); }
+}
+
+FCatOnlineResult UCatOnlineSubsystem::RequestJoinLink(const FString& Input)
+{
+	if (ActiveOperation != ECatOnlineOperation::None || PendingAcceptedInvite.IsValid()) { return RejectRequest(ECatOnlineError::CommandAlreadyPending); }
+	if (WorldState != ECatOnlineWorldState::Frontend || SessionState != ECatOnlineSessionState::NoSession) { return RejectRequest(ECatOnlineError::InvalidState); }
+	uint32 AppId = 0;
+#if WITH_STEAMWORKS
+	if (SteamAPI_IsSteamRunning() && SteamUtils()) { AppId = SteamUtils()->GetAppID(); }
+#endif
+	if (!AppId) { return RejectRequest(ECatOnlineError::OnlineSubsystemUnavailable); }
+	uint64 LobbyId = 0;
+	if (!CatSteamJoinLink::Parse(Input, AppId, LobbyId)) { return RejectRequest(ECatOnlineError::InvalidJoinLink); }
+	FCatOnlineResult Result = BeginOperation(ECatOnlineOperation::ResolveJoin, ECatOnlineSessionState::Searching);
+	if (!Result.bAccepted) { return Result; }
+	JoinLink = MakeUnique<FCatSteamJoinLink>();
+	bJoinLinkLaunched = false;
+	AbandonedJoinLinkLobby = 0;
+	JoinResolveDeadline = FPlatformTime::Seconds() + 30.0;
+	BroadcastSnapshot(TEXT("online_join_link_query"));
+	if (!JoinLink->Begin(LobbyId)) { FailJoinResolution(ECatOnlineError::JoinTargetUnavailable); Result.bAccepted = false; Result.Error = LastError; }
+	return Result;
+}
+
+void UCatOnlineSubsystem::FailJoinResolution(ECatOnlineError Error)
+{
+	// 只有已经交给 Steam 的链接才可能产生迟到加入回调；查询失败不能屏蔽随后手动接受的新邀请。
+	if (JoinLink && bJoinLinkLaunched) { AbandonedJoinLinkLobby = JoinLink->GetLobbyId(); }
+	UE_LOG(LogCatOnline, Warning, TEXT("Event=online_join_resolution_failed RequestId=%s Epoch=%llu World=%s NetMode=%d Error=%s"),
+		*ActiveRequestId.ToString(), OperationEpoch, *GetNameSafe(GetWorld()), GetWorld() ? int32(GetWorld()->GetNetMode()) : -1, *UEnum::GetValueAsString(Error));
+	SessionState = ECatOnlineSessionState::NoSession;
+	FinishOperationFailure(Error);
 }
 
 // 好友邀请流程：先验证当前仍是前台 Host 房间和本代 opaque 句柄，再调用 OSS 的真实 Session Invite；平台接受后仅标记本代已发送，不把邀请发送误写成好友已加入或已接受。
@@ -1578,7 +1658,17 @@ FCatOnlineResult UCatOnlineSubsystem::RequestJoinInternal(const FOnlineSessionSe
 		return RejectRequest(ECatOnlineError::SessionCompatibilityMismatch);
 	}
 
-	FCatOnlineResult Result = BeginOperation(ECatOnlineOperation::Join, ECatOnlineSessionState::Joining);
+	FCatOnlineResult Result;
+	if (ActiveOperation == ECatOnlineOperation::ResolveJoin)
+	{
+		ClearOperationDelegates();
+		ActiveOperation = ECatOnlineOperation::Join;
+		SessionState = ECatOnlineSessionState::Joining;
+		Result.bAccepted = true;
+		Result.RequestId = ActiveRequestId;
+		BroadcastSnapshot(TEXT("online_join_target_resolved"));
+	}
+	else { Result = BeginOperation(ECatOnlineOperation::Join, ECatOnlineSessionState::Joining); }
 	if (!Result.bAccepted)
 	{
 		return Result;
@@ -1879,6 +1969,7 @@ FCatOnlineSnapshot UCatOnlineSubsystem::GetSnapshot() const
 	Snapshot.SessionState = SessionState;
 	Snapshot.TransportState = TransportState;
 	Snapshot.ActiveOperation = ActiveOperation;
+	Snapshot.bFriendsRefreshPending = bFriendsRefreshPending;
 	Snapshot.SessionRole = SessionRole;
 	Snapshot.RequestId = ActiveRequestId;
 	Snapshot.OperationEpoch = static_cast<int64>(OperationEpoch);
@@ -2269,7 +2360,7 @@ void UCatOnlineSubsystem::HandleJoinSessionComplete(const FName SessionName, con
 	{
 		SessionState = ECatOnlineSessionState::NoSession;
 		SessionRole = ECatOnlineSessionRole::None;
-		FinishOperationFailure(ECatOnlineError::JoinFailed);
+		FinishOperationFailure(Result == EOnJoinSessionCompleteResult::SessionIsFull ? ECatOnlineError::SessionFull : ECatOnlineError::JoinFailed);
 		return;
 	}
 
@@ -2393,6 +2484,21 @@ void UCatOnlineSubsystem::HandleRunTeardownCompleted(const FCatRunTeardownResult
 // 可受理时只保存一个带固定期限和操作代际的意图并广播；下一次生命周期检查会等 Frontend/身份就绪后自动复用 RequestAcceptInvite。
 void UCatOnlineSubsystem::HandleSessionUserInviteAccepted(const bool bWasSuccessful, const int32 ControllerId, FUniqueNetIdPtr UserId, const FOnlineSessionSearchResult& InviteResult)
 {
+	// 链接回调必须对应当前目标；超时后的同目标回调不再自动加入。
+	const uint64 CallbackLobby = InviteResult.IsValid() ? FCString::Strtoui64(*InviteResult.Session.SessionInfo->GetSessionId().ToString(), nullptr, 10) : 0;
+	if (CallbackLobby && CallbackLobby == AbandonedJoinLinkLobby)
+	{
+		AbandonedJoinLinkLobby = 0;
+		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_join_link_late_callback_ignored Epoch=%llu"), OperationEpoch);
+		RejectRequest(ECatOnlineError::JoinTargetTimedOut);
+		return;
+	}
+	if (ActiveOperation == ECatOnlineOperation::ResolveJoin && JoinLink && CallbackLobby == JoinLink->GetLobbyId())
+	{
+		ClearOperationDelegates();
+		ActiveOperation = ECatOnlineOperation::None;
+		SessionState = ECatOnlineSessionState::NoSession;
+	}
 	ECatOnlineError Error = ECatOnlineError::None;
 	const IOnlineSessionPtr Sessions = GetWorldSessionInterface();
 	if (!bWasSuccessful || ControllerId != 0 || !UserId.IsValid() || !UserId->IsValid() || !InviteResult.IsValid())
@@ -2442,6 +2548,23 @@ bool UCatOnlineSubsystem::TickPlatformInvites(float DeltaSeconds)
 {
 	(void)DeltaSeconds;
 	RebindInviteDelegate();
+	if (ActiveOperation == ECatOnlineOperation::ResolveJoin)
+	{
+		if (FPlatformTime::Seconds() >= JoinResolveDeadline) { FailJoinResolution(ECatOnlineError::JoinTargetTimedOut); return true; }
+		if (JoinLink && JoinLink->HasFailed()) { FailJoinResolution(ECatOnlineError::JoinTargetUnavailable); return true; }
+		if (JoinLink && !bJoinLinkLaunched)
+		{
+			const FString Uri = JoinLink->TakeReadyUri();
+			if (!Uri.IsEmpty())
+			{
+				bJoinLinkLaunched = true;
+				FString Error;
+				FPlatformProcess::LaunchURL(*Uri, nullptr, &Error);
+				if (!Error.IsEmpty()) { FailJoinResolution(ECatOnlineError::JoinTargetUnavailable); return true; }
+				BroadcastSnapshot(TEXT("online_join_link_dispatched"));
+			}
+		}
+	}
 	if (!PendingAcceptedInvite.IsValid())
 	{
 		return true;
@@ -2889,6 +3012,12 @@ void UCatOnlineSubsystem::ClearRunTeardownDelegate()
 // 操作委托清理流程：只在保存的精确 Session 接口上逐一清理有效句柄；每个 Clear 同时 Reset 句柄，重复调用不会影响后续 epoch。
 void UCatOnlineSubsystem::ClearOperationDelegates()
 {
+	JoinLink.Reset();
+	JoinResolveDeadline = 0.0;
+	bJoinLinkLaunched = false;
+	if (OperationSessionInterface.IsValid() && FindJoinFriendHandle.IsValid())
+	{ OperationSessionInterface->ClearOnFindFriendSessionCompleteDelegate_Handle(0, FindJoinFriendHandle); }
+	FindJoinFriendHandle.Reset();
 	if (OperationSessionInterface.IsValid())
 	{
 		if (CreateSessionHandle.IsValid())

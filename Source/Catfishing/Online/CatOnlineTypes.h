@@ -98,7 +98,9 @@ enum class ECatOnlineOperation : uint8
 	/** Host 玩法包预载或 Client 收到真实 Host Start 后的旅行操作。 */
 	Start,
 	/** Host 或 Client 的本地 DestroySession 与回前台旅行。 */
-	Leave
+	Leave,
+	/** 定向查询好友房间或等待 Steam 链接回调；尚未提交 Join。 */
+	ResolveJoin
 };
 
 /** 本地 NamedSession 角色；离局入口用它选择 Host 与 Client 的不同旅行方式。 */
@@ -180,7 +182,11 @@ enum class ECatOnlineError : uint8
 	/** 已接受邀请等待前台和本地 Steam 身份就绪超失效限；意图失效，停止自动提交。 */
 	InviteAcceptanceExpired,
 	/** 会话已离开但本局载荷释放服务缺失或拒绝；不伪造释放成功，后续选槽仍受 Save 的真实状态约束。 */
-	ActiveRunReleaseFailed
+	ActiveRunReleaseFailed,
+	InvalidJoinLink,
+	JoinTargetUnavailable,
+	JoinTargetTimedOut,
+	SessionFull
 };
 
 /** 对 UI 暴露的搜索句柄；Value 只在当前 GameInstance 的 Online 子系统内部可解析。 */
@@ -292,6 +298,10 @@ struct FCatOnlineFriendSummary
 	/** 当前好友缓存代际是否已成功提交过一次平台邀请；刷新好友后重置，平台不回执时不把它当作对方已接受。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bHasInvited = false;
+
+	/** Steam 已报告好友位于本游戏 Lobby；点击后仍重新查询目标和准入。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bHasGameLobby = false;
 };
 
 /** 当前 Steam Lobby 中的一条真实成员记录；成员数组只在平台已确认本地位于 Lobby 时填充，空数组不伪造人数。 */
@@ -330,6 +340,9 @@ struct FCatOnlineSnapshot
 	/** 当前唯一异步操作。 */
 	UPROPERTY(BlueprintReadOnly)
 	ECatOnlineOperation ActiveOperation = ECatOnlineOperation::None;
+
+	UPROPERTY(BlueprintReadOnly)
+	bool bFriendsRefreshPending = false;
 
 	/** 已确认的本地 Session 角色。 */
 	UPROPERTY(BlueprintReadOnly)

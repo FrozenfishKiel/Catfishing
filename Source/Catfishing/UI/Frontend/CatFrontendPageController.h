@@ -37,8 +37,10 @@ public:
 	/** 开始游戏流程；把入口标记为 StartGame、要求 SaveModel 刷新摘要并显示存档列表，不创建替身房间。 */
 	void RequestStartGameFlow();
 
-	/** 加入队伍占位请求；产品尚未定义流程，因此只保存可读反馈，不调用 RoomModel 的创建、搜索或加入接口。 */
+	/** 打开加入页并刷新好友房间；已有房间、存档或加入操作不能被抢占。 */
 	void RequestJoinParty();
+	void RequestJoinFriend(FCatOnlineFriendHandle FriendHandle);
+	void RequestJoinLink(const FString& Input);
 
 	/** 打开设置请求；显示设置页面，具体草稿初始化和数据读取仍属于 SettingsModel。 */
 	void RequestOpenFrontendSettings();

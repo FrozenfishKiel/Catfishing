@@ -11,6 +11,14 @@ namespace CatFrontendRoomModelText
 	{
 		switch (Error)
 		{
+		case ECatOnlineError::InvalidJoinLink:
+			return FText::FromString(TEXT("请输入本游戏的 Steam 邀请链接或完整房间 ID。"));
+		case ECatOnlineError::JoinTargetUnavailable:
+			return FText::FromString(TEXT("无法取得房间信息。请确认房间仍开放，或让房主通过 Steam 邀请你。"));
+		case ECatOnlineError::JoinTargetTimedOut:
+			return FText::FromString(TEXT("等待 Steam 响应超时，请检查连接后重试。"));
+		case ECatOnlineError::SessionFull:
+			return FText::FromString(TEXT("房间已满，请等待朋友腾出空位。"));
 		case ECatOnlineError::None:
 			return FText::GetEmpty();
 		case ECatOnlineError::CommandAlreadyPending:
@@ -211,9 +219,17 @@ void UCatFrontendRoomModel::HandleOnlineChanged()
 		{
 			LastResultText = FText::FromString(TEXT("已接受邀请，正在等待 Steam 登录和主界面就绪。"));
 		}
+		else if (Snapshot.ActiveOperation == ECatOnlineOperation::ResolveJoin)
+		{
+			LastResultText = FText::FromString(TEXT("正在查询房间并等待 Steam 响应…"));
+		}
+		else if (Snapshot.bFriendsRefreshPending)
+		{
+			LastResultText = FText::FromString(TEXT("正在刷新好友房间…"));
+		}
 		else if (Snapshot.ActiveOperation == ECatOnlineOperation::Join)
 		{
-			LastResultText = FText::FromString(TEXT("正在加入受邀房间。"));
+			LastResultText = FText::FromString(TEXT("正在加入房间…"));
 		}
 	}
 	OnChanged.Broadcast();
@@ -237,4 +253,21 @@ void UCatFrontendRoomModel::CaptureResult(const FCatOnlineResult& Result)
 	}
 	LastResultText = CatFrontendRoomModelText::MakeErrorText(Result.Error);
 	OnChanged.Broadcast();
+}
+
+FCatOnlineResult UCatFrontendRoomModel::JoinFriend(FCatOnlineFriendHandle FriendHandle)
+{
+	FCatOnlineResult Result;
+	if (UCatOnlineSubsystem* Source = Online.Get()) { Result = Source->RequestJoinFriend(FriendHandle); }
+	else { Result.Error = ECatOnlineError::OnlineSubsystemUnavailable; }
+	CaptureResult(Result);
+	return Result;
+}
+FCatOnlineResult UCatFrontendRoomModel::JoinLink(const FString& Input)
+{
+	FCatOnlineResult Result;
+	if (UCatOnlineSubsystem* Source = Online.Get()) { Result = Source->RequestJoinLink(Input); }
+	else { Result.Error = ECatOnlineError::OnlineSubsystemUnavailable; }
+	CaptureResult(Result);
+	return Result;
 }

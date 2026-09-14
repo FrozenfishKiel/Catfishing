@@ -823,6 +823,46 @@ namespace CatFrontendWidgetAuthoring
 	}
 
 	/** 构造左右等宽的好友与房间成员列表；搜索属于好友列，邀请码与权限属于房间列，两个列表独立滚动。 */
+	bool BuildJoinWidget(UWidgetBlueprint* WidgetBlueprint)
+	{
+		UVerticalBox* Column = CreatePageColumn(WidgetBlueprint, TEXT("JoinRoot"));
+		if (!Column) { return false; }
+		UWidgetTree* Tree = WidgetBlueprint->WidgetTree;
+		if (UBorder* Shade = Cast<UBorder>(Tree->FindWidget(TEXT("JoinRootShade"))))
+		{
+			Shade->SetPadding(FMargin(32.0f, 24.0f));
+			Shade->SetBrush(FSlateColorBrush(FLinearColor(0.018f, 0.023f, 0.021f, 1.0f)));
+		}
+		SetBoxSlot(AddText(Tree, Column, TEXT("JoinTitleText"), TEXT("加入队伍"), 30), false, FMargin(0, 0, 0, 8));
+		SetBoxSlot(AddText(Tree, Column, TEXT("JoinSubtitleText"), TEXT("选择好友房间，或粘贴朋友发来的邀请链接。"), 14), false, FMargin(0, 0, 0, 16));
+		UHorizontalBox* Columns = Tree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("JoinColumns"));
+		Column->AddChild(Columns); SetBoxSlot(Columns, true);
+		UVerticalBox* Friends = Tree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("JoinFriendsColumn"));
+		UVerticalBox* Link = Tree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("JoinLinkColumn"));
+		Columns->AddChild(Friends); Columns->AddChild(Link);
+		SetBoxSlot(Friends, true, FMargin(0, 0, 24, 0)); SetBoxSlot(Link, true, FMargin(24, 0, 0, 0));
+		CastChecked<UHorizontalBoxSlot>(Friends->Slot)->SetVerticalAlignment(VAlign_Fill);
+		CastChecked<UHorizontalBoxSlot>(Link->Slot)->SetVerticalAlignment(VAlign_Fill);
+		AddText(Tree, Friends, TEXT("JoinFriendsTitleText"), TEXT("好友的房间"), 22);
+		AddText(Tree, Friends, TEXT("JoinEmptyText"), TEXT("暂无好友房间。让朋友先创建房间，或通过 Steam 邀请你。"), 14);
+		UScrollBox* Rows = Tree->ConstructWidget<UScrollBox>(UScrollBox::StaticClass(), TEXT("JoinFriendsScrollBox"));
+		Friends->AddChild(Rows); SetBoxSlot(Rows, true, FMargin(0, 12)); Rows->SetClipping(EWidgetClipping::ClipToBounds);
+		ExposeWidget(WidgetBlueprint, Rows);
+		AddButton(Tree, Friends, TEXT("RefreshJoinFriendsButton"), TEXT("刷新好友房间"));
+		AddText(Tree, Link, TEXT("JoinLinkTitleText"), TEXT("通过链接加入"), 22);
+		AddText(Tree, Link, TEXT("JoinLinkHelpText"), TEXT("支持 Steam 邀请链接和完整房间 ID。"), 14);
+		AddTextBox(Tree, Link, TEXT("JoinLinkTextBox"), TEXT("邀请链接或房间 ID"));
+		UHorizontalBox* LinkActions = Tree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("JoinLinkActions"));
+		Link->AddChild(LinkActions); SetBoxSlot(LinkActions, false, FMargin(0, 8));
+		SetBoxSlot(AddButton(Tree, LinkActions, TEXT("PasteJoinLinkButton"), TEXT("粘贴")), true, FMargin(0, 0, 8, 0));
+		SetBoxSlot(AddButton(Tree, LinkActions, TEXT("JoinLinkButton"), TEXT("加入房间")), true);
+		AddText(Tree, Link, TEXT("JoinPermissionText"), TEXT("仅好友房间需要好友关系。仅邀请房间请先接受 Steam 邀请。"), 12);
+		AddText(Tree, Column, TEXT("JoinResultText"), TEXT(""), 16);
+		UButton* Back = AddButton(Tree, Column, TEXT("JoinBackButton"), TEXT("返回"));
+		CastChecked<UVerticalBoxSlot>(Back->Slot)->SetHorizontalAlignment(HAlign_Left);
+		return true;
+	}
+
 	bool BuildRoomWidget(UWidgetBlueprint* WidgetBlueprint)
 	{
 		// 房间布局流程：标题下用填充槽分配两列，每列先放自己的信息再把余高交给滚动列表；底部统一承载结果、离开和开始命令，不制造玩家占位。
@@ -851,9 +891,9 @@ namespace CatFrontendWidgetAuthoring
 		SetBoxSlot(Friends, true, FMargin(0.0f, 8.0f));
 		AddButton(Tree, FriendsColumn, TEXT("RefreshFriendsButton"), TEXT("刷新好友"));
 		AddText(Tree, PlayersColumn, TEXT("PlayersTitleText"), TEXT("当前房间"), 22);
-		AddText(Tree, PlayersColumn, TEXT("RoomInviteCodeText"), TEXT("邀请码：未提供"), 16);
+		AddText(Tree, PlayersColumn, TEXT("RoomInviteCodeText"), TEXT("邀请链接：未提供"), 16);
 		AddText(Tree, PlayersColumn, TEXT("RoomAccessPolicyText"), TEXT("房间权限：未提供"), 16);
-		AddButton(Tree, PlayersColumn, TEXT("CopyInviteCodeButton"), TEXT("复制邀请码"));
+		AddButton(Tree, PlayersColumn, TEXT("CopyInviteCodeButton"), TEXT("复制邀请链接"));
 		UScrollBox* Players = Tree->ConstructWidget<UScrollBox>(UScrollBox::StaticClass(), TEXT("PlayersScrollBox"));
 		PlayersColumn->AddChild(Players);
 		SetBoxSlot(Players, true, FMargin(0.0f, 8.0f));
@@ -1101,6 +1141,20 @@ namespace CatFrontendWidgetAuthoring
 	}
 
 	/** 构造成员槽模板；左侧区分玩家名与身份，右侧只显示 RoomModel 提供的成员状态。 */
+	bool BuildJoinFriendRowWidget(UWidgetBlueprint* WidgetBlueprint)
+	{
+		UHorizontalBox* Row = CreateCompactRow(WidgetBlueprint, TEXT("JoinFriendRowRoot"));
+		if (!Row) { return false; }
+		UWidgetTree* Tree = WidgetBlueprint->WidgetTree;
+		UVerticalBox* Text = Tree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("JoinFriendTextColumn"));
+		Row->AddChild(Text); SetBoxSlot(Text, true, FMargin(0, 0, 12, 0));
+		UTextBlock* Name = AddText(Tree, Text, TEXT("FriendNameText"), TEXT("好友"), 18);
+		Name->SetAutoWrapText(false); Name->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
+		AddText(Tree, Text, TEXT("FriendStatusText"), TEXT("正在房间中"), 14);
+		SetBoxSlot(AddButton(Tree, Row, TEXT("JoinFriendButton"), TEXT("加入")), false);
+		return true;
+	}
+
 	bool BuildRoomPlayerSlotWidget(UWidgetBlueprint* WidgetBlueprint)
 	{
 		// 成员槽流程：验证行根，建立可收缩的玩家信息列，再添加右对齐的状态文本；作者器不生成准备状态或示例人数。
@@ -1177,7 +1231,8 @@ namespace CatFrontendWidgetAuthoring
 		const TSubclassOf<UUserWidget> SaveListClass = LoadChildWidgetClass(TEXT("WBP_CatFrontendSaveList"));
 		const TSubclassOf<UUserWidget> RoomClass = LoadChildWidgetClass(TEXT("WBP_CatFrontendRoom"));
 		const TSubclassOf<UUserWidget> SettingsClass = LoadChildWidgetClass(TEXT("WBP_CatFrontendSettings"));
-		if (!MenuClass || !SaveListClass || !RoomClass || !SettingsClass)
+		const TSubclassOf<UUserWidget> JoinClass = LoadChildWidgetClass(TEXT("WBP_CatFrontendJoin"));
+		if (!MenuClass || !SaveListClass || !RoomClass || !SettingsClass || !JoinClass)
 		{
 			return false;
 		}
@@ -1186,11 +1241,15 @@ namespace CatFrontendWidgetAuthoring
 		UUserWidget* SaveListPage = WidgetBlueprint->WidgetTree->ConstructWidget<UUserWidget>(SaveListClass, TEXT("SaveListPage"));
 		UUserWidget* RoomPage = WidgetBlueprint->WidgetTree->ConstructWidget<UUserWidget>(RoomClass, TEXT("RoomPage"));
 		UUserWidget* FrontendSettingsPage = WidgetBlueprint->WidgetTree->ConstructWidget<UUserWidget>(SettingsClass, TEXT("FrontendSettingsPage"));
-		if (!MenuPage || !SaveListPage || !RoomPage || !FrontendSettingsPage)
+		UUserWidget* JoinPage = WidgetBlueprint->WidgetTree->ConstructWidget<UUserWidget>(JoinClass, TEXT("JoinPage"));
+		if (!MenuPage || !SaveListPage || !RoomPage || !FrontendSettingsPage || !JoinPage)
 		{
 			return false;
 		}
+		PageSwitcher->AddChild(JoinPage);
 		PageSwitcher->AddChild(MenuPage);
+		PageSwitcher->SetActiveWidget(MenuPage);
+		ExposeWidget(WidgetBlueprint, JoinPage);
 		PageSwitcher->AddChild(SaveListPage);
 		PageSwitcher->AddChild(RoomPage);
 		PageSwitcher->AddChild(FrontendSettingsPage);
@@ -1350,6 +1409,28 @@ namespace CatFrontendWidgetAuthoring
 			UE_LOG(LogTemp, Error, TEXT("Event=frontend_widget_font_repair_missing_asset Asset=%s"), *ObjectPath);
 			return false;
 		}
+		if (FCString::Strcmp(AssetName, TEXT("WBP_CatFrontendJoin")) == 0)
+		{
+			ExposeWidget(WidgetBlueprint, WidgetBlueprint->WidgetTree->FindWidget(TEXT("JoinFriendsScrollBox")));
+		}
+		if (FCString::Strcmp(AssetName, TEXT("WBP_CatFrontendJoin")) == 0 || FCString::Strcmp(AssetName, TEXT("WBP_CatJoinFriendRow")) == 0)
+		{
+			// 按钮标签使用单行固有宽度，避免 AutoWrapText 在缩放后的首次预布局中把短标签拆成多行。
+			WidgetBlueprint->ForEachSourceWidget([](UWidget* Widget)
+			{
+				if (UButton* Button = Cast<UButton>(Widget))
+				{
+					if (UTextBlock* Label = Cast<UTextBlock>(Button->GetContent()))
+					{ Label->SetAutoWrapText(false); Label->SetMinDesiredWidth(60.0f); }
+				}
+			});
+		}
+		if (FCString::Strcmp(AssetName, TEXT("WBP_CatFrontendRoom")) == 0)
+		{
+			if (UTextBlock* Text = Cast<UTextBlock>(WidgetBlueprint->WidgetTree->FindWidget(TEXT("RoomInviteCodeText")))) { Text->SetText(FText::FromString(TEXT("邀请链接暂不可用"))); Text->SetAutoWrapText(true); }
+			if (UButton* Button = Cast<UButton>(WidgetBlueprint->WidgetTree->FindWidget(TEXT("CopyInviteCodeButton"))))
+			{ if (UTextBlock* Label = Cast<UTextBlock>(Button->GetContent())) { Label->SetText(FText::FromString(TEXT("复制邀请链接"))); } }
+		}
 		int32 ChangedFontCount = 0;
 		WidgetBlueprint->ForEachSourceWidget([&ChangedFontCount](UWidget* Widget)
 		{
@@ -1375,6 +1456,8 @@ namespace CatFrontendWidgetAuthoring
 		}
 		const TCHAR* const AssetNames[] = {
 			TEXT("WBP_CatFrontendMenu"),
+			TEXT("WBP_CatFrontendJoin"),
+			TEXT("WBP_CatJoinFriendRow"),
 			TEXT("WBP_CatFrontendSaveList"),
 			TEXT("WBP_CatFrontendRoom"),
 			TEXT("WBP_CatFrontendSettings"),
@@ -1427,6 +1510,8 @@ namespace CatFrontendWidgetAuthoring
 		}
 		const TCHAR* const AssetNames[] = {
 			TEXT("WBP_CatFrontendMenu"),
+			TEXT("WBP_CatFrontendJoin"),
+			TEXT("WBP_CatJoinFriendRow"),
 			TEXT("WBP_CatFrontendSaveList"),
 			TEXT("WBP_CatFrontendRoom"),
 			TEXT("WBP_CatFrontendSettings"),
@@ -1596,7 +1681,23 @@ namespace CatFrontendWidgetAuthoring
 	bool ValidateFrontendWidgetContracts()
 	{
 		// 整体合同核验流程：逐页检查具名控件的类型和变量标记，再检查 Root、全局 Loading 与三类行的原生父类；设置包含真实输入、设备刷新、语音禁用下拉框及原因文本，全部满足才报告成功。
+		const FRequiredWidgetControl JoinControls[] = {
+			{TEXT("JoinFriendsScrollBox"), UScrollBox::StaticClass()},
+			{TEXT("JoinLinkTextBox"), UEditableTextBox::StaticClass()},
+			{TEXT("JoinResultText"), UTextBlock::StaticClass()},
+			{TEXT("JoinEmptyText"), UTextBlock::StaticClass()},
+			{TEXT("JoinLinkButton"), UButton::StaticClass()},
+			{TEXT("PasteJoinLinkButton"), UButton::StaticClass()},
+			{TEXT("RefreshJoinFriendsButton"), UButton::StaticClass()},
+			{TEXT("JoinBackButton"), UButton::StaticClass()}
+		};
+		const FRequiredWidgetControl JoinRowControls[] = {
+			{TEXT("FriendNameText"), UTextBlock::StaticClass()},
+			{TEXT("FriendStatusText"), UTextBlock::StaticClass()},
+			{TEXT("JoinFriendButton"), UButton::StaticClass()}
+		};
 		const FRequiredWidgetControl RootControls[] = {
+			{TEXT("JoinPage"), UUserWidget::StaticClass()},
 			{ TEXT("FrontendPageSwitcher"), UWidgetSwitcher::StaticClass() },
 			{ TEXT("MenuPage"), UUserWidget::StaticClass() },
 			{ TEXT("SaveListPage"), UUserWidget::StaticClass() },
@@ -1687,6 +1788,9 @@ namespace CatFrontendWidgetAuthoring
 		};
 		return ValidateWidgetParent(TEXT("WBP_CatFrontendRoot"), UCatFrontendRootWidget::StaticClass())
 			&& ValidateWidgetContract(TEXT("WBP_CatFrontendRoot"), RootControls)
+			&& ValidateWidgetContract(TEXT("WBP_CatFrontendJoin"), JoinControls)
+			&& ValidateWidgetParent(TEXT("WBP_CatJoinFriendRow"), UCatFrontendJoinFriendRowWidget::StaticClass())
+			&& ValidateWidgetContract(TEXT("WBP_CatJoinFriendRow"), JoinRowControls)
 			&& ValidateWidgetContract(TEXT("WBP_CatFrontendMenu"), MenuControls)
 			&& ValidateWidgetContract(TEXT("WBP_CatFrontendSaveList"), SaveListControls)
 			&& ValidateWidgetContract(TEXT("WBP_CatFrontendRoom"), RoomControls)
@@ -1702,11 +1806,25 @@ namespace CatFrontendWidgetAuthoring
 }
 }
 
-bool UCatFrontendWidgetAuthoringLibrary::CreateMissingFrontendWidgetBlueprints()
+bool UCatFrontendWidgetAuthoringLibrary::CreateMissingFrontendWidgetBlueprints(bool bJoinPageOnly, bool bRebuildJoinPage)
 {
 	// 前端 WBP 创建流程：先补齐普通业务子资产，再重建全局 Loading 和 Root，确保 Root 只挂独立 Loading 页面合同；最后修复文本字体并核验全部合同。
 	using namespace CatFrontendWidgetAuthoring;
+	if (bJoinPageOnly)
+	{
+		if (bRebuildJoinPage && !RebuildWidgetInDirectory(WidgetDirectory, TEXT("WBP_CatFrontendJoin"), UUserWidget::StaticClass(),
+			UCanvasPanel::StaticClass(), TEXT("CatFrontendJoinLayout"), BuildJoinWidget)) { return false; }
+		return CreateMissingWidget(TEXT("WBP_CatFrontendJoin"), UUserWidget::StaticClass(), UCanvasPanel::StaticClass(), BuildJoinWidget)
+			&& CreateMissingWidget(TEXT("WBP_CatJoinFriendRow"), UCatFrontendJoinFriendRowWidget::StaticClass(), USizeBox::StaticClass(), BuildJoinFriendRowWidget)
+			&& RepairWidgetFonts(TEXT("WBP_CatFrontendJoin")) && RepairWidgetFonts(TEXT("WBP_CatJoinFriendRow"))
+			&& RepairWidgetFonts(TEXT("WBP_CatFrontendRoom"))
+			&& RebuildWidgetInDirectory(WidgetDirectory, TEXT("WBP_CatFrontendRoot"), UCatFrontendRootWidget::StaticClass(),
+				UCanvasPanel::StaticClass(), TEXT("CatFrontendWidgetAuthoring"), BuildRootWidget)
+			&& ValidateFrontendWidgetContracts();
+	}
 	const bool bCreated = CreateMissingWidget(TEXT("WBP_CatFrontendMenu"), UUserWidget::StaticClass(), UCanvasPanel::StaticClass(), BuildMenuWidget)
+		&& CreateMissingWidget(TEXT("WBP_CatFrontendJoin"), UUserWidget::StaticClass(), UCanvasPanel::StaticClass(), BuildJoinWidget)
+		&& CreateMissingWidget(TEXT("WBP_CatJoinFriendRow"), UCatFrontendJoinFriendRowWidget::StaticClass(), USizeBox::StaticClass(), BuildJoinFriendRowWidget)
 		&& CreateMissingWidget(TEXT("WBP_CatFrontendSaveList"), UUserWidget::StaticClass(), UCanvasPanel::StaticClass(), BuildSaveListWidget)
 		&& CreateMissingWidget(TEXT("WBP_CatFrontendRoom"), UUserWidget::StaticClass(), UCanvasPanel::StaticClass(), BuildRoomWidget)
 		&& CreateMissingWidget(TEXT("WBP_CatFrontendSettings"), UUserWidget::StaticClass(), UCanvasPanel::StaticClass(), BuildSettingsWidget)

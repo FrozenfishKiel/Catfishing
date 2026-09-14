@@ -19,7 +19,7 @@ public:
 	 * 该入口由编辑器内的资产构造脚本调用；成功时相关包已经编译、登记并保存，普通业务子页面不会被重复执行覆盖。
 	 */
 	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Frontend")
-	static bool CreateMissingFrontendWidgetBlueprints();
+	static bool CreateMissingFrontendWidgetBlueprints(bool bJoinPageOnly = false, bool bRebuildJoinPage = false);
 
 	/**
 	 * 创建或重建局内 ESC 菜单 WBP，并核验它继承局内菜单 View 基类且提供返回、设置、保存、退出和设置页控件。

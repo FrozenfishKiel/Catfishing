@@ -9,6 +9,7 @@
 #include "OnlineSessionSettings.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "UObject/UObjectGlobals.h"
+#include "Online/CatSteamJoinLink.h"
 #include "CatOnlineSubsystem.generated.h"
 
 class APlayerController;
@@ -65,6 +66,11 @@ public:
 	/** 请求 OSS 刷新 Steam 好友缓存；完成回调整代替换公开摘要，接口或平台不支持时返回结构化拒绝。 */
 	FCatOnlineResult RequestRefreshFriends();
 
+	/** 定向查询好友所在 Session，结果复用统一 Join；不会从公共列表猜测。 */
+	FCatOnlineResult RequestJoinFriend(FCatOnlineFriendHandle FriendHandle);
+	/** 严格校验 Steam 链接或 Lobby ID，经平台数据确认后打开邀请链接。 */
+	FCatOnlineResult RequestJoinLink(const FString& Input);
+
 	/** 使用好友缓存中的 opaque 句柄向当前 Host Lobby 发送 Steam 邀请；调用者不能直接接触平台身份。 */
 	FCatOnlineResult RequestInviteFriend(FCatOnlineFriendHandle FriendHandle);
 
@@ -80,6 +86,13 @@ public:
 
 private:
 	friend class FCatOnlinePreloadLifetimeTest;
+	void HandleFindJoinFriendComplete(int32 LocalUserNum, bool bSuccess, const TArray<FOnlineSessionSearchResult>& Results, uint64 Epoch);
+	void FailJoinResolution(ECatOnlineError Error);
+	TUniquePtr<FCatSteamJoinLink> JoinLink;
+	FDelegateHandle FindJoinFriendHandle;
+	double JoinResolveDeadline = 0.0;
+	bool bJoinLinkLaunched = false;
+	uint64 AbandonedJoinLinkLobby = 0;
 	/** 按当前 World 取得对应 OSS Session 接口；PIE 多 World 下不得退回进程级无上下文查询。 */
 	IOnlineSessionPtr GetWorldSessionInterface() const;
 

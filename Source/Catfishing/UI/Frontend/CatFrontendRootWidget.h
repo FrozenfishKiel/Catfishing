@@ -97,6 +97,24 @@ private:
 	TObjectPtr<UButton> InviteFriendButton;
 };
 
+/** 加入页好友行；只持有当前展示句柄，查询与准入由 Online 完成。 */
+UCLASS(Abstract)
+class CATFISHING_API UCatFrontendJoinFriendRowWidget : public UUserWidget
+{
+	GENERATED_BODY()
+public:
+	void ConfigureRow(UCatFrontendRootWidget* Root, const FCatOnlineFriendSummary& Friend);
+protected:
+	virtual void NativeOnInitialized() override;
+private:
+	UFUNCTION() void HandleJoinClicked();
+	TWeakObjectPtr<UCatFrontendRootWidget> RootWidget;
+	FCatOnlineFriendHandle FriendHandle;
+	UPROPERTY(meta=(BindWidget)) TObjectPtr<UTextBlock> FriendNameText;
+	UPROPERTY(meta=(BindWidget)) TObjectPtr<UTextBlock> FriendStatusText;
+	UPROPERTY(meta=(BindWidget)) TObjectPtr<UButton> JoinFriendButton;
+};
+
 /** 房间成员的一行原生 View；它只渲染 RoomModel 的真实成员记录，不新增准备、人数或房主第二份状态。 */
 UCLASS(Abstract)
 class CATFISHING_API UCatFrontendRoomPlayerSlotWidget : public UUserWidget
@@ -152,6 +170,10 @@ public:
 	 * 本方法只显式切换 MenuPage，不从当前显示页推导流程状态。
 	 */
 	void ShowMenu();
+	void ShowJoin();
+	void RequestJoinFriend(FCatOnlineFriendHandle FriendHandle);
+	UFUNCTION() void RequestSubmitJoinLink();
+	UFUNCTION() void RequestPasteJoinLink();
 
 	/**
 	 * 显示 Minecraft 风格的单页存档列表；Controller 在开始游戏流程中调用，存档数据仍由 SaveModel 负责刷新。
@@ -200,7 +222,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
 	void RequestStartGameFlow();
 
-	/** 首页“加入队伍”占位意图；当前产品未定义加入流程，因此只交给 Controller 记录可见反馈，不触发搜索或本地替身房间。 */
+	/** 首页“加入队伍”意图；Controller 打开正式加入页并刷新好友房间。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
 	void RequestJoinParty();
 
@@ -337,6 +359,16 @@ private:
 	 * 缺少必需控件时记录明确资产接线错误并保持该页面不可操作，避免空蓝图事件被误认为已交付交互。
 	 */
 	void ResolvePageControls();
+	void RefreshJoinPresentation();
+	UPROPERTY(meta=(BindWidget)) TObjectPtr<UUserWidget> JoinPage;
+	UPROPERTY(Transient) TObjectPtr<UScrollBox> JoinFriendsScrollBox;
+	UPROPERTY(Transient) TObjectPtr<UEditableTextBox> JoinLinkTextBox;
+	UPROPERTY(Transient) TObjectPtr<UTextBlock> JoinResultText;
+	UPROPERTY(Transient) TObjectPtr<UTextBlock> JoinEmptyText;
+	UPROPERTY(Transient) TObjectPtr<UButton> JoinLinkButton;
+	UPROPERTY(Transient) TObjectPtr<UButton> PasteJoinLinkButton;
+	UPROPERTY(Transient) TObjectPtr<UButton> RefreshJoinFriendsButton;
+	UPROPERTY(Transient) TObjectPtr<UButton> JoinBackButton;
 
 	/**
 	 * 按页面根与控件名解析指定类型的控件；只读取该子 WidgetTree，不扫描其他页面，避免同名控件被错误接线。
@@ -488,7 +520,7 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UButton> StartGameButton;
 
-	/** MenuPage 子 WidgetTree 中的加入队伍按钮；当前只转交占位意图，不接搜索、加入或创建房间流程。 */
+	/** MenuPage 子 WidgetTree 中的加入队伍按钮；转交 Controller 打开加入页面。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UButton> JoinPartyButton;
 
