@@ -48,12 +48,26 @@ HUD、背包、背包格子、交互提示和局内 ESC 菜单的默认路径来
 
 ## Frontend：`WBP_CatFrontendRoot`
 
-正式 Frontend Root 目标路径是 `/Game/UI/Frontend/WBP_CatFrontendRoot`，父类是 `UCatFrontendRootWidget`。整套 Frontend 共九个资产：一个 Root、四个业务子 WBP、一个全局 Loading WBP 和三个动态列表行资产。Root 是 `UCatLocalPlayerUISubsystem` 的主界面创建目标；Loading WBP 由同一个 LocalPlayer UI 作为最高层遮罩创建，不嵌入 Root。
+### 首页视觉接入（2026-09-14）
+
+正式样式入口为 `Scripts/style_frontend_menu.py`；`Scripts/generate_frontend_widgets.py` 在作者器重建 Root 后调用它。脚本只保存首页、Root 和湖畔背景贴图，执行前拒绝覆盖这三个包的未保存更改，在 `Saved/Automation/FrontendMenu/Backups` 按 SHA256 保存原包。普通业务子页仍由原作者器保留人工布局；直接调用 C++ 作者器只保证基础装配，重建 Root 后须执行完整脚本入口恢复表现。
+
+背景原稿与完整 imagegen 提示词见 `ArtSource/UI/Frontend/README.md`。正式包 `/Game/UI/Texture/Frontend/T_UI_Frontend_LakeNight` 由 Root 的 `StaticBackgroundImage` 硬引用，位于独立的 `FrontendBackgroundScale`（ScaleToFill，靠右裁剪保留猫和篝火）；页面仍通过 `FrontendPageScale`（ScaleToFit，1280×720 最小设计画布）保持文字与控件比例。风景覆盖整个窗口，不在 4:3 上下补灰边或黑边。
+
+`FrontendVisualShade` 是全屏常驻的轻度压暗层；新增 `FrontendExitScrim` 是全屏退出遮罩，由 `UCatFrontendRootWidget::ShowMenu` 读取 Controller 已有退出确认事实控制，切页时撤下。首页里的原 `ExitConfirmationOverlay`、`ExitConfirmationPanel`、确认/取消按钮及焦点路径保留；旧 `ExitConfirmationScrim` 控件保留以维持原层级，但笔刷透明，不再重复局部压暗。本轮曾创建的首页内背景图及 ScaleBox 已移除，Root 是唯一背景引用入口。
+
+`NorthStarTitleText` 沿用原 Designer 名称，显示“秘境同行”；`MenuSubtitleText` 继续接收 `RefreshFlowFeedback` 的真实错误和默认提示，不是可删的装饰文本。首页短按钮文案禁用自动换行，四态样式序列化在原按钮上。新日志 `LogCatUI / Event=frontend_page_shown` 只在切到不同页面时记录 World、NetMode、View、Page、Asset，供 Development 落盘追踪，重复刷新不刷屏。
+
+这次接入仅交付首页视觉、退出确认表现及必要 Root 适配，不代表其余页面完成美术重做，也不关闭 Frontend / Online 模块。设置页下拉框文字裁切在旧 760×500 画布对照中同样存在，仍属设置页待处理表现问题。
+
+正式 Frontend Root 目标路径是 `/Game/UI/Frontend/WBP_CatFrontendRoot`，父类是 `UCatFrontendRootWidget`。当前前端包含 Root、五个业务子 WBP、全局 Loading 和动态列表行资产。Root 是 `UCatLocalPlayerUISubsystem` 的主界面创建目标；Loading WBP 由同一个 LocalPlayer UI 作为最高层遮罩创建，不嵌入 Root。
 
 | 资产 | 父类 / 装配位置 | 用途 |
 | --- | --- | --- |
-| `/Game/UI/Frontend/WBP_CatFrontendRoot` | `UCatFrontendRootWidget` | 唯一 Frontend 根视图，持有背景层、页面切换器和四个业务子 WBP |
-| `/Game/UI/Frontend/WBP_CatFrontendMenu` | `UUserWidget`，装到 `MenuPage` | 首页、退出确认，以及当前只保留按钮的“加入队伍” |
+| `/Game/UI/Frontend/WBP_CatFrontendRoot` | `UCatFrontendRootWidget` | 唯一 Frontend 根视图，持有背景层、页面切换器和五个业务子 WBP |
+| `/Game/UI/Frontend/WBP_CatFrontendMenu` | `UUserWidget`，装到 `MenuPage` | 首页、退出确认，以及进入加入队伍页的按钮 |
+| `/Game/UI/Frontend/WBP_CatFrontendJoin` | `UUserWidget`，装到 `JoinPage` | 好友房间及邀请链接加入入口 |
+| `/Game/UI/Frontend/WBP_CatJoinFriendRow` | `UCatFrontendJoinFriendRowWidget`，加入页动态行 | 展示真实好友房间并提交加入请求 |
 | `/Game/UI/Frontend/WBP_CatFrontendSaveList` | `UUserWidget`，装到 `SaveListPage` | Minecraft 风格单页存档列表 |
 | `/Game/UI/Frontend/WBP_CatFrontendRoom` | `UUserWidget`，装到 `RoomPage` | Steam 好友、邀请、当前房间和房主开始游戏 |
 | `/Game/UI/Frontend/WBP_CatFrontendSettings` | `UUserWidget`，装到 `FrontendSettingsPage` | 游戏、画面、声音、控制四类设置 |
@@ -64,11 +78,11 @@ HUD、背包、背包格子、交互提示和局内 ESC 菜单的默认路径来
 
 ### Root 必需装配
 
-`FrontendPageSwitcher`、`MenuPage`、`SaveListPage`、`RoomPage` 和 `FrontendSettingsPage` 是 Root 的必需控件。`StaticBackgroundImage` 和 `DynamicBackgroundContainer` 是两个可选背景资产位；静态图和动态材质、媒体或场景子 WBP 都由资产侧承载，Controller 和 Model 不感知背景形态。
+`FrontendPageSwitcher`、`MenuPage`、`SaveListPage`、`RoomPage`、`JoinPage` 和 `FrontendSettingsPage` 是 Root 的必需控件。`StaticBackgroundImage` 和 `DynamicBackgroundContainer` 是两个可选背景资产位；静态图和动态材质、媒体或场景子 WBP 都由资产侧承载，Controller 和 Model 不感知背景形态。
 
-四个页面按业务通信边界拆分，业务状态集中在 Root、Model 和 PageController。Root 通过 `BP_RenderMenu()`、`BP_RenderSaveList()`、`BP_RenderRoom()` 和 `BP_RenderFrontendSettings()` 通知蓝图重绘；子 WBP 分别通过 Root 的 `GetSaveModel()`、`GetRoomModel()`、`GetSettingsModel()` 读取数据，并通过 `GetPageController()` 或 Root 的 `Request...` 函数提交玩家意图。全局 Loading WBP 不读取这些 Model，也不向 Root 提交意图。
+五个页面按业务通信边界拆分，业务状态集中在 Root、Model 和 PageController。Root 通过 `BP_RenderMenu()`、`BP_RenderSaveList()`、`BP_RenderRoom()` 和 `BP_RenderFrontendSettings()` 通知蓝图重绘；子 WBP 分别通过 Root 的 `GetSaveModel()`、`GetRoomModel()`、`GetSettingsModel()` 读取数据，并通过 `GetPageController()` 或 Root 的 `Request...` 函数提交玩家意图。全局 Loading WBP 不读取这些 Model，也不向 Root 提交意图。
 
-Root 会在四个子 WBP 的 WidgetTree 内按名称解析以下关键控件：菜单页的 `StartGameButton`、`JoinPartyButton`、`FrontendSettingsButton`、`ExitGameButton`、`ConfirmExitButton`、`CancelExitButton`；设置页的 `GameSettingsCategoryButton`、`GraphicsSettingsCategoryButton`、`AudioSettingsCategoryButton`、`ControlsSettingsCategoryButton`；以及各业务页的 `SaveResultTextBlock`、`RoomResultTextBlock`、`FrontendSettingsResultTextBlock`。全局 Loading WBP 由 `UCatLocalPlayerUISubsystem` 写入 `LoadingProgressTextBlock`、`LoadingProgressBar` 和等待原因文本；进入游戏用 Start、地图包、旅行、World、BeginPlay 和本地 UI 的真实 gate 合成总进度，退出到主菜单会折叠进度条。
+Root 会在五个子 WBP 的 WidgetTree 内按名称解析以下关键控件：菜单页的 `StartGameButton`、`JoinPartyButton`、`FrontendSettingsButton`、`ExitGameButton`、`ConfirmExitButton`、`CancelExitButton`；设置页的 `GameSettingsCategoryButton`、`GraphicsSettingsCategoryButton`、`AudioSettingsCategoryButton`、`ControlsSettingsCategoryButton`；以及各业务页的 `SaveResultTextBlock`、`RoomResultTextBlock`、`FrontendSettingsResultTextBlock`。全局 Loading WBP 由 `UCatLocalPlayerUISubsystem` 写入 `LoadingProgressTextBlock`、`LoadingProgressBar` 和等待原因文本；进入游戏用 Start、地图包、旅行、World、BeginPlay 和本地 UI 的真实 gate 合成总进度，退出到主菜单会折叠进度条。
 
 ### 数据与流程边界
 
@@ -76,7 +90,7 @@ Root 会在四个子 WBP 的 WidgetTree 内按名称解析以下关键控件：�
 
 世界 Save 独立于 Profile：`UCatSaveSubsystem` 和 `UCatRunSaveGame` 负责世界槽、库存内容和角色位置；`UCatProfileSubsystem` 继续负责 Grant Journal、图鉴、解锁与装备选择，不能拿 Profile 拼主界面存档行。
 
-创建房间与开始游戏是两个阶段：Online 创建成功后应停留在 Frontend 房间页，只有房主显式点击“开始游戏”才提交异步预载和旅行。设置页固定为游戏、画面、声音、控制四类；控制分类当前只保留正式入口，不虚构控制字段。“加入队伍”同样只保留首页按钮，不接搜索、加入或本地替身房间。
+创建房间与开始游戏是两个阶段：Online 创建成功后应停留在 Frontend 房间页，只有房主显式点击“开始游戏”才提交异步预载和旅行。设置页固定为游戏、画面、声音、控制四类；控制分类当前只保留正式入口，不虚构控制字段。“加入队伍”通过 `RequestJoinParty` 打开正式 `JoinPage`，展示好友房间并提交邀请链接；不生成虚假的房间或成员。
 
 人工已允许麦克风选择和语音输入模式本轮暂不可用。设置页保留 `MicrophoneComboBox`、`VoiceInputModeComboBox` 两行并禁用，用 `MicrophoneUnavailableText`、`VoiceInputModeUnavailableText` 分别说明现有 Steam 语音未接通设备选择、输入模式切换；麦克风可提示在系统声音设置中调整默认输入设备。占位文本只供展示，不保存为偏好；其他设置范围不变。控件与禁用逻辑已在 Root 和资产生成器源码中落地，尚无正式 WBP 的运行证据。
 

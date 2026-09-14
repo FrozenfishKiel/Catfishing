@@ -512,7 +512,7 @@ namespace CatFrontendWidgetAuthoring
 			return false;
 		}
 		UWidgetTree* Tree = WidgetBlueprint->WidgetTree;
-		AddText(Tree, Column, TEXT("NorthStarTitleText"), TEXT("北极星愿景"), 38);
+		AddText(Tree, Column, TEXT("NorthStarTitleText"), TEXT("秘境同行"), 38);
 		AddText(Tree, Column, TEXT("MenuSubtitleText"), TEXT("与朋友一同启程"), 16);
 		USpacer* Space = Tree->ConstructWidget<USpacer>(USpacer::StaticClass(), TEXT("MenuOpenSpace"));
 		Column->AddChild(Space);
@@ -1215,8 +1215,9 @@ namespace CatFrontendWidgetAuthoring
 		}
 		VisualShade->SetBrushColor(FLinearColor(0.008f, 0.012f, 0.025f, 0.65f));
 		PageScale->SetStretch(EStretch::ScaleToFit);
-		PageBounds->SetMinDesiredWidth(760.0f);
-		PageBounds->SetMinDesiredHeight(500.0f);
+		// 与前端页面的 16:9 设计画布一致；保留 ScaleToFit 处理窄屏，避免首页按 760:500 放大并产生侧边空白。
+		PageBounds->SetMinDesiredWidth(1280.0f);
+		PageBounds->SetMinDesiredHeight(720.0f);
 		PageScale->SetContent(PageBounds);
 		PageBounds->SetContent(PageSwitcher);
 		AddFullCanvasChild(Canvas, StaticBackground, 0);

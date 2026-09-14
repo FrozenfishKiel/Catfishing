@@ -153,6 +153,11 @@ void UCatFrontendRootWidget::ShowMenu()
 {
 	ShowPage(MenuPage, TEXT("MenuPage"));
 	const bool bShowExitConfirmation = PageController && PageController->IsExitConfirmationVisible();
+	// 风景铺满视口后，退出遮罩也放在 Root 全屏层；弹窗仍由 MenuPage 保持比例和原有绑定。
+	if (UWidget* Scrim = GetWidgetFromName(TEXT("FrontendExitScrim")))
+	{
+		Scrim->SetVisibility(bShowExitConfirmation ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	}
 	if (UPanelWidget* Commands = FindPageControl<UPanelWidget>(MenuPage, TEXT("MenuCommands"), TEXT("MenuPage"))) { Commands->SetIsEnabled(!bShowExitConfirmation); }
 	if (UPanelWidget* Overlay = FindPageControl<UPanelWidget>(MenuPage, TEXT("ExitConfirmationOverlay"), TEXT("MenuPage"))) { Overlay->SetVisibility(bShowExitConfirmation ? ESlateVisibility::Visible : ESlateVisibility::Collapsed); }
 	if (UTextBlock* ConfirmationText = FindPageControl<UTextBlock>(MenuPage, TEXT("ExitConfirmationText"), TEXT("MenuPage"))) { ConfirmationText->SetVisibility(bShowExitConfirmation ? ESlateVisibility::Visible : ESlateVisibility::Collapsed); }
@@ -956,7 +961,19 @@ void UCatFrontendRootWidget::ShowPage(UWidget* Page, const TCHAR* PageName)
 			FrontendPageSwitcher ? TEXT("valid") : TEXT("missing"), Page ? TEXT("valid") : TEXT("missing"));
 		return;
 	}
+	const bool bPageChanged = FrontendPageSwitcher->GetActiveWidget() != Page;
 	FrontendPageSwitcher->SetActiveWidget(Page);
+	if (UWidget* Scrim = GetWidgetFromName(TEXT("FrontendExitScrim")))
+	{
+		Scrim->SetVisibility(ESlateVisibility::Collapsed);
+	}
+	// 只记录真实切页，Development 落盘日志可核对 WBP 消费者；重复刷新不刷屏，也不维护第二份页面状态。
+	if (bPageChanged)
+	{
+		UE_LOG(LogCatUI, Log, TEXT("Event=frontend_page_shown World=%s NetMode=%d View=%s Page=%s Asset=%s"),
+			*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1,
+			*GetName(), PageName, *Page->GetClass()->GetPathName());
+	}
 }
 
 void UCatFrontendRootWidget::ShowJoin()
