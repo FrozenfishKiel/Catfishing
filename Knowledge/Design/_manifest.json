@@ -15,9 +15,9 @@
       ],
       "has_child": false,
       "file": "北极星愿景.md",
-      "revision_id": "3129acfaff60",
+      "revision_id": "70a72959c0cd",
       "lines": 60,
-      "content_sha1": "3129acfaff60",
+      "content_sha1": "70a72959c0cd",
       "feishu_revision_id": 59
     },
     {
@@ -150,9 +150,9 @@
       ],
       "has_child": true,
       "file": "GDD 系统分册/道具/道具.md",
-      "revision_id": "6a2a8d07a32d",
+      "revision_id": "122cc59e1464",
       "lines": 307,
-      "content_sha1": "6a2a8d07a32d",
+      "content_sha1": "122cc59e1464",
       "feishu_revision_id": 833
     },
     {
@@ -219,9 +219,9 @@
       ],
       "has_child": false,
       "file": "GDD 系统分册/商店.md",
-      "revision_id": "d983b0112421",
+      "revision_id": "7e3a6746fa5e",
       "lines": 165,
-      "content_sha1": "d983b0112421",
+      "content_sha1": "7e3a6746fa5e",
       "feishu_revision_id": 351
     },
     {
@@ -290,9 +290,9 @@
       ],
       "has_child": false,
       "file": "GDD 系统分册/猫咪与状态/升级效果.md",
-      "revision_id": "d024d0657a6f",
+      "revision_id": "f6c33d80f906",
       "lines": 49,
-      "content_sha1": "d024d0657a6f",
+      "content_sha1": "f6c33d80f906",
       "feishu_revision_id": 66
     },
     {
@@ -325,9 +325,9 @@
       ],
       "has_child": false,
       "file": "GDD 系统分册/交互.md",
-      "revision_id": "7c8136ef7bb1",
+      "revision_id": "e2212e0d40fd",
       "lines": 112,
-      "content_sha1": "7c8136ef7bb1",
+      "content_sha1": "e2212e0d40fd",
       "feishu_revision_id": 81
     },
     {
@@ -342,9 +342,9 @@
       ],
       "has_child": false,
       "file": "GDD 系统分册/图鉴.md",
-      "revision_id": "4b4d196b74db",
+      "revision_id": "c5c1bca695d3",
       "lines": 242,
-      "content_sha1": "4b4d196b74db",
+      "content_sha1": "c5c1bca695d3",
       "feishu_revision_id": 132
     },
     {
@@ -376,9 +376,9 @@
       ],
       "has_child": false,
       "file": "GDD 系统分册/环境与氛围.md",
-      "revision_id": "80da3ebaaad7",
+      "revision_id": "5ec3ad0d7336",
       "lines": 241,
-      "content_sha1": "80da3ebaaad7",
+      "content_sha1": "5ec3ad0d7336",
       "feishu_revision_id": 114
     },
     {
@@ -442,9 +442,9 @@
       ],
       "has_child": false,
       "file": "数值模拟与参数记录.md",
-      "revision_id": "5bc23265c4f7",
+      "revision_id": "b613ad97a994",
       "lines": 102,
-      "content_sha1": "5bc23265c4f7",
+      "content_sha1": "b613ad97a994",
       "feishu_revision_id": 167
     }
   ],
