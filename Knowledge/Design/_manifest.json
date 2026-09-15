@@ -416,22 +416,6 @@
       "feishu_revision_id": 90
     },
     {
-      "title": "设计修改记录",
-      "node_token": "ZNEpwV95CiU8eVkXoN4c0M1Sn8c",
-      "obj_token": "QKjfd7uYKo9vNuxmtJqcBkiInEc",
-      "obj_type": "docx",
-      "depth": 1,
-      "path": [
-        "设计修改记录"
-      ],
-      "has_child": false,
-      "file": "设计修改记录.md",
-      "revision_id": "dbc5465e17e5",
-      "lines": 305,
-      "content_sha1": "dbc5465e17e5",
-      "feishu_revision_id": 98
-    },
-    {
       "title": "数值模拟与参数记录",
       "node_token": "Xg1EwylUuiUeVckeLwtcMXMjnAg",
       "obj_token": "IR2edjDXHoiiTPxko3zciwswnyg",
