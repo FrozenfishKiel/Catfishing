@@ -1403,12 +1403,12 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	// 双方力量、实际鱼重与猫的等效系统质量在此冻结；Runner 每步只刷新参与者输入、力量和接入约束的猫数。
 	// 鱼力量包含完美中鱼折减；这里先保存主位基础力量供初始化校验，
 	// Runner启动后只读取主控ASC与实际身体样本；旁人助力通过物理竿端点进入求解。
-	// 下面把服务器设置、鱼竿/鱼定义、性格模板的各项参数一次性打包进模拟配置结构体，交给 FightRunner/Simulator 使用。
+	// 将服务器设置、鱼竿/鱼定义和逐鱼解析结果冻结进模拟配置，未裁定参数继续来自已绑定模板。
 	FCatFightSimulationConfig Config;
 	Config.FixedStepSeconds = Settings->FixedFightStepSeconds; // 固定步长模拟，保证服务器权威结果确定可复现。
 	Config.PrimaryOperatorCatStrength = AbilitySystem->GetNumericAttribute(
 		UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
-	// 辅助位合力不能在会话启动瞬间静态冻结；Runner 每个固定步从鱼竿操作位重建并覆盖此合计。
+	// Runner 每个固定步刷新主控力量；抓猫队友只通过真实身体位移和竿端点参与。
 
 	// 猫系统质量独立于力量成长；CharacterMovement 的推挤 Mass 不作为搏斗质量来源。
 	const UCatPhysicalBodyComponent* PhysicalBody = FisherCharacter->GetPhysicalBodyComponent();
@@ -1416,6 +1416,16 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	Config.PrimaryOperatorMassKilograms = PhysicalBody->GetBody()->GetMass();
 
 	Config.FishMassKilograms = FishWeightKilograms;
+	Config.FishBody.Geometry = FishDefinition->FightBodyGeometry.Scaled(Encounter->GetPresentationState().VisualScale);
+	Config.FishBody.MaximumSwimTurnRateDegreesPerSecond = ResolvedBehavior.SteeringConfig.MaximumTurnRateDegreesPerSecond;
+	Config.FishBody.MaximumBodyTurnRateDegreesPerSecond = FMath::Max(240.0, Config.FishBody.MaximumSwimTurnRateDegreesPerSecond);
+	if (!Config.FishBody.Geometry.HasMouthLever())
+	{
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_fight_start_rejected SessionId=%s FishDefinitionId=%s Reason=FishBodyGeometryMissing %s"),
+			*Snapshot.FishingSessionId.ToString(), *FishDefinition->FishDefinitionId.ToString(),
+			*CatLogContext::BuildControllerFields(FisherCharacter->GetController()));
+		return false;
+	}
 	Config.FishStrength = FrozenSelectionResult.BaseFishStrength * FishStrengthScale;
 	Config.StrengthPerKilogram = FightBalance->StrengthPerKilogram;
 	Config.ForcePerStrengthNewtons = FightBalance->ForcePerStrengthNewtons;
@@ -1485,8 +1495,8 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	const FVector RodTipWorldPosition = Rod->GetRodTipWorldTransform().GetLocation();
 	const double RequestedInitialLineLength = TrueBiteDistanceCentimeters * LineLengthScale;
 	const double MinimumPhysicalLineLength = FMath::Abs(
-		Encounter->GetActorLocation().Z - RodTipWorldPosition.Z);
-	// 完美提竿会缩短初始线长，但“账面线长”绝不能直接变得比 Actor 的真实距离还短。
+		Encounter->GetMouthWorldLocation().Z - RodTipWorldPosition.Z);
+	// 完美提竿会缩短初始线长，但“账面线长”绝不能直接变得比鱼嘴到竿尖的真实距离还短。
 	// 先把请求值限制在竿尖到当前水面的最短物理长度内，下面再用同一长度真正投影鱼的位置。
 	if (!FMath::IsFinite(RequestedInitialLineLength) || TrueBiteDistanceCentimeters < 0.0
 		|| TrueBiteDistanceCentimeters > Config.MaximumLineLengthCentimeters
@@ -1497,6 +1507,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		return false;
 	}
 	InitialState.LineLengthCentimeters = FMath::Max(RequestedInitialLineLength, MinimumPhysicalLineLength);
+	InitialState.FishBody.Heading = (Encounter->GetMouthWorldLocation() - RodTipWorldPosition).GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER, FVector::ForwardVector);
 	InitialState.FishWorldPosition = Encounter->GetActorLocation();
 	InitialState.MotionIntent = ECatFishMotionIntent::StrugglingOutward; // 刚上钩默认视为鱼在向外挣扎。
 	InitialState.CatAction = ECatFightCatAction::None;
@@ -1512,7 +1523,8 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	const FBox FrozenBounds = FBox::BuildAABB(Landing, HalfExtent);
 	// 用运动求解器把鱼的初始位置投影到合法范围内（尊重最大线长、水域边界），得到一个几何上自洽的起始点。
 	FCatFishMotionSolveInput ProjectionInput;
-	ProjectionInput.RodTipWorldPosition = RodTipWorldPosition;
+	const FVector InitialMouthOffset = FCatFishBodyModel::RotateLocal(Config.FishBody.Geometry.MouthLocalPositionCentimeters, InitialState.FishBody.Heading);
+	ProjectionInput.RodTipWorldPosition = RodTipWorldPosition - InitialMouthOffset;
 	ProjectionInput.ProposedFishWorldPosition = InitialState.FishWorldPosition;
 	ProjectionInput.WaterBounds = FrozenBounds;
 	// 关键约束：这里必须使用本次（可能被完美提竿缩短的）初始线长，而不是整根鱼线的最大长度。
@@ -1524,7 +1536,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		? Water->ResolveCandidatePointToWater(Projected.FishWorldPosition, AttemptSnapshot.WaterRegion)
 		: FCatWaterSpatialResult{};
 	const double ResolvedInitialDistance = Exact.bSucceeded
-		? FVector::Distance(RodTipWorldPosition, Exact.WaterSurfaceWorldPoint)
+		? FVector::Distance(RodTipWorldPosition, Exact.WaterSurfaceWorldPoint + InitialMouthOffset)
 		: TNumericLimits<double>::Max();
 	const double ReconciledInitialLineLength = FMath::Min(Config.MaximumLineLengthCentimeters,
 		FMath::Max(InitialState.LineLengthCentimeters, ResolvedInitialDistance));
@@ -1534,18 +1546,35 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 			ReconciledInitialLineLength,
 			Exact.WaterSurfaceWorldPoint, 0.0f, 0.0f, 0.0f,
 			static_cast<float>(Config.FishFullEffortSpeedCentimetersPerSecond), false, false, FVector::UpVector,
-			(Exact.WaterSurfaceWorldPoint - RodTipWorldPosition).GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER, FVector::ForwardVector),
+			InitialState.FishBody.Heading,
 			ECatFishBehavior::OutwardRush, static_cast<float>(InitialState.FishEffortRatio)))
 	{
 		// 求解/吸附/表现应用任一环节失败：保留原余额，不进入搏斗。
 		return false;
 	}
-	// 真实水面校正可能把候选点沿岸轻微挪动；最终以 Actor 到竿尖的真实距离抬高线长，
+	// 真实水面校正可能把候选点沿岸轻微挪动；最终以鱼嘴到竿尖的真实距离抬高线长，
 	// 保证 Runner 从第一步起始终满足 D <= L_paid，同时尽可能保留完美提竿的缩线收益。
 	InitialState.LineLengthCentimeters = ReconciledInitialLineLength;
 	InitialState.FishWorldPosition = Encounter->GetActorLocation(); // 用刚落位的实际权威位置覆盖，作为 Runner 的真正起点。
 
-	// 组装 FightRunner 的初始化参数：把 Session/Actor 引用、模拟配置/初始状态、性格模板节奏参数、
+	// 嘴点是同一个静态局部点；附着复制让客户端钩和鱼共享一份移动快照。
+	if (Snapshot.HookActor)
+	{
+		Snapshot.HookActor->SetActorLocation(Encounter->GetMouthWorldLocation());
+		if (!Snapshot.HookActor->AttachToActor(Encounter, FAttachmentTransformRules::KeepWorldTransform))
+		{
+			UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_fight_start_rejected SessionId=%s CastAttemptId=%s HookActor=%s FishActor=%s Reason=FishMouthAttachmentFailed World=%s NetMode=%d Authority=1 LocalRole=%d"),
+				*Snapshot.FishingSessionId.ToString(), *AttemptSnapshot.CastAttemptId.ToString(), *GetNameSafe(Snapshot.HookActor), *GetNameSafe(Encounter),
+				*GetNameSafe(GetWorld()), int32(GetNetMode()), int32(GetLocalRole()));
+			return false;
+		}
+	}
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_fish_body_bound SessionId=%s FishActor=%s FishDefinitionId=%s MouthLocalCm=%s CenterLocalCm=%s YawRadiusCm=%.4f World=%s NetMode=%d Authority=1 LocalRole=%d"),
+		*Snapshot.FishingSessionId.ToString(), *GetNameSafe(Encounter), *FishDefinition->FishDefinitionId.ToString(),
+		*Config.FishBody.Geometry.MouthLocalPositionCentimeters.ToCompactString(), *Config.FishBody.Geometry.CenterOfMassLocalPositionCentimeters.ToCompactString(),
+		Config.FishBody.Geometry.YawRadiusOfGyrationCentimeters, *GetNameSafe(GetWorld()), int32(GetNetMode()), int32(GetLocalRole()));
+
+	// 组装 FightRunner 的初始化参数：把 Session/Actor 引用、模拟配置/初始状态、逐鱼解析后的节奏参数、
 	// 连续出力/反馈参数与本场随机种子一并交给它，随后驱动固定步长的搏斗推进。
 	FCatFishingFightRunnerInit Init;
 	Init.Session = this;
@@ -1781,10 +1810,10 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 		}
 		return;
 	}
-	// 钩在鱼嘴里：搏斗期间钩 Actor 跟随鱼的权威位置（含近岸/贴岸吸附后的落点），复制到所有端。
+	// 钩在静态嘴点：权威位置由同一步鱼身姿态推导，附着复制保持客户端钩嘴同位。
 	if (Snapshot.HookActor && Snapshot.FishEncounterActor)
 	{
-		Snapshot.HookActor->SetActorLocation(Snapshot.FishEncounterActor->GetActorLocation());
+		Snapshot.HookActor->SetActorLocation(Snapshot.FishEncounterActor->GetMouthWorldLocation());
 		if (!Snapshot.HookActor->SetFishingLinePresentationFromAuthority(
 			Step.LineLengthCentimeters, Step.StraightLineDistanceCentimeters,
 			Step.SlackLineLengthCentimeters, static_cast<float>(Step.NormalizedTension), Step.bLineTaut,

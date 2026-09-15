@@ -25,6 +25,7 @@
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
 #include "Fishing/Simulation/CatFishingFightRunner.h"
+#include "Fishing/Simulation/CatFishFightMotionSolver.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "Framework/Game/CatfishingPlayerState.h"
@@ -418,6 +419,145 @@ bool FCatFishingFormalPhysicalRunnerTest::RunTest(const FString& Parameters)
 	}
 	if (TravelByRate.Num() == 2) TestTrue(TEXT("formal production travel is comparable at 60 and 120 Hz"),
 		FMath::Abs(TravelByRate[0] - TravelByRate[1]) < FMath::Max(35.0, .3 * FMath::Max(TravelByRate[0], TravelByRate[1])));
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingSurfaceTraversalTest,
+	"Catfishing.Unit.Fishing.PhysicalRod.RealShoreContactReconcilesFishTurnAndFinalLineForce",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FTestWorldWrapper Wrapper;
+	if (!TestTrue(TEXT("建立真实水域查询世界"), Wrapper.CreateTestWorld(EWorldType::Game))) return false;
+	Wrapper.ForwardErrorMessages(this);
+	UWorld* World = Wrapper.GetTestWorld();
+	auto* Region = World->SpawnActor<ACatWaterRegion>();
+	FCatWaterGeometryBuildInput Geometry;
+	Geometry.RegionId = TEXT("FishBodyShoreUnload");
+	Geometry.WaterPointVerticalToleranceCm = 10.0;
+	Geometry.BankHeightToleranceCm = 20.0;
+	Geometry.BoundaryToleranceCm = 0.001;
+	Geometry.MaxLandingCorrectionCm = 20.0;
+	Geometry.MinimumWaterInsetCm = 0.01;
+	auto& Boundary = Geometry.Boundaries.AddDefaulted_GetRef();
+	Boundary.BoundaryId = TEXT("StraightShore");
+	Boundary.Vertices = {FVector2D(0, -2000), FVector2D(2000, -2000), FVector2D(2000, 2000), FVector2D(0, 2000)};
+	const auto Baked = FCatWaterGeometry::Build(Geometry);
+	if (!TestTrue(TEXT("真实直岸缓存构建成功"), Region && Baked.bSucceeded)) return false;
+	FCatWaterRegionTestAccess::InjectBakedGeometry(*Region, Baked.Cache);
+	if (!TestTrue(TEXT("水域注册真实查询生命周期"), Wrapper.BeginPlayInTestWorld())) return false;
+	auto* Session = World->SpawnActor<ACatFishingSession>();
+	if (!TestNotNull(TEXT("建立权威地形接收宿主"), Session)) return false;
+	Session->Snapshot.FishingSessionId = FGuid::NewGuid();
+	auto* Runner = NewObject<UCatFishingFightRunner>(Session);
+	Runner->Session = Session;
+	Runner->WaterRegion = Region->GetWaterRegionHandle();
+	Runner->Config.FixedStepSeconds = 0.05;
+	Runner->Config.PrimaryOperatorCatStrength = 40.0;
+	Runner->Config.PrimaryOperatorMassKilograms = 10.0;
+	Runner->Config.FishMassKilograms = 5.0;
+	Runner->Config.FishStrength = 80.0;
+	Runner->Config.CatStaminaMaximum = 1000.0;
+	Runner->Config.ReelSpeedCentimetersPerSecond = 80.0;
+	Runner->Config.FishFullEffortSpeedCentimetersPerSecond = 180.0;
+	Runner->Config.MaximumLineLengthCentimeters = 2000.0;
+	Runner->Config.RodDurability = 10000.0;
+	Runner->Config.FishBody.Geometry.MouthLocalPositionCentimeters = FVector(35.0, 0.0, -5.0);
+	Runner->Config.FishBody.Geometry.CenterOfMassLocalPositionCentimeters = FVector(-5.0, 0.0, -5.0);
+	Runner->Config.FishBody.Geometry.YawRadiusOfGyrationCentimeters = 18.0;
+	FCatFightRodConstraintInput Rod;
+	Rod.RodTipWorldPosition = FVector(100.0, -500.0, 100.0);
+	for (int32 Scenario = 0; Scenario < 3; ++Scenario)
+	{
+		const bool bLimitedReel = Scenario == 2;
+		Runner->Config.PrimaryOperatorCatStrength = bLimitedReel ? 0.25 : 40.0;
+		Runner->State = FCatFightSimulationState{};
+		Runner->State.CatAction = bLimitedReel ? ECatFightCatAction::Pull : ECatFightCatAction::None;
+		Runner->State.CatStamina = 1000.0;
+		Runner->State.FishStamina = 1000.0;
+		Runner->State.FishEffortRatio = 0.8;
+		Runner->State.FishWorldPosition = FVector(1.0, 0.0, 0.0);
+		Runner->State.FishBody.Heading = FRotator(0, Scenario == 1 ? -135.0 : -90.0, 0).Vector();
+		Runner->State.FishVelocityCentimetersPerSecond = Scenario == 1 ? FVector(-50.0, 150.0, 0.0)
+			: FVector(bLimitedReel ? -292.0 : -300.0, 0.0, 0.0);
+		Runner->State.MotionIntent = ECatFishMotionIntent::StrugglingOutward;
+		Runner->State.LineLengthCentimeters = FVector::Distance(Rod.RodTipWorldPosition,
+			FCatFishBodyModel::MouthPosition(Runner->Config.FishBody.Geometry,
+				Runner->State.FishWorldPosition, Runner->State.FishBody.Heading));
+		Runner->SteeringState = FCatFishSteeringState{};
+		Runner->SteeringState.bInitialized = true;
+		Runner->SteeringState.CurrentDirection = Runner->SteeringState.TargetDirection = Runner->State.FishBody.Heading;
+		Runner->SteeringState.Behavior = ECatFishBehavior::OutwardRush;
+		Runner->SteeringRandom.Initialize(1801);
+		Runner->bFishBeached = false;
+		const auto InitialState = Runner->State;
+		auto ExpectedSteering = Runner->SteeringState;
+		auto ExpectedRandom = Runner->SteeringRandom;
+		const FVector DesiredHeading = InitialState.FishBody.Heading;
+		auto Step = FCatFishingFightSimulator::Step(Runner->Config, InitialState, Rod, DesiredHeading);
+		if (!TestTrue(TEXT("普通鱼身求解先产生触岸且有侧向转矩的候选"), Step.bSucceeded
+			&& Step.ProposedFishWorldPosition.X < 0.0 && Step.LineTensionNewtons > 0.0
+			&& FMath::Abs(Step.FishBodyTurn.LineTorqueNewtonMeters) > 0.1)) return false;
+		const auto BeforeSurface = Step;
+		FCatWaterSpatialResult WaterResult;
+		bool bBeached = false;
+		FVector GroundNormal;
+		AActor* GroundActor = nullptr;
+		FCatFishingRodResistanceResult Resistance;
+		const auto Motion = Runner->ResolveFishSurfaceFromAuthority(Step, Rod, WaterResult, bBeached,
+			GroundNormal, GroundActor, Resistance);
+		if (!TestTrue(TEXT("真实水域/岸线接收方完成最终解析"), Motion.bSucceeded && Step.bSucceeded && Resistance.bSucceeded)) return false;
+		TestTrue(TEXT("确实经过真实岸线接触，且没有伪装成上岸交付"), Runner->bLastShoreContactDiagnosticActive && !bBeached
+			&& WaterResult.bSucceeded && Motion.FishWorldPosition.X >= -0.001);
+		TestTrue(TEXT("所有张力试探仍只提交一次岸线转向反馈"), FCatFishSteeringModel::RedirectFromWaterBoundary(
+			Runner->SteeringConfig, WaterResult.WaterwardDirection, ExpectedRandom, ExpectedSteering)
+			&& ExpectedRandom.GetCurrentSeed() == Runner->SteeringRandom.GetCurrentSeed()
+			&& ExpectedSteering.TargetDirection.Equals(Runner->SteeringState.TargetDirection, 1e-7));
+		TestTrue(TEXT("地形重算不直接扣除任一方体力或改变初始状态"), Runner->State.CatStamina == InitialState.CatStamina
+			&& Runner->State.FishStamina == InitialState.FishStamina && Runner->State.FishWorldPosition == InitialState.FishWorldPosition);
+		const auto ExpectedTurn = FCatFishBodyModel::PredictTurn(Runner->Config.FishBody, InitialState.FishBody,
+			DesiredHeading, InitialState.FishEffortRatio, Runner->Config.FishMassKilograms,
+			Runner->Config.FishStrength * Runner->Config.ForcePerStrengthNewtons, -Step.RodLineForceNewtons,
+			Runner->Config.FixedStepSeconds);
+		TestTrue(TEXT("鱼身只保留最终实际发布线力产生的同一步转动"),
+			Step.FishBodyTurn.State.Heading.Equals(ExpectedTurn.State.Heading, 1e-7)
+			&& FMath::IsNearlyEqual(Step.FishBodyTurn.State.AngularVelocityRadiansPerSecond,
+				ExpectedTurn.State.AngularVelocityRadiansPerSecond, 1e-7));
+		TestEqual(TEXT("最终线力与鱼嘴转矩使用同一力臂和单位"), Step.FishBodyTurn.LineTorqueNewtonMeters,
+			ExpectedTurn.LineTorqueNewtonMeters, 1e-7);
+		const FVector Mouth = FCatFishBodyModel::MouthPosition(Runner->Config.FishBody.Geometry,
+			Motion.FishWorldPosition, Step.FishBodyTurn.State.Heading);
+		TestTrue(TEXT("最终根/鱼头仍唯一确定嘴部端点"), Mouth.Equals(Step.ProposedMouthWorldPosition, 1e-7));
+		TestTrue(TEXT("卸载重转不能把嘴重新推出线长"), FVector::Distance(Mouth, Rod.RodTipWorldPosition)
+			<= Step.LineLengthCentimeters + 0.01);
+		if (bLimitedReel)
+		{
+			TestTrue(TEXT("小力量收线保留合法岸线接触，不能把四厘米请求全部伪装为完成"),
+				Step.Outcome == ECatFightStepOutcome::None && Step.RequestedReelDistanceCentimeters > 3.9
+				&& Step.ActualReelDistanceCentimeters > 2.0 && Step.ActualReelDistanceCentimeters < 2.2
+				&& Step.LineTensionNewtons <= Step.Trace.ReelForceLimitNewtons + 1e-7);
+			TestEqual(TEXT("仅最终可行收线量改变线长"), InitialState.LineLengthCentimeters - Step.LineLengthCentimeters,
+				Step.ActualReelDistanceCentimeters, 1e-7);
+		}
+		else TestEqual(TEXT("岸线重算不擅自吐线"), Step.LineLengthCentimeters, InitialState.LineLengthCentimeters, 1e-7);
+		const FVector CenterDelta = FCatFishBodyModel::CenterPosition(Runner->Config.FishBody.Geometry,
+			Motion.FishWorldPosition, Step.FishBodyTurn.State.Heading)
+			- FCatFishBodyModel::CenterPosition(Runner->Config.FishBody.Geometry,
+				InitialState.FishWorldPosition, InitialState.FishBody.Heading)
+			- Step.FishPositionCorrectionWorldDisplacement;
+		TestEqual(TEXT("最终体力继续按质心实际进展结算，不把重转根偏移当成游动"), Step.FishActualIntentProgressCentimeters,
+			FVector::DotProduct(CenterDelta, DesiredHeading), 1e-7);
+		if (Scenario == 0)
+			TestTrue(TEXT("有足够余线时真实卸载，双方均不保留旧张力"), Step.LineTensionNewtons == 0.0
+				&& Step.RodLineForceNewtons.IsNearlyZero() && Step.FishBodyTurn.LineTorqueNewtonMeters == 0.0);
+		AddInfo(FString::Printf(TEXT("Event=fish_body_real_shore_contract Scenario=%d Candidate=%s Surface=%s BeforeTensionN=%.6f FinalTensionN=%.6f BeforeLineTorqueNm=%.6f FinalLineTorqueNm=%.6f MouthDistanceCm=%.6f LineLengthCm=%.6f RequestedReelCm=%.6f ActualReelCm=%.6f ReelLimitN=%.6f"),
+			Scenario, *BeforeSurface.ProposedFishWorldPosition.ToCompactString(), *Motion.FishWorldPosition.ToCompactString(),
+			BeforeSurface.LineTensionNewtons, Step.LineTensionNewtons, BeforeSurface.FishBodyTurn.LineTorqueNewtonMeters,
+			Step.FishBodyTurn.LineTorqueNewtonMeters, FVector::Distance(Mouth, Rod.RodTipWorldPosition), Step.LineLengthCentimeters,
+			Step.RequestedReelDistanceCentimeters, Step.ActualReelDistanceCentimeters, Step.Trace.ReelForceLimitNewtons));
+	}
 	return !HasAnyErrors();
 }
 

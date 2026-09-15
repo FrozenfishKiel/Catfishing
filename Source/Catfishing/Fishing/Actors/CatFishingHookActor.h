@@ -49,6 +49,7 @@ protected:
 	virtual void OnRep_Owner() override;
 	/** 远端客户端若先收到 CastFlight、后解析到抛竿者，在 Instigator 回调里补播一次投杆动画。 */
 	virtual void OnRep_Instigator() override;
+	virtual void OnRep_AttachmentReplication() override;
 
 private:
 	UFUNCTION()
@@ -69,7 +70,8 @@ private:
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> FishingLineStartAnchor;
 	/**
 	 * 纯表现鱼线：每台机器依据 Hook/Rod Transform 与已放线长生成曲线，不承载受力或命中判定。
-	 * 起点跟随 Hook 的 VisualRoot，末端在 BeginPlay/表现状态到达时绑定到鱼竿的 RodTipMarker（缺失时回退权威锚点）。
+	 * 未中鱼时起点跟随 Hook 的 VisualRoot；附着鱼后直接使用静态嘴点。
+	 * 末端在 BeginPlay/表现状态到达时绑定到鱼竿的 RodTipMarker（缺失时回退权威锚点）。
 	 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Fishing|Presentation", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<UCatFishingLineCurveComponent> FishingLineCurve;
@@ -80,6 +82,8 @@ private:
 	void RefreshFishingLineShape();
 	void RefreshFishingLinePresentationTimer();
 	void UpdateFishingLinePresentation();
+	void LogMouthAttachment();
+	TWeakObjectPtr<AActor> LastLoggedMouthAttachment;
 	/** 仅在本机第一次观察到有效 CastFlight + Instigator 时播放；不复制 Montage 播放进度。 */
 	void TryPlayCastMontageFromPresentation();
 	UPROPERTY(ReplicatedUsing=OnRep_PresentationState, VisibleInstanceOnly, BlueprintReadOnly, meta=(AllowPrivateAccess="true"))

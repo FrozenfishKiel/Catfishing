@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Data/CatFishSelectionTypes.h"
+#include "Fishing/Simulation/CatFishBodyModel.h"
 #include "Framework/Core/CatRunContracts.h"
 #include "Inventory/CatInventoryItemDefinition.h"
 #include "CatFishDefinition.generated.h"
@@ -111,6 +112,10 @@ class CATFISHING_API UCatFishDefinition : public UCatInventoryItemDefinition
 	GENERATED_BODY()
 
 public:
+	/** 正式水中鱼身标定；保存静态嘴点/质心/回转半径，服务器无需加载动画或网格。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fight|Body")
+	FCatFishBodyGeometry FightBodyGeometry;
+
 	/** 食用限时效果是否已由属主确认；true + 空 GE 明确表示无该效果，false 为迁移缺口。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Use|TimedEffect")
 	bool bEatingTimedEffectConfigured = false;

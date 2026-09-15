@@ -1,6 +1,82 @@
 # 鱼运动与遛鱼逻辑：设计与实现
 
-## 2026-09-15：鱼与钓鱼按保留建议收口（当前交付与保留边界）
+## 2026-09-15：鱼嘴牵引鱼身，侧向控鱼打开收线机会
+
+用户反馈是鱼常向湖心游、出力却没有拉回进展，以及被拉时整条鱼平移、看不到鱼头先转。本次沿原 StateTree、连续出力和权威物理链实现，不增加 AIController。下方同日“保留建议”是此前的数据迁移记录；本节说明其后的运动实现，模块总状态仍见 [需求对齐差距清单](Development/需求对齐差距清单.md)。
+
+基线 `4d0391a1`；修改前工作区只有用户新增的根目录《裁决同步 · 程序（工程待办）.md》，未修改或纳入提交。修改前未另跑完整基线；已知此前多人抓握用例存在失败，不据此预判本次失败原因。本轮有渲染回归和真实资产重载证据，真人手感、Cook 与打包联机仍未验收。用户当前继续试玩，主工程最后复编暂缓；已在源码/二进制/插件独立的验证工程编译并运行补齐前置后的测试，不将正在试玩的旧 DLL 记作最新验证结果。
+
+过程中另出现 Interaction 距离判定，以及 Online/UI 房间链、`Config/DefaultGame.ini`、相关脚本和主界面文档的并行改动，均保留且不纳入本次提交；本次隔离验证仍采用这些环节的先前基线。不能把钓鱼验证称为并行改动的组合验收。
+
+### 现在怎样拉动鱼
+
+1. StateTree 继续决定外冲、横切和缓游调整；连续模型给出期望游向及出力比例。实际鱼身朝向另由物理角速度推进。鱼想向外游，不意味着鱼头可以无条件立刻朝外。
+2. 推力沿当步真实鱼身前向施加。鱼线作用于静态嘴点；嘴点到质心的力臂与同一笔线力产生转矩。侧拉会先扳动鱼头，鱼恢复原游向只有有限的主动转矩，因而存在侧控后外游分力降低、卷线器能够收线的机会。
+3. 鱼嘴、质心和鱼竿端点一起参与线长求解。鱼 Actor 根位置从质心与最终朝向反算；不先平移整条鱼，再用表现层把头硬转过去。实际身体仍可能有惯性和侧向位移，不承诺任何时刻速度都与鱼头完全同向。
+4. 状态变更只改变目标，保留普通阶段之间的角速度。默认转向响应时间 `0.25 s`，主动转矩系数 `0.35`；主动最大角速率取逐鱼行为解析结果，鱼身总角速率上限为 `max(240°/s, 主动最大角速率)`。这些是本轮试用参数，尚未由真人手感确定最终值。力竭进入既有“无自由漂游”收尾：不保留自由平移或自由旋转惯性，当步鱼线仍可被动转动鱼身。
+
+原先还有两处影响拉回进展的实际接缝：`TryResolveFishBehavior` 已能读取逐鱼节拍和游速，但 Session 入战仍直接装入模板。本轮将生产入口接到解析结果，食性概率及未裁定的横切参数继续保留模板来源。另一个问题是主控身体移动方向又被投影成持竿/卷线力量折扣；现在主控力量不因按 W/A/S/D 被二次削弱，杆线几何杠杆仍保留，腿部移动仍按原真实身体样本结算。
+
+### 几何、单位与费用契约
+
+`UCatFishDefinition::FightBodyGeometry` 保存 Actor 局部坐标、`VisualScale=1` 时的嘴点、质心、缩放原点和偏航回转半径，距离单位均为 cm。`Scripts/calibrate_fish_body_geometry.py` 沿正式鱼表 → 鱼定义 → PresentationDefinition → Mesh，读取参考姿态 `Bone014` 的上颚末端。16 鱼参考网格已逐一核对；权威运动求解不读取动画骨骼。质心采用网格原点，回转半径采用参考网格长宽的均匀长方体近似 `sqrt((L²+W²)/12)`，属于游戏模型近似，不是实测质量分布。
+
+本场缩放围绕 `ScaleOriginLocalCentimeters`，保留表现配置的基础平移；不把网格平移误乘鱼体缩放。求转矩前力臂由 cm 转 m，力为 N，转矩为 N·m，惯量为 kg·m²，角速度为 rad/s。转向有效惯量取实体惯量与水附加惯量的较大者，角阻尼固定按满出力标定，不能随缓游出力同步降为零而失去阻尼。
+
+费用沿用既有“意图方向上的运动缺失”算法：意图位移为 `AI期望方向 × 当步期望游速 × dt`，实际位移改为质心位移并扣除独立的历史几何纠偏，缺失为 `max(0, 意图长度 − 实际位移在意图方向的投影)`。这里只校正计量点，不改米价、不增加转头费、不额外乘状态倍率，也不把根点绕质心的转动当成主动游动。实际推力方向与 AI 意图方向分别存储，不能用同一个字段掩盖含义差异。猫 ASC、腿/杆/卷线/支撑费用、竿耐久仍经原有单一服务器结算入口。
+
+### 影响对照与最终衔接
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 入战及行为来源 | `Source/Catfishing/Fishing/CatFishingSession.cpp::TryEnterHookedFightFromAuthority` → `UCatFishingSettings::TryResolveFishBehavior` → Runner 初始化 | 模板直装绕过逐鱼解析；改为真实逐鱼节拍/游速，未知列仍由原模板提供 | 同一入战入口接收 `ResolvedBehavior`；不重建 StateTree | 解析器已有 → Session → 原 Runner/树 | 正式两鱼、完美/普通、固定步实际消费；食性缺配保留诊断 | 正式资产解析及完整固定步通过，见 `IsolatedUnitReport`；未裁食性继续明确诊断 |
+| 鱼身状态/核心物理 | `Source/Catfishing/Fishing/Simulation/CatFishBodyModel.h/.cpp`；`CatFishingFightSimulator::Step`；`CatFishingFightRunner::HandleFixedStep` | AI方向直接决定推力、Actor自己转向 → 有惯量的真实鱼身方向、有限主动转矩、嘴点线力矩 | 新纯函数候选模型；Runner 持有并单次提交朝向/角速度；旧 `FishVelocity` 明确为质心速度 | 标定几何 → 同步张力/端点/姿态候选 → 原结算 → 提交 | 左右侧拉、松线、目标反向、静态/物理/CMC端点；不得重复推进状态 | 8项鱼身契约通过，含持续侧拉收线及288组近竿尖边界；不以此证明真人手感 |
+| 线长/贴岸/初始位置 | Session 初始投影；Runner `ResolveFishSurface` → `CatFishFightMotionSolver` | 线长球约束根点 → 约束嘴点；地形仍解析鱼根，保持水面/拖岸职责 | 给原根点地形求解器传入嘴偏移修正后的竿端点；最终口径回到实际嘴点 | 几何与朝向先确定 → 初始水面/运行表面 → 费用重算 | 完美缩线、水面修正、力竭拖岸、最短垂直线；不能引入凭空冲量 | 初始嘴点线长、纯候选及边界回归通过；正式复杂岸坡真人表现未验证 |
+| 主控出力及费用 | Runner `UpdateOperatorIntentAndProperties` → Simulator；`ApplyOperatorStaminaChanges` → ASC | 身体方向再次折扣持竿力量 → 主控全力量与原杆线杠杆，腿部价格保持 | 删除 native `OperatorSupportAlignment` / `CatSupportAlignment` 及乘法；不新增账本 | 身体实际样本 → 原主控属性 → 原费用提交 | 静止/前后/侧移力量，真实ASC、单笔防重、绿黄余额 | 生产方向输入及腿费0.075/0.15/0/0每50ms回归通过；重复提交拒绝 |
+| 正式数据/持久化/生成 | `Source/Catfishing/Data/CatFishDefinition.h::FightBodyGeometry`；16个 `/Game/Catfishing/Data/Fish/Fish_*`；`Scripts/calibrate_fish_body_geometry.py` | 鱼嘴/质心无显式几何 → 正式逐鱼静态标定 | 新结构零默认；生产入战缺几何拒绝，纯质点测试允许零几何；仅迁几何字段 | 预览及参考网格核对 → 保存 → 新进程只读重载 → 幂等复验 | 保留ID、数值、所有表现引用；检查完整序列化属性排除目标字段后的哈希 | 16保存、16重载一致、重复Apply零保存；既有设计数据生成器衔接与发布包哈希见下方补充 |
+| 权威/复制/钩与鱼线 | Session 入战 AttachHook、逐步更新；`CatFishEncounterActor::ApplyFightStepFromAuthority` / `OnRep_ReplicatedMovement`；`CatFishingHookActor::OnRep_AttachmentReplication` / `UpdateFishingLinePresentation` | 独立钩位置与表现端点插值可能落后鱼身 → Hook附着鱼、线起点取同一嘴点 | Actor移动复制传递物理姿态；Hook owner仍为竿；只增加原附着复制消费，不增第二份姿态裁决 | 服务器鱼姿态 → 钩嘴附着 → 客户端同父变换/同嘴点 | 网络到达顺序、AI方向与身体方向不同、缩放、四行为快照 | 有渲染 Listen/Client 正式资产测试通过；独立打包双端未验 |
+| 动画/UI消费者与退出 | Encounter `ApplyVisualPose`、原 AnimBP/PresentationState；Session终局 DestroyHook/Encounter | 翻肚围绕网格原点会挪开鱼嘴 → 实际动画嘴对齐静态物理嘴；HUD仍读原状态/体力 | 移除Actor独立 `FixedTurn`、旧角速率字段；保留AI意图表现字段；原终局销毁次序保持 | 先物理姿态 → 动画/翻肚补偿；终局先钩后鱼 | 翻肚嘴点、倾斜地形/拾取切换、取消失败清理；反射删除需资产审计 | 117 BP/ABP/WBP、13地图/外置包无旧字段引用，配置为native类；真实AnimBP双端翻肚通过；岸坡交付未验 |
+| 配置/Cook/存档 | `Config/DefaultGame.ini` Encounter/StateTree/目录绑定；原鱼定义持久身份 | 配置路径、树包、存档ID均保持；新增数据仅在原鱼资产 | 保留入口，无新增Cook目录，无存档迁移；新资产字段随原包引用进入Cook | 原目录 → 鱼定义 → 表现资源 | 新Cook与正式包必须另验，不能用编辑器加载替代 | 配置/引用未变；本轮Cook、打包未运行 |
+| 测试/日志/文档 | `Source/Catfishing/Fishing/Tests/CatFishBodyTests.cpp`、Operator/Timing测试；`Source/CatfishingEditor/Fishing/Tests/CatFishBehaviorNetworkTests.cpp`；本节/差距清单 | 增加鱼身行为断言，修正根点线长及完整入战夹具；旧诊断鱼点口径需同步 | 同一费用及端点契约，默认Log限频记录身体与嘴点；不另建业务进度 | 实现 → 契约/真实链路 → 文档证据 | 三层证据分开，保留失败记录 | 结果和剩余缺口如下；模块不关闭 |
+| 地形卸载后的角状态 | Runner `ResolveFishSurfaceFromAuthority` → Simulator 同一候选求解 | 表面使线松弛后原逻辑清杆端力，却保留鱼身受该力转动；简单撤矩又可能使嘴点重新超线 | 将只读 `FCatFightFishSurfaceConstraintInput` 接入同一张力/姿态候选，仅真实岸线改变落点时重求；不复制求解器；卷线试探须同时满足力和嘴点约束 | 表面约束 → 同力重求 → 最终嘴/根 → 原状态/费用提交 | 真实水域卸载、撤矩再触线及小力量部分收线；不重复随机、费用或地形副作用 | `ShoreUnitReport` 82/82通过，新真实岸线用例三构型通过；曲岸exact回退和查询拒绝主要由静态链路支持，未冒充实跑 |
+| 发布字段/资产快照链 | `Knowledge/Schema/鱼表格.第一版.yaml::code_only_fields`；`.harness/formal-fish-asset-input-package.json` → `Scripts/check_fish_table_vs_definition.py`；`Docs/DataAsset字段含义.md` | 新几何不来自CSV；旧包哈希不能代表标定后的资产 | 补独立标定来源；保留 `current_migration` 原对象，追加 `subsequent_migrations` 前后链；核对最终磁盘及原CSV/饵输入 | 字段来源 → 几何证据 → 快照链 → 检查器 | 当前包篡改、断链、漏/多资产、输入变化必须失败；不修改Harness模块状态 | 发布检查从2问题到0；10项哈希链契约通过；原生成器白名单保留几何，不需改写 |
+| 动画姿态后的嘴部对齐 | Encounter `RefreshFishPresentation` / `ApplyVisualPose`；正式48动画序列动态采样 | 静态嘴点对齐仍会留下最大2.8cm动画偏差 → 完成动画姿态后将可见嘴点对齐物理嘴点 | 逐祖先点变换匹配已烘焙嘴点并缓存；骨骼完成回调只调VisualRoot；不增Actor Tick或骨骼物理权威 | 骨架/动画 → 视觉补偿 → 钩/线显示；EndPlay解绑 | 真正运行AnimBP、缩放、翻肚、房主/客户端、连续帧不累计；保留原托地优先 | `AnimatedVerifiedReport`通过：RiverPattern正式AnimBP、两端四状态各40/42/40/40帧；16鱼参考匹配唯一通过；LOD/蒙皮及全部鱼真人画面未验 |
+| 鱼的查询碰撞框 | Encounter `ApplyVisualScale` → `FishingCollision` | 旧组件变换包含显示偏移，动画补偿可能反馈到查询框 | 静态Mesh Bounds经FishMesh相对变换计算，保留缩放与2cm最小范围；排除VisualRoot | 静态范围 → 查询框；动画补偿仅影响显示 | 两端动画播放、状态切换与翻肚时局部中心/范围稳定 | `AnimatedVerifiedReport`连续帧验证通过，局部中心/范围未随动画或翻肚偏移 |
+
+### 验证与尚未完成
+
+证据根目录：`Saved/Automation/FishMouth-20260915`。Editor 与 Game Win64 Development 均完成过本轮生产代码构建；Game 成功见 `BuildGameFinal.log`。最新一次主工程 Editor 构建被正在试玩的 Live Coding 挡住（`BuildEditorFinal.log`），不是源码编译错误；随后复用 `Saved/FishAlignment/Project` 独立 Source/Config/Binaries/Intermediate，并把原先共享的 Plugins 改为独立副本，Content只读引用正式资产。UE的Live Coding门按引擎可执行文件互斥，独立构建显式使用 `-NoHotReloadFromIDE`，不改用户当前进程。`BuildIsolatedEditor.log` 构建成功；`IsolatedSourceSync.json` 记录同步源码及哈希。
+
+最终动画修正后的Editor构建为 `BuildAnimatedReferenceFixEditor.log`（成功），源码核对为 `IsolatedAnimatedMouthSourceSync.json`。有渲染 `AnimatedVerifiedReport/index.json` **83/83通过**（60 clean、23 warning、0 failed/notRun，进程exit 0），覆盖82个钓鱼用例及一个真实Listen/Client动画用例，替代下方历史轮次作为当前契约/运行证据。未将各轮重叠测试相加。
+
+最终Game Win64 Development也通过，见 `BuildVerifiedIsolatedGame.log`（75.27秒，独立输出 `Saved/FishAlignment/Project/Binaries/Win64/Catfishing.exe`）。验证副本没有正常Git工作集，所有可写源文件会被默认adaptive规则排除出合并编译；本次Game使用引擎原生 `-DisableAdaptiveUnity`，仅关闭该工作集启发式，不改产品代码或主工程配置。Editor继续按原方式逐文件验证本轮改动。当前主编辑器与试玩按用户要求保持，最新补修尚未完成主工程重编及重载。
+
+最终 `runtime_behavior` 的动画样本为正式RiverPattern鱼、VisualScale=1.15、四种外冲/横切/缓游/力竭快照；两端分别观察40/42/40/40个实际更新帧，每状态至少0.6世界秒。运行中AnimBP消费快照，嘴骨相对首采样帧移动0.254–0.549cm（组件空间），不是冻结姿态。客户端最大嘴钩误差0.003450cm，服务器及两端静态物理嘴误差按日志六位小数为0；查询框稳定、AI目标与物理鱼身朝向分离、客户端权威写入拒绝均通过。见 `AnimatedVerifiedTests.log` 的 `fish_animated_mouth_network_sample`，SessionId=`086223C34795D6B766B9EB8BAEA39111`。此用例不代表16鱼全部动画/LOD或真人表现已经验收。
+
+- `contract`：补齐夹具后 `IsolatedUnitReport/index.json` **81/81通过**（60 clean、21 warning、0 failed/notRun）。8个 FishBody 用例全部通过，包含288组短线、高度差、活鱼/力竭及三种端点组合，检查有限性、线长和重复候选纯度。前一次 `FinalUnitReport` 80/81通过，唯一失败来自扩展的 Timing 正式会话夹具遗漏 `CommitFishingBaitDeferred`，真实第一步竿耐久提交因 `BaitNotCommitted` 返回 InvalidPhase；现在已补前置并实跑通过。此前 CoreReport 17项通过；各轮有重叠，不累计数量。
+- `runtime_behavior`：`FishingReport/index.json` 有渲染85项中59 clean、25 warning、1失败。`FishBehaviorListenClientSnapshots` 使用真实Listen/Client、正式鱼网格和钩，四次快照验证身体角度不跟AI方向硬同步、嘴点附着、1.15缩放及翻肚对齐；生产ASC费用和逐鱼解析消费通过。其后 `IsolatedUnitReport` 的 Timing 进一步通过真实第一固定步：Session/Runner、StateTree、ASC/耐久、鱼身与钩、嘴点线长全链提交成立。
+- 该85项中的失败为 `GroupListenThreeClients`：测试把猫力量固定50，却允许基础池抽到1.266kg的 RiverPattern，鱼基础力量7.598、完美后6.078；开场比例8.226超过既定2倍碾压门，系统正确直接交鱼，测试仍断言一定启动Runner。日志 `FishingTests.log` 中同一 SessionId `E1FDA052-47A1-6E57-419D-FDA1107B4E9D` 有开场碾压、渔获生成与三客户端回执。基线源码也有该固定力量、随机选鱼与碾压门，未在本轮实跑基线重现；不称为已实证的基线失败。本轮未改它的玩法或测试，需另按多人钓鱼场景修正前置后验收。
+- `presentation_delivery`：有渲染自动化仅证明受控快照和资源变换，尚未进行正式湖区真人手感、复杂岸坡翻肚/拾取、新Cook、独立Development包房主/客户端默认落盘验收。不能宣称已达到“丝滑”或Fishing/Delivery模块已完成。
+
+贴岸补修复验：`BuildIsolatedFinalEditor.log` 成功；`ShoreUnitReport/index.json` 82/82通过（60 clean、22 warning）。新用例在真实水域中得到三组最终张力：卸载 `3.254532→0 N`，转回后仍需绷线 `83.806148→71.393570 N`，小力量收线限制 `0.25 N` 下实际卷线 `2.123502 cm / 请求4 cm`。同一步最终张力与鱼嘴转矩一致，嘴距合法，岸线随机反馈只有一次，地形求解不直接写双方体力。结果见 `ShoreUnitTests.log` 的 `fish_body_real_shore_contract`；普通拖岸/力竭既有回归保持通过。
+
+动画审计：`Saved/FishMouth/AnimatedMouthAudit.json` 与 `AnimatedMouthSummary.json` 沿正式引用对48条 Calm/Struggle/Exhausted 序列完成12,576次 Raw/Compressed 姿态求值，16鱼的嘴链均为 `Bone014→Bone013→Bone022→Bone001`。`VisualScale=1` 时相对参考嘴的逐鱼最大偏差范围分别为0.078–1.917、0.096–1.998、0.168–2.801cm；相对序列首帧也在移动，不能靠重新标定一个静态偏移修好。129个读取资产哈希未变。报告中17条附带错误来自protected ParentClass反射读取，未伪装全绿；该审计证明序列骨骼在动，不证明运行AnimBP混合、LOD或蒙皮上唇顶点已验收。对应纯显示补偿按上表单独验收。
+
+首次真实动画复验 `AnimatedFinalReport` 为82通过、1失败，失败仅为动画网络测试：两端 `ReferenceMouthNotMatched` 退回静态补偿，服务器真实嘴距钩1.270876cm。参考骨链含非均匀缩放和旋转，合成 `FTransform` 丢失剪切；RiverPattern的参考点因此与原逐祖先点变换差0.318600cm，超过0.01cm匹配阈值。已改为与标定脚本相同的逐祖先 `TransformPosition`，不改资产、物理或测试容差。先前 `BuildVisualEditor.log` 的测试缺完整AnimInstance类型定义也已修正，`BuildVisualEditorFinal.log` 成功；这次运行失败仍保留，修正后的真实结果为上方 `AnimatedVerifiedReport`。过期的隔离Game构建主动停止后，最终版本已重新构建成功。
+
+`Saved/FishMouth/ReferenceBoneMatchAudit.json` 对16鱼全部参考骨按新算法复算：最近点均唯一为Bone014，最大误差1.986×10⁻¹⁵cm，第二近骨最小距离0.0884507cm，0.01cm阈值内没有歧义。64个鱼定义/表现/网格/骨架包哈希与此前UE审计一致。这是全名册静态匹配证据，实际动画与复制仍由网络复验提供。
+
+资产证据：`GeometryFirstApply.json`、`GeometryFreshProcessVerify.json`、`GeometryIdempotence.json`；完整非几何序列化属性不变。参考网格 `FishReferenceSide.png`；反射删除审计 `FishActorConsumers.json`、`FishActorLevelFieldReferences.json`。新几何脚本默认只预览，`-FishBodyGeometryApply` 保存，`-FishBodyGeometryVerify` 只读验证；换网格、参考姿态或 EncounterTransform 后应重做标定并重载核验，不从运行中的摆尾动画反推权威几何。
+
+发布检查证据为同目录 `FinalPublicationMapping.md`（0问题）、`FinalPublicationContractTests.txt`（10/10通过）；检查器不要求协作者有本机 Saved 报告，使用仓库内连续快照与当前文件核验。10项契约保存在 `Scripts/Tests/test_fish_table_snapshot_checks.py`，按既有PyYAML依赖运行 `python -m unittest discover -s Scripts/Tests -p test_fish_table_snapshot_checks.py -v`。`Scripts/migrate_fish_design_data.py` 与 `Scripts/prepare_fish_runtime_migration.py` 只赋值自有字段白名单，不替换鱼定义对象，均不会覆盖本次几何。
+
+默认诊断在 `LogCatFishing`：入战 `fishing_fish_body_bound`，服务器约1秒限频 `fishing_fish_body_sample`，客户端约1秒限频 `fishing_fish_body_received`，附着变化 `fishing_fish_mouth_attachment_received`。动画锚点解析为 `fish_animated_mouth_bone_resolved`，无法匹配或姿态无效时每资源只记一次 `fish_animated_mouth_fallback` 并保留静态视觉补偿，不反馈物理。事件携带 SessionId、Actor、World/NetMode/Authority/Role；采样记录AI/身体朝向、角速率、线力矩/主动转矩、嘴点、张力、请求/实际卷线量。缺几何或行为解析失败走 `fishing_fight_start_rejected`，挂钩附着失败含 `FishMouthAttachmentFailed`。包端日志应在 `<打包根目录>/Catfishing/Saved/Logs` 核对两端，本轮没有包端日志证据。
+
+保留边界：现有外冲/横切/缓游 StateTree 与连续出力仍生效；未新增连续低体力降力曲线、状态数量或湖心固定目标。`Fight_*` 仍提供未裁定参数；新几何并不补齐四种缺失鱼或全部水面特效。零几何仅是纯模拟质点测试的数学极限，正式入战没有第二条质点回退路径。最近冲岸距离和强拉越界后的设计缺口仍按此前记录保留。
+
+独立检查点：`c10a205d`（身体方向不重复折扣力量）、`3bd20968`（生产入战接逐鱼行为解析）；鱼身几何、嘴部附着与动画补偿以本节最终证据建立独立代码检查点。均只在本地提交，未推送，Fishing/Delivery模块总体验收仍未关闭。
+
+## 2026-09-15：鱼与钓鱼按保留建议收口（此前的数据迁移与取舍记录）
 
 授权：用户在当前任务批准按“建议保留”实现，同时记录与策划案冲突的部分、推荐版本及临时原因。本节是技术交付材料，不是第二份进度清单；模块状态仍由 [需求对齐差距清单](Development/需求对齐差距清单.md) 管理。下方旧日期段落是历史证据，不覆盖本节的当前决策。
 

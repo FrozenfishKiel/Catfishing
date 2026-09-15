@@ -15,6 +15,7 @@
 #include "Fishing/Simulation/CatFishingFightRunner.h"
 #include "Logging/CatLog.h"
 #include "Net/UnrealNetwork.h"
+#include "ReferenceSkeleton.h"
 #include "StateTree.h"
 
 ACatFishEncounterActor::ACatFishEncounterActor()
@@ -26,7 +27,7 @@ ACatFishEncounterActor::ACatFishEncounterActor()
 	bOnlyRelevantToOwner = false; // 所有客户端都需要看到鱼，而非只有 Owner 可见。
 	PrimaryActorTick.bCanEverTick = false; // 纯粹由服务器权威事件（InitializeAuthoritativeIdentity/ApplyFightStepFromAuthority）驱动状态，不需要 Tick。
 	PrimaryActorTick.bStartWithTickEnabled = false;
-	// 根组件只承载权威 Transform；VisualRoot 只做力竭侧翻，FishMesh 由鱼种库表现定义直接配置。
+	// 根组件只承载权威 Transform；VisualRoot 做侧翻与动画嘴点补偿，FishMesh 由鱼种库表现定义直接配置。
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
 	// T15，钓鱼规则 §5.5：查询碰撞体给所有端同一个鱼中心；不向运动求解施加阻挡力。
@@ -84,9 +85,17 @@ bool ACatFishEncounterActor::InitializeAuthoritativeIdentity(const FGuid InFishi
 	bIdentityInitialized = true; // 标记身份已锁定，后续调用只能走上面的幂等分支。
 	RefreshFishPresentation();
 	ApplyVisualScale();
+	ApplyVisualPose();
 	QueueOrDispatchPresentationChanged(Previous, PresentationState); // 按 BeginPlay 时序决定立即广播还是先排队。
 	ForceNetUpdate(); // 立即触发一次网络复制，不等下个复制周期，保证表现尽快到达客户端。
 	return true;
+}
+
+FVector ACatFishEncounterActor::GetMouthWorldLocation() const
+{
+	const UCatFishDefinition* Definition = GetFishDefinition();
+	return Definition ? FCatFishBodyModel::MouthPosition(Definition->FightBodyGeometry.Scaled(PresentationState.VisualScale),
+		GetActorLocation(), GetActorForwardVector()) : GetActorLocation();
 }
 
 const FCatFishEncounterPresentationState& ACatFishEncounterActor::GetPresentationState() const { return PresentationState; }
@@ -190,7 +199,7 @@ namespace CatFishEncounterPresentationPrivate
 // 鱼种表现解析流程：只从正式鱼目录解析 FishDefinition，再沿其直接引用加载表现资产；不存在任何按 ID 维护的第二张映射表。
 void ACatFishEncounterActor::RefreshFishPresentation()
 {
-	if (!FishMesh || PresentationState.FishDefinitionId.IsNone()
+	if (!FishMesh || bRefreshingFishPresentation || PresentationState.FishDefinitionId.IsNone()
 		|| AppliedPresentationFishDefinitionId == PresentationState.FishDefinitionId)
 	{
 		return;
@@ -200,6 +209,12 @@ void ACatFishEncounterActor::RefreshFishPresentation()
 		AppliedPresentationFishDefinitionId = PresentationState.FishDefinitionId;
 		return;
 	}
+	// 更换 Mesh/AnimClass 可同步完成一次骨骼刷新；完成资源和缓存切换前不消费该回调。
+	TGuardValue<bool> RefreshGuard(bRefreshingFishPresentation, true);
+	AnimatedMouthMesh.Reset();
+	AnimatedMouthBone = NAME_None;
+	AnimatedMouthBoneIndex = INDEX_NONE;
+	bLoggedAnimatedMouthFallback = false;
 
 	const UCatFishCatalogSettings* Catalog = GetDefault<UCatFishCatalogSettings>();
 	const UCatFishDefinition* Definition = Catalog
@@ -232,6 +247,45 @@ void ACatFishEncounterActor::RefreshFishPresentation()
 	FishMesh->SetAnimationMode(EAnimationMode::AnimationBlueprint);
 	FishMesh->SetAnimInstanceClass(AnimClass);
 	AppliedPresentationFishDefinitionId = PresentationState.FishDefinitionId;
+
+	// MouthLocal 是经过表现基础变换后的参考骨架点，无需维护第二份逐鱼骨名配置。
+	// 只在资源切换时遍历参考骨架，逐帧使用缓存骨名读取最终动画姿态。
+	const FReferenceSkeleton& ReferenceSkeleton = Mesh->GetRefSkeleton();
+	const TArray<FTransform>& ReferenceLocalPose = ReferenceSkeleton.GetRefBonePose();
+	double ClosestDistanceSquared = TNumericLimits<double>::Max();
+	for (int32 BoneIndex = 0; BoneIndex < ReferenceLocalPose.Num(); ++BoneIndex)
+	{
+		// 与正式嘴点标定保持同一逐级点变换口径。非均匀缩放与旋转共存时，
+		// 先合成 FTransform 会丢失剪切，得到的骨点与逐级 TransformPosition 不等价。
+		FVector ReferencePointInMesh = FVector::ZeroVector;
+		for (int32 AncestorIndex = BoneIndex; AncestorIndex != INDEX_NONE; AncestorIndex = ReferenceSkeleton.GetParentIndex(AncestorIndex))
+		{
+			ReferencePointInMesh = ReferenceLocalPose[AncestorIndex].TransformPosition(ReferencePointInMesh);
+		}
+		const FVector ReferencePoint = EncounterMeshBaseTransform.TransformPosition(ReferencePointInMesh);
+		const double DistanceSquared = FVector::DistSquared(ReferencePoint, Definition->FightBodyGeometry.MouthLocalPositionCentimeters);
+		if (DistanceSquared < ClosestDistanceSquared)
+		{
+			ClosestDistanceSquared = DistanceSquared;
+			AnimatedMouthBoneIndex = BoneIndex;
+		}
+	}
+	constexpr double ReferenceMouthToleranceCentimeters = 0.01;
+	if (AnimatedMouthBoneIndex != INDEX_NONE && ClosestDistanceSquared <= FMath::Square(ReferenceMouthToleranceCentimeters))
+	{
+		AnimatedMouthMesh = Mesh;
+		AnimatedMouthBone = ReferenceSkeleton.GetBoneName(AnimatedMouthBoneIndex);
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fish_animated_mouth_bone_resolved SessionId=%s CastAttemptId=%s FishActor=%s FishDefinitionId=%s Mesh=%s Bone=%s ReferenceErrorCm=%.6f Result=Cached World=%s NetMode=%d Authority=%d LocalRole=%d"),
+			*PresentationState.FishingSessionId.ToString(), *PresentationState.CastAttemptId.ToString(), *GetName(),
+			*PresentationState.FishDefinitionId.ToString(), *GetNameSafe(Mesh), *AnimatedMouthBone.ToString(), FMath::Sqrt(ClosestDistanceSquared),
+			*GetNameSafe(GetWorld()), int32(GetNetMode()), HasAuthority(), int32(GetLocalRole()));
+	}
+	else
+	{
+		AnimatedMouthBoneIndex = INDEX_NONE;
+		LogAnimatedMouthFallback(TEXT("ReferenceMouthNotMatched"));
+	}
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fish_presentation_applied FishDefinition=%s Actor=%s NetMode=%s Authority=%s Presentation=%s Mesh=%s Skeleton=%s AnimClass=%s VisualScale=%.3f"),
 		*PresentationState.FishDefinitionId.ToString(), *GetNameSafe(this),
@@ -251,7 +305,8 @@ void ACatFishEncounterActor::ApplyVisualScale()
 	FishMesh->SetRelativeScale3D(EncounterMeshBaseTransform.GetScale3D() * Scale);
 	if (FishingCollision && FishMesh->GetSkeletalMeshAsset())
 	{
-		const FBoxSphereBounds LocalBounds = FishMesh->CalcBounds(FishMesh->GetComponentTransform().GetRelativeTransform(GetActorTransform()));
+		// 查询碰撞使用静态资源边界，不能让动画嘴点补偿或侧翻偏移反写玩法查询位置。
+		const FBoxSphereBounds LocalBounds = FishMesh->GetSkeletalMeshAsset()->GetBounds().TransformBy(FishMesh->GetRelativeTransform());
 		FishingCollision->SetRelativeLocation(LocalBounds.Origin);
 		FishingCollision->SetBoxExtent(LocalBounds.BoxExtent.ComponentMax(FVector(2.0)));
 	}
@@ -259,17 +314,46 @@ void ACatFishEncounterActor::ApplyVisualScale()
 
 void ACatFishEncounterActor::ApplyVisualPose()
 {
-	if (!VisualRoot)
+	if (!VisualRoot || bRefreshingFishPresentation || bApplyingVisualPose)
 	{
 		return;
 	}
+	TGuardValue<bool> PoseGuard(bApplyingVisualPose, true);
 	// AutoHauling 在玩法上表示鱼已经力竭、只会被收线拖动。这个状态属于复制的 PresentationState，
 	// 所以服务器和每个客户端都会独立应用同一侧翻角；VisualRoot 旋转不会污染权威 Actor 朝向。
 	const double VisualRoll = PresentationState.MotionIntent == ECatFishMotionIntent::AutoHauling
 		? AppliedExhaustedVisualRollDegrees : 0.0;
-	VisualRoot->SetRelativeLocationAndRotation(FVector::ZeroVector, FRotator(0.0, 0.0, VisualRoll));
+	const UCatFishDefinition* Definition = GetFishDefinition();
+	const FVector MouthLocal = Definition ? Definition->FightBodyGeometry.Scaled(PresentationState.VisualScale).MouthLocalPositionCentimeters : FVector::ZeroVector;
+	FVector AnimatedMouthInVisualRoot = MouthLocal;
+	if (!AnimatedMouthBone.IsNone())
+	{
+		if (FishMesh && AnimatedMouthMesh.IsValid() && FishMesh->GetSkeletalMeshAsset() == AnimatedMouthMesh.Get()
+			&& FishMesh->GetComponentSpaceTransforms().IsValidIndex(AnimatedMouthBoneIndex))
+		{
+			const FVector AnimatedMouthInMesh = FishMesh->GetBoneTransform(AnimatedMouthBone, RTS_Component).GetLocation();
+			const FVector AnimatedPoint = FishMesh->GetRelativeTransform().TransformPosition(AnimatedMouthInMesh);
+			if (!AnimatedPoint.ContainsNaN())
+			{
+				AnimatedMouthInVisualRoot = AnimatedPoint;
+			}
+			else
+			{
+				LogAnimatedMouthFallback(TEXT("NonFiniteBonePose"));
+			}
+		}
+		else
+		{
+			LogAnimatedMouthFallback(TEXT("BonePoseUnavailable"));
+		}
+	}
+	const FRotator RollRotation(0.0, 0.0, VisualRoll);
+	// 每次从 Mesh 相对基础变换重建，不读上次 VisualRoot 偏移；实际动画嘴点与静态物理嘴点同位。
+	// 只移动可见鱼身，不改变权威身体 yaw、位置、钩或鱼线长度。
+	VisualRoot->SetRelativeLocationAndRotation(MouthLocal - RollRotation.RotateVector(AnimatedMouthInVisualRoot), RollRotation);
 	if (PresentationState.bGrounded && FishMesh && FishMesh->GetSkeletalMeshAsset())
 	{
+		// 已落地时仍优先托起整个可见鱼身防止穿地；该额外提升不反馈给物理嘴点。
 		const FBox Bounds = FishMesh->GetSkeletalMeshAsset()->GetBounds().GetBox()
 			+ FishMesh->CalcBounds(FTransform::Identity).GetBox();
 		const double Lift = CatFishGrounding::ComputeVerticalLift(Bounds,
@@ -278,12 +362,23 @@ void ACatFishEncounterActor::ApplyVisualPose()
 	}
 }
 
+void ACatFishEncounterActor::LogAnimatedMouthFallback(const TCHAR* Reason)
+{
+	if (bLoggedAnimatedMouthFallback) return;
+	bLoggedAnimatedMouthFallback = true;
+	UE_LOG(LogCatFishing, Warning,
+		TEXT("Event=fish_animated_mouth_fallback SessionId=%s CastAttemptId=%s FishActor=%s FishDefinitionId=%s Mesh=%s Bone=%s Reason=%s Result=StaticMouthFallback World=%s NetMode=%d Authority=%d LocalRole=%d"),
+		*PresentationState.FishingSessionId.ToString(), *PresentationState.CastAttemptId.ToString(), *GetName(),
+		*PresentationState.FishDefinitionId.ToString(), *GetNameSafe(FishMesh ? FishMesh->GetSkeletalMeshAsset() : nullptr),
+		*AnimatedMouthBone.ToString(), Reason, *GetNameSafe(GetWorld()), int32(GetNetMode()), HasAuthority(), int32(GetLocalRole()));
+}
+
 bool ACatFishEncounterActor::ApplyFightStepFromAuthority(const ECatFishMotionIntent MotionIntent,
 	const double CurrentLineLength, const FVector& FishWorldPosition, const float StepDeltaSeconds,
 	const float FishLineAlignment, const float NormalizedLineLoad,
 	const float IntendedSwimSpeedCentimetersPerSecond, const bool bStrongConfrontation,
 	const bool bGrounded, const FVector GroundNormal, const FVector SwimHeading,
-	const ECatFishBehavior Behavior, const float FishEffortRatio)
+	const ECatFishBehavior Behavior, const float FishEffortRatio, const FVector ResolvedBodyHeading)
 {
 	// [FishLogic 4/5：权威落位与多人表现]
 	// Simulator 给出事实，本 Actor 只负责在服务器应用 Transform/表现快照；位置和 PresentationState 再复制给客户端。
@@ -293,7 +388,7 @@ bool ACatFishEncounterActor::ApplyFightStepFromAuthority(const ECatFishMotionInt
 		|| !FMath::IsFinite(NormalizedLineLoad) || NormalizedLineLoad < 0.0f || NormalizedLineLoad > 1.0f
 		|| !FMath::IsFinite(IntendedSwimSpeedCentimetersPerSecond)
 		|| IntendedSwimSpeedCentimetersPerSecond < 0.0f || GroundNormal.ContainsNaN()
-		|| SwimHeading.ContainsNaN() || !FMath::IsFinite(FishEffortRatio)
+		|| SwimHeading.ContainsNaN() || ResolvedBodyHeading.ContainsNaN() || !FMath::IsFinite(FishEffortRatio)
 		|| FishEffortRatio < 0.0f || FishEffortRatio > 1.0f)
 	{
 		// 必须已经完成身份初始化才允许推进搏斗表现；位置/线长必须是合法有限值，防止把 NaN/负数同步给客户端。
@@ -313,33 +408,11 @@ bool ACatFishEncounterActor::ApplyFightStepFromAuthority(const ECatFishMotionInt
 	PresentationState.bGrounded = bGrounded;
 	PresentationState.GroundNormal = bGrounded ? GroundNormal.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, FVector::UpVector) : FVector::UpVector;
 
-	// 活鱼身体追向主动游向；被收线侧拖的位移不再强迫鱼掉头。初次落位及收尾仍可使用位移方向。
-	// 只写 Actor 旋转（随 SetReplicateMovement 一起复制），玩法判定（线长/近岸/抄网半圆）全部只用位置，旋转不参与任何裁决。
-	// 只转偏航不转俯仰：鱼贴着水面走，Z 的微小抖动会让 Pitch 疯狂跳动。
-	const FVector MoveDelta = FishWorldPosition - GetActorLocation();
-	constexpr double MinimumMoveCentimeters = 1.0; // 位移过小（僵持不动）时保持上一帧朝向，避免噪声导致乱转。
-	const bool bActiveHeading = MotionIntent != ECatFishMotionIntent::AutoHauling
-		&& !PresentationState.SwimHeading.IsNearlyZero();
-	const FVector FacingDirection = bActiveHeading ? PresentationState.SwimHeading : MoveDelta;
-	if (bActiveHeading || FVector2D(MoveDelta.X, MoveDelta.Y).SizeSquared() >= MinimumMoveCentimeters * MinimumMoveCentimeters)
-	{
-		const double TargetYaw = FMath::RadiansToDegrees(FMath::Atan2(FacingDirection.Y, FacingDirection.X));
-		FRotator NewRotation = GetActorRotation();
-		if (!bFacingInitialized || StepDeltaSeconds <= 0.0f || MaximumTurnRateDegreesPerSecond <= 0.0f)
-		{
-			NewRotation.Yaw = TargetYaw; // 首次落位（或未提供步长）直接对准，不做插值。
-		}
-		else
-		{
-			// 限速转向：每步最多转 MaximumTurnRateDegreesPerSecond * 步长 度；FixedTurn 自带角度环绕处理。
-			NewRotation.Yaw = FMath::FixedTurn(NewRotation.Yaw, TargetYaw,
-				MaximumTurnRateDegreesPerSecond * StepDeltaSeconds);
-		}
-		NewRotation.Pitch = 0.0;
-		NewRotation.Roll = 0.0;
-		SetActorRotation(NewRotation, ETeleportType::TeleportPhysics);
-		bFacingInitialized = true;
-	}
+	// 位置与朝向是同一步物理事实。初始/直接快照写入可用提供的 SwimHeading 播种；
+	// 正式 Runner 始终传入受嘴部拉力、主动转矩和角阻尼共同积分的身体朝向。
+	const FVector BodyHeading = ResolvedBodyHeading.GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER,
+		SwimHeading.GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER, GetActorForwardVector()));
+	SetActorRotation(FRotator(0, FMath::RadiansToDegrees(FMath::Atan2(BodyHeading.Y, BodyHeading.X)), 0), ETeleportType::TeleportPhysics);
 
 	// 用 TeleportPhysics 直接落位而非物理模拟移动：鱼的位置由服务器权威搏斗模拟计算，这里只是把结果“摆”过去。
 	SetActorLocation(FishWorldPosition, false, nullptr, ETeleportType::TeleportPhysics);
@@ -393,8 +466,13 @@ void ACatFishEncounterActor::PublishInitialPresentationFromAuthority()
 void ACatFishEncounterActor::BeginPlay()
 {
 	Super::BeginPlay();
+	if (FishMesh && !BoneTransformsFinalizedHandle.IsValid())
+	{
+		BoneTransformsFinalizedHandle = FishMesh->RegisterOnBoneTransformsFinalizedDelegate(
+			FOnBoneTransformsFinalizedMultiCast::FDelegate::CreateUObject(this, &ThisClass::ApplyVisualPose));
+	}
 	RefreshFishPresentation();
-	// 每鱼轴向/位置修正已经来自 FishPresentation 并应用到 FishMesh；VisualRoot 只承载复制状态驱动的力竭侧翻。
+	// 每鱼轴向/位置修正来自 FishPresentation；VisualRoot 从基础姿态重建动画嘴点补偿与力竭侧翻。
 	ApplyVisualScale();
 	ApplyVisualPose();
 	if (bHasPendingPresentationNotification && !bPresentationDeferred)
@@ -404,6 +482,16 @@ void ACatFishEncounterActor::BeginPlay()
 		bHasPendingPresentationNotification = false;
 		DispatchPresentationChanged(PendingPreviousPresentationState, PendingCurrentPresentationState);
 	}
+}
+
+void ACatFishEncounterActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (FishMesh && BoneTransformsFinalizedHandle.IsValid())
+	{
+		FishMesh->UnregisterOnBoneTransformsFinalizedDelegate(BoneTransformsFinalizedHandle);
+		BoneTransformsFinalizedHandle.Reset();
+	}
+	Super::EndPlay(EndPlayReason);
 }
 
 void ACatFishEncounterActor::OnRep_PresentationState(const FCatFishEncounterPresentationState& Previous)
@@ -442,6 +530,14 @@ void ACatFishEncounterActor::OnRep_ReplicatedMovement()
 	Super::OnRep_ReplicatedMovement();
 	// 位置/朝向与表现状态可能分包到达；每次都从未托起的基础姿态重算，不累积偏移。
 	ApplyVisualPose();
+	if (GetWorld() && PresentationState.FishingSessionId.IsValid() && GetWorld()->GetTimeSeconds() >= NextBodyDiagnosticWorldSeconds)
+	{
+		UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_fish_body_received SessionId=%s CastAttemptId=%s FishActor=%s BodyRoot=%s BodyHeading=%s Mouth=%s World=%s NetMode=%d Authority=%d LocalRole=%d"),
+			*PresentationState.FishingSessionId.ToString(), *PresentationState.CastAttemptId.ToString(), *GetName(),
+			*GetActorLocation().ToCompactString(), *GetActorForwardVector().ToCompactString(), *GetMouthWorldLocation().ToCompactString(),
+			*GetNameSafe(GetWorld()), int32(GetNetMode()), HasAuthority(), int32(GetLocalRole()));
+		NextBodyDiagnosticWorldSeconds = GetWorld()->GetTimeSeconds() + 1.0;
+	}
 }
 
 void ACatFishEncounterActor::QueueOrDispatchPresentationChanged(const FCatFishEncounterPresentationState& Previous,

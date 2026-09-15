@@ -425,12 +425,17 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 		const double D0 = FVector::Distance(F.Cat->GetActorLocation(), Encounter->GetActorLocation());
 		const FGuid CastId = FGuid::NewGuid();
 		if (!TestTrue(TEXT("真实鱼实体接收本场身份"), Encounter->InitializeAuthoritativeIdentity(F.SessionId, CastId, Fish->FishDefinitionId, D0, 1.0))) return false;
+		auto* Hook = World->SpawnActor<ACatFishingHookActor>();
+		if (!TestTrue(TEXT("真实鱼钩接收同场身份和落点"), Hook && Hook->InitializeAuthoritativeIdentity(F.SessionId, CastId)
+			&& Hook->FinalizeAuthoritativeLandingOnce(true, InitialFishPosition))) return false;
+		Hook->SetOwner(Rod);
 		Session->FishDefinition = const_cast<UCatFishDefinition*>(Fish);
 		Session->FishWeightKilograms = 2.0;
 		Session->Snapshot.FishingSessionId = F.SessionId;
 		Session->Snapshot.CastAttemptId = CastId;
 		Session->Snapshot.FishDefinitionId = Fish->FishDefinitionId;
 		Session->Snapshot.FishEncounterActor = Encounter;
+		Session->Snapshot.HookActor = Hook;
 		Session->Snapshot.RodActor = Rod;
 		Session->Snapshot.FisherPlayerState = F.Player;
 		Session->Snapshot.Phase = ECatFishingPhase::TrueBiteWindow;
@@ -452,7 +457,11 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 		Session->bStartupInProgress = true;
 		// 冻结常规搏斗样本，猫鱼力量比保持在瞬断/碾压区间之外，确保经过真实入场。
 		F.Cat->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 10.0f);
+		// 直接进入入战入口的夹具补齐真实中鱼已完成的扣饵事务；完整固定步随后需要合法磨损写口。
+		if (!TestTrue(TEXT("中鱼前置通过唯一库存入口提交鱼饵"), F.Equipment->CommitFishingBaitDeferred(F.SessionId).bApplied)) return false;
 		if (!TestTrue(TEXT("生产搏斗入口启动真实Runner"), Session->TryEnterHookedFightFromAuthority() && Session->IsFightRunnerRunning())) return false;
+		TestTrue(TEXT("生产入口读取正式非零嘴部标定并绑定真实钩嘴"), Session->FightRunner->Config.FishBody.Geometry.HasMouthLever()
+			&& Hook->GetAttachParentActor() == Encounter && Hook->GetActorLocation().Equals(Encounter->GetMouthWorldLocation(), 0.001));
 		const auto* Template = GetDefault<UCatFishingSettings>()->FindFightPersonality(Fish->FightPersonalityId);
 		if (!TestNotNull(TEXT("未裁横切参数仍有正式模板来源"), Template)) return false;
 		TestTrue(TEXT("生产Runner外冲节拍使用正式逐鱼列"), Session->FightRunner->SteeringConfig.OutwardDurationRangeSeconds.Equals(Fish->OutwardSegmentDurationRangeSeconds, 1e-9));
@@ -467,10 +476,10 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 		if (bPerfect) TestTrue(TEXT("游速测试具有区别于模板的正式系数"), Fish->SwimSpeedCoefficient != 1.0);
 		const double Expected = D0 * (bPerfect ? 0.9 : 1.0);
 		const double Actual = Session->FightRunner->State.LineLengthCentimeters;
-		const double Distance = FVector::Distance(Rod->GetRodTipWorldTransform().GetLocation(), Encounter->GetActorLocation());
+		const double Distance = FVector::Distance(Rod->GetRodTipWorldTransform().GetLocation(), Encounter->GetMouthWorldLocation());
 		TestEqual(TEXT("实际入场线长完美乘0.9，非完美乘1"), Actual, Expected, 0.01);
 		if (bPerfect)
-			TestEqual(TEXT("完美时实际鱼Actor投影到缩短的线长"), Distance, Expected, 0.01);
+			TestEqual(TEXT("完美时实际鱼嘴投影到缩短的线长"), Distance, Expected, 0.01);
 		else
 		{
 			TestTrue(TEXT("非完美保持原鱼位置，允许既有松线"), Encounter->GetActorLocation().Equals(InitialFishPosition, 0.01));
@@ -518,6 +527,14 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 		}
 		Body->SetMoveIntent(FVector::ZeroVector);
 		Runner->State = InitialState;
+		Runner->HandleFixedStep();
+		TestTrue(TEXT("正式会话完成包含鱼身转向的完整固定步"), Runner->IsRunning() && !Session->IsTerminal()
+			&& Runner->PreviousFishExpectedSwimSpeedCentimetersPerSecond > 0.0);
+		TestTrue(TEXT("固定步鱼身和鱼钩共用已提交的物理姿态"),
+			Encounter->GetActorForwardVector().Equals(Runner->State.FishBody.Heading, 0.0001)
+			&& Hook->GetActorLocation().Equals(Encounter->GetMouthWorldLocation(), 0.001));
+		TestEqual(TEXT("Session提交的鱼线直距来自同一嘴点"), Hook->GetPresentationState().StraightLineDistanceCentimeters,
+			FVector::Distance(Rod->GetRodTipWorldTransform().GetLocation(), Hook->GetActorLocation()), 0.001);
 		Session->FightRunner->Stop();
 		F.Equipment->ReleaseFishingUse(F.SessionId);
 	}

@@ -3,6 +3,7 @@
 #include "Character/CatCharacter.h"
 #include "Components/SceneComponent.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
+#include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Presentation/CatRodBendComponent.h"
 #include "Fishing/Presentation/CatFishingLineCurveComponent.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
@@ -82,6 +83,24 @@ bool ACatFishingHookActor::InitializeAuthoritativeIdentity(const FGuid InFishing
 
 const FCatFishingHookPresentationState& ACatFishingHookActor::GetPresentationState() const { return PresentationState; }
 
+void ACatFishingHookActor::LogMouthAttachment()
+{
+	const auto* Fish = Cast<ACatFishEncounterActor>(GetAttachParentActor());
+	if (!Fish || !PresentationState.FishingSessionId.IsValid() || LastLoggedMouthAttachment == Fish) return;
+	LastLoggedMouthAttachment = GetAttachParentActor();
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_fish_mouth_attachment_received SessionId=%s CastAttemptId=%s HookActor=%s FishActor=%s Mouth=%s Hook=%s Result=Attached World=%s NetMode=%d Authority=%d LocalRole=%d"),
+		*PresentationState.FishingSessionId.ToString(), *PresentationState.CastAttemptId.ToString(), *GetName(), *GetNameSafe(Fish),
+		*Fish->GetMouthWorldLocation().ToCompactString(), *GetActorLocation().ToCompactString(),
+		*GetNameSafe(GetWorld()), int32(GetNetMode()), HasAuthority(), int32(GetLocalRole()));
+}
+
+void ACatFishingHookActor::OnRep_AttachmentReplication()
+{
+	Super::OnRep_AttachmentReplication();
+	LogMouthAttachment();
+	RefreshFishingLineAttachment();
+}
+
 // 表现浮动：只动 VisualRoot 相对 Z，权威 Actor Transform 保持不变（复制/判定安全）。
 void ACatFishingHookActor::SetPresentationBobOffset(const float OffsetZ)
 {
@@ -93,6 +112,8 @@ void ACatFishingHookActor::SetPresentationBobOffset(const float OffsetZ)
 			bVisualRootBaseLocationInitialized = true;
 		}
 		VisualRoot->SetRelativeLocation(VisualRootBaseRelativeLocation + FVector(0.0, 0.0, OffsetZ));
+		if (Cast<ACatFishEncounterActor>(GetAttachParentActor()) && HookVisualAnchor)
+			HookVisualAnchor->SetWorldLocation(GetActorLocation());
 	}
 }
 
@@ -313,6 +334,7 @@ void ACatFishingHookActor::OnRep_Instigator()
 
 void ACatFishingHookActor::OnRep_PresentationState(const FCatFishingHookPresentationState& Previous)
 {
+	LogMouthAttachment();
 	if (Previous.Phase != PresentationState.Phase || Previous.CastTrajectory.DurationSeconds != PresentationState.CastTrajectory.DurationSeconds)
 	{
 		UE_LOG(LogCatFishing, Log, TEXT("Event=cast_flight_received World=%s WorldNetMode=%d Authority=%d Role=%s Actor=%s Session=%s CastAttempt=%s Phase=%s Landing=%s Duration=%.3f %s"),
@@ -600,7 +622,9 @@ void ACatFishingHookActor::UpdateFishingLinePresentation()
 		DeltaSeconds = Settings ? Settings->FishingLineVisualUpdateIntervalSeconds : 1.0 / 60.0;
 	}
 
-	const FVector TargetStart = VisualRoot->GetComponentLocation();
+	const auto* HookedFish = Cast<ACatFishEncounterActor>(GetAttachParentActor());
+	const FVector TargetStart = HookedFish ? HookedFish->GetMouthWorldLocation() : VisualRoot->GetComponentLocation();
+	if (HookedFish && HookVisualAnchor) HookVisualAnchor->SetWorldLocation(TargetStart);
 	const bool bInitializeSmoothing = !bFishingLineSmoothingInitialized;
 	if (bInitializeSmoothing)
 	{
@@ -610,7 +634,7 @@ void ACatFishingHookActor::UpdateFishingLinePresentation()
 	}
 	else
 	{
-		FishingLineStartAnchor->SetWorldLocation(FMath::VInterpTo(
+		FishingLineStartAnchor->SetWorldLocation(HookedFish ? TargetStart : FMath::VInterpTo(
 			FishingLineStartAnchor->GetComponentLocation(), TargetStart,
 			static_cast<float>(DeltaSeconds), static_cast<float>(EndpointSpeed)));
 		DisplayedFishingLineLengthCentimeters = FMath::FInterpTo(

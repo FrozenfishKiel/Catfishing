@@ -67,6 +67,7 @@ bool UCatFishingFightRunner::InitializeFromAuthority(const FCatFishingFightRunne
 	WaterRegion = Init.WaterRegion;
 	Config = Init.Config;
 	State = Init.InitialState;
+	State.FishBody.Heading = Init.FishActor->GetActorForwardVector().GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER, FVector::ForwardVector);
 	DiagnosticFixedStepSequence = 0;
 	LastFixedStepDiagnosticWorldSeconds = -1.0;
 	State.bOperatorPresent = true;
@@ -111,7 +112,7 @@ bool UCatFishingFightRunner::Start()
 	// 从搏斗启动这一帧起就把控制器旋转视为“意图”，避免首个固定步到来前竿尖仍瞬移跟随。
 	ACatFishingRodActor* Rod = RodActor.Get();
 	const FVector InitialPullDirection = Rod
-		? Encounter->GetActorLocation() - Rod->GetRodTipWorldTransform().GetLocation()
+		? Encounter->GetMouthWorldLocation() - Rod->GetRodTipWorldTransform().GetLocation()
 		: FVector::ZeroVector;
 	if (!Rod || (Rod->GetPresentationState().PoseMode == ECatFishingRodPoseMode::Held
 		&& !Rod->SetFightConstraintObservationFromAuthority(InitialPullDirection, 0.0, 0.0, true, 0.0, Config.PrimaryOperatorCatStrength, InitialPullDirection.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, FVector::ForwardVector))))
@@ -566,7 +567,7 @@ bool UCatFishingFightRunner::BeginFishBehaviorFromStateTree(const ECatFishBehavi
 	const ACatFishingRodActor* Rod = RodActor.Get();
 	const ACatFishingSession* SessionActor = Session.Get();
 	if (!Rod || !SessionActor || !SessionActor->HasAuthority()) return false;
-	FVector Outward = (State.FishWorldPosition - Rod->GetRodTipWorldTransform().GetLocation()).GetSafeNormal2D();
+	FVector Outward = (FCatFishBodyModel::MouthPosition(Config.FishBody.Geometry, State.FishWorldPosition, State.FishBody.Heading) - Rod->GetRodTipWorldTransform().GetLocation()).GetSafeNormal2D();
 	if (Outward.IsNearlyZero()) Outward = FVector::ForwardVector;
 	const ECatFishBehavior PreviousBehavior = SteeringState.Behavior;
 	// 进入行为会清除累计计时，诊断必须保留选边之前的事实，不能把重置后的零当作原因。
@@ -681,6 +682,10 @@ FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthorit
 	UWorld* World = Session.IsValid() ? Session->GetWorld() : nullptr;
 	const UCatWaterQuerySubsystem* Water = World ? World->GetSubsystem<UCatWaterQuerySubsystem>() : nullptr;
 	if (!Water || !Step.bSucceeded || Step.ProposedFishWorldPosition.ContainsNaN()) return Motion;
+	const FVector InitialSurfaceCandidate = Step.ProposedFishWorldPosition;
+	const double InitialSurfaceTension = Step.LineTensionNewtons;
+	bool bSurfaceConstraintResolved = false;
+	bool bExactSurfaceCandidates = false;
 
 	// 水域轮廓提供水面与岸向，不再用抛竿的内缩安全点或初始落点包围盒裁剪拖鱼运动。
 	// 先投影水面再查岸向，高岸/下坡不会受抛竿高度容差限制。
@@ -774,12 +779,13 @@ FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthorit
 		ShoreInput.ResolvedWaterWorldPosition = OutWater.Containment == ECatWaterContainment::Inside
 			? OutWater.WaterSurfaceWorldPoint : OutWater.NearestShoreWorldPoint;
 		ShoreInput.WaterwardDirection = OutWater.WaterwardDirection;
-		ShoreInput.RodTipWorldPosition = RodConstraint.RodTipWorldPosition;
+		const FVector MouthOffset = Step.ProposedMouthWorldPosition - Step.ProposedFishWorldPosition;
+		ShoreInput.RodTipWorldPosition = RodConstraint.RodTipWorldPosition - MouthOffset;
 		ShoreInput.PreviousLineLengthCentimeters = State.LineLengthCentimeters;
 		ShoreInput.ProposedLineLengthCentimeters = Step.LineLengthCentimeters;
 		ShoreInput.MaximumConstraintDistanceCentimeters = FMath::Max3(Step.LineLengthCentimeters,
-			FVector::Distance(RodConstraint.RodTipWorldPosition, Step.ProposedFishWorldPosition),
-			FVector::Distance(RodConstraint.RodTipWorldPosition, State.FishWorldPosition));
+			FVector::Distance(ShoreInput.RodTipWorldPosition, Step.ProposedFishWorldPosition),
+			FVector::Distance(ShoreInput.RodTipWorldPosition, State.FishWorldPosition));
 		ShoreInput.bReeling = State.CatAction == ECatFightCatAction::Pull;
 		// 开步尚有容量时允许按最终岸线落点校正本步出线；候选放满不等于实际已放满。
 		ShoreInput.bSlacking = State.CatAction == ECatFightCatAction::Slack
@@ -790,6 +796,90 @@ FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthorit
 		Motion.FishWorldPosition = ShoreContact.FishWorldPosition;
 		Step.LineLengthCentimeters = FMath::Min(Config.MaximumLineLengthCentimeters, ShoreContact.LineLengthCentimeters);
 		bShoreContactThisStep = ShoreContact.bShoreContact;
+		if (bShoreContactThisStep && !Motion.FishWorldPosition.Equals(Step.ProposedFishWorldPosition, 0.001))
+		{
+			// 岸线反应参与同一个张力候选，而非事后撤掉杆端线力却留下鱼端旧转矩。
+			// 普通直岸只用本步已经查到的平面；候选不触碰随机数、反馈、Actor 或费用写口。
+			const FCatWaterSpatialResult SurfaceReference = OutWater;
+			const FVector DesiredHeading = Step.FishEffortDirection;
+			bool bSurfaceQueryFailed = false;
+			bool bSurfaceContactDataRejected = false;
+			const auto ProjectCandidate = [&](const FVector& CandidateRoot, const FVector& Heading,
+				const double CandidateLength, const bool bExactQuery, FVector& ResolvedRoot)
+			{
+				FCatFishShoreContactInput Candidate = ShoreInput;
+				Candidate.CandidateFishWorldPosition = CandidateRoot;
+				Candidate.ProposedLineLengthCentimeters = CandidateLength;
+				if (bExactQuery)
+				{
+					const auto CandidateImmersion = Water->QueryImmersionAtWorldPoint(CandidateRoot, WaterRegion);
+					const auto Relation = CandidateImmersion.bSucceeded
+						? Water->QueryShoreRelation(CandidateImmersion.WaterSurfaceWorldPoint, WaterRegion) : FCatWaterSpatialResult{};
+					if (!Relation.bSucceeded) { bSurfaceQueryFailed = true; return false; }
+					Candidate.WaterwardDirection = Relation.WaterwardDirection;
+					Candidate.ResolvedWaterWorldPosition = Relation.Containment == ECatWaterContainment::Inside
+						? Relation.WaterSurfaceWorldPoint : Relation.NearestShoreWorldPoint;
+				}
+				else
+				{
+					const FVector Waterward = SurfaceReference.WaterwardDirection.GetSafeNormal2D();
+					const double WaterwardDistance = FVector::DotProduct(CandidateRoot - SurfaceReference.NearestShoreWorldPoint, Waterward);
+					Candidate.ResolvedWaterWorldPosition = CandidateRoot - Waterward * FMath::Min(0.0, WaterwardDistance);
+					Candidate.ResolvedWaterWorldPosition.Z = SurfaceReference.WaterSurfaceWorldPoint.Z;
+				}
+				const FVector MouthOffset = FCatFishBodyModel::RotateLocal(Config.FishBody.Geometry.MouthLocalPositionCentimeters, Heading);
+				Candidate.RodTipWorldPosition = RodConstraint.RodTipWorldPosition - MouthOffset;
+				// 岸线这里只处理接触；嘴部线长由外层统一张力求解，不能靠投影假装收线成功。
+				const double MaximumContactTravel = FMath::Sqrt(FVector::DistSquared2D(
+					Candidate.CurrentFishWorldPosition, CandidateRoot) + FMath::Square(
+					Candidate.ResolvedWaterWorldPosition.Z - Candidate.CurrentFishWorldPosition.Z));
+				Candidate.MaximumConstraintDistanceCentimeters = FMath::Max(CandidateLength,
+					FVector::Distance(Candidate.RodTipWorldPosition, Candidate.CurrentFishWorldPosition) + MaximumContactTravel);
+				const auto Contact = FCatFishFightMotionSolver::ResolveLiveFishShoreContact(Candidate);
+				if (!Contact.bSucceeded) { bSurfaceContactDataRejected = true; return false; }
+				ResolvedRoot = Contact.FishWorldPosition;
+				return true;
+			};
+			FCatFightFishSurfaceConstraintInput SurfaceConstraint;
+			SurfaceConstraint.ProjectRoot = [&](const FVector& CandidateRoot, const FVector& Heading,
+				const double CandidateLength, FVector& ResolvedRoot)
+			{
+				return ProjectCandidate(CandidateRoot, Heading, CandidateLength, bExactSurfaceCandidates, ResolvedRoot);
+			};
+			auto SurfaceStep = FCatFishingFightSimulator::Step(Config, State, RodConstraint, DesiredHeading, &SurfaceConstraint);
+			FVector VerifiedRoot;
+			bool bCandidateVerified = SurfaceStep.bSucceeded && ProjectCandidate(SurfaceStep.ProposedFishWorldPosition,
+				SurfaceStep.FishBodyTurn.State.Heading, SurfaceStep.LineLengthCentimeters, true, VerifiedRoot);
+			if (bCandidateVerified && !VerifiedRoot.Equals(SurfaceStep.ProposedFishWorldPosition, 0.001))
+			{
+				// 转过曲岸或到另一边界才用真实只读查询重求；不放长线，也不事后挪根去掩盖转矩。
+				bExactSurfaceCandidates = true;
+				SurfaceStep = FCatFishingFightSimulator::Step(Config, State, RodConstraint, DesiredHeading, &SurfaceConstraint);
+				bCandidateVerified = SurfaceStep.bSucceeded && ProjectCandidate(SurfaceStep.ProposedFishWorldPosition,
+					SurfaceStep.FishBodyTurn.State.Heading, SurfaceStep.LineLengthCentimeters, true, VerifiedRoot);
+			}
+			const auto FinalImmersion = SurfaceStep.bSucceeded
+				? Water->QueryImmersionAtWorldPoint(SurfaceStep.ProposedFishWorldPosition, WaterRegion) : FCatWaterImmersionResult{};
+			const auto FinalRelation = FinalImmersion.bSucceeded
+				? Water->QueryShoreRelation(FinalImmersion.WaterSurfaceWorldPoint, WaterRegion) : FCatWaterSpatialResult{};
+			const bool bFinalSurfaceConsistent = bCandidateVerified && VerifiedRoot.Equals(SurfaceStep.ProposedFishWorldPosition, 0.001);
+			if (!SurfaceStep.bSucceeded || !bCandidateVerified || !FinalRelation.bSucceeded || !bFinalSurfaceConsistent)
+			{
+				UE_LOG(LogCatFishing, Error, TEXT("Event=fishing_shore_force_resolve_failed SessionId=%s FishActor=%s StepId=%llu Reason=%s ExactCandidates=%d Fish=%s Candidate=%s LineLengthCm=%.6f SimulationReject=%s World=%s NetMode=%d Authority=1 LocalRole=%d"),
+					*Session->GetSnapshot().FishingSessionId.ToString(), *GetNameSafe(FishActor.Get()), DiagnosticFixedStepSequence,
+					bSurfaceQueryFailed ? TEXT("SurfaceWaterQueryFailed") : bSurfaceContactDataRejected ? TEXT("SurfaceContactDataInvalid")
+						: !SurfaceStep.bSucceeded ? TEXT("SurfaceCandidateRejected") : !bCandidateVerified ? TEXT("SurfaceVerificationFailed")
+						: !FinalRelation.bSucceeded ? TEXT("FinalWaterQueryFailed") : TEXT("FinalSurfaceMismatch"), bExactSurfaceCandidates,
+					*State.FishWorldPosition.ToCompactString(), *InitialSurfaceCandidate.ToCompactString(), Step.LineLengthCentimeters,
+					SimulationRejectReasonName(SurfaceStep.RejectReason),
+					*GetNameSafe(World), int32(World->GetNetMode()), int32(Session->GetLocalRole()));
+				return FCatFishMotionSolveResult{};
+			}
+			Step = SurfaceStep;
+			Motion.FishWorldPosition = Step.ProposedFishWorldPosition;
+			OutWater = FinalRelation;
+			bSurfaceConstraintResolved = true;
+		}
 		if (bShoreContactThisStep && !FCatFishSteeringModel::RedirectFromWaterBoundary(
 			SteeringConfig, OutWater.WaterwardDirection, SteeringRandom, SteeringState))
 		{
@@ -812,26 +902,28 @@ FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthorit
 		UE_LOG(LogCatFishing, Log,
 			TEXT("Event=fishing_shore_recovery SessionId=%s FishActor=%s RodActor=%s PlayerState=%s RegionId=%s "
 				"Result=%s Containment=%s SignedShoreDistanceCm=%.3f Fish=%s Candidate=%s ResolvedFish=%s "
-				"Waterward=%s CandidateWaterwardCm=%.3f ResolvedWaterwardCm=%.3f CatAction=%s LineLengthCm=%.3f "
+				"Waterward=%s CandidateWaterwardCm=%.3f ResolvedWaterwardCm=%.3f CatAction=%s LineLengthCm=%.3f SurfaceConstraintResolved=%d ExactSurfaceCandidates=%d InitialTensionN=%.6f FinalTensionN=%.6f BodyLineTorqueNm=%.6f "
 				"World=%s NetMode=%d Authority=true LocalRole=%d"),
 			*Session->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 			*GetNameSafe(FishActor.Get()), *GetNameSafe(RodActor.Get()),
 			*GetNameSafe(Primary ? Primary->PlayerState.Get() : nullptr), *WaterRegion.RegionId.ToString(),
 			bShoreContactThisStep ? TEXT("ContactResolved") : TEXT("ContactEnded"),
 			*UEnum::GetValueAsString(OutWater.Containment), OutWater.SignedDistanceToShoreCm,
-			*State.FishWorldPosition.ToCompactString(), *Step.ProposedFishWorldPosition.ToCompactString(),
+			*State.FishWorldPosition.ToCompactString(), *InitialSurfaceCandidate.ToCompactString(),
 			*Motion.FishWorldPosition.ToCompactString(), *OutWater.WaterwardDirection.ToCompactString(),
-			FVector::DotProduct(Step.ProposedFishWorldPosition - State.FishWorldPosition, OutWater.WaterwardDirection),
+			FVector::DotProduct(InitialSurfaceCandidate - State.FishWorldPosition, OutWater.WaterwardDirection),
 			FVector::DotProduct(Motion.FishWorldPosition - State.FishWorldPosition, OutWater.WaterwardDirection),
 			State.CatAction == ECatFightCatAction::Pull ? TEXT("Pull")
 				: State.CatAction == ECatFightCatAction::Slack ? TEXT("Slack") : TEXT("None"), Step.LineLengthCentimeters,
+			bSurfaceConstraintResolved, bExactSurfaceCandidates, InitialSurfaceTension, Step.LineTensionNewtons, Step.FishBodyTurn.LineTorqueNewtonMeters,
 			*GetNameSafe(World), static_cast<int32>(World->GetNetMode()), static_cast<int32>(Session->GetLocalRole()));
 		NextShoreContactDiagnosticWorldSeconds = WorldSeconds + 1.0;
 	}
 	bLastShoreContactDiagnosticActive = bShoreContactThisStep;
 
 	// 地面落点只结算一次，不能随后被水面候选覆盖。坡面改变后的真实距离供复制和下一步共同使用。
-	Step.StraightLineDistanceCentimeters = FVector::Distance(RodConstraint.RodTipWorldPosition, Motion.FishWorldPosition);
+	Step.ProposedMouthWorldPosition = FCatFishBodyModel::MouthPosition(Config.FishBody.Geometry, Motion.FishWorldPosition, Step.FishBodyTurn.State.Heading);
+	Step.StraightLineDistanceCentimeters = FVector::Distance(RodConstraint.RodTipWorldPosition, Step.ProposedMouthWorldPosition);
 	Step.SlackLineLengthCentimeters = FMath::Max(0.0, Step.LineLengthCentimeters - Step.StraightLineDistanceCentimeters);
 	// 求解输出包含双方同一时间步末的负载；只有地形确实改变候选落点，才按新几何撤销负载。
 	const bool bSurfaceChangedCandidate = !Motion.FishWorldPosition.Equals(Step.ProposedFishWorldPosition, 0.001);
@@ -876,7 +968,7 @@ FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthorit
 	RotationInput.RodPhysicsLengthCentimeters = Config.RodPhysicsLengthCentimeters;
 	RotationInput.RodLineAlignment = FMath::Clamp(FVector::DotProduct(
 		RodConstraint.RodForwardWorld.GetSafeNormal(),
-		(Motion.FishWorldPosition - RodConstraint.RodTipWorldPosition).GetSafeNormal()), -1.0, 1.0);
+		(Step.ProposedMouthWorldPosition - RodConstraint.RodTipWorldPosition).GetSafeNormal()), -1.0, 1.0);
 	OutRotationResistance = FCatFishingRodResistanceModel::Evaluate(RotationInput);
 	if (!OutRotationResistance.bSucceeded)
 	{
@@ -976,7 +1068,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 	const bool bExhaustedCatEscape = UpdateFishBehaviorForCurrentOperator(bRodHeld);
 	const APawn* EscapeHolder = Rod->GetHolderPawnFromAuthority();
 	// 外冲以猫身体为远离基点，避免力竭时被鱼拉转的竿尖把方向绕回岸边。
-	FVector Outward = State.FishWorldPosition - (bExhaustedCatEscape && EscapeHolder ? EscapeHolder->GetActorLocation() : RodTip);
+	FVector Outward = Encounter->GetMouthWorldLocation() - (bExhaustedCatEscape && EscapeHolder ? EscapeHolder->GetActorLocation() : RodTip);
 	if (Outward.IsNearlyZero()) Outward = FVector::ForwardVector;
 	FVector DesiredFishDirection = FVector::ZeroVector;
 	// 服务器按性格和固定随机种子生成连续游向；客户端不参与随机，只接收最终权威 Transform/表现状态。
@@ -1091,7 +1183,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 	// 鱼线载荷只提交一次；持竿交给主控 CMC，架竿由固定支撑承受。
 	if (Rod->IsUsingPhysicalRod())
 	{
-		const FVector LineDirection = (Motion.FishWorldPosition - RodTip).GetSafeNormal();
+		const FVector LineDirection = (Step.ProposedMouthWorldPosition - RodTip).GetSafeNormal();
 		// Publish tension exactly once. No already-netted carrier acceleration or second fish torque reaches physics.
 		Rod->GetPhysicalRodComponent()->SetLineLoad(SessionActor->GetSnapshot().FishingSessionId,
 			DiagnosticFixedStepSequence, Step.RodLineForceNewtons, Config.FixedStepSeconds, FMath::Max(0.15, Config.FixedStepSeconds * 3.0));
@@ -1239,6 +1331,15 @@ void UCatFishingFightRunner::HandleFixedStep()
 			State.bFishExhausted ? TEXT("true") : TEXT("false"),
 			*GetNameSafe(World), *GetNameSafe(GetPrimaryOperator() ? GetPrimaryOperator()->PlayerState.Get() : nullptr),
 			static_cast<int32>(World->GetNetMode()), static_cast<int32>(SessionActor->GetLocalRole()));
+		UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_fish_body_sample SessionId=%s FishActor=%s StepId=%llu BodyHeading=%s DesiredHeading=%s AngularVelocityRadS=%.4f SwimTorqueNm=%.4f LineTorqueNm=%.4f InertiaKgM2=%.6f Mouth=%s BodyRoot=%s ThrustN=%.3f TensionN=%.3f RequestedReelCm=%.3f ActualReelCm=%.3f ReelLimitN=%.3f World=%s NetMode=%d Authority=1 LocalRole=%d"),
+			*SessionActor->GetSnapshot().FishingSessionId.ToString(), *GetNameSafe(Encounter), DiagnosticFixedStepSequence,
+			*Step.FishBodyTurn.State.Heading.ToCompactString(), *DesiredFishDirection.ToCompactString(),
+			Step.FishBodyTurn.State.AngularVelocityRadiansPerSecond, Step.FishBodyTurn.SwimTorqueNewtonMeters,
+			Step.FishBodyTurn.LineTorqueNewtonMeters, Step.FishBodyTurn.EffectiveInertiaKilogramMetersSquared,
+			*Step.ProposedMouthWorldPosition.ToCompactString(), *Motion.FishWorldPosition.ToCompactString(),
+			Step.Trace.FishThrustNewtons, Step.LineTensionNewtons, Step.RequestedReelDistanceCentimeters,
+			Step.ActualReelDistanceCentimeters, Step.Trace.ReelForceLimitNewtons,
+			*GetNameSafe(World), int32(World->GetNetMode()), int32(SessionActor->GetLocalRole()));
 		LogFishStaminaBreakdown(TEXT("fishing_fish_stamina_sample"), TEXT("Periodic"));
 		NextPowerDiagnosticWorldSeconds = WorldSeconds + 1.0;
 	}
@@ -1260,7 +1361,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 	{
 		UE_LOG(LogCatFishing, Display,
 			TEXT("Event=fishing_constraint_sample SessionId=%s RodActorId=%s Active=%s Action=%s "
-				"Model=CommonLineForce Geometry=WaterPlaneSphereIntersection RodTorqueSource=ResolvedSurface "
+				"Model=MouthCoupledFishBody Geometry=WaterPlaneMouthConstraint RodTorqueSource=ResolvedSurface "
 				"ConstraintError=%.2f RelativeLineSpeed=%.2f Tension=%.3f FishCorrection=%.2f "
 				"RodLeverage=%.3f "
 				"RodPhysicsLengthCm=%.2f MaximumFishTorque=%.3f FishTorque=%.3f CatTorqueCapacity=%.3f "
@@ -1325,7 +1426,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 		static_cast<float>(Step.IntendedSwimSpeedCentimetersPerSecond), Step.bStrongConfrontation,
 		bFishBeached, GroundSurfaceNormal, DesiredFishDirection,
 		State.bFishExhausted ? ECatFishBehavior::None : SteeringState.Behavior,
-		static_cast<float>(State.FishEffortRatio)))
+		static_cast<float>(State.FishEffortRatio), Step.FishBodyTurn.State.Heading))
 	{
 		Stop();
 		SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("EncounterFightStepWrite"));
@@ -1358,6 +1459,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 			Step.FishStaminaDrain, Step.RodWearDelta, bLineAtMaximum ? TEXT("NormalLockedContest") : TEXT("LineCapacityAvailable"),
 			*GetNameSafe(World), static_cast<int32>(World->GetNetMode()), static_cast<int32>(SessionActor->GetLocalRole()));
 	}
+	State.FishBody = Step.FishBodyTurn.State;
 	State.AbsoluteRodWear = Step.AbsoluteRodWear;
 	State.StrongConfrontationBuildUpSeconds = Step.StrongConfrontationBuildUpSeconds;
 	// 保存受力积分速度，地形修正在 ResolveFishSurface 中反馈；几何纠偏不能变成下一步惯性。

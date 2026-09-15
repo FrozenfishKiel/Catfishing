@@ -137,6 +137,7 @@
 | 体重 | Minimum/MaximumWeightKilograms | 服务器在区间内抽取真实重量;min≤max |
 | 搏斗 | FishStrengthPerKilogram | 每鱼力量系数K；实例力量=冻结重量×K。0或非法值不参与抽鱼；不借用猫方全局换算 |
 | 搏斗 | FishFightStaminaPerKilogram | 体力点/千克，乘实际重量得到本场初值；16资产已迁，旧定额折算已删 |
+| 搏斗几何 | FightBodyGeometry | 本鱼在 Encounter Actor 局部空间的静态嘴点、近似质心、缩放原点与偏航回转半径，单位 cm、对应 VisualScale=1；独立于鱼表数值，供权威模拟计算嘴上拉力和鱼体转矩 |
 | 搏斗 | MinimumFightParticipants | 需要的协作人数;单人局过滤 >1 的定义 |
 | 抄网 | **ScoopTargetRadiusCentimeters** | **这条鱼的可捞圆圈半径 cm**,圆心随鱼移动;抄手向正前方发射长度=抄网 ScoopReach 的水平线段,与圆相交即够得着。语义="这条鱼有多好捞"；巨影正式值0，不能抄。**必须 >0,为 0 时服务器一律拒绝抢抄** |
 | 性格 | BitePersonalityId / FightPersonalityId | Bite ID 仅保留旧资产反射兼容；Fight ID 仍接现有搏斗模板，未审鱼行为页本轮不切换 |
@@ -150,6 +151,21 @@
 | gate | bEnableRuntimeDefinition | 必须 True |
 
 `FishPresentation_*` 是普通 `UCatFishPresentationDefinition` DataAsset，不单独注册到鱼目录。它配置本鱼的 `SkeletalMesh`、继承 `UCatFishAnimInstance` 的子 AnimBP、Calm/Struggle/Exhausted/Landed 四类动画、参考重量与缩放范围，以及 Encounter/Landed/Carried 三套 Mesh 局部 Transform。Mesh 自身持有 Skeleton；子 AnimBP 和四类动画必须与该 Skeleton 兼容。所有子 AnimBP 继承无 Target Skeleton 的 `ABPT_CatFishBase`，只覆盖三个 Sequence Player，美术资源变化不会复制游速公式与状态机。
+
+`FightBodyGeometry` 将参考模型的几何烘焙到鱼定义；运行时直接读取这些数值，不依赖骨骼动画更新或客户端渲染。四个子字段均为厘米：
+
+| 子字段 | 标定含义 |
+|---|---|
+| MouthLocalPositionCentimeters | 当前 16 鱼已核对的 `Bone014` 上唇参考姿态点，经 `EncounterMeshRelativeTransform` 映射到 Actor 局部空间；不使用游泳动画中的嘴部位置 |
+| CenterOfMassLocalPositionCentimeters | 参考 Mesh 原点经同一 Transform 映射；这是游戏近似质心，并非实测质量中心 |
+| ScaleOriginLocalCentimeters | Mesh 实例缩放围绕的 Actor 局部点，等于该 Transform 的平移；当前与近似质心重合 |
+| YawRadiusOfGyrationCentimeters | 使用参考 Mesh 导入包围盒的长宽，经基础缩放后按均匀体近似 `sqrt((L²+W²)/12)` 标定；它是回转半径，模拟器换算成米后以 `I=质量×半径²` 计算偏航惯量 |
+
+本场 `VisualScale=s` 时，各点使用 `ScaleOrigin+(Point-ScaleOrigin)×s`，回转半径乘 `s`；不能将 Encounter 的平移也乘实例缩放。新结构的零默认值表示尚未标定，正式 16 鱼均已有静态嘴与质心的力臂。更换参考模型、骨架或 Encounter Transform 后，需要重新检查嘴点及惯量近似。
+
+标定入口是 [calibrate_fish_body_geometry.py](../Scripts/calibrate_fish_body_geometry.py)，在 `$env:UE_ROOT` 对应引擎的 UE Python 环境运行：默认只预览，命令行加 `-FishBodyGeometryApply` 才保存正式 16 鱼定义，加 `-FishBodyGeometryVerify` 只读验证当前定义与参考模型。Apply 只修改 `FightBodyGeometry`，比较其余序列化字段并备份原包；再次执行且数值相同则不保存。报告写入 `Saved/FishBodyGeometry/fish-body-geometry-{preview|applied|verified}.json`。数值表入口 [migrate_fish_design_data.py](../Scripts/migrate_fish_design_data.py) 只写自身字段白名单，会保留鱼体几何。
+
+发布元数据保留数值迁移的旧包哈希，再在 `subsequent_migrations` 追加几何迁移前后快照；[check_fish_table_vs_definition.py](../Scripts/check_fish_table_vs_definition.py) 校验迁移链、当前包与 CSV 输入。此文本检查不代替 UE 的几何字段校验或试玩表现验收。
 
 首轮正式鱼的近似美术映射如下；这是可替换的内容选择，不是运行时代码分支：
 

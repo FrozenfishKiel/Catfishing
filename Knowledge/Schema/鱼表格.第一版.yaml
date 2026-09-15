@@ -233,6 +233,7 @@ columns:
 
 # 代码有、表里没有的字段：谁定值、要不要在表里加列
 code_only_fields:
+  FightBodyGeometry: 鱼体几何，独立于数值表；Scripts/calibrate_fish_body_geometry.py 沿 PresentationDefinition 的参考 Mesh 与 EncounterTransform 标定静态嘴点、近似质心、缩放原点和偏航回转半径，Actor 局部厘米、VisualScale=1，运行时按本场比例缩放；数值表迁移不写本字段
   YellowStaminaGrant: 逐鱼食用的一次性黄色体力赠送，单位点；不可食用鱼必须为0，现有四鱼赠送资产保持，本轮不重复迁移
   FishDefinitionId: 资产内部稳定 ID（RiverPatternFish／Loach／StinkyFish…），代码一律按它查表，配置里的 BasePool 等清单也用它。表里 fish_id 列装的是资产文件名（Fish_RiverPattern），两者不同名，迁移脚本必须做映射。2026-09-14 发现：往 BasePool 填包名会抽不出鱼。2026-09-15 按用户保留建议固定保留内部ID，迁移报告输出文件名映射
   bEatingTimedEffectConfigured: 属主确认食用限时 GE 绑定的显式标记；False 为迁移缺口，True 且空 GE 表示确认无效果
@@ -256,7 +257,7 @@ code_only_fields:
   Thumbnail: 资产绑定
   PresentationDefinition: 资产绑定
 
-editor_backflow: 未接。资产字段被人在编辑器里改了不会回到表；改数一律先改表再重生成（README 的三方合并链条尚不存在）
+editor_backflow: 未接。资产字段被人在编辑器里改了不会回到表；表格声明的数值先改表再重生成（README 的三方合并链条尚不存在）；FightBodyGeometry 来自参考模型，改模型或 EncounterTransform 后另跑标定与只读验证，不回写鱼表
 
 # 窗口/时段天气接收脚本与正式数据迁移入口；基础池按已批准四成员配置。
 runtime_migration_receiver:

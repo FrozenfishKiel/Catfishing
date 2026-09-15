@@ -12,7 +12,7 @@
 输出三类差异 + 行级检查：
   ① 表有列、sidecar 声明了 publish 目标，但目标在头文件里不存在（或已 Deprecated）
   ② 代码字段表里没有列（对照 sidecar 的 code_only_fields 是否都有说法）
-  ③ 输入包 revision 与镜像 revision 的差（资产是否落后于表）
+  ③ 输入包 revision、定向迁移哈希链与当前文件（历史快照不覆盖）
   ④ 行级：identity 列唯一且形如 Fish_X；declarative 列按 type 解析（range/number/enum）
 资产里的实际值读不到，值级比对不在本脚本范围。
 """
@@ -111,6 +111,58 @@ def check_value(col: dict, v: str) -> str | None:
     return None
 
 
+def check_migration_snapshots(pkg: dict, root: Path) -> tuple[list[str], int]:
+    """保留首次数值迁移快照，逐次核对完整鱼包集合和前后哈希，再检查末次磁盘快照。"""
+    errors: list[str] = []
+    migration = pkg["current_migration"]
+    roster = (pkg.get("generated_assets") or {}).get("fish_definitions") or []
+    expected_assets = {"Content/" + name.removeprefix("/Game/") + ".uasset" for name in roster}
+    if not expected_assets or len(expected_assets) != len(roster):
+        errors.append("generated_assets.fish_definitions 名册为空或重复")
+
+    def asset_hashes(record: dict, field: str, label: str) -> dict:
+        values = record.get(field)
+        if not isinstance(values, dict) or set(values) != expected_assets:
+            errors.append(f"{label}.{field} 与正式鱼包集合不一致")
+            return {}
+        if any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
+               for value in values.values()):
+            errors.append(f"{label}.{field} 含非法 SHA256")
+            return {}
+        return values
+
+    current_assets = asset_hashes(migration, "asset_sha256", "current_migration")
+    followups = pkg.get("subsequent_migrations", [])
+    if not isinstance(followups, list):
+        errors.append("subsequent_migrations 必须为有序数组")
+        followups = []
+    for index, followup in enumerate(followups):
+        label = f"subsequent_migrations[{index}]"
+        if not isinstance(followup, dict):
+            errors.append(f"{label} 必须为迁移对象")
+            continue
+        before = asset_hashes(followup, "before_asset_sha256", label)
+        after = asset_hashes(followup, "asset_sha256", label)
+        if before != current_assets:
+            errors.append(f"{label} 前置哈希与上一迁移快照不连续")
+        current_assets = after
+
+    files = dict(current_assets)
+    # 鱼体几何等后续迁移不解除原始表格和饵表的输入校验。
+    for source, hash_field in (("source", "source_sha256"), ("bait_source", "bait_sha256")):
+        name, expected = migration.get(source), migration.get(hash_field)
+        if not isinstance(name, str) or not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
+            errors.append(f"current_migration.{source} 缺少有效文件与 SHA256")
+        else:
+            files[name] = expected
+    mismatched = [name for name, expected in files.items()
+                  if not (root / name).is_file()
+                  or hashlib.sha256((root / name).read_bytes()).hexdigest() != expected]
+    if mismatched:
+        errors.append(f"末次快照或表格输入与当前文件不同：{mismatched}")
+    return errors, len(current_assets)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", type=Path, default=None, help="Markdown 报告落点；不给只打印")
@@ -186,18 +238,13 @@ def main(argv=None) -> int:
     P(f"- 输入包按表 revision **{pkg_rev}** 生成（{((pkg.get('sources') or {}).get('fish_table') or {}).get('live_read_at_local', '?')}）；镜像现在是 **{sheet.get('revision', '?')}**。")
     migration = pkg.get("current_migration") or {}
     if migration:
-        # 定向迁移有明确CSV和包哈希时，八月生成revision只代表历史，不能据此宣称现资产没迁。
-        files = dict(migration.get("asset_sha256") or {})
-        files[migration["source"]] = migration["source_sha256"]
-        files[migration["bait_source"]] = migration["bait_sha256"]
-        mismatched = [name for name, expected in files.items()
-                      if not (ROOT / name).is_file()
-                      or hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != expected]
-        if mismatched:
-            problems += 1
-            P(f"- ❌ 定向迁移后有输入/资产变化，需要重新核验：{mismatched}")
+        errors, asset_count = check_migration_snapshots(pkg, ROOT)
+        if errors:
+            problems += len(errors)
+            for error in errors:
+                P(f"- ❌ 定向迁移快照需要重新核验：{error}")
         else:
-            P(f"- ✅ {migration['date']} 定向迁移的CSV与{len(migration['asset_sha256'])}个包哈希一致；只证明这份已核验快照，未覆盖正式GE/表现缺口。")
+            P(f"- ✅ {migration['date']} 数值迁移的CSV/饵输入未变，{len(pkg.get('subsequent_migrations', []))}次后续迁移哈希链连续，末次{asset_count}个包与磁盘一致；历史快照仍保留。仅证明输入与包快照，未读取资产字段值，也未覆盖正式GE/表现缺口。")
     elif pkg_rev and sheet.get("revision") and int(sheet["revision"]) > int(pkg_rev):
         problems += 1; P("- ❌ 历史输入包版本落后于镜像，缺少新迁移证据；需开引擎核对现资产，不能仅凭版本差断言实际字段值。")
     req_missing = [f for f in req if f not in fields]

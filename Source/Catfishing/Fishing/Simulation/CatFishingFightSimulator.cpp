@@ -23,6 +23,7 @@ bool FCatFightSimulationConfig::IsValid() const
 		&& IsFiniteNonNegative(PrimaryOperatorCatStrength)
 		&& FMath::IsFinite(PrimaryOperatorMassKilograms) && PrimaryOperatorMassKilograms > 0.0
 		&& FMath::IsFinite(FishMassKilograms) && FishMassKilograms > 0.0
+		&& FishBody.IsValid()
 		&& FMath::IsFinite(FishStrength) && FishStrength > 0.0
 		&& FMath::IsFinite(StrengthPerKilogram) && StrengthPerKilogram > 0.0
 		&& FMath::IsFinite(ForcePerStrengthNewtons) && ForcePerStrengthNewtons > 0.0
@@ -88,7 +89,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 
 FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationConfig& Config,
 	const FCatFightSimulationState& State, const FCatFightRodConstraintInput& RodConstraint,
-	const FVector& DesiredFishDirection)
+	const FVector& DesiredFishDirection, const FCatFightFishSurfaceConstraintInput* FishSurface)
 {
 	FCatFightStepResult Result;
 	if (!Config.IsValid())
@@ -105,6 +106,8 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		|| !FMath::IsFinite(State.StrongConfrontationBuildUpSeconds)
 		|| State.StrongConfrontationBuildUpSeconds < 0.0
 		|| !IsFiniteVector(State.FishWorldPosition)
+		|| !IsFiniteVector(State.FishBody.Heading)
+		|| !FMath::IsFinite(State.FishBody.AngularVelocityRadiansPerSecond)
 		|| !IsFiniteVector(State.FishVelocityCentimetersPerSecond))
 	{
 		Result.RejectReason = ECatFightSimulationRejectReason::InvalidState;
@@ -132,7 +135,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		return Result;
 	}
 	if (!IsFiniteVector(DesiredFishDirection)
-		|| (!State.bFishExhausted && DesiredFishDirection.IsNearlyZero()))
+		|| (!State.bFishExhausted && FVector(DesiredFishDirection.X, DesiredFishDirection.Y, 0).IsNearlyZero()))
 	{
 		Result.RejectReason = ECatFightSimulationRejectReason::InvalidFishDirection;
 		Result.Trace.RejectReason = Result.RejectReason;
@@ -144,7 +147,14 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	Result.Trace.FixedStepSeconds = Dt;
 	Result.Trace.OperatorBodyMassKilograms = Config.PrimaryOperatorMassKilograms;
 	const FVector RodTip = RodConstraint.RodTipWorldPosition;
-	const FVector FromRod = State.FishWorldPosition - RodTip;
+	FCatFishBodyState BodyState = State.FishBody;
+	// 力竭鱼与既有零自由平移惯性的收尾规则一致；当步线力仍可被动转头。
+	if (State.bFishExhausted) BodyState.AngularVelocityRadiansPerSecond = 0.0;
+	BodyState.Heading = BodyState.Heading.GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER,
+		DesiredFishDirection.GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER, FVector::ForwardVector));
+	const FVector BodyCenter0 = FCatFishBodyModel::CenterPosition(Config.FishBody.Geometry, State.FishWorldPosition, BodyState.Heading);
+	const FVector Mouth0 = FCatFishBodyModel::MouthPosition(Config.FishBody.Geometry, State.FishWorldPosition, BodyState.Heading);
+	const FVector FromRod = Mouth0 - RodTip;
 	const double Distance0 = FromRod.Size();
 	const double VerticalDistance = FMath::Abs(FromRod.Z);
 	Result.Trace.DistanceBeforeCentimeters = Distance0;
@@ -160,7 +170,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	FVector FishDirection = FVector::ZeroVector;
 	if (!State.bFishExhausted)
 	{
-		FishDirection = FVector(DesiredFishDirection.X, DesiredFishDirection.Y, 0.0);
+		FishDirection = BodyState.Heading;
 		if (!FishDirection.Normalize())
 		{
 			Result.RejectReason = ECatFightSimulationRejectReason::InvalidFishDirection;
@@ -209,6 +219,8 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	const double FishThrust = ActiveFishStrength * Config.ForcePerStrengthNewtons + (bExhaustedCatEscape
 		? Config.PrimaryOperatorMassKilograms * Config.ExhaustedCatTowAccelerationCentimetersPerSecondSquared / 100.0 : 0.0);
 	const double FishDriveAcceleration = 100.0 * FishThrust / Config.FishMassKilograms;
+	const FCatFishBodyTurn FreeTurn = FCatFishBodyModel::PredictTurn(Config.FishBody, BodyState,
+		DesiredFishDirection, FishEffortRatio, Config.FishMassKilograms, FullEffortThrust, FVector::ZeroVector, Dt);
 	Result.Trace.RodLineAlignment = RodLineAlignment;
 	Result.Trace.RodLeverageMultiplier = RodLeverage;
 	Result.Trace.OperatorCatStrength = OperatorCatStrength;
@@ -245,9 +257,28 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	const bool bCMC = bool(RodConstraint.PredictCMCEndpoint);
 	const double PositionCorrection = RodConstraint.bPhysicalRodEndpoint && !bCMC ? 0.0 : FMath::Min(ExistingHorizontalError,
 		Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond * Dt);
-	const FVector ForceStart = RodConstraint.bPhysicalRodEndpoint && !bCMC ? State.FishWorldPosition : State.FishWorldPosition - HorizontalOutward * ExistingHorizontalError;
+	const FVector ForceStart = RodConstraint.bPhysicalRodEndpoint && !bCMC ? BodyCenter0 : BodyCenter0 - HorizontalOutward * ExistingHorizontalError;
 	const FVector ResidualPositionError = RodConstraint.bPhysicalRodEndpoint && !bCMC ? FVector::ZeroVector : HorizontalOutward * (ExistingHorizontalError - PositionCorrection);
-	const FVector FreeFishPosition = ForceStart + FreeVelocity * Dt;
+	const FVector LocalMouthLever = Config.FishBody.Geometry.MouthLocalPositionCentimeters - Config.FishBody.Geometry.CenterOfMassLocalPositionCentimeters;
+	bool bSurfaceCandidateSucceeded = true;
+	const auto ProjectFishSurface = [&](FVector& Root, FVector& Velocity, const FVector& Heading, const double Length)
+	{
+		if (!FishSurface || !FishSurface->ProjectRoot) return;
+		FVector ProjectedRoot;
+		if (!FishSurface->ProjectRoot(Root, Heading, Length, ProjectedRoot) || !IsFiniteVector(ProjectedRoot))
+		{
+			bSurfaceCandidateSucceeded = false;
+			return;
+		}
+		// 同一朝向下根与质心的地形位移相同；接触反应更新速度，不把根偏移当主动推进。
+		Velocity += (ProjectedRoot - Root) / Dt;
+		Root = ProjectedRoot;
+	};
+	FVector FreeSurfaceVelocity = FreeVelocity;
+	FVector FreeSurfaceRoot = ForceStart + FreeVelocity * Dt
+		- FCatFishBodyModel::RotateLocal(Config.FishBody.Geometry.CenterOfMassLocalPositionCentimeters, FreeTurn.State.Heading);
+	ProjectFishSurface(FreeSurfaceRoot, FreeSurfaceVelocity, FreeTurn.State.Heading, PaidOutLine0);
+	const FVector FreeFishPosition = FCatFishBodyModel::MouthPosition(Config.FishBody.Geometry, FreeSurfaceRoot, FreeTurn.State.Heading);
 	const double FreeDistance = FVector::Distance(RodTip, FreeFishPosition + ResidualPositionError);
 	const double RequestedReelDistance = bReeling && (State.bFishExhausted || CatForce > UE_DOUBLE_SMALL_NUMBER)
 		? FMath::Min(Config.ReelSpeedCentimetersPerSecond * Dt, FMath::Max(0.0, PaidOutLine0 - VerticalDistance)) : 0.0;
@@ -262,8 +293,12 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		double Tension = 0.0;
 		FVector Force = FVector::ZeroVector;
 		FVector Velocity = FVector::ZeroVector;
+		FVector VelocityBeforeSurface = FVector::ZeroVector;
 		FVector Position = FVector::ZeroVector;
 		FVector RodEnd = FVector::ZeroVector;
+		FVector Mouth = FVector::ZeroVector;
+		double UncorrectedConstraintExcessCentimeters = 0.0;
+		FCatFishBodyTurn Turn;
 	};
 	const auto ApplyPointResponse = [&](const FVector& Force)
 	{
@@ -286,94 +321,116 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
     Result.Trace.bCMCEndpointPredicted = bCMC;
 	const auto SolveForLength = [&](const double Length)
 	{
-        FLineSolve Solved;
-        if (bCMC)
-        {
-            // 7e606dd: one candidate tension drives fish, collision-bounded CMC motion and the same aim model.
-            const FVector Offset = FreeFishPosition - RodTip;
-            const FVector Axis = Offset.GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER, HorizontalOutward);
-            const double Radius = RadiusAtHeight(Length, FMath::Abs(Offset.Z));
-            const double MidRadius = .5 * (Offset.Size2D() + FMath::Min(Offset.Size2D(),Radius));
-            const double HorizontalFraction = FMath::Max(.001, MidRadius / FMath::Max(UE_DOUBLE_SMALL_NUMBER,
-                FMath::Sqrt(MidRadius*MidRadius + Offset.Z*Offset.Z)));
-            const FVector ForceAxis = Axis * HorizontalFraction + FVector(0,0,FMath::Sign(Offset.Z)*FMath::Sqrt(1-HorizontalFraction*HorizontalFraction));
-            const auto Evaluate = [&](double Tension)
-            {
-                Solved.Tension = Tension; Solved.Force = ForceAxis * Tension;
-                Solved.Velocity = FreeVelocity - Axis * (100*Tension*HorizontalFraction*Dt/EffectiveFishMass);
-                Solved.Position = ForceStart + Solved.Velocity * Dt;
-                FCatFightCMCPredictionQuery Query;
-                Query.ForceNewtons = Solved.Force; Query.Seconds = Dt;
-                Query.TorqueStrengthMetersPerNewton = Config.RodPhysicsLengthCentimeters / (100*Config.ForcePerStrengthNewtons);
-                Query.TravelAxis = HorizontalOutward; Query.TravelLimitCentimeters = CMCTravelLimit;
-                const auto Predicted = RodConstraint.PredictCMCEndpoint(Query);
-                bCandidateSucceeded &= Predicted.bSucceeded;
-                Solved.RodEnd = Predicted.bSucceeded ? Predicted.RodTipWorldPosition : RodTip;
-                const FVector Separation = Solved.Position - Solved.RodEnd;
-                const double EndRadius = RadiusAtHeight(Length,FMath::Abs(Separation.Z));
-                const double Along = FVector::DotProduct(Separation,Axis);
-                const double AcrossSquared = FMath::Max(0.0,Separation.SizeSquared2D()-Along*Along);
-                return Along-FMath::Sqrt(FMath::Max(0.0,EndRadius*EndRadius-AcrossSquared));
-            };
-            if (Evaluate(0)>UE_DOUBLE_SMALL_NUMBER)
-            {
-                double Low=0, High=(Offset.Size2D()+FMath::Max(0.0,-FVector::DotProduct(RodConstraint.CarrierVelocityCentimetersPerSecond,Axis)*Dt))
-                    / (MobilityCmPerNewton*HorizontalFraction);
-                for(int32 I=0;I<40;++I) { const double Mid=(Low+High)*.5; if(Evaluate(Mid)>0) Low=Mid; else High=Mid; }
-                Evaluate(High);
-            }
-            Solved.Position += ResidualPositionError;
-            return Solved;
-        }
-        if (RodConstraint.bPhysicalRodEndpoint)
-		{
-			const FVector FreeOffset = FreeFishPosition - FreePhysicalEndpoint;
-			const FVector Axis = FreeOffset.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, LineDirection);
-			const FVector FishResponse = FVector(Axis.X, Axis.Y, 0) * MobilityCmPerNewton;
-			const FVector RodResponse = ApplyPointResponse(Axis) * (100.0 * EndpointPositionFactor * Dt * Dt);
-			const FVector RelativeResponse = FishResponse + RodResponse;
-			const double ErrorSquared = FreeOffset.SizeSquared() - Length * Length;
-			if (ErrorSquared > 0 && RelativeResponse.SizeSquared() > UE_DOUBLE_SMALL_NUMBER)
-			{
-				const double Projection = FVector::DotProduct(FreeOffset, RelativeResponse);
-				const double Discriminant = Projection * Projection - RelativeResponse.SizeSquared() * ErrorSquared;
-				if (Projection > 0)
-					Solved.Tension = Discriminant >= 0
-						? ErrorSquared / (Projection + FMath::Sqrt(Discriminant))
-						: Projection / RelativeResponse.SizeSquared();
-			}
-			Solved.Force = Axis * Solved.Tension;
-			Solved.Velocity = FreeVelocity - FishResponse * (Solved.Tension / Dt);
-			Solved.Position = State.FishWorldPosition + Solved.Velocity * Dt;
-			Solved.RodEnd = RodTip; // Observation only. No predicted transform is committed to Chaos.
-			return Solved;
-		}
-		const FVector FreeOffset = FreeFishPosition - RodTip;
-		const FVector Axis = FreeOffset.GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER, HorizontalOutward);
+		FLineSolve Solved;
+		const FVector FreeEndpoint = RodConstraint.bPhysicalRodEndpoint && !bCMC ? FreePhysicalEndpoint : RodTip;
+		const FVector FreeOffset = FreeFishPosition - FreeEndpoint;
+		FVector Axis = FreeOffset.GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER, HorizontalOutward);
 		const double Radius = RadiusAtHeight(Length, FMath::Abs(FreeOffset.Z));
 		const double MidRadius = 0.5 * (FreeOffset.Size2D() + FMath::Min(FreeOffset.Size2D(), Radius));
 		const double HorizontalFraction = FMath::Max(0.001, MidRadius / FMath::Max(UE_DOUBLE_SMALL_NUMBER,
 			FMath::Sqrt(MidRadius * MidRadius + FreeOffset.Z * FreeOffset.Z)));
-		Solved.Tension = FMath::Max(0.0, FreeOffset.Size2D() - Radius) / (MobilityCmPerNewton * HorizontalFraction);
-		Solved.Force = (FreeFishPosition - RodTip).GetSafeNormal() * Solved.Tension;
-		Solved.Velocity = FreeVelocity - Axis * (100.0 * Solved.Tension * HorizontalFraction * Dt / EffectiveFishMass);
-		Solved.Position = ForceStart + Solved.Velocity * Dt + ResidualPositionError;
-		// Static-anchor callers retain the sampled endpoint. No hypothetical pose is committed.
-		Solved.RodEnd = RodTip;
+		const auto Evaluate = [&](const double Tension)
+		{
+			const FVector ForceAxis = Axis * HorizontalFraction
+				+ FVector(0, 0, FMath::Sign(FreeOffset.Z) * FMath::Sqrt(1 - HorizontalFraction * HorizontalFraction));
+			Solved.Tension = Tension;
+			Solved.Force = ForceAxis * Tension;
+			Solved.Velocity = FreeVelocity - Axis * (100.0 * Tension * HorizontalFraction * Dt / EffectiveFishMass);
+			Solved.VelocityBeforeSurface = Solved.Velocity;
+			Solved.Turn = FCatFishBodyModel::PredictTurn(Config.FishBody, BodyState, DesiredFishDirection,
+				FishEffortRatio, Config.FishMassKilograms, FullEffortThrust, -Solved.Force, Dt);
+			const FVector Center = ForceStart + Solved.Velocity * Dt;
+			Solved.Position = Center - FCatFishBodyModel::RotateLocal(Config.FishBody.Geometry.CenterOfMassLocalPositionCentimeters, Solved.Turn.State.Heading);
+			ProjectFishSurface(Solved.Position, Solved.Velocity, Solved.Turn.State.Heading, Length);
+			Solved.Mouth = FCatFishBodyModel::MouthPosition(Config.FishBody.Geometry, Solved.Position, Solved.Turn.State.Heading);
+			if (bCMC)
+			{
+				FCatFightCMCPredictionQuery Query;
+				Query.ForceNewtons = Solved.Force; Query.Seconds = Dt;
+				Query.TorqueStrengthMetersPerNewton = Config.RodPhysicsLengthCentimeters / (100 * Config.ForcePerStrengthNewtons);
+				Query.TravelAxis = HorizontalOutward; Query.TravelLimitCentimeters = CMCTravelLimit;
+				const auto Predicted = RodConstraint.PredictCMCEndpoint(Query);
+				bCandidateSucceeded &= Predicted.bSucceeded;
+				Solved.RodEnd = Predicted.bSucceeded ? Predicted.RodTipWorldPosition : RodTip;
+			}
+			else
+			{
+				Solved.RodEnd = RodConstraint.bPhysicalRodEndpoint
+					? FreePhysicalEndpoint + ApplyPointResponse(Solved.Force) * (100.0 * EndpointPositionFactor * Dt * Dt)
+					: RodTip;
+			}
+			// 沿本步冻结的拉力轴找第一个可行端点，避免距离平方在越过竿尖后出现第二个根。
+			const FVector Separation = Solved.Mouth - Solved.RodEnd;
+			const double EndRadius = RadiusAtHeight(Length, FMath::Abs(Separation.Z));
+			const double Along = FVector::DotProduct(Separation, Axis);
+			const double AcrossSquared = FMath::Max(0.0, Separation.SizeSquared2D() - Along * Along);
+			return Along - FMath::Sqrt(FMath::Max(0.0, EndRadius * EndRadius - AcrossSquared));
+		};
+		const auto SolveTension = [&]()
+		{
+			if (Evaluate(0) <= UE_DOUBLE_SMALL_NUMBER) return;
+			double Low = 0;
+			double High = (FreeOffset.Size2D() + 2 * LocalMouthLever.Size2D()
+				+ FMath::Max(0.0, -FVector::DotProduct(RodConstraint.CarrierVelocityCentimetersPerSecond, Axis) * Dt))
+				/ (MobilityCmPerNewton * HorizontalFraction);
+			for (int32 I = 0; I < 8 && Evaluate(High) > 0; ++I) High *= 2;
+			for (int32 I = 0; I < 40; ++I)
+			{
+				const double Mid = (Low + High) * 0.5;
+				if (Evaluate(Mid) > 0) Low = Mid; else High = Mid;
+			}
+			Evaluate(High);
+		};
+		SolveTension();
+		// 嘴点绕质心转动后，极短线可能在旧冻结轴的横向无解。不能把负根号截成零就接受越线。
+		// 只在这种退化几何下修正拉力方向；每次候选仍使用同一个姿态/张力模型，无位置传送补偿。
+		for (int32 DirectionIteration = 0; DirectionIteration < 12
+			&& FVector::Distance(Solved.Mouth, Solved.RodEnd) > Length + 0.0001; ++DirectionIteration)
+		{
+			const FVector PreviousAxis = Axis;
+			const FLineSolve PreviousSolved = Solved;
+			const auto Across = [&]() { return FVector::DotProduct(Solved.Mouth - Solved.RodEnd, FVector(-Axis.Y, Axis.X, 0)); };
+			const double Error = Across();
+			constexpr double ProbeRadians = 0.001;
+			Axis = PreviousAxis.RotateAngleAxis(FMath::RadiansToDegrees(ProbeRadians), FVector::UpVector);
+			SolveTension();
+			const double Derivative = (Across() - Error) / ProbeRadians;
+			if (FMath::Abs(Derivative) <= UE_DOUBLE_SMALL_NUMBER)
+			{
+				Axis = PreviousAxis; Solved = PreviousSolved; break;
+			}
+			const double Correction = FMath::Clamp(-Error / Derivative, -0.35, 0.35);
+			Axis = PreviousAxis.RotateAngleAxis(FMath::RadiansToDegrees(Correction), FVector::UpVector);
+			SolveTension();
+		}
+		// 保留同一预测竿端的验线结果；历史欠下的限速纠偏余额随后单独归还。
+		Solved.UncorrectedConstraintExcessCentimeters = FMath::Max(0.0, FVector::Distance(Solved.Mouth, Solved.RodEnd) - Length);
+		Solved.Position += ResidualPositionError;
+		Solved.Mouth += ResidualPositionError;
+		// Chaos/CMC 的候选端点只服务求解；不把预测 Transform 写回接收方。
+		if (!bCMC) Solved.RodEnd = RodTip;
 		return Solved;
 	};
 	// 卷线器和锁线使用同一个张力求解；先检验接收端是否有余力，再提交真正完成的线长。
 	double ActualReelDistance = 0.0;
-	if (RequestedReelDistance > 0.0 && SolveForLength(PaidOutLine0).Tension < ReelForceLimit)
+	if (RequestedReelDistance > 0.0)
 	{
-		double Low = 0.0, High = RequestedReelDistance;
-		for (int32 Iteration = 0; Iteration < 32; ++Iteration)
+		const FLineSolve CurrentLengthCandidate = SolveForLength(PaidOutLine0);
+		if (CurrentLengthCandidate.Tension < ReelForceLimit
+			&& (!FishSurface || CurrentLengthCandidate.UncorrectedConstraintExcessCentimeters <= 0.01))
 		{
-			const double Candidate = (Low + High) * 0.5;
-			if (SolveForLength(PaidOutLine0 - Candidate).Tension <= ReelForceLimit) Low = Candidate;
-			else High = Candidate;
+			double Low = 0.0, High = RequestedReelDistance;
+			for (int32 Iteration = 0; Iteration < 32; ++Iteration)
+			{
+				const double Candidate = (Low + High) * 0.5;
+				const FLineSolve ReelCandidate = SolveForLength(PaidOutLine0 - Candidate);
+				// 接触约束可能使某个更短线长无交集；该试探只缩小卷线量，不否定合法的锁线候选。
+				if (ReelCandidate.Tension <= ReelForceLimit
+					&& (!FishSurface || ReelCandidate.UncorrectedConstraintExcessCentimeters <= 0.01)) Low = Candidate;
+				else High = Candidate;
+			}
+			ActualReelDistance = Low;
 		}
-		ActualReelDistance = Low;
 	}
 	double LineLength = PaidOutLine0 - ActualReelDistance;
 	if (bFreeSpool) LineLength = FMath::Min(Config.MaximumLineLengthCentimeters, FMath::Max(LineLength, FreeDistance));
@@ -381,6 +438,11 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	const double IntendedDistance = FreeDistance;
 	const double ConstraintError = FMath::Max(0.0, FreeDistance - LineLength);
 	FLineSolve Solved = SolveForLength(LineLength);
+    if (!bSurfaceCandidateSucceeded)
+    {
+        Result.RejectReason = Result.Trace.RejectReason = ECatFightSimulationRejectReason::InvalidResolvedResult;
+        return Result;
+    }
     if (!bCandidateSucceeded)
     {
         Result.RejectReason = Result.Trace.RejectReason = ECatFightSimulationRejectReason::InvalidRodConstraint;
@@ -391,17 +453,36 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		Solved.Tension = 0.0;
 		Solved.Force = FVector::ZeroVector;
 		Solved.Velocity = FreeVelocity;
-		Solved.Position = State.FishWorldPosition + FreeVelocity * Dt;
+		Solved.VelocityBeforeSurface = FreeVelocity;
+		Solved.Turn = FreeTurn;
+		const FVector FreeCenter = BodyCenter0 + FreeVelocity * Dt;
+		Solved.Position = FreeCenter - FCatFishBodyModel::RotateLocal(Config.FishBody.Geometry.CenterOfMassLocalPositionCentimeters, FreeTurn.State.Heading);
+		ProjectFishSurface(Solved.Position, Solved.Velocity, FreeTurn.State.Heading, LineLength);
+		Solved.Mouth = FCatFishBodyModel::MouthPosition(Config.FishBody.Geometry, Solved.Position, FreeTurn.State.Heading);
 		Solved.RodEnd = RodTip;
+		Solved.UncorrectedConstraintExcessCentimeters = FMath::Max(0.0, FVector::Distance(Solved.Mouth, Solved.RodEnd) - LineLength);
+	}
+	// 未被采纳的试探长度可以无解；只核对最终候选，且不把旧的限速纠偏余额算作本步越线。
+	if (!bSurfaceCandidateSucceeded || (FishSurface && Solved.UncorrectedConstraintExcessCentimeters > 0.01))
+	{
+		Result.RejectReason = Result.Trace.RejectReason = ECatFightSimulationRejectReason::InvalidResolvedResult;
+		return Result;
 	}
 	const double LineTension = Solved.Tension;
 	const bool bLineRestraining = LineTension > UE_DOUBLE_SMALL_NUMBER;
-	const double FishCorrection = PositionCorrection + (FreeVelocity - Solved.Velocity).Size() * Dt;
+	const double FishCorrection = PositionCorrection + (FreeVelocity - Solved.VelocityBeforeSurface).Size() * Dt;
 	Result.Trace.ExistingPositionErrorCentimeters = ExistingHorizontalError;
 	Result.Trace.FishCorrectionCentimeters = FishCorrection;
 	Result.Trace.LineTensionNewtons = LineTension;
 	Result.Trace.RequiredTensionAtCurrentLengthNewtons = SolveForLength(LineLength).Tension;
 	Result.Trace.RequiredTensionAtPaidOutLengthNewtons = SolveForLength(PaidOutLine0).Tension;
+	// 诊断也会走同一只读候选入口；不能把这些查询失败遗漏在前面的成功检查之外。
+	if (!bSurfaceCandidateSucceeded || !bCandidateSucceeded)
+	{
+		Result.RejectReason = Result.Trace.RejectReason = !bSurfaceCandidateSucceeded
+			? ECatFightSimulationRejectReason::InvalidResolvedResult : ECatFightSimulationRejectReason::InvalidRodConstraint;
+		return Result;
+	}
 	Result.Trace.ReelForceLimitNewtons = ReelForceLimit;
 	Result.Trace.bLineRestraining = bLineRestraining;
 	const FVector ProposedFishPosition = Solved.Position;
@@ -410,7 +491,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	Result.Trace.ConstraintRodEndWorldPosition = Solved.RodEnd;
 	const double NormalizedTension = FMath::Clamp(LineTension / Config.DisplayTensionNewtons, 0.0, 1.0);
 
-	const double Distance1 = FVector::Distance(RodTip, ProposedFishPosition);
+	const double Distance1 = FVector::Distance(RodTip, Solved.Mouth);
 	const bool bLineTaut = bLineRestraining
 		|| LineLength - Distance1 <= UE_DOUBLE_KINDA_SMALL_NUMBER;
 
@@ -426,7 +507,10 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	Result.NormalizedTension = NormalizedTension;
 	Result.bLineTaut = bLineTaut;
 	Result.ProposedFishWorldPosition = ProposedFishPosition;
-	Result.FishEffortDirection = FishDirection;
+	Result.FishBodyTurn = Solved.Turn;
+	Result.ProposedMouthWorldPosition = Solved.Mouth;
+	Result.FishEffortDirection = State.bFishExhausted ? FVector::ZeroVector : DesiredFishDirection.GetSafeNormal2D();
+	Result.FishThrustDirection = FishDirection;
 	Result.FishLineAlignment = Alignment;
 	Result.NormalizedLineLoad = OutwardLoad;
 	Result.RodLineAlignment = RodLineAlignment;
@@ -473,6 +557,8 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 	if (!Result.bSucceeded || !Config.IsValid() || Result.ProposedFishWorldPosition.ContainsNaN() || Result.FishEffortDirection.ContainsNaN()
 		|| !FMath::IsFinite(State.FishEffortRatio) || State.FishEffortRatio < 0.0 || State.FishEffortRatio > 1.0
 		|| !IsFiniteVector(Result.ResolvedFishVelocityCentimetersPerSecond)
+		|| !IsFiniteVector(Result.ProposedMouthWorldPosition) || !IsFiniteVector(Result.FishBodyTurn.State.Heading)
+		|| !FMath::IsFinite(Result.FishBodyTurn.State.AngularVelocityRadiansPerSecond)
 		|| !IsFiniteVector(Result.RodLineForceNewtons)
 		|| !IsFiniteVector(Result.FishPositionCorrectionWorldDisplacement)
 		|| !IsFiniteNonNegative(Result.LineLengthCentimeters) || !IsFiniteNonNegative(Result.LineTensionNewtons))
@@ -511,7 +597,7 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 	Result.Trace.bStruggling = bStruggling;
 	Result.Trace.bLineRestraining = bLineRestraining;
 	Result.Trace.CatForceNewtons = CatForce;
-	const FVector LineDirection = (Result.ProposedFishWorldPosition - RodConstraint.RodTipWorldPosition)
+	const FVector LineDirection = (Result.ProposedMouthWorldPosition - RodConstraint.RodTipWorldPosition)
 		.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, FVector::ForwardVector);
 	const double RodLineAlignment = FVector::DotProduct(RodConstraint.RodForwardWorld.GetSafeNormal(), LineDirection);
 	const double OutwardLoad = Result.NormalizedLineLoad;
@@ -543,7 +629,11 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 	Result.CatActualLineDistanceCentimeters = ActualReelDistance;
 	const double FishSignedIntentLineDistance = FVector::DotProduct(
 		FishIntentDisplacement, LineDirection);
-	const FVector FishActualDisplacement = ProposedFishPosition - State.FishWorldPosition
+	const FVector StartHeading = State.FishBody.Heading.GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER,
+		Result.FishEffortDirection.GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER, FVector::ForwardVector));
+	const FVector FishActualDisplacement = FCatFishBodyModel::CenterPosition(Config.FishBody.Geometry,
+		ProposedFishPosition, Result.FishBodyTurn.State.Heading)
+		- FCatFishBodyModel::CenterPosition(Config.FishBody.Geometry, State.FishWorldPosition, StartHeading)
 		- Result.FishPositionCorrectionWorldDisplacement;
 	const double FishSignedActualLineDistance = FVector::DotProduct(FishActualDisplacement, LineDirection);
 	Result.FishIntendedLineDistanceCentimeters = FMath::Abs(FishSignedIntentLineDistance);

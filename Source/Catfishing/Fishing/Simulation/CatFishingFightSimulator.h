@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Fishing/CatFishingTypes.h"
 #include "Fishing/Simulation/CatFishingRodResistanceModel.h"
+#include "Fishing/Simulation/CatFishBodyModel.h"
 
 /** 单步终局；猫力竭先进入持续拖拽，由真实水深确认落水，不直接结束本场。 */
 enum class ECatFightStepOutcome : uint8
@@ -42,6 +43,7 @@ struct CATFISHING_API FCatFightSimulationConfig
 	double PrimaryOperatorCatStrength = 0.0;
 	double PrimaryOperatorMassKilograms = 0.0;
 	double FishMassKilograms = 0.0;
+	FCatFishBodyConfig FishBody;
 
 
 	double FishStrength = 0.0;
@@ -120,6 +122,14 @@ struct CATFISHING_API FCatFightCMCPredictionResult
     bool bSucceeded = false;
 };
 
+/** 可选的只读地形约束。候选调用不能写世界位姿、费用、随机数或岸线反馈状态。 */
+struct CATFISHING_API FCatFightFishSurfaceConstraintInput
+{
+	/** 根位置和线长为 cm；Heading 是本候选实际鱼身朝向。false 只表示查询/数据无效。 */
+	TFunction<bool(const FVector& CandidateRoot, const FVector& Heading, double LineLengthCentimeters,
+		FVector& ResolvedRoot)> ProjectRoot;
+};
+
 /** 权威端点观察与本步操竿努力。Chaos 决定端点位置，卷线器只改变线长。 */
 struct CATFISHING_API FCatFightRodConstraintInput
 {
@@ -164,6 +174,8 @@ struct CATFISHING_API FCatFightSimulationState
 	double LineLengthCentimeters = 0.0;
 	double AbsoluteRodWear = 0.0;
 	FVector FishWorldPosition = FVector::ZeroVector;
+	FCatFishBodyState FishBody;
+	/** 质心速度；Actor 根与质心存在静态偏移时，不含绕质心转动造成的根点速度。 */
 	FVector FishVelocityCentimetersPerSecond = FVector::ZeroVector;
 	ECatFightCatAction CatAction = ECatFightCatAction::None;
 	ECatFishMotionIntent MotionIntent = ECatFishMotionIntent::None;
@@ -289,12 +301,16 @@ struct CATFISHING_API FCatFightStepResult
 	/** 本固定步新增的鱼竿磨损；由 Session 写回同一装备实例。 */
 	double RodWearDelta = 0.0;
 	FVector ProposedFishWorldPosition = FVector::ZeroVector;
+	FCatFishBodyTurn FishBodyTurn;
+	FVector ProposedMouthWorldPosition = FVector::ZeroVector;
 	/** 受力积分的鱼速度；几何纠偏不注入惯性，地形碰撞再修正该速度。 */
 	FVector ResolvedFishVelocityCentimetersPerSecond = FVector::ZeroVector;
 	/** 本步历史位置误差修正；不计入惯性或鱼主动做功。 */
 	FVector FishPositionCorrectionWorldDisplacement = FVector::ZeroVector;
 	/** 本步实际提交的游动努力方向；地形反馈更新下步转向时不能改写本步费用。 */
 	FVector FishEffortDirection = FVector::ZeroVector;
+	/** 实际鱼身朝向决定推进力；主动意图方向仍用于既有运动缺失费用。 */
+	FVector FishThrustDirection = FVector::ZeroVector;
 	double FishLineAlignment = 0.0;
 	double NormalizedLineLoad = 0.0;
 	double RodLineAlignment = 1.0;
@@ -336,5 +352,5 @@ public:
 		const FVector& DesiredFishDirection);
 	static FCatFightStepResult Step(const FCatFightSimulationConfig& Config,
 		const FCatFightSimulationState& State, const FCatFightRodConstraintInput& RodConstraint,
-		const FVector& DesiredFishDirection);
+		const FVector& DesiredFishDirection, const FCatFightFishSurfaceConstraintInput* FishSurface = nullptr);
 };

@@ -8,6 +8,7 @@
 
 class USceneComponent;
 class UBoxComponent;
+class USkeletalMesh;
 class USkeletalMeshComponent;
 class UStateTree;
 class UStateTreeComponent;
@@ -30,16 +31,18 @@ public:
 	void DeferInitialPresentationFromAuthority();
 	void PublishInitialPresentationFromAuthority();
 	/**
-	 * 推进一步搏斗表现：写行为/发力/线长、落位到权威位置，活鱼朝向主动游动方向。
-	 * StepDeltaSeconds > 0 时按 MaximumTurnRateDegreesPerSecond 限速转向（搏斗固定步进传 FixedStepSeconds）；
-	 * <= 0 表示首次落位，直接对准不插值。
+	 * 应用已求解的权威落点和鱼身朝向。SwimHeading 保留 AI 目标；ResolvedBodyHeading 为物理结果。
+	 * 转动的惯量与限速归 Simulator；本 Actor 不再用第二层转向改变线端几何。
 	 */
 	bool ApplyFightStepFromAuthority(ECatFishMotionIntent MotionIntent, double CurrentLineLength,
 		const FVector& FishWorldPosition, float StepDeltaSeconds = 0.0f, float FishLineAlignment = 0.0f,
 		float NormalizedLineLoad = 0.0f, float IntendedSwimSpeedCentimetersPerSecond = 0.0f,
 		bool bStrongConfrontation = false, bool bGrounded = false, FVector GroundNormal = FVector::UpVector,
 		FVector SwimHeading = FVector::ZeroVector, ECatFishBehavior Behavior = ECatFishBehavior::None,
-		float FishEffortRatio = 0.0f);
+		float FishEffortRatio = 0.0f, FVector ResolvedBodyHeading = FVector::ZeroVector);
+	/** 与权威求解同源的静态鱼嘴点；所有端可用，不依赖 Mesh/动画加载。 */
+	UFUNCTION(BlueprintPure, Category="Fishing|Fish")
+	FVector GetMouthWorldLocation() const;
 	/** 服务器把高层鱼行为交给独立 StateTree；客户端永不启动平行行为树。 */
 	bool StartFishBehaviorFromAuthority(UStateTree* BehaviorStateTree, UCatFishingFightRunner* FightRunner);
 	void StopFishBehaviorFromAuthority();
@@ -54,7 +57,7 @@ public:
 	void BP_OnFishPresentationChanged(const FCatFishEncounterPresentationState& Previous, const FCatFishEncounterPresentationState& Current);
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category="Fishing|Fish") void BP_PlayFishPresentationEvent(FGameplayTag EventTag);
 
-	/** Mesh 组件的世界位置；调试球和鱼线用它对齐实际可见资源。 */
+	/** Mesh 组件的世界位置，供调试可见资源；钩和鱼线锚点使用 GetMouthWorldLocation。 */
 	UFUNCTION(BlueprintPure, Category="Fishing|Fish")
 	FVector GetVisualWorldLocation() const;
 
@@ -74,14 +77,8 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void OnRep_ReplicatedMovement() override;
-
-	/**
-	 * 转向速率上限（度/秒）：鱼调头不会瞬间完成，避免挣扎/收线切换时朝向瞬移。
-	 * 只影响表现观感；线长、近岸、抄网等一切判定都只用位置，与朝向无关。
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Fishing|Presentation", meta=(ClampMin="0", Units="deg/s"))
-	float MaximumTurnRateDegreesPerSecond = 180.0f;
 
 private:
 	friend class FCatFishBehaviorStateTreeRuntimeTest;
@@ -92,6 +89,7 @@ private:
 	void RefreshFishPresentation();
 	void ApplyVisualScale();
 	void ApplyVisualPose();
+	void LogAnimatedMouthFallback(const TCHAR* Reason);
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> SceneRoot;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> VisualRoot;
 	/** 鱼种库表现定义的唯一可见 Mesh 消费者；蓝图子类不得再添加平行鱼 Mesh。 */
@@ -104,13 +102,20 @@ private:
 	bool bIdentityInitialized = false;
 	bool bPresentationDeferred = false;
 	bool bHasPendingPresentationNotification = false;
-	/** 是否已经有过一次有效的移动方向；首次落位直接对准，之后才做限速转向。 */
-	bool bFacingInitialized = false;
 	bool bBehaviorStartupInProgress = false;
+	bool bRefreshingFishPresentation = false;
+	bool bApplyingVisualPose = false;
+	bool bLoggedAnimatedMouthFallback = false;
+	double NextBodyDiagnosticWorldSeconds = 0.0;
 	FName AppliedPresentationFishDefinitionId = NAME_None;
 	double AppliedExhaustedVisualRollDegrees = 90.0;
 	TWeakObjectPtr<UCatFishingFightRunner> AuthorityFightRunner;
 	FTransform EncounterMeshBaseTransform = FTransform::Identity;
+	// 从正式参考嘴点解析一次；只供动画表现补偿，不参与权威嘴点和运动求解。
+	TWeakObjectPtr<USkeletalMesh> AnimatedMouthMesh;
+	FName AnimatedMouthBone = NAME_None;
+	int32 AnimatedMouthBoneIndex = INDEX_NONE;
+	FDelegateHandle BoneTransformsFinalizedHandle;
 	FCatFishEncounterPresentationState PendingPreviousPresentationState;
 	FCatFishEncounterPresentationState PendingCurrentPresentationState;
 };
