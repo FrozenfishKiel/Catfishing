@@ -869,3 +869,35 @@ presentation_delivery：未重新打包，未完成正式地图鼠标操作、�
 | 阶段、体力、耐久、收线玩法和终局 | 项目规则，由 StateTree/ASC/Session 等现有基础设施承载 | 仍需业务代码，不属于物理引擎会自动提供的玩法 |
 
 因此不以未经统计的代码行百分比声称“多少在造轮子”。可替代程度最高的是基础动力学和约束，但是否更好取决于是否接受角色整体物理架构迁移。本轮选择保留 CMC，把自定义范围收在鱼线耦合与玩法；没有新增 Chaos/Cable/Mover 插件、另一个网络移动框架或假张力保底。参考：[Physics Constraints](https://dev.epicgames.com/documentation/en-us/unreal-engine/physics-constraints-in-unreal-engine)、[CMC 网络移动](https://dev.epicgames.com/documentation/en-us/unreal-engine/understanding-networked-movement-in-the-character-movement-component-for-unreal-engine)。
+
+
+## 2026-09-15 远端 Debug 合并衔接
+
+合并基线：本地 `5714fc0c` 与远端 `45b7eb86`，共同祖先 `acb40b82`。主工作区仅有既存未跟踪文档；在 `Saved/Integration/MergeDebug-20260915` 隔离整合。保留双父历史，不重写或推送；本节为合并审查材料，不另建业务进度入口。远端新增设计文档照常纳入，但不把尚未实现的设计规则宣称为已落地。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 鱼定义与资产 | `Source/Catfishing/Data/CatFishDefinition.h` → Catalog/Session；`/Game/Catfishing/Data/Fish/Fish_*` 共16包 | 本地正式数值、稳定ID、表现引用和鱼体厘米标定保留；远端移除食用中毒/限时效果/黄体力赠送，成长仍按经验系数×千克 | 保留 `FightBodyGeometry`，衔接现有食用成长入口，重存清除旧载荷 | 先编译类型，再导出双方属性、重存、独立重载 | 不能整包覆盖数值；检查完整属性、源表、ID、引用和几何 | 16包完整属性重存不变、独立重载一致；正式数值/几何核验通过 |
+| 迁移与字段契约 | `Scripts/migrate_fish_design_data.py`、`calibrate_fish_body_geometry.py`、`migrate_fish_retired_fields.py`；`.harness/formal-fish-asset-input-package.json`；`Knowledge/Schema/鱼表格.第一版.yaml` | 旧脚本写已删除字段；输入包包含历史数值/几何哈希链 | 删除失效写入，保留迁移历史；新增完整属性不变的受控重存脚本及备份 | 全包预检先于任何保存，输出证据后更新哈希链 | 源表漂移、跨鱼身份、几何被重置；Python及UE只读核验 | 15项Python回归通过、字段映射0问题；输入包已追加重存SHA链，历史几何/数值链保持 |
+| 使用入口与退出 | `Fishing/Integration/CatFishingCommandComponent` → `CatFishingService::PlaceRod`/`CatFishingSession::RequestScoop`；Rod `ICatInteractable` | 远端指定库存实例 Use/E交互；本地普通伸手不抓竿 | 使用远端单一事务入口，保留本地显式持竿豁免和权限边界；厘米、秒与请求幂等契约不变 | 先库存身份预检，再扣量/生成/回执；取消清理固定实例 | 抄错物、双重扣量、生命周期残留；库存Use和钓鱼回归 | 自动合并已核对；库存Use/身份/回执和钓鱼生命周期回归通过，单鱼重拾边界见下文 |
+| 鱼体与窗口 | Session → FightRunner/Simulator → Encounter/Hook/AnimBP | 本地嘴点、质心、有限转矩、三窗口与逐鱼节拍保持；抄网多了指定实例校验 | 原求解器、单位、状态转换、动画和网络复制路径保留，不并挂新求解器 | 定义与资产就绪后沿现有Session初始化 | 真咬扣饵、搏斗入场、钩嘴、退出与多人回执；相关回归 | Solver/Encounter相对本地无差异；鱼体、三窗口和实际Session回归通过；Group抓握后续失败保留 |
+| 外围消费者与持久化 | `Online/CatOnlineSubsystem`、Inventory/Equipment/ShopEconomy/Save及正式WBP | 保留本地连接超时/取消/输入修复，接远端库存、商店、鱼护和祭坛改动 | 对自动合并的调用链与资产入口复核，不另增持久化模型 | 接口编译后运行库存、交易、存档及联机契约 | 正式资产加载、物品身份、收付与回执、旧存档恢复 | 本地联机独立改动保留；首轮库存/交易/存档及指定联机回归通过；鱼护完整用例失败分段见下文 |
+| 配置、日志与交付 | `Config/DefaultGame.ini`、`Config/DefaultEngine.ini`；`Docs/DataAsset字段含义.md`；`Build/Automation/RunCatAutomation.ps1` | 鱼目录/三窗口配置保留，远端库存4格和已退役配置清理纳入；Cook入口不涉及新增修改 | 字段文档同步最终实现，保留原Log/Warning关联事件；Editor/Game Development构建 | 编译、资产核验、运行检查后记录三层证据 | `fishing_command_result`、`fishing_fish_body_bound`、`place_chum_result`；新Cook及真人双端落盘未验证 | Editor/Game Development通过；自动化失败与正式UI警告保留，未进行新Cook/真人双端验收 |
+
+追加盘点：首轮145项运行回归143通过、2失败。`CatFishingGroupNetworkTests.cpp` 固定主控力量50，正式小鱼在真实提竿时合法触发碾压；夹具改为普通响应窗提竿、按已经冻结的鱼力配置同强度测试团队，保持真实强度裁决。`CatFishGuardCarryNetworkTests.cpp::BothSidesMatch` 沿用库存隐藏方案，和远端 `ACatFishGuardActor::OnRep_InventoryOwner` 的嘴叼可见实现及同一测试的占嘴按钮断言冲突；单独复跑同样失败，现恢复正式嘴部Actor/Socket/可见性检查，保留GUID、重量、物理、重复丢取及晚到Mesh回归。首次仅修正测试后，多人链进入搏斗但后续观察到物理ReachLimit释放；鱼护链则推进到快捷丢弃，暴露出远端Controller只接受单鱼、直接忽略嘴叼鱼护的生产漏接。鱼护现已按服务器当前嘴部Actor定位原库存实例，复用 ExecuteInventoryActionFromAuthority(Drop) 统一事务和回执；不另写附件或内鱼状态。该生产修复与后续复跑结果见下文。
+
+contract：Editor/Game Win64 Development构建已通过；15项Python回归通过、最终字段映射0问题。两边16资产已用合并后的同一UE模块完整反射导出；差异只涉及本地已批准数值、窗口、偏好、行为及几何字段，身份、表现和其他属性无差异。本地16包受控重存前后所有现存属性一致，独立进程重载的属性与包哈希完全一致；源表数值和参考模型几何各自独立核验通过，旧食用字段载荷已清除。证据位于隔离工作区的 `Saved/MergeValidation`、`Saved/FishRetiredFields`、`Saved/FishAlignment`、`Saved/FishBodyGeometry`。
+
+runtime_behavior：首轮145项中143通过、2失败。修正夹具并补齐鱼护快捷丢弃后，`DropFixRetestReport/index.json` 定向9项中7通过、2失败。鱼护已经通过Place及三轮丢弃、拾取、移动和身份/内鱼校验；完整用例随后在单鱼第二轮重拾stage11失败，服务器先接受交互、再回报`StaleScoopTarget`并施加失误眩晕，实际拒绝分支未确认。协作用例进入真实搏斗后仍因实际抓握距离70.336cm超过64cm而释放，未满足稍后仍保持抓握的断言。保持这两项失败，不放宽生产规则或删去断言；对应模块不关闭。最终整组复跑结果另见本节末尾。
+
+presentation_delivery：回归包含有渲染正式资产与受控双端检查，但未新增完整Cook、真人手感或打包房主/客户端无-log落盘验收；不关闭模块。
+
+| 追加环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 嘴叼鱼护快捷丢弃 | `Source/Catfishing/Framework/Game/CatfishingPlayerController.cpp::ServerDropCarriedItem` → 当前嘴部Actor → InventoryStatics统一Drop | 远端嘴叼已恢复，但快捷函数仍只处理单鱼；真实双端测试在stage5复现鱼护未释放 | 服务器按原Actor找到唯一库存实例，复用通用动作校验、扣格、释放和回执；日志携带同一RequestId | 已有库存事务为唯一写口，快捷入口不自行搬鱼或改附件；同步回执后结束 | 原GUID、内鱼数量/重量、三轮落地重拾和客户端附件；单鱼Drop仍走原链 | Editor/Game增量构建通过；DropFixRetest中鱼护三轮通过，完整用例的单鱼重拾仍失败，未关闭模块 |
+| 协作运行测试夹具 | `Source/CatfishingEditor/Fishing/Tests/CatFishingGroupNetworkTests.cpp` stage2 → 正式Session提竿 | 固定50力量会把正式小鱼合法碾压，本用例却要求持续搏斗 | 普通响应窗内按已冻结鱼力配置同强度测试团队；真实提竿、阶段和抓握断言保留 | 先等完美窗结束，再设置测试ASC力量，最后提竿；不改生产公式/资产/网络规则 | 验证进入HookedFight及后续协作复制，不将夹具修复当作完整用例通过 | Editor构建及两次定向回归均进入真实搏斗；后续ReachLimit导致停车抓握断言仍失败 |
+| 鱼护表现测试夹具 | `Source/CatfishingEditor/Inventory/Tests/CatFishGuardCarryNetworkTests.cpp::BothSidesMatch` ← 正式鱼护Actor复制 | 旧隐藏库存断言与当前可见嘴叼和占嘴行为矛盾 | 恢复可见性、嘴部Actor、Mesh及Mouth Socket校验；保留GUID/重量/比例/物理断言 | 等服务器及客户端事实收敛后继续Place/Drop | 不能仅凭相对附件证明世界移动；三轮双端实际位移及内鱼保持 | 鱼护阶段通过；同一用例后续单鱼第二轮重拾仍失败，不能视为完整表现交付 |
+
+静态核验：本轮源码、脚本、字段表和冲突解决无新增空白错误、无未解决索引项。全量相对本地的`diff --check`仍报告远端历史设计快照/模拟输出自带的尾空格，本轮未为清理这些历史文本扩大改动。一次额外整组启动在ShaderCompiler临时文件写入阶段失败且无测试报告，不计入通过数；随后以允许UE写临时目录的方式复跑。主工作区原有未跟踪文档保留，编译与运行证据均来自隔离工作区；主编辑器尚未重新加载合并后的模块。
+
+最终整组回归：`Saved/MergeValidation/FinalCombinedAuthorizedReport/index.json` 为145项，83 clean success、60 successWithWarnings、2 fail、0 notRun、0 inProcess。失败仍为`GroupListenThreeClients`的停车后助手抓握断言，以及`FormalTwoEndpointGuardCarryPlaceDrop`的单鱼stage11重拾超时；后一个用例本轮还出现实际Slate动态Carry点击未被处理的断言，不能据定向阶段成功宣称正式UI交付通过。首轮和最终回归都有上述两个用例失败，但失败推进阶段不同，详情以各自报告为准。最终源代码对应合并`38baa026`、鱼护修复`a7d541a6`、协作夹具`26a84a94`；文档检查点只记录证据，不改变模块状态。Editor/Game编译日志分别为`DropFixEditorBuild.log`、`DropFixGameBuild.log`；鱼护入口诊断过滤词为`mouth_drop_result`，关联库存原事务RequestId。完整新Cook、打包真人房主/客户端日志和上述两项失败的解除仍未完成。
