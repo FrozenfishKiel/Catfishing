@@ -3,9 +3,9 @@ source: https://qcniqd0mjfwg.feishu.cn/wiki/VuC1wdXIsiXJp1kPDiVcmFOlnNh
 node_token: VuC1wdXIsiXJp1kPDiVcmFOlnNh
 obj_token: PKxHdEJwQoDnKUxRhnccia6Gnwb
 revision_id: 114
-fetched_at: 2026-09-11T23:31:17
+fetched_at: 2026-09-15T16:01:50
 wiki_path: 裁决同步 / 裁决同步 · 鱼／营地／UI 与交互（张佳）
-generated: true  # 飞书非正式页的只读快照，既不是 SSOT 也不要手改；改内容去飞书
+generated: true  # 由飞书导出，勿手改；改内容去飞书
 ---
 
 <title>裁决同步 · 鱼／营地／UI 与交互（张佳）</title>
