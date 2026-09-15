@@ -113,8 +113,18 @@ void UCatFrontendRootWidget::RequestOpenRoomSettings()
 
 void UCatFrontendRootWidget::RequestSaveRoomSettings()
 {
-	// The save action is enabled only once the room settings service is connected.
-	CatRoomDialogs::Text(RoomPage, TEXT("RoomSettingsFeedbackText"), TEXT("房间设置服务暂不可用，修改尚未保存。"));
+	auto* Name = CatRoomDialogs::Find<UEditableTextBox>(RoomPage, TEXT("RoomNameInput"));
+	auto* Capacity = CatRoomDialogs::Find<UComboBoxString>(RoomPage, TEXT("RoomCapacityInput"));
+	auto* Access = CatRoomDialogs::Find<UComboBoxString>(RoomPage, TEXT("RoomAccessInput"));
+	auto* Password = CatRoomDialogs::Find<UEditableTextBox>(RoomPage, TEXT("RoomPasswordInput"));
+	auto* Clear = CatRoomDialogs::Find<UCheckBox>(RoomPage, TEXT("RoomClearPasswordCheckBox"));
+	if (!RoomModel || !Name || !Capacity || !Access || !Password || !Clear) { return; }
+	const FString Secret = Password->GetText().ToString();
+	Password->SetText(FText::GetEmpty());
+	const int32 Policy = Access->GetSelectedIndex();
+	RoomModel->UpdateRoomSettings(Name->GetText().ToString(), Capacity->GetSelectedIndex() + 1,
+		Policy == 0 ? ECatSessionAccessPolicy::Public : Policy == 1 ? ECatSessionAccessPolicy::FriendsOnly : ECatSessionAccessPolicy::InviteOnly,
+		Secret, Clear->IsChecked());
 }
 
 void UCatFrontendRootWidget::RefreshRoomDialogPresentation(const FCatOnlineSnapshot& Snapshot)
@@ -122,22 +132,27 @@ void UCatFrontendRootWidget::RefreshRoomDialogPresentation(const FCatOnlineSnaps
 	CatRoomDialogs::Text(RoomPage, TEXT("RoomNameText"), Snapshot.RoomName.IsEmpty() ? TEXT("房间") : Snapshot.RoomName);
 	CatRoomDialogs::Text(RoomPage, TEXT("RoomMemberCountText"), FString::Printf(TEXT("%d / %d 位伙伴"), Snapshot.CurrentPlayers, Snapshot.MaxPlayers));
 	CatRoomDialogs::Text(RoomPage, TEXT("RoomModalIdText"), Snapshot.LobbyId.IsEmpty() ? TEXT("等待房间 ID") : Snapshot.LobbyId);
+	CatRoomDialogs::Text(RoomPage, TEXT("RoomShortCodeText"), Snapshot.InviteCode.IsEmpty() ? TEXT("邀请码由房主分享") : FString::Printf(TEXT("免密邀请码：%s"), *Snapshot.InviteCode));
+	if (auto* Copy = CatRoomDialogs::Find<UButton>(RoomPage, TEXT("CopyRoomShortCodeButton"))) { Copy->SetIsEnabled(!Snapshot.InviteCode.IsEmpty()); }
 	if (auto* Feedback = CatRoomDialogs::Find<UTextBlock>(RoomPage, TEXT("RoomInviteFeedbackText")))
 	{
 		const FText Result = RoomModel ? RoomModel->GetLastResultText() : FText::GetEmpty();
 		Feedback->SetText(Result);
 		Feedback->SetVisibility(Result.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
 	}
-	const bool bEditable = Snapshot.bIsHost && Snapshot.ActiveOperation == ECatOnlineOperation::None && !Snapshot.bIsGameplayLoadPending;
+	const bool bEditable = Snapshot.bIsHost && Snapshot.WorldState == ECatOnlineWorldState::Frontend && Snapshot.ActiveOperation == ECatOnlineOperation::None && !Snapshot.bIsGameplayLoadPending;
 	if (const auto* Settings = CatRoomDialogs::Find<UWidget>(RoomPage, TEXT("RoomSettingsDialog")); Settings && Settings->GetVisibility() == ESlateVisibility::Visible)
 	{
-		CatRoomDialogs::Text(RoomPage, TEXT("RoomSettingsFeedbackText"), Snapshot.bIsHost ? TEXT("房间设置暂未开放，修改尚不能保存。") : TEXT(""));
+		const FString Feedback = RoomModel && !RoomModel->GetLastResultText().IsEmpty() ? RoomModel->GetLastResultText().ToString()
+			: Snapshot.ActiveOperation == ECatOnlineOperation::UpdateRoom ? TEXT("正在保存房间设置…")
+			: Snapshot.bHasPassword ? TEXT("当前已设置密码；留空保留原密码。主动邀请和邀请码免密。") : TEXT("当前无密码；填写后保存即可启用。主动邀请和邀请码免密。");
+		CatRoomDialogs::Text(RoomPage, TEXT("RoomSettingsFeedbackText"), Feedback);
 	}
 	for (const TCHAR* Name : {TEXT("RoomNameInput"), TEXT("RoomCapacityInput"), TEXT("RoomAccessInput"), TEXT("RoomPasswordInput"), TEXT("RoomClearPasswordCheckBox")})
 	{
 		if (auto* Field = CatRoomDialogs::Find<UWidget>(RoomPage, Name)) { Field->SetIsEnabled(bEditable); }
 	}
-	if (auto* Save = CatRoomDialogs::Find<UButton>(RoomPage, TEXT("SaveRoomSettingsButton"))) { Save->SetIsEnabled(false); }
+	if (auto* Save = CatRoomDialogs::Find<UButton>(RoomPage, TEXT("SaveRoomSettingsButton"))) { Save->SetIsEnabled(bEditable); }
 	for (const TCHAR* Name : {TEXT("CopyModalRoomIdButton"), TEXT("CopySettingsRoomIdButton")})
 	{
 		if (auto* Copy = CatRoomDialogs::Find<UButton>(RoomPage, Name)) { Copy->SetIsEnabled(!Snapshot.LobbyId.IsEmpty()); }

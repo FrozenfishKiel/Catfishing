@@ -1,4 +1,5 @@
 #include "Framework/Game/CatfishingGameModeBase.h"
+#include "Online/CatRoomAdmission.h"
 
 #include "Equipment/Fragments/CatEquipmentFragment_Chum.h"
 #include "Camp/CatAltarActor.h"
@@ -317,6 +318,15 @@ void ACatfishingGameModeBase::PreLogin(const FString& Options, const FString& Ad
 	Super::PreLogin(Options, Address, UniqueId, ErrorMessage);
 	if (!ErrorMessage.IsEmpty())
 	{
+		return;
+	}
+	if (const UCatOnlineSubsystem* Online = GetGameInstance() ? GetGameInstance()->GetSubsystem<UCatOnlineSubsystem>() : nullptr;
+		Online && Online->GetSnapshot().SessionRole == ECatOnlineSessionRole::Host
+		&& !GetGameInstance()->GetSubsystem<UCatRoomAdmission>()->ValidateGameplayPeer(Address, UniqueId))
+	{
+		ErrorMessage = TEXT("CAT_ROOM_ADMISSION_REQUIRED");
+		UE_LOG(LogCatOnline, Warning, TEXT("Event=room_gameplay_admission_rejected World=%s NetMode=%d Authority=%d Player=Redacted Result=GrantMissingOrIdentityMismatch"),
+			*GetNameSafe(GetWorld()), int32(GetNetMode()), HasAuthority());
 		return;
 	}
 	if (IsPieNoSessionUniqueId(UniqueId))

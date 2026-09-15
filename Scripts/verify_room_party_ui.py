@@ -232,7 +232,7 @@ def tick(delta):
             r=state['root'];r.request_open_room_settings();r.render_room_snapshot(room_snapshot(count=4,ready=True));settings_values()
             state['checks']['host_can_edit_draft']=child(r,'RoomNameInput').get_is_enabled()
             state['checks']['host_dismiss_visible']=child(r,'DismissRoomButton').get_visibility()==unreal.SlateVisibility.VISIBLE
-            state['checks']['host_save_still_unavailable']=not child(r,'SaveRoomSettingsButton').get_is_enabled()
+            state['checks']['host_save_enabled']=child(r,'SaveRoomSettingsButton').get_is_enabled()
             state['phase']=37;state['next']=time.monotonic()+2
         elif phase==37:
             shot('RoomHostSettings');state['phase']=38;state['next']=time.monotonic()+1

@@ -836,11 +836,19 @@ namespace CatFrontendWidgetAuthoring
 			Shade->SetBrush(FSlateColorBrush(FLinearColor(0.018f, 0.023f, 0.021f, 1.0f)));
 		}
 		SetBoxSlot(AddText(Tree, Column, TEXT("JoinTitleText"), TEXT("加入队伍"), 30), false, FMargin(0, 0, 0, 8));
-		SetBoxSlot(AddText(Tree, Column, TEXT("JoinSubtitleText"), TEXT("选择好友房间，或粘贴朋友发来的邀请链接。"), 14), false, FMargin(0, 0, 0, 16));
+		SetBoxSlot(AddText(Tree, Column, TEXT("JoinSubtitleText"), TEXT("浏览公开房间、加入好友，或输入朋友分享的邀请码。"), 14), false, FMargin(0, 0, 0, 16));
 		UHorizontalBox* Columns = Tree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("JoinColumns"));
 		Column->AddChild(Columns); SetBoxSlot(Columns, true);
 		UVerticalBox* Friends = Tree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("JoinFriendsColumn"));
 		UVerticalBox* Link = Tree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("JoinLinkColumn"));
+		UVerticalBox* Public = Tree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("PublicRoomsColumn"));
+		Columns->AddChild(Public); SetBoxSlot(Public, true, FMargin(0, 0, 20, 0));
+		AddText(Tree, Public, TEXT("PublicRoomsTitleText"), TEXT("公开房间"), 22);
+		AddText(Tree, Public, TEXT("PublicRoomsEmptyText"), TEXT("点击刷新搜索房间。"), 14);
+		UScrollBox* PublicRows = Tree->ConstructWidget<UScrollBox>(UScrollBox::StaticClass(), TEXT("PublicRoomsScrollBox"));
+		Public->AddChild(PublicRows); SetBoxSlot(PublicRows, true, FMargin(0, 12)); PublicRows->SetClipping(EWidgetClipping::ClipToBounds);
+		ExposeWidget(WidgetBlueprint, PublicRows);
+		AddButton(Tree, Public, TEXT("RefreshPublicRoomsButton"), TEXT("刷新公开房间"));
 		Columns->AddChild(Friends); Columns->AddChild(Link);
 		SetBoxSlot(Friends, true, FMargin(0, 0, 24, 0)); SetBoxSlot(Link, true, FMargin(24, 0, 0, 0));
 		CastChecked<UHorizontalBoxSlot>(Friends->Slot)->SetVerticalAlignment(VAlign_Fill);
@@ -851,14 +859,22 @@ namespace CatFrontendWidgetAuthoring
 		Friends->AddChild(Rows); SetBoxSlot(Rows, true, FMargin(0, 12)); Rows->SetClipping(EWidgetClipping::ClipToBounds);
 		ExposeWidget(WidgetBlueprint, Rows);
 		AddButton(Tree, Friends, TEXT("RefreshJoinFriendsButton"), TEXT("刷新好友房间"));
-		AddText(Tree, Link, TEXT("JoinLinkTitleText"), TEXT("通过链接加入"), 22);
-		AddText(Tree, Link, TEXT("JoinLinkHelpText"), TEXT("支持 Steam 邀请链接和完整房间 ID。"), 14);
-		AddTextBox(Tree, Link, TEXT("JoinLinkTextBox"), TEXT("邀请链接或房间 ID"));
+		AddText(Tree, Link, TEXT("JoinLinkTitleText"), TEXT("通过邀请码加入"), 22);
+		AddText(Tree, Link, TEXT("JoinLinkHelpText"), TEXT("6 位邀请码免密码；也支持邀请链接和完整房间 ID。"), 14);
+		AddTextBox(Tree, Link, TEXT("JoinLinkTextBox"), TEXT("邀请码、链接或房间 ID"));
 		UHorizontalBox* LinkActions = Tree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("JoinLinkActions"));
 		Link->AddChild(LinkActions); SetBoxSlot(LinkActions, false, FMargin(0, 8));
 		SetBoxSlot(AddButton(Tree, LinkActions, TEXT("PasteJoinLinkButton"), TEXT("粘贴")), true, FMargin(0, 0, 8, 0));
 		SetBoxSlot(AddButton(Tree, LinkActions, TEXT("JoinLinkButton"), TEXT("加入房间")), true);
-		AddText(Tree, Link, TEXT("JoinPermissionText"), TEXT("仅好友房间需要好友关系。仅邀请房间请先接受 Steam 邀请。"), 12);
+		AddText(Tree, Link, TEXT("JoinPermissionText"), TEXT("公开列表、好友房间和完整链接按房主设置校验密码。"), 12);
+		UVerticalBox* Password = Tree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("JoinPasswordPanel"));
+		Link->AddChild(Password); SetBoxSlot(Password, false, FMargin(0, 24));
+		AddText(Tree, Password, TEXT("JoinPasswordTitle"), TEXT("请输入房间密码"), 20);
+		UEditableTextBox* Secret = AddTextBox(Tree, Password, TEXT("JoinPasswordInput"), TEXT("房间密码"));
+		Secret->SetIsPassword(true);
+		AddButton(Tree, Password, TEXT("SubmitRoomPasswordButton"), TEXT("确认加入"));
+		AddButton(Tree, Password, TEXT("CancelRoomPasswordButton"), TEXT("取消"));
+		Password->SetVisibility(ESlateVisibility::Collapsed);
 		AddText(Tree, Column, TEXT("JoinResultText"), TEXT(""), 16);
 		UButton* Back = AddButton(Tree, Column, TEXT("JoinBackButton"), TEXT("返回"));
 		CastChecked<UVerticalBoxSlot>(Back->Slot)->SetHorizontalAlignment(HAlign_Left);
@@ -1844,6 +1860,14 @@ UCatLakeMainMenuController* UCatFrontendWidgetAuthoringLibrary::BindLakeMenuPrev
 void UCatFrontendWidgetAuthoringLibrary::ReleaseLakeMenuPreview(UCatLakeMainMenuController* Controller)
 {
 	if (Controller) { Controller->Unbind(); }
+}
+
+bool UCatFrontendWidgetAuthoringLibrary::RebuildPublicRoomBrowser()
+{
+	using namespace CatFrontendWidgetAuthoring;
+	return RebuildWidgetInDirectory(WidgetDirectory, TEXT("WBP_CatFrontendJoin"), UUserWidget::StaticClass(),
+		UCanvasPanel::StaticClass(), TEXT("CatPublicRooms"), BuildJoinWidget)
+		&& RepairWidgetFonts(TEXT("WBP_CatFrontendJoin"));
 }
 
 bool UCatFrontendWidgetAuthoringLibrary::CreateMissingFrontendWidgetBlueprints(bool bJoinPageOnly, bool bRebuildJoinPage)

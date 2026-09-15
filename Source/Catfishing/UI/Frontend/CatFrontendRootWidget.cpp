@@ -616,11 +616,13 @@ void UCatFrontendRootWidget::BindPageControls()
 	if (ReadyRoomButton) { ReadyRoomButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestToggleRoomReady); }
 	if (CopyInviteCodeButton) { CopyInviteCodeButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestCopyRoomInviteCode); }
 	BindRoomDialogControls(true);
+	BindPublicRoomControls(true);
 }
 
 // 按钮解绑流程：逐个移除本 Root 注册的动态委托；空指针和重复拆除安全跳过，防止 Widget 重建叠加点击回调。
 void UCatFrontendRootWidget::UnbindPageControls()
 {
+	BindPublicRoomControls(false);
 	if (JoinLinkButton) { JoinLinkButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestSubmitJoinLink); }
 	if (PasteJoinLinkButton) { PasteJoinLinkButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestPasteJoinLink); }
 	if (RefreshJoinFriendsButton) { RefreshJoinFriendsButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestRefreshFriends); }
@@ -1204,6 +1206,7 @@ void UCatFrontendRootWidget::RequestPasteJoinLink()
 void UCatFrontendRootWidget::RefreshJoinPresentation()
 {
 	const FCatOnlineSnapshot Snapshot = RoomModel ? RoomModel->GetSnapshot() : FCatOnlineSnapshot();
+	RefreshPublicRoomPresentation(Snapshot);
 	const bool bIdle = RoomModel && Snapshot.SessionState == ECatOnlineSessionState::NoSession
 		&& Snapshot.ActiveOperation == ECatOnlineOperation::None && !Snapshot.bIsAcceptedInvitePending;
 	if (JoinLinkButton) { JoinLinkButton->SetIsEnabled(bIdle); }
@@ -1246,5 +1249,6 @@ void UCatFrontendJoinFriendRowWidget::ConfigureRow(UCatFrontendRootWidget* Root,
 }
 void UCatFrontendJoinFriendRowWidget::HandleJoinClicked()
 {
-	if (UCatFrontendRootWidget* Root = RootWidget.Get()) { Root->RequestJoinFriend(FriendHandle); }
+	if (UCatFrontendRootWidget* Root = RootWidget.Get())
+	{ if (PublicRoomHandle.IsValid()) { Root->RequestJoinPublicRoom(PublicRoomHandle); } else { Root->RequestJoinFriend(FriendHandle); } }
 }

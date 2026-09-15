@@ -1,4 +1,5 @@
 #include "Online/CatOnlineSubsystem.h"
+#include "Online/CatRoomAdmission.h"
 #include "Misc/CoreDelegates.h"
 
 #include "AbilitySystem/BodyAction/CatBodyActionPresentationSettings.h"
@@ -55,11 +56,11 @@ namespace CatOnlineNames
 	static const FString ProjectId(TEXT("Catfishing"));
 	/** 协议键阻止网络合同不匹配的构建进入当前房间。 */
 	static const FName ProtocolSetting(TEXT("CAT_PROTOCOL_VERSION"));
-	static const FString ProtocolVersion(TEXT("2"));
+	static const FString ProtocolVersion(TEXT("3"));
 	/** Steam Lobby 元数据里的可展示名称；值由 Steam Lobby 写入，缺失时 UI 回退到 OSS 房主显示名。 */
-	static const ANSICHAR* RoomNameLobbyKey = "CAT_ROOM_NAME";
+	static const ANSICHAR* RoomNameLobbyKey = "CAT_ROOM_NAME_s";
 	/** Steam Lobby 的 Host ready 元数据；只有 Lake 的 GameNetDriver 已创建后才由 Host 写入，Client 用它决定何时预载并连接。 */
-	static const ANSICHAR* LobbyReadyKey = "CAT_GAME_READY";
+	static const ANSICHAR* LobbyReadyKey = "CAT_GAME_READY_s";
 	static const ANSICHAR* PlayerReadyKey = "CAT_PLAYER_READY";
 	/** Host ready 失败后等待下一次发布尝试的秒数；PostLoadMap 与 Lobby 轮询用它写入单调时间，轮询只在 Steam Lobby 可写时消费以避免 NULL 后端刷屏。 */
 	static constexpr double HostLobbyReadyRetrySeconds = 2.0;
@@ -173,6 +174,7 @@ namespace CatOnlineRoomFacts
 void UCatOnlineSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
+	Collection.InitializeDependency<UCatRoomAdmission>();
 	GetDefault<UCatOnlineSettings>()->TryGetGameplayMapPackage(GameplayMapPackage);
 	PreLoadMapHandle = FCoreUObjectDelegates::PreLoadMapWithContext.AddUObject(this, &ThisClass::HandlePreLoadMap);
 	PostLoadMapHandle = FCoreUObjectDelegates::PostLoadMapWithWorld.AddUObject(this, &ThisClass::HandlePostLoadMap);
@@ -197,6 +199,7 @@ void UCatOnlineSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 void UCatOnlineSubsystem::Deinitialize()
 {
 	++OperationEpoch;
+	if (UCatRoomAdmission* Admission = GetGameInstance()->GetSubsystem<UCatRoomAdmission>()) { Admission->CancelClient(); Admission->StopHost(); }
 	FTSTicker::RemoveTicker(PlatformInviteTickHandle);
 	PlatformInviteTickHandle.Reset();
 	if (PendingAcceptedInvite.IsValid())
@@ -359,10 +362,12 @@ void UCatOnlineSubsystem::RefreshRoomSnapshotFacts()
 		SteamMatchmaking()->SetLobbyMemberData(LobbyId, CatOnlineNames::PlayerReadyKey, "0");
 		ReadinessInitializedLobbyId = CandidateLobbyId;
 	}
-	RoomCurrentPlayers = MemberCount;
+	RoomCurrentPlayers = 0;
 
 	CurrentLobbyId = CandidateLobbyId;
 	const CSteamID LobbyOwner = SteamMatchmaking()->GetLobbyOwner(LobbyId);
+	const FString Approved = UTF8_TO_TCHAR(SteamMatchmaking()->GetLobbyData(LobbyId, "CAT_ADMITTED_s"));
+	const UCatRoomAdmission* Admission = GetGameInstance()->GetSubsystem<UCatRoomAdmission>();
 	if (LobbyOwner.IsValid())
 	{
 		CurrentLobbyOwnerId = LexToString(LobbyOwner.ConvertToUint64());
@@ -375,9 +380,14 @@ void UCatOnlineSubsystem::RefreshRoomSnapshotFacts()
 			continue;
 		}
 		const char* PersonaName = SteamFriends()->GetFriendPersonaName(MemberId);
+		const FString Identity = CandidateLobbyId + TEXT(":") + LexToString(MemberId.ConvertToUint64());
+		const bool bAllowed = MemberId == LobbyOwner || (SessionRole == ECatOnlineSessionRole::Host
+			? Admission->IsAuthorized(LexToString(MemberId.ConvertToUint64()))
+			: Approved.Contains(FMD5::HashAnsiString(*Identity) + TEXT(";")));
+		if (!bAllowed) { continue; }
+		++RoomCurrentPlayers;
 		FCatOnlineRoomMember& Member = RoomMembers.AddDefaulted_GetRef();
 		Member.DisplayName = PersonaName && PersonaName[0] ? UTF8_TO_TCHAR(PersonaName) : TEXT("玩家");
-		const FString Identity = CandidateLobbyId + TEXT(":") + LexToString(MemberId.ConvertToUint64());
 		FGuid::ParseExact(FMD5::HashAnsiString(*Identity), EGuidFormats::Digits, Member.MemberId);
 		Member.bIsLocalPlayer = MemberId == LocalId;
 		const char* Ready = SteamMatchmaking()->GetLobbyMemberData(LobbyId, MemberId, CatOnlineNames::PlayerReadyKey);
@@ -430,6 +440,14 @@ bool UCatOnlineSubsystem::TickLobbyFacts(const float DeltaSeconds)
 
 	RefreshRoomSnapshotFacts();
 	bLobbyReadyObserved = IsCurrentLobbyReady();
+	if (SessionRole == ECatOnlineSessionRole::Client && !VerifiedHostOwnerId.IsEmpty() && !CurrentLobbyOwnerId.IsEmpty()
+		&& CurrentLobbyOwnerId != VerifiedHostOwnerId && WorldState == ECatOnlineWorldState::Frontend)
+	{
+		UE_LOG(LogCatOnline, Warning, TEXT("Event=room_host_departed World=%s Epoch=%llu Result=LeaveOrphanedLobby"), *GetNameSafe(GetWorld()), OperationEpoch);
+		if (ActiveOperation == ECatOnlineOperation::None) { RequestLeave(); }
+		else if (ActiveOperation == ECatOnlineOperation::Start) { BeginDestroySession(ECatOnlineError::AdmissionDenied); }
+		return true;
+	}
 	bool bCanAttemptHostReadyPublish = false;
 #if WITH_STEAMWORKS
 	bCanAttemptHostReadyPublish = !CurrentLobbyId.IsEmpty() && SteamAPI_IsSteamRunning() && SteamMatchmaking();
@@ -1185,6 +1203,7 @@ FCatOnlineResult UCatOnlineSubsystem::RequestJoinFriend(const FCatOnlineFriendHa
 	const FUniqueNetIdPtr* Id = FriendsByHandle.Find(FriendHandle.Value);
 	if (!Id || !Id->IsValid()) { return RejectRequest(ECatOnlineError::InvalidHandle); }
 	const FUniqueNetIdPtr FriendId = *Id;
+	JoinCredential.Reset(); bJoinWithCode = false; CancelRoomPassword();
 	FCatOnlineResult Result = BeginOperation(ECatOnlineOperation::ResolveJoin, ECatOnlineSessionState::Searching);
 	if (!Result.bAccepted) { return Result; }
 	JoinResolveDeadline = FPlatformTime::Seconds() + 30.0;
@@ -1218,6 +1237,9 @@ FCatOnlineResult UCatOnlineSubsystem::RequestJoinLink(const FString& Input)
 {
 	if (ActiveOperation != ECatOnlineOperation::None || PendingAcceptedInvite.IsValid()) { return RejectRequest(ECatOnlineError::CommandAlreadyPending); }
 	if (WorldState != ECatOnlineWorldState::Frontend || SessionState != ECatOnlineSessionState::NoSession) { return RejectRequest(ECatOnlineError::InvalidState); }
+	FString Code;
+	if (UCatRoomAdmission::NormalizeCode(Input, Code)) { return RequestFindSessions(Code); }
+	JoinCredential.Reset(); bJoinWithCode = false; CancelRoomPassword();
 	uint32 AppId = 0;
 #if WITH_STEAMWORKS
 	if (SteamAPI_IsSteamRunning() && SteamUtils()) { AppId = SteamUtils()->GetAppID(); }
@@ -1238,6 +1260,7 @@ FCatOnlineResult UCatOnlineSubsystem::RequestJoinLink(const FString& Input)
 
 void UCatOnlineSubsystem::FailJoinResolution(ECatOnlineError Error)
 {
+	JoinCredential.Reset(); bJoinWithCode = false;
 	// 只有已经交给 Steam 的链接才可能产生迟到加入回调；查询失败不能屏蔽随后手动接受的新邀请。
 	if (JoinLink && bJoinLinkLaunched) { AbandonedJoinLinkLobby = JoinLink->GetLobbyId(); }
 	UE_LOG(LogCatOnline, Warning, TEXT("Event=online_join_resolution_failed RequestId=%s Epoch=%llu World=%s NetMode=%d Error=%s"),
@@ -1270,6 +1293,7 @@ FCatOnlineResult UCatOnlineSubsystem::RequestInviteFriend(const FCatOnlineFriend
 	{
 		return RejectRequest(ECatOnlineError::InviteFailed);
 	}
+	GetGameInstance()->GetSubsystem<UCatRoomAdmission>()->Invite((*FriendId)->ToString());
 	for (FCatOnlineFriendSummary& Summary : FriendSummaries)
 	{
 		if (Summary.Handle.Value == FriendHandle.Value)
@@ -1608,6 +1632,8 @@ FCatOnlineResult UCatOnlineSubsystem::RequestCreateSession()
 	SessionSettings.Set(CatOnlineNames::MapSetting, GameplayMapPackage, EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
 	SessionSettings.Set(CatOnlineNames::ProjectSetting, CatOnlineNames::ProjectId, EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
 	SessionSettings.Set(CatOnlineNames::ProtocolSetting, CatOnlineNames::ProtocolVersion, EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
+	PendingHostCode = UCatRoomAdmission::GenerateCode();
+	SessionSettings.Set(FName(TEXT("CAT_CODE_ROUTE")), PendingHostCode.Left(3), EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
 	if (!HasCompatibleSessionSettings(SessionSettings))
 	{
 		SessionState = ECatOnlineSessionState::NoSession;
@@ -1645,7 +1671,7 @@ FCatOnlineResult UCatOnlineSubsystem::RequestCreateSession()
 
 // Find 流程：先以 CommandAlreadyPending 拒绝活动操作且不覆盖其关联键，再检查前台与公开搜索策略；受理新 Find 前整代清除失效搜索句柄，使 pending 快照也不暴露上一代结果。
 // 提交后按 operation、epoch 与句柄识别同步完成；只有 OSS 返回 false 且回调仍未消费本代时才结为 RequestRejected。
-FCatOnlineResult UCatOnlineSubsystem::RequestFindSessions()
+FCatOnlineResult UCatOnlineSubsystem::RequestFindSessions(const FString& InviteCode)
 {
 	if (ActiveOperation != ECatOnlineOperation::None)
 	{
@@ -1669,11 +1695,24 @@ FCatOnlineResult UCatOnlineSubsystem::RequestFindSessions()
 		return RejectRequest(ECatOnlineError::InvalidState);
 	}
 
+	FString Normalized;
+	if (!InviteCode.IsEmpty() && !UCatRoomAdmission::NormalizeCode(InviteCode, Normalized)) { return RejectRequest(ECatOnlineError::InvalidInviteCode); }
+	SearchInviteCode = Normalized;
+	CodeCandidates.Reset();
+	CancelRoomPassword();
 	SearchResultsByHandle.Reset();
 	SearchSummaries.Reset();
 	FCatOnlineResult Result = BeginOperation(ECatOnlineOperation::Find, ECatOnlineSessionState::Searching);
 	if (!Result.bAccepted)
 	{
+		return Result;
+	}
+	if (!SearchInviteCode.IsEmpty())
+	{
+		CodeSearch = MakeUnique<FCatSteamCodeSearch>();
+		JoinResolveDeadline = FPlatformTime::Seconds() + 20.0;
+		if (!CodeSearch->Begin(SearchInviteCode.Left(3), GameplayMapPackage))
+		{ SessionState = ECatOnlineSessionState::NoSession; FinishOperationFailure(ECatOnlineError::FindFailed); Result.bAccepted = false; Result.Error = LastError; }
 		return Result;
 	}
 	OperationSessionInterface = GetWorldSessionInterface();
@@ -1719,11 +1758,14 @@ FCatOnlineResult UCatOnlineSubsystem::RequestJoinSession(const FCatSessionSearch
 		return RejectRequest(ECatOnlineError::CommandAlreadyPending);
 	}
 	const FOnlineSessionSearchResult* SearchResult = SearchResultsByHandle.Find(SearchHandle.Value);
+	if (const uint64* Candidate = CodeCandidates.Find(SearchHandle.Value)) { return JoinCodeCandidate(*Candidate); }
 	if (!SearchHandle.IsValid() || !SearchResult)
 	{
 		return RejectRequest(ECatOnlineError::InvalidHandle);
 	}
 	const FOnlineSessionSearchResult SearchResultCopy = *SearchResult;
+	JoinCredential = SearchInviteCode;
+	bJoinWithCode = !SearchInviteCode.IsEmpty();
 	return RequestJoinInternal(SearchResultCopy);
 }
 
@@ -1740,13 +1782,15 @@ FCatOnlineResult UCatOnlineSubsystem::RequestAcceptInvite(const FCatSessionInvit
 		return RejectRequest(ECatOnlineError::InvalidHandle);
 	}
 	const FOnlineSessionSearchResult InviteResultCopy = *InviteResult;
+	if (!bJoinWithCode) { JoinCredential.Reset(); }
+	CancelRoomPassword();
 	ClearPendingAcceptedInvite();
 	return RequestJoinInternal(InviteResultCopy);
 }
 
 // 统一 Join 流程：前台和 SessionAccess gate 通过后检查目标匹配合同；再绑定当前 epoch 回调并提交 JoinSession，邀请与搜索从这里起没有分叉。
 // OSS 可能在返回前同步完成，故返回后只有 operation、epoch 与句柄仍指向本次提交时，false 才能结束操作；回调产生的 JoinFailed 或旅行状态不得被覆盖。
-FCatOnlineResult UCatOnlineSubsystem::RequestJoinInternal(const FOnlineSessionSearchResult& SearchResult)
+FCatOnlineResult UCatOnlineSubsystem::RequestJoinInternal(const FOnlineSessionSearchResult& SearchResult, bool bAdmissionGranted)
 {
 	if (WorldState != ECatOnlineWorldState::Frontend || SessionRole != ECatOnlineSessionRole::None)
 	{
@@ -1765,6 +1809,7 @@ FCatOnlineResult UCatOnlineSubsystem::RequestJoinInternal(const FOnlineSessionSe
 		return RejectRequest(ECatOnlineError::SessionCompatibilityMismatch);
 	}
 
+	if (!bAdmissionGranted) { return BeginRoomAdmission(SearchResult); }
 	FCatOnlineResult Result;
 	if (ActiveOperation == ECatOnlineOperation::ResolveJoin)
 	{
@@ -2087,6 +2132,14 @@ FCatOnlineSnapshot UCatOnlineSubsystem::GetSnapshot() const
 	Snapshot.Friends = FriendSummaries;
 	Snapshot.RoomMembers = RoomMembers;
 	Snapshot.RoomName = CurrentRoomName;
+	const UCatRoomAdmission* Admission = GetGameInstance()->GetSubsystem<UCatRoomAdmission>();
+	Snapshot.InviteCode = Admission && SessionRole == ECatOnlineSessionRole::Host ? Admission->GetCode() : FString();
+	Snapshot.bHasPassword = Admission && Admission->IsHosting() && Admission->HasPassword();
+#if WITH_STEAMWORKS
+	if (SessionRole == ECatOnlineSessionRole::Client && SteamMatchmaking() && !CurrentLobbyId.IsEmpty())
+	{ Snapshot.bHasPassword = FCStringAnsi::Strcmp(SteamMatchmaking()->GetLobbyData(CSteamID(FCString::Strtoui64(*CurrentLobbyId, nullptr, 10)), "CAT_PASSWORD_s"), "1") == 0; }
+#endif
+	Snapshot.bPasswordRequested = PasswordRetryTarget.IsValid();
 	Snapshot.SessionAccess = CurrentSessionAccess;
 	Snapshot.LobbyId = CurrentLobbyId;
 	if (!CurrentLobbyId.IsEmpty() && !CurrentLobbyOwnerId.IsEmpty())
@@ -2209,6 +2262,7 @@ bool UCatOnlineSubsystem::BeginHostTravelToGameplayMap()
 	// SteamSockets::Shutdown 仅标记删除；CoreTicker 才真正 CloseListenSocket。
 	// 同一次 LoadMap 内销毁旧驱动再 Listen 会让 Steam 的 P2P 虚拟端口仍被占用。
 	FrontendListener.Stop(TEXT("HostTravelHandoff"), ActiveRequestId, OperationEpoch);
+	GetGameInstance()->GetSubsystem<UCatRoomAdmission>()->SuspendListener();
 	HostListenReleaseHandle = FCoreDelegates::OnEndFrame.AddUObject(this, &ThisClass::HandleHostListenReleased,
 		OperationEpoch, TWeakObjectPtr<UWorld>(World), GFrameCounter);
 	BroadcastSnapshot(TEXT("online_host_listen_release_queued"));
@@ -2447,6 +2501,12 @@ void UCatOnlineSubsystem::HandleCreateSessionComplete(const FName SessionName, c
 		Settings->RestoreVoiceChatForLocalPlayers(GetWorld());
 	}
 	RefreshRoomSnapshotFacts();
+	if (!GetGameInstance()->GetSubsystem<UCatRoomAdmission>()->StartHost(CurrentLobbyId, CurrentLobbyOwnerId, PendingHostCode))
+	{
+		BeginDestroySession(ECatOnlineError::AdmissionUnavailable);
+		return;
+	}
+	PendingHostCode.Reset();
 	StartLobbyFactPolling();
 	FinishOperationSuccess();
 }
@@ -2489,6 +2549,19 @@ void UCatOnlineSubsystem::HandleFindSessionsComplete(const bool bWasSuccessful, 
 		Summary.MaxPlayers = SearchResult.Session.SessionSettings.NumPublicConnections;
 		Summary.CurrentPlayers = FMath::Max(0, Summary.MaxPlayers - SearchResult.Session.NumOpenPublicConnections);
 		Summary.PingMilliseconds = SearchResult.PingInMs;
+		Summary.RoomName = Summary.OwnerDisplayName;
+		Summary.bCanJoin = Summary.CurrentPlayers < Summary.MaxPlayers;
+#if WITH_STEAMWORKS
+		if (SteamMatchmaking() && SearchResult.Session.SessionInfo.IsValid())
+		{
+			const CSteamID Lobby(FCString::Strtoui64(*SearchResult.Session.SessionInfo->GetSessionId().ToString(), nullptr, 10));
+			const FString Name = UTF8_TO_TCHAR(SteamMatchmaking()->GetLobbyData(Lobby, "CAT_ROOM_NAME_s"));
+			if (!Name.IsEmpty()) { Summary.RoomName = Name; }
+			Summary.bHasPassword = FCStringAnsi::Strcmp(SteamMatchmaking()->GetLobbyData(Lobby, "CAT_PASSWORD_s"), "1") == 0;
+			Summary.bInProgress = FCStringAnsi::Strcmp(SteamMatchmaking()->GetLobbyData(Lobby, "CAT_GAME_READY_s"), "1") == 0;
+			Summary.bCanJoin &= FCStringAnsi::Atoi(SteamMatchmaking()->GetLobbyData(Lobby, "CAT_ADMISSION_PORT_s")) > 0;
+		}
+#endif
 	}
 	ActiveSearch.Reset();
 	SessionState = ECatOnlineSessionState::NoSession;
@@ -2563,6 +2636,8 @@ void UCatOnlineSubsystem::HandleDestroySessionComplete(const FName SessionName, 
 	SessionState = ECatOnlineSessionState::NoSession;
 	SessionRole = ECatOnlineSessionRole::None;
 	FrontendListener.Stop(TEXT("SessionDestroyed"), ActiveRequestId, OperationEpoch);
+	GetGameInstance()->GetSubsystem<UCatRoomAdmission>()->StopHost();
+	CancelRoomPassword(); SearchInviteCode.Reset(); JoinCredential.Reset(); VerifiedHostOwnerId.Reset(); CodeCandidates.Reset();
 	if (DeferredFailureAfterDestroy != ECatOnlineError::None)
 	{
 		const ECatOnlineError Failure = DeferredFailureAfterDestroy;
@@ -2702,6 +2777,9 @@ void UCatOnlineSubsystem::HandleSessionUserInviteAccepted(const bool bWasSuccess
 bool UCatOnlineSubsystem::TickPlatformInvites(float DeltaSeconds)
 {
 	(void)DeltaSeconds;
+	if (ActiveOperation == ECatOnlineOperation::UpdateRoom && FPlatformTime::Seconds() >= RoomSettingsDeadline)
+	{ HandleRoomSettingsComplete(NAME_GameSession, false, OperationEpoch); }
+	if (ActiveOperation == ECatOnlineOperation::Find && !SearchInviteCode.IsEmpty()) { PollCodeSearch(); }
 	RebindInviteDelegate();
 	if (ActiveOperation == ECatOnlineOperation::ResolveJoin)
 	{
@@ -2797,6 +2875,7 @@ void UCatOnlineSubsystem::HandlePreLoadMap(const FWorldContext& WorldContext, co
 		return;
 	}
 	bIsEngineLoadMapPending = true;
+	GetGameInstance()->GetSubsystem<UCatRoomAdmission>()->SuspendListener();
 	EngineLoadMapName = MapName;
 	UE_LOG(LogCatOnline, Log, TEXT("Event=online_engine_loadmap_started RequestId=%s Epoch=%llu Operation=%s Map=%s"),
 		*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch,
@@ -2816,6 +2895,8 @@ void UCatOnlineSubsystem::HandlePostLoadMap(UWorld* LoadedWorld)
 	EngineLoadMapName.Reset();
 	RebindInviteDelegate();
 	const FString PackageName = UWorld::StripPIEPrefixFromPackageName(LoadedWorld->GetPackage()->GetName(), LoadedWorld->StreamingLevelsPrefix);
+	if (SessionRole == ECatOnlineSessionRole::Host && !GetGameInstance()->GetSubsystem<UCatRoomAdmission>()->ResumeListener())
+	{ UE_LOG(LogCatOnline, Warning, TEXT("Event=room_admission_resume_failed World=%s Result=NewJoinsUnavailable"), *GetNameSafe(LoadedWorld)); }
 	if (!ExpectedPackage.IsEmpty())
 	{
 		const bool bReturnedToSource = (ExpectedPackage == GameplayMapPackage && PackageName == CatOnlineNames::Frontend)
@@ -3176,6 +3257,11 @@ void UCatOnlineSubsystem::ClearRunTeardownDelegate()
 // 操作委托清理流程：只在保存的精确 Session 接口上逐一清理有效句柄；每个 Clear 同时 Reset 句柄，重复调用不会影响后续 epoch。
 void UCatOnlineSubsystem::ClearOperationDelegates()
 {
+	CodeSearch.Reset();
+	if (GetGameInstance()) { GetGameInstance()->GetSubsystem<UCatRoomAdmission>()->CancelClient(); }
+	if (OperationSessionInterface.IsValid() && RoomSettingsHandle.IsValid())
+	{ OperationSessionInterface->ClearOnUpdateSessionCompleteDelegate_Handle(RoomSettingsHandle); }
+	RoomSettingsHandle.Reset(); PendingRoomPassword.Reset();
 	FCoreDelegates::OnEndFrame.Remove(HostListenReleaseHandle);
 	HostListenReleaseHandle.Reset();
 	JoinLink.Reset();

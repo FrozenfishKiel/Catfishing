@@ -11,6 +11,7 @@
 #include "UObject/UObjectGlobals.h"
 #include "Online/CatSteamJoinLink.h"
 #include "Online/CatFrontendListener.h"
+#include "Online/CatSteamCodeSearch.h"
 #include "CatOnlineSubsystem.generated.h"
 
 class APlayerController;
@@ -47,11 +48,14 @@ public:
 
 	/** 在 Frontend 提交 FindSessions；重复请求优先返回 CommandAlreadyPending 且不覆盖活动关联键，结果只通过 opaque 句柄和公开摘要进入 Snapshot。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Online")
-	FCatOnlineResult RequestFindSessions();
+	FCatOnlineResult RequestFindSessions(const FString& InviteCode = FString());
 
 	/** 使用最近一次 Find 生成的 opaque 句柄加入；重复请求先于句柄校验拒绝且不覆盖活动关联键，成功后留在 Frontend 等真实 Steam Lobby ready 再预载和 ClientTravel。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Online")
 	FCatOnlineResult RequestJoinSession(FCatSessionSearchHandle SearchHandle);
+	FCatOnlineResult RequestSubmitRoomPassword(const FString& Password);
+	void CancelRoomPassword();
+	FCatOnlineResult RequestUpdateRoomSettings(const FString& Name, int32 Capacity, ECatSessionAccessPolicy Access, const FString& Password, bool bClearPassword);
 
 	/** 使用已接受邀请的 opaque 句柄复用 Join 管线；平台意图由 Online 自动提交一次，重复请求不覆盖活动关联键，失败须重新接受邀请。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Online")
@@ -113,7 +117,26 @@ private:
 	FCatOnlineResult RejectRequest(ECatOnlineError Error);
 
 	/** 让搜索结果或邀请结果汇入同一 JoinSession/Resolve/ClientTravel 管线。 */
-	FCatOnlineResult RequestJoinInternal(const FOnlineSessionSearchResult& SearchResult);
+	FCatOnlineResult RequestJoinInternal(const FOnlineSessionSearchResult& SearchResult, bool bAdmissionGranted = false);
+	FCatOnlineResult BeginRoomAdmission(const FOnlineSessionSearchResult& SearchResult);
+	void HandleRoomSettingsComplete(FName SessionName, bool bSuccess, uint64 Epoch);
+	FOnlineSessionSearchResult PasswordRetryTarget;
+	FString JoinCredential;
+	FString SearchInviteCode;
+	TUniquePtr<FCatSteamCodeSearch> CodeSearch;
+	double NextCodeSearchAttempt = 0;
+	TMap<FGuid, uint64> CodeCandidates;
+	FCatOnlineResult JoinCodeCandidate(uint64 LobbyId);
+	void PollCodeSearch();
+	bool bJoinWithCode = false;
+	FDelegateHandle RoomSettingsHandle;
+	FString PendingRoomName, PendingRoomPassword;
+	FString PendingHostCode;
+	FString VerifiedHostOwnerId;
+	int32 PendingRoomCapacity = 4;
+	bool bPendingClearPassword = false;
+	TOptional<FOnlineSessionSettings> PreviousRoomSettings;
+	double RoomSettingsDeadline = 0;
 
 	/** 获取当前 World 对应的 OSS Friends 接口；与 Session 查询一样不退回进程级默认接口。 */
 	IOnlineFriendsPtr GetWorldFriendsInterface() const;

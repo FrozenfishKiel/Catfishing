@@ -38,6 +38,11 @@ public:
 	FCatOnlineResult RefreshFriends();
 	FCatOnlineResult JoinFriend(FCatOnlineFriendHandle FriendHandle);
 	FCatOnlineResult JoinLink(const FString& Input);
+	FCatOnlineResult RefreshPublicRooms();
+	FCatOnlineResult JoinPublicRoom(FCatSessionSearchHandle Handle);
+	FCatOnlineResult SubmitPassword(const FString& Password);
+	void CancelPassword();
+	FCatOnlineResult UpdateRoomSettings(const FString& Name, int32 Capacity, ECatSessionAccessPolicy Access, const FString& Password, bool bClearPassword);
 
 	/** 用好友行的 opaque 句柄请求平台邀请；Model 不解释或保存 Steam 身份。 */
 	FCatOnlineResult InviteFriend(FCatOnlineFriendHandle FriendHandle);

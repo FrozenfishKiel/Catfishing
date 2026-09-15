@@ -12,6 +12,15 @@ namespace CatFrontendRoomModelText
 	{
 		switch (Error)
 		{
+		case ECatOnlineError::PasswordRequired: return FText::FromString(TEXT("此房间需要密码。"));
+		case ECatOnlineError::PasswordIncorrect: return FText::FromString(TEXT("密码不正确，请重新输入。"));
+		case ECatOnlineError::AdmissionUnavailable: return FText::FromString(TEXT("房主暂时无法接受加入，可能正在开始游戏，请稍后重试。"));
+		case ECatOnlineError::AdmissionRateLimited: return FText::FromString(TEXT("尝试过于频繁，请一分钟后重试。"));
+		case ECatOnlineError::AdmissionDenied: return FText::FromString(TEXT("房主拒绝了加入请求，请重新获取邀请。"));
+		case ECatOnlineError::InvalidInviteCode: return FText::FromString(TEXT("邀请码无效或房间已关闭。"));
+		case ECatOnlineError::InviteCodeCandidates: return FText::FromString(TEXT("找到多个候选房间，请选择房主；加入时会校验完整邀请码。"));
+		case ECatOnlineError::RoomSettingsInvalid: return FText::FromString(TEXT("名称和密码最多 32 字，人数须为 1–4，且不能少于已加入或正加入的人数。"));
+		case ECatOnlineError::RoomSettingsFailed: return FText::FromString(TEXT("房间设置保存失败，请重试。"));
 		case ECatOnlineError::FrontendListenFailed:
 			return FText::FromString(TEXT("无法启动房主监听服务，请确认 Steam 已登录后重试。"));
 		case ECatOnlineError::RoomMembersNotReady:

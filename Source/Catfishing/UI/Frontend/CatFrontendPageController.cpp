@@ -106,6 +106,7 @@ void UCatFrontendPageController::RequestJoinParty()
 		SetLocalResultText(FText::GetEmpty());
 		if (UCatFrontendRootWidget* Root = RootWidget.Get()) { Root->ShowJoin(); }
 		Room->RefreshFriends();
+		Room->RefreshPublicRooms();
 	}
 }
 
@@ -549,6 +550,9 @@ void UCatFrontendPageController::HandleRoomModelChanged()
 			}
 		}
 	}
+	if (Snapshot.bPasswordRequested && Snapshot.WorldState == ECatOnlineWorldState::Frontend
+		&& Snapshot.SessionState == ECatOnlineSessionState::NoSession)
+	{ Root->ShowJoin(); }
 	const bool bHasFrontendRoom = Snapshot.WorldState == ECatOnlineWorldState::Frontend
 		&& ((Snapshot.SessionState == ECatOnlineSessionState::Host && Snapshot.SessionRole == ECatOnlineSessionRole::Host)
 			|| (Snapshot.SessionState == ECatOnlineSessionState::Client && Snapshot.SessionRole == ECatOnlineSessionRole::Client));

@@ -112,12 +112,14 @@ class CATFISHING_API UCatFrontendJoinFriendRowWidget : public UUserWidget
 	GENERATED_BODY()
 public:
 	void ConfigureRow(UCatFrontendRootWidget* Root, const FCatOnlineFriendSummary& Friend);
+	void ConfigurePublicRoom(UCatFrontendRootWidget* Root, const FCatSessionSearchSummary& Room);
 protected:
 	virtual void NativeOnInitialized() override;
 private:
 	UFUNCTION() void HandleJoinClicked();
 	TWeakObjectPtr<UCatFrontendRootWidget> RootWidget;
 	FCatOnlineFriendHandle FriendHandle;
+	FCatSessionSearchHandle PublicRoomHandle;
 	UPROPERTY(meta=(BindWidget)) TObjectPtr<UTextBlock> FriendNameText;
 	UPROPERTY(meta=(BindWidget)) TObjectPtr<UTextBlock> FriendStatusText;
 	UPROPERTY(meta=(BindWidget)) TObjectPtr<UButton> JoinFriendButton;
@@ -201,6 +203,14 @@ public:
 	void ShowMenu();
 	void ShowJoin();
 	void RequestJoinFriend(FCatOnlineFriendHandle FriendHandle);
+	void RequestJoinPublicRoom(FCatSessionSearchHandle Handle);
+	UFUNCTION() void RequestRefreshPublicRooms();
+	UFUNCTION() void RequestSubmitRoomPassword();
+	UFUNCTION() void RequestCancelRoomPassword();
+	UFUNCTION() void RequestCopyShortCode();
+	void BindPublicRoomControls(bool bBind);
+	UFUNCTION(BlueprintCallable, Category="Room Presentation")
+	void RefreshPublicRoomPresentation(const FCatOnlineSnapshot& Snapshot);
 	UFUNCTION() void RequestSubmitJoinLink();
 	UFUNCTION() void RequestPasteJoinLink();
 

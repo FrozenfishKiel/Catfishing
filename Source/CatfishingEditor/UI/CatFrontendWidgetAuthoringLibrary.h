@@ -20,6 +20,9 @@ class CATFISHINGEDITOR_API UCatFrontendWidgetAuthoringLibrary : public UBlueprin
 	GENERATED_BODY()
 
 public:
+	/** 仅迁移公开加入页，保留 Root 和房间页正在编辑的布局。 */
+	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Frontend")
+	static bool RebuildPublicRoomBrowser();
 	/** 编辑器检查通过原生 CreateWidget 初始化正式 WBP；Python 的内部 Create 节点不可调用。 */
 	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Preview")
 	static UUserWidget* CreateWidgetPreview(UObject* WorldContext, TSubclassOf<UUserWidget> WidgetClass, APlayerController* Player);
