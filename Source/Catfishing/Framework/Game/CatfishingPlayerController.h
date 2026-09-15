@@ -188,9 +188,9 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerPickUpFishGuard(ACatFishGuardActor* Guard, FGuid RequestId);
 
-	/** 请求服务器释放当前嘴叼的原Actor；服务器自行查携带对象，空嘴无副作用。 */
+	/** 请求服务器释放当前嘴叼的原 Actor；客户端目标和代次必须匹配服务器当前嘴部状态，同一 RequestId 继续作为公共释放的库存预留和日志关联号。 */
 	UFUNCTION(Server, Reliable)
-	void ServerDropCarriedItem();
+	void ServerDropCarriedItem(FGuid RequestId, AActor* ExpectedItem, uint32 ExpectedCarryRevision);
 
 	/** 从当前这组三选一里选中一项；OfferSerial 用来拒绝过期面板，服务器只认自己发出的那一组。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Growth")
@@ -280,6 +280,8 @@ protected:
 	int32 InputMappingPriority = 0;
 
 private:
+	/** 本 Controller 已处理的丢弃请求；重复包不能在重新叼起后再次执行，目标代次额外拒绝迟到新请求。 */
+	TSet<FGuid> ProcessedDropRequests;
 	friend class UCatFishingCommandComponent;
 
 	/** 消费当前 GameState 快照；绑定变化通知，调和本地输入与服务器移动锁，再刷新 LocalPlayer 的时间轴表现。 */

@@ -18,7 +18,18 @@ public:
 	virtual void ActivateAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 		FGameplayAbilityActivationInfo ActivationInfo, const FGameplayEventData* TriggerEventData) override;
 
-	/** Primary 松开时提交 Released 边沿并结束 Ability；服务器继续裁决真实钓鱼语义。 */
-	virtual void InputReleased(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
-		FGameplayAbilityActivationInfo ActivationInfo) override;
+	/** WaitInputRelease 收到同一 AbilitySpec 的松开事件后提交 Released 边沿，并结束本次按住型 Ability。 */
+	UFUNCTION()
+	void HandleInputReleased(float ServerHeldSeconds);
+
+	/** 外部取消也必须提交 PrimaryReleased；否则 GAS 停掉 Task 后服务器仍会把旧按键当成持续收线。 */
+	virtual void EndAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+		FGameplayAbilityActivationInfo ActivationInfo, bool bReplicateEndAbility, bool bWasCancelled) override;
+
+private:
+	/** 当前激活是否已经向 Commands 提交释放边沿；Task 正常回调和外部取消共用它防止重复清持续输入。 */
+	bool bReleaseSubmitted = false;
+
+	/** 当前激活是否已成功提交按下边沿；取消只补偿已经进入 Commands 的输入，避免本地预检失败时制造无源 Release。 */
+	bool bPressSubmitted = false;
 };

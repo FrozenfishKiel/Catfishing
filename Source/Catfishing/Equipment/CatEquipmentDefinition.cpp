@@ -6,6 +6,7 @@
 #include "Equipment/Fragments/CatEquipmentFragment_Scoop.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Chum.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
+#include "Equipment/CatEquipmentUseItemInstances.h"
 #include "Inventory/CatInventorySettings.h"
 
 namespace
@@ -65,6 +66,11 @@ TSubclassOf<UCatInventoryItemInstance> UCatEquipmentDefinition::GetPreferredInst
 		return PreferredInstanceType->IsChildOf(UCatEquipmentInventoryItemInstance::StaticClass())
 			? PreferredInstanceType : nullptr;
 	}
+	// 行为实例选择流程：旧资产尚未经作者器写回时按已存在片段推导同一行为；迁移后 PreferredInstanceType 是可审计的显式资产事实。
+	if (CanServeFishingRod()) return UCatFishingRodEquipmentItemInstance::StaticClass();
+	if (CanServeFishingBait() || CanServeFishingFloat()) return UCatLoadoutEquipmentItemInstance::StaticClass();
+	if (CanServeScoopNet()) return UCatScoopNetEquipmentItemInstance::StaticClass();
+	if (CanServeChumPlacement()) return UCatChumEquipmentItemInstance::StaticClass();
 	return UCatEquipmentInventoryItemInstance::StaticClass();
 }
 

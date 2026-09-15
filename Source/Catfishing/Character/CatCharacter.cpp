@@ -1,4 +1,5 @@
 #include "Character/CatCharacter.h"
+#include "Interaction/Carry/CatCarryableActor.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "AbilitySystem/Physics/CatPhysicalEffortComponent.h"
 #include "Character/Physics/CatPhysicsPrototypeVisualComponent.h"
@@ -253,7 +254,8 @@ AActor* ACatCharacter::GetMouthCarriedActor() const
 // 嘴部认领流程：
 // 1. 只接受本 World 内仍有效的 Actor，避免跨世界或销毁中的对象写入复制状态。
 // 2. 只在当前为空时写入，因此并发拾取和库存回调最多有一个提交者获胜。
-// 3. 立即强制复制，让附件表现只消费这份已建立的权威事实。
+// 3. 若对象支持共同携带，立即推进携带代次，使旧 Q 请求不能作用于重新叼起的同一 Actor。
+// 4. 绑定销毁回调并强制复制，让附件表现只消费这份已建立的权威事实。
 bool ACatCharacter::TryClaimMouthCarriedActorFromAuthority(AActor* ExpectedActor)
 {
 	if (!HasAuthority() || !IsValid(ExpectedActor) || ExpectedActor->IsActorBeingDestroyed() || ExpectedActor->GetWorld() != GetWorld()
@@ -262,6 +264,8 @@ bool ACatCharacter::TryClaimMouthCarriedActorFromAuthority(AActor* ExpectedActor
 		return false;
 	}
 	MouthCarriedActor = ExpectedActor;
+	// 每次成功认领推进携带代次，旧输入不能作用于重新叼起的同一实物。
+	if (ACatCarryableActor* Carryable = Cast<ACatCarryableActor>(ExpectedActor)) Carryable->BeginCarryRevisionFromAuthority();
 	ExpectedActor->OnDestroyed.AddDynamic(this, &ThisClass::HandleMouthCarriedActorDestroyed);
 	ForceNetUpdate();
 	return true;
@@ -386,8 +390,7 @@ void ACatCharacter::PawnClientRestart()
 void ACatCharacter::UnPossessed()
 {
 	// 生命周期释放流程：失去控制不能让嘴叼物跟随一个无主 Pawn 停留；对象自己的释放方法负责恢复地面状态，随后按 expected actor 清空引用。
-	if (ACatFishPickupActor* Fish = Cast<ACatFishPickupActor>(MouthCarriedActor)) Fish->ReleaseMouthCarryFromAuthority(GetActorLocation());
-	else if (ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(MouthCarriedActor)) Guard->ReleaseMouthCarryFromAuthority(GetActorLocation());
+	if (ACatCarryableActor* Item = Cast<ACatCarryableActor>(MouthCarriedActor)) Item->ReleaseMouthCarryFromAuthority(GetActorLocation());
 	PhysicalBodyComponent->ReleaseConnectionsFromAuthority(TEXT("Unpossessed"));
 	PhysicalBodyComponent->BeginControlEpochFromAuthority();
 	ACatfishingGameModeBase::HandleCharacterUnavailable(this);
@@ -406,8 +409,7 @@ void ACatCharacter::UnPossessed()
 void ACatCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	// 销毁路径复用同一 expected-actor 释放，覆盖直接 Destroy 而没有先走 UnPossessed 的服务器清理。
-	if (ACatFishPickupActor* Fish = Cast<ACatFishPickupActor>(MouthCarriedActor)) Fish->ReleaseMouthCarryFromAuthority(GetActorLocation());
-	else if (ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(MouthCarriedActor)) Guard->ReleaseMouthCarryFromAuthority(GetActorLocation());
+	if (ACatCarryableActor* Item = Cast<ACatCarryableActor>(MouthCarriedActor)) Item->ReleaseMouthCarryFromAuthority(GetActorLocation());
 	ConditionComponent->OnSnapshotChanged.RemoveAll(this);
 	PhysicalBodyComponent->ReleaseConnectionsFromAuthority(TEXT("EndPlay"));
 	ACatfishingGameModeBase::HandleCharacterUnavailable(this);
@@ -467,8 +469,7 @@ void ACatCharacter::RefreshPhysicalCondition()
 		RefreshLocomotionSpeedScale();
 		if (ConditionComponent->GetSnapshot().bDowned)
 		{
-			if (ACatFishPickupActor* Fish = Cast<ACatFishPickupActor>(MouthCarriedActor)) Fish->ReleaseMouthCarryFromAuthority(GetActorLocation());
-			else if (ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(MouthCarriedActor)) Guard->ReleaseMouthCarryFromAuthority(GetActorLocation());
+			if (ACatCarryableActor* Item = Cast<ACatCarryableActor>(MouthCarriedActor)) Item->ReleaseMouthCarryFromAuthority(GetActorLocation());
 		}
 	}
 }

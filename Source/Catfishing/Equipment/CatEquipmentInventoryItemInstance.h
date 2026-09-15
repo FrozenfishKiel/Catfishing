@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Inventory/CatInventoryItemInstance.h"
@@ -42,20 +42,6 @@ public:
 
 	/** 装备实例只读声明自己可作为库存 Use 候选；真正的选择、权限和版本仍在结构化提交时复核。 */
 	virtual bool CanUseFromInventory(const FCatInventoryEntry& InventoryEntry, APawn* UserPawn) const override;
-
-	/** 装备库存 Use 的正式提交扩展面；正式库存重读槽位后调用它，让钓具选择规则停留在装备物品实例里。 */
-	virtual FCatDomainCommandResult UseFromInventorySlotFromAuthority(
-		const FCatInventoryEntry& InventoryEntry, const FCatInventoryItemUseContext& UseContext) override;
-
-	/** 读取装备实例是否需要等待同一次输入结束；当前只有窝料保留蓄力状态，鱼竿在 Begin 内完成部署。 */
-	virtual bool UsesContinuousInput() const override;
-
-	/** 窝料本地连续输入边沿转交钓鱼命令组件显示蓄力预览；其它装备不产生表现或权威写入。 */
-	virtual void SetUseInputActiveLocally(APlayerController* RequestingController, bool bActive) override;
-
-	/** 结束或取消装备实例的持续 Use；只把窝料转给钓鱼命令组件，其他装备没有第二阶段玩法。 */
-	virtual FCatDomainCommandResult EndUseFromInventorySlotFromAuthority(
-		const FCatInventoryItemUseContext& UseContext, bool bCancelled) override;
 
 protected:
 	/** 绑定装备定义后补齐装备专属运行初值；通用库存实例状态先由父类完成。 */

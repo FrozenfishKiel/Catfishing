@@ -634,36 +634,11 @@ void UCatFishingDebugSubsystem::DrawCastAimPoint(APlayerController* Controller) 
 #endif
 }
 
-// 窝料蓄力抛物线（玩法反馈，默认常开，受 cat.Fishing.ChumPreview 控制）。
-// 纯本地绘制：不复制、不提交任何命令，别的玩家看不到你的预览线——这正是想要的，瞄准辅助只该给瞄准的人看。
-// 用 GetLocalChumChargeStartTime 而非权威那份：后者只在服务器写，客户端读永远是 -1，会变成只有主机看得见。
+// 窝料蓄力预览保留调用点，具体本地表现将由 G Use 的来源物品 Ability 承担；命令组件不再保存影子计时。
 void UCatFishingDebugSubsystem::DrawChumChargePreview(APlayerController* Controller) const
 {
 #if ENABLE_DRAW_DEBUG
-	UWorld* World = GetWorld();
-	APawn* Pawn = Controller->GetPawn();
-	const ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(Controller);
-	const UCatFishingCommandComponent* Commands = CatController ? CatController->GetFishingCommandComponent() : nullptr;
-	const double ChargeStart = Commands ? Commands->GetLocalChumChargeStartTime() : -1.0;
-	if (!Pawn || ChargeStart < 0.0) return; // <0 = 当前没按住 Q，不画。
-
-	const float Alpha = UCatFishingAimLibrary::ChargeAlphaFromHeldSeconds(
-		static_cast<float>(World->GetTimeSeconds() - ChargeStart));
-	TArray<FVector> Path;
-	FVector Landing;
-	FCatWaterRegionHandle Region;
-	bool bHitWater = false;
-	// 与服务器投放走同一个 PredictChumThrow：画出来的落点就是真实落点，换成美术资源后也应继续调它。
-	UCatFishingAimLibrary::PredictChumThrow(World, Pawn->GetActorLocation(), Controller->GetControlRotation(),
-		Alpha, Path, Landing, Region, bHitWater);
-	// 黄=会落进水里（有效打窝），红=落在岸上（服务器会拒绝），颜色直接来自预测结果，不是另判一次。
-	const FColor PathColor = bHitWater ? FColor::Yellow : FColor::Red;
-	for (int32 Index = 1; Index < Path.Num(); ++Index)
-	{
-		DrawDebugLine(World, Path[Index - 1], Path[Index], PathColor, false, -1.0f, 0, 2.0f);
-	}
-	DrawDebugSphere(World, Landing, 24.0f, 12, bHitWater ? FColor::Green : FColor::Red, false, -1.0f, 0, 2.0f);
-	PushStatus(0, FColor::Yellow, FString::Printf(TEXT("窝料蓄力 %.0f%%  松开 G 投出"), Alpha * 100.0f));
+	(void)Controller;
 #endif
 }
 

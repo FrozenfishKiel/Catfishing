@@ -4,14 +4,18 @@
 #include "Tests/AutomationEditorCommon.h"
 #include "Editor.h"
 #include "Engine/Engine.h"
+#include "Engine/NetDriver.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerState.h"
 #include "Settings/LevelEditorPlaySettings.h"
 #include "Character/CatCharacter.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Fishing/InputAbilities/CatFishingChumAbility.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
+#include "Equipment/CatEquipmentUseItemInstances.h"
 #include "Environment/CatChumFieldSettings.h"
 #include "Environment/CatWaterRegion.h"
 #include "Environment/CatWaterQuerySubsystem.h"
@@ -29,6 +33,16 @@
 
 namespace CatInventoryQuickbarRemoteUseTests
 {
+	/** 远端用例只从服务器上精确来源实例的活动 Spec/Task 读取持续 Use，不读取客户端命令组件影子时间。 */
+	bool IsChumUseWaiting(ACatCharacter* Character, const UCatInventoryItemInstance* SourceItem)
+	{
+		const UCatAbilitySystemComponent* ASC = Character ? Character->GetCatAbilitySystemComponent() : nullptr;
+		if (!ASC || !SourceItem) return false;
+		for (const FGameplayAbilitySpec& Spec : ASC->GetActivatableAbilities())
+			if (Spec.SourceObject.Get() == SourceItem && Spec.IsActive())
+				if (const UCatGA_FishingChum* Ability = Cast<UCatGA_FishingChum>(Spec.GetPrimaryInstance())) return Ability->IsWaitingForInputRelease();
+		return false;
+	}
 	/** 恢复 PIE 网络设置：本用例结束后写回用户原本的启动拓扑和 NetDriver 定义。 */
 	class FRestoreSettings final : public IAutomationLatentCommand
 	{
@@ -60,12 +74,13 @@ namespace CatInventoryQuickbarRemoteUseTests
 		TArray<FNetDriverDefinition> NetDrivers;
 	};
 
-	/** 远端 owning-client 快捷栏状态机：真实 G/Release 在弱网下只使用选中实例，并验证第二根鱼竿的部署载荷。 */
+	/** 远端 owning-client 快捷栏状态机：复用同一条正式 G/Release 路径，在正常或显式弱网条件下验证精确实例与回执。 */
 	class FVerifyRemoteSelectedUse final : public IAutomationLatentCommand
 	{
 	public:
-		/** 保存 Automation 断言出口，状态机不拥有 PIE 对象。 */
-		explicit FVerifyRemoteSelectedUse(FAutomationTestBase* InTest) : Test(InTest) {}
+		/** 保存 Automation 断言出口和本次网络场景；状态机不拥有 PIE 对象，也不会修改全局网络配置。 */
+		explicit FVerifyRemoteSelectedUse(FAutomationTestBase* InTest, const bool bInSimulateWeakNetwork)
+			: Test(InTest), bSimulateWeakNetwork(bInSimulateWeakNetwork) {}
 		/** 等待复制或按阶段提交真实本地输入；超时输出端点和库存状态供日志复查。 */
 		virtual bool Update() override
 		{
@@ -82,14 +97,15 @@ namespace CatInventoryQuickbarRemoteUseTests
 			case 1: return SeedServerInventory();
 			case 2: return WaitForRemoteInstances();
 			case 3: return StartRemoteSecondChumThenChangeSelection();
-			case 4: return VerifyRemoteChumConsumption();
-			case 5: return DeployRemoteSecondRod();
-			case 6: return VerifySecondRodPayload();
-			case 7: return RequestRemoteTargetedRodLeave();
-			case 8: return VerifyRemoteTargetedRodLeave();
-			case 9: return VerifyRemoteTargetedRodLeaveReplay();
-			case 10: return RequestRemoteTargetedRodOperate();
-			case 11: return VerifyRemoteTargetedRodOperate();
+			case 4: return WaitForRemoteSecondChumThenRelease();
+			case 5: return VerifyRemoteChumConsumption();
+			case 6: return DeployRemoteSecondRod();
+			case 7: return VerifySecondRodPayload();
+			case 8: return RequestRemoteTargetedRodLeave();
+			case 9: return VerifyRemoteTargetedRodLeave();
+			case 10: return VerifyRemoteTargetedRodLeaveReplay();
+			case 11: return RequestRemoteTargetedRodOperate();
+			case 12: return VerifyRemoteTargetedRodOperate();
 			default: Test->AddError(TEXT("Remote quickbar use test reached an unknown stage.")); return true;
 			}
 		}
@@ -182,21 +198,73 @@ namespace CatInventoryQuickbarRemoteUseTests
 			ClientController->SetIgnoreMoveInput(false);
 			if (!Test->TestTrue(TEXT("modal input gate blocks quickbar wheel cycling and G use without clearing local selection"),
 				bModalBlocksWheel && bModalBlocksUse && ClientController->GetSelectedQuickbarSlotIndex() == SelectedBeforeModal)) return true;
+			if (bSimulateWeakNetwork && !bPacketSimulationApplied)
+			{
+				if (!ApplyWeakNetworkAfterFixtureSync()) return bPacketSimulationFailed;
+			}
 			Stage = 3; return false;
 		}
-		/** 远端先选第二份窝料按 G，再立刻选第一格并 Release；换格不得取消或把释放改投第一份窝料。 */
+		/** 在初始库存已复制后只改本次 PIE 的两端 Driver，并以读回值证明后续输入实际经过弱网模拟。 */
+		bool ApplyWeakNetworkAfterFixtureSync()
+		{
+			UNetDriver* ServerDriver = ServerWorld.IsValid() ? ServerWorld->GetNetDriver() : nullptr;
+			UNetDriver* ClientDriver = ClientWorld.IsValid() ? ClientWorld->GetNetDriver() : nullptr;
+			if (!ServerDriver || !ClientDriver) return false;
+			FPacketSimulationSettings WeakNetwork;
+			WeakNetwork.PktLag = 100;
+			WeakNetwork.PktLagVariance = 30;
+			WeakNetwork.PktLoss = 5;
+			ServerDriver->SetPacketSimulationSettings(WeakNetwork);
+			ClientDriver->SetPacketSimulationSettings(WeakNetwork);
+			const bool bReadBack = ServerDriver->PacketSimulationSettings.PktLag == WeakNetwork.PktLag
+				&& ServerDriver->PacketSimulationSettings.PktLagVariance == WeakNetwork.PktLagVariance
+				&& ServerDriver->PacketSimulationSettings.PktLoss == WeakNetwork.PktLoss
+				&& ClientDriver->PacketSimulationSettings.PktLag == WeakNetwork.PktLag
+				&& ClientDriver->PacketSimulationSettings.PktLagVariance == WeakNetwork.PktLagVariance
+				&& ClientDriver->PacketSimulationSettings.PktLoss == WeakNetwork.PktLoss;
+			if (!Test->TestTrue(TEXT("remote quickbar applies 100ms ±30ms and 5% loss to both PIE NetDrivers"), bReadBack))
+			{
+				bPacketSimulationFailed = true;
+				return false;
+			}
+			Test->AddInfo(FString::Printf(TEXT("Event=quickbar_remote_weak_network_configured ServerDriver=%s ClientDriver=%s LagMs=%d LagVarianceMs=%d LossPercent=%d"),
+				*GetNameSafe(ServerDriver), *GetNameSafe(ClientDriver), WeakNetwork.PktLag, WeakNetwork.PktLagVariance, WeakNetwork.PktLoss));
+			bPacketSimulationApplied = true;
+			return true;
+		}
+		/** 远端先选第二份窝料按 G，再立刻换到第一格；弱网下不能把客户端 RPC 尚未抵达服务器误判为 Begin 失败。 */
 		bool StartRemoteSecondChumThenChangeSelection()
 		{
 			if (!VerifyFixtureChumLineOfSight()) return true;
 			if (!Test->TestTrue(TEXT("remote selects second chum locally"), ClientController->RequestSelectQuickbarSlotFromInput(SecondChumSlot))) return true;
 			ClientController->BeginSelectedItemUseFromInput();
-			UCatFishingCommandComponent* ClientCommands = ClientController->GetFishingCommandComponent();
-			if (!Test->TestTrue(TEXT("remote G begins the local chum preview"), ClientCommands && ClientCommands->GetLocalChumChargeStartTime() >= 0.0)) return true;
+			const FCatInventoryEntry* SourceChum = ServerBackpack->GetInventoryEntryAtSlot(SecondChumSlot);
+			ActiveChumSource = SourceChum ? SourceChum->Instance : nullptr;
+			if (!Test->TestTrue(TEXT("remote G retains the selected source chum identity before RPC arrives"), ActiveChumSource.IsValid())) return true;
 			if (!Test->TestTrue(TEXT("remote changes local selection without ending the active chum input"), ClientController->RequestSelectQuickbarSlotFromInput(FirstChumSlot))) return true;
-			if (!Test->TestTrue(TEXT("remote slot change keeps the original local chum preview active"), ClientCommands->GetLocalChumChargeStartTime() >= 0.0)) return true;
-			ClientController->EndSelectedItemUseFromInput(false);
-			if (!Test->TestTrue(TEXT("remote release clears the original local chum preview"), ClientCommands->GetLocalChumChargeStartTime() < 0.0)) return true;
 			Stage = 4; return false;
+		}
+		/** 等待弱网 RPC 在服务器原实例上真正激活后才发送 Release，保证结束事件与 Begin 的精确实例配对。 */
+		bool WaitForRemoteSecondChumThenRelease()
+		{
+			if (!ActiveChumSource.IsValid())
+			{
+				Test->AddError(TEXT("remote chum source identity was lost before the server ability could activate."));
+				return true;
+			}
+			if (!IsChumUseWaiting(ServerCharacter.Get(), ActiveChumSource.Get())) return false;
+			const UCatChumEquipmentItemInstance* ChumSource = Cast<UCatChumEquipmentItemInstance>(ActiveChumSource.Get());
+			FCatInventoryItemUseContext ActiveUseContext;
+			if (!ChumSource || !ChumSource->TryGetActiveUseContext(ActiveUseContext))
+			{
+				Test->AddError(TEXT("remote chum ability was waiting without an active source use context."));
+				return true;
+			}
+			ActiveChumRequestId = ActiveUseContext.RequestId;
+			if (!Test->TestTrue(TEXT("remote source chum keeps a valid Begin request for Release receipt"), ActiveChumRequestId.IsValid())) return true;
+			if (!Test->TestTrue(TEXT("remote slot change keeps the original source ability active"), IsChumUseWaiting(ServerCharacter.Get(), ActiveChumSource.Get()))) return true;
+			ClientController->EndSelectedItemUseFromInput(false);
+			Stage = 5; return false;
 		}
 		/** 使用与正式 PlaceChum 相同的抛物线、水域吸附和 Visibility 射线预检测试场景；命中时记录精确遮挡物，避免把固定夹具问题误报为 RPC 超时。 */
 		bool VerifyFixtureChumLineOfSight()
@@ -237,16 +305,34 @@ namespace CatInventoryQuickbarRemoteUseTests
 			const FCatInventoryEntry* First = ServerBackpack->GetInventoryEntryAtSlot(FirstChumSlot);
 			const FCatInventoryEntry* Second = ServerBackpack->GetInventoryEntryAtSlot(SecondChumSlot);
 			if (!First || !Second || First->StackCount != FirstChumCount || Second->StackCount == SecondChumCount) return false;
-			if (!Test->TestEqual(TEXT("remote selection change leaves first chum quantity unchanged"), First->StackCount, FirstChumCount)
-				|| !Test->TestTrue(TEXT("remote release consumes only the second chum selected at Begin"), Second->StackCount < SecondChumCount)) return true;
-			Stage = 5; return false;
+			ACatfishingPlayerController* ServerController = ServerCharacter.IsValid() ? Cast<ACatfishingPlayerController>(ServerCharacter->GetController()) : nullptr;
+			UCatFishingCommandComponent* ServerCommands = ServerController ? ServerController->GetFishingCommandComponent() : nullptr;
+			UCatFishingCommandComponent* ClientCommands = ClientController.IsValid() ? ClientController->GetFishingCommandComponent() : nullptr;
+			if (!ServerCommands || !ClientCommands || !ActiveChumRequestId.IsValid())
+			{
+				Test->AddError(TEXT("remote chum receipt fixture lost an endpoint or the Begin request identity."));
+				return true;
+			}
+			FCatPlaceChumResult ServerPlaceResult;
+			FCatPlaceChumResult ClientPlaceResult;
+			if (!ServerCommands->TryGetPlaceChumResult(ActiveChumRequestId, ServerPlaceResult)
+				|| !ClientCommands->TryGetPlaceChumResult(ActiveChumRequestId, ClientPlaceResult)) return false;
+			const bool bFirstChumUnchanged = Test->TestEqual(TEXT("remote selection change leaves first chum quantity unchanged"), First->StackCount, FirstChumCount);
+			const bool bSecondChumConsumed = Test->TestTrue(TEXT("remote release consumes only the second chum selected at Begin"), Second->StackCount < SecondChumCount);
+			// 数量只证明库存变化；同一 Request 的权威与 owning-client 回执都必须确认真实 PlaceChum 成功，不能把缓存错误伪装成消费成功。
+			const bool bServerReceiptMatches = Test->TestTrue(TEXT("remote server caches the matching successful PlaceChum receipt"),
+				ServerPlaceResult.RequestId == ActiveChumRequestId && ServerPlaceResult.bCommitted && ServerPlaceResult.Error == ECatChumFieldError::None);
+			const bool bClientReceiptMatches = Test->TestTrue(TEXT("remote owning client receives the matching successful PlaceChum receipt"),
+				ClientPlaceResult.RequestId == ActiveChumRequestId && ClientPlaceResult.bCommitted && ClientPlaceResult.Error == ECatChumFieldError::None);
+			if (!bFirstChumUnchanged || !bSecondChumConsumed || !bServerReceiptMatches || !bClientReceiptMatches) return true;
+			Stage = 6; return false;
 		}
 		/** 远端选择第二根鱼竿并按 G；服务器部署时必须读取该槽的实例，第一根仍留在背包。 */
 		bool DeployRemoteSecondRod()
 		{
 			if (!Test->TestTrue(TEXT("remote selects second rod locally"), ClientController->RequestSelectQuickbarSlotFromInput(SecondRodSlot))) return true;
 			ClientController->BeginSelectedItemUseFromInput();
-			Stage = 6; return false;
+			Stage = 7; return false;
 		}
 		/** 查询正式服务器鱼竿 Actor 与 held/visible 背包条目，确认 world payload 使用第二根的 ID 和耐久而第一根未被拿走。 */
 		bool VerifySecondRodPayload()
@@ -258,14 +344,16 @@ namespace CatInventoryQuickbarRemoteUseTests
 			UCatEquipmentInventoryItemInstance* FirstInstance = First ? Cast<UCatEquipmentInventoryItemInstance>(First->Instance) : nullptr;
 			UCatEquipmentInventoryItemInstance* HeldInstance = Held ? Cast<UCatEquipmentInventoryItemInstance>(Held->Instance) : nullptr;
 			if (!Rod || !FirstInstance || !HeldInstance) return false;
-			if (!Test->TestEqual(TEXT("remote G deploys the selected second rod instance into world payload"), Rod->GetPresentationState().ItemInstanceId, SecondRodId)
-				&& Test->TestEqual(TEXT("first rod remains visible in remote server backpack"), FirstInstance->GetItemInstanceId(), FirstRodId)
-				&& Test->TestTrue(TEXT("two rod runtime durability values stay distinct across selected deployment"),
-					FMath::IsNearlyEqual(FirstInstance->GetRodDurability(), FirstRodDurability)
-					&& !FMath::IsNearlyEqual(FirstInstance->GetRodDurability(), HeldInstance->GetRodDurability())
-					&& FMath::IsNearlyEqual(HeldInstance->GetRodDurability(), SecondRodDurability))) return true;
+			// 三项都是同一次选中实例部署的独立证据；逐项执行可在回归时同时报告身份、库存和耐久是否串线。
+			const bool bSecondRodPayloadMatches = Test->TestEqual(TEXT("remote G deploys the selected second rod instance into world payload"), Rod->GetPresentationState().ItemInstanceId, SecondRodId);
+			const bool bFirstRodStillVisible = Test->TestEqual(TEXT("first rod remains visible in remote server backpack"), FirstInstance->GetItemInstanceId(), FirstRodId);
+			const bool bRodDurabilityRemainsDistinct = Test->TestTrue(TEXT("two rod runtime durability values stay distinct across selected deployment"),
+				FMath::IsNearlyEqual(FirstInstance->GetRodDurability(), FirstRodDurability)
+				&& !FMath::IsNearlyEqual(FirstInstance->GetRodDurability(), HeldInstance->GetRodDurability())
+				&& FMath::IsNearlyEqual(HeldInstance->GetRodDurability(), SecondRodDurability));
+			if (!bSecondRodPayloadMatches || !bFirstRodStillVisible || !bRodDurabilityRemainsDistinct) return true;
 			RodActorId = Rod->GetPresentationState().RodActorId;
-			Stage = 7; return false;
+			Stage = 8; return false;
 		}
 		/** 从远端客户端找到同一复制鱼竿后通过正式交互 RPC 放下；target 就是该 Actor，不能改走最近竿或 R 路径。 */
 		bool RequestRemoteTargetedRodLeave()
@@ -287,7 +375,7 @@ namespace CatInventoryQuickbarRemoteUseTests
 			if (!Test->TestTrue(TEXT("formal deployed rod body is reachable through the real interaction trace channel"), bHitRod)) return true;
 			LeaveRequestId = FGuid::NewGuid();
 			ClientController->ServerRequestInteraction(ClientRod, LeaveRequestId);
-			Stage = 8; return false;
+			Stage = 9; return false;
 		}
 		/** 服务器状态先显示目标竿已由远端放下，再重放同一 RequestId；缓存命中不得因当前非主控而反向拾起。 */
 		bool VerifyRemoteTargetedRodLeave()
@@ -301,7 +389,7 @@ namespace CatInventoryQuickbarRemoteUseTests
 				if (It->GetPresentationState().RodActorId == RodActorId) ClientRod = *It;
 			if (!Test->TestNotNull(TEXT("remote replay finds the original replicated rod target"), ClientRod)) return true;
 			ClientController->ServerRequestInteraction(ClientRod, LeaveRequestId);
-			Stage = 9; return false;
+			Stage = 10; return false;
 		}
 		/** 重放后仍应保持放下状态；通过后才为下一次新 RequestId 发起拾取。 */
 		bool VerifyRemoteTargetedRodLeaveReplay()
@@ -309,7 +397,7 @@ namespace CatInventoryQuickbarRemoteUseTests
 			UCatFishingService* Fishing = ServerWorld->GetSubsystem<UCatFishingService>();
 			ACatFishingRodActor* Rod = Fishing ? Fishing->FindDeployedRodById(RodActorId) : nullptr;
 			if (!Rod || Rod->IsPrimaryOperator(ServerCharacter->GetPlayerState())) return false;
-			Stage = 10; return false;
+			Stage = 11; return false;
 		}
 		/** 对同一远端复制 Actor 发新的正式交互 RPC，验证拾回不会改操作到其它场景鱼竿。 */
 		bool RequestRemoteTargetedRodOperate()
@@ -319,7 +407,7 @@ namespace CatInventoryQuickbarRemoteUseTests
 				if (It->GetPresentationState().RodActorId == RodActorId) ClientRod = *It;
 			if (!ClientRod) return false;
 			ClientController->ServerRequestInteraction(ClientRod, FGuid::NewGuid());
-			Stage = 11; return false;
+			Stage = 12; return false;
 		}
 		/** 操作位恢复到远端玩家且实例 ID 仍为第二根，证明两次 E 都以 target RodActorId 为唯一目标。 */
 		bool VerifyRemoteTargetedRodOperate()
@@ -361,28 +449,56 @@ namespace CatInventoryQuickbarRemoteUseTests
 		FGuid LeaveRequestId;
 		/** 两根鱼竿刻意不同的运行时耐久样本。 */
 		double FirstRodDurability = 0.0, SecondRodDurability = 0.0;
+		/** 远端 Begin 时服务器背包中第二份窝料的实例；等待与 Release 都必须绑定它，换格不能改写该身份。 */
+		TWeakObjectPtr<UCatInventoryItemInstance> ActiveChumSource;
+		/** 从原窝料实例的活动上下文冻结的 Begin 请求；服务器和客户端回执只能用它核对，不能按当前选中格重新生成。 */
+		FGuid ActiveChumRequestId;
+		/** 本次状态机是否应在初始复制完成后启用两端 PIE Driver 的弱网配置；正常网络入口保持 false。 */
+		bool bSimulateWeakNetwork = false;
+		/** 两端 Driver 是否已经接受并读回本次弱网配置；只影响当前 PIE 生命周期。 */
+		bool bPacketSimulationApplied = false;
+		/** Driver 存在但拒绝配置时终止测试，避免把正常网络回退伪装成弱网验证。 */
+		bool bPacketSimulationFailed = false;
 	};
+
+	/** 复用相同 PIE 拓扑和状态机排入正常或弱网用例；网络参数只在状态机确认初始库存同步后写入 Driver。 */
+	bool QueueRemoteSelectedUseScenario(FAutomationTestBase* Test, const bool bSimulateWeakNetwork)
+	{
+		if (!Test->TestTrue(TEXT("remote quickbar selected-use test requires idle editor"), GEditor && GEngine && !GEditor->PlayWorld)) return false;
+		const TSharedRef<FRestoreSettings> Restore = MakeShared<FRestoreSettings>();
+		ULevelEditorPlaySettings* Settings = GetMutableDefault<ULevelEditorPlaySettings>();
+		Settings->SetPlayNetMode(PIE_ListenServer); Settings->SetPlayNumberOfClients(2); Settings->SetRunUnderOneProcess(true);
+		for (FNetDriverDefinition& Driver : GEngine->NetDriverDefinitions)
+			if (Driver.DefName == TEXT("GameNetDriver")) { Driver.DriverClassName = TEXT("/Script/OnlineSubsystemUtils.IpNetDriver"); Driver.DriverClassNameFallback = Driver.DriverClassName; }
+		FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShareable(new FEditorLoadMap(TEXT("/Game/Catfishing/Maps/TestMap"))));
+		FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShareable(new FStartPIECommand(false)));
+		FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FVerifyRemoteSelectedUse>(Test, bSimulateWeakNetwork));
+		FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShareable(new FEndPlayMapCommand()));
+		FAutomationTestFramework::Get().EnqueueLatentCommand(Restore);
+		return true;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatInventoryQuickbarRemoteSelectedUseNormalNetworkTest,
+	"Catfishing.Editor.Inventory.Quickbar.RemoteSelectedUseNormalNetworkExactInstance",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+/** 启动一名远端客户端的 IP listen-server PIE，在正常网络下复用真实本地快捷栏 G/Release 与回执验证链。 */
+bool FCatInventoryQuickbarRemoteSelectedUseNormalNetworkTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	return CatInventoryQuickbarRemoteUseTests::QueueRemoteSelectedUseScenario(this, false);
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatInventoryQuickbarRemoteSelectedUseTest,
 	"Catfishing.Editor.Inventory.Quickbar.RemoteSelectedUseWeakNetworkExactInstance",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-/** 启动一名远端客户端的 IP listen-server PIE，执行弱网下的真实本地快捷栏 G/Release 路径并恢复用户设置。 */
+/** 启动一名远端客户端的 IP listen-server PIE；初始库存同步后显式启用双端弱网，再验证真实本地快捷栏 G/Release 与回执。 */
 bool FCatInventoryQuickbarRemoteSelectedUseTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
-	if (!TestTrue(TEXT("remote quickbar selected-use test requires idle editor"), GEditor && GEngine && !GEditor->PlayWorld)) return false;
-	const TSharedRef<CatInventoryQuickbarRemoteUseTests::FRestoreSettings> Restore = MakeShared<CatInventoryQuickbarRemoteUseTests::FRestoreSettings>();
-	ULevelEditorPlaySettings* Settings = GetMutableDefault<ULevelEditorPlaySettings>();
-	Settings->SetPlayNetMode(PIE_ListenServer); Settings->SetPlayNumberOfClients(2); Settings->SetRunUnderOneProcess(true);
-	for (FNetDriverDefinition& Driver : GEngine->NetDriverDefinitions) if (Driver.DefName == TEXT("GameNetDriver")) { Driver.DriverClassName = TEXT("/Script/OnlineSubsystemUtils.IpNetDriver"); Driver.DriverClassNameFallback = Driver.DriverClassName; }
-	ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/Catfishing/Maps/TestMap")));
-	ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
-	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<CatInventoryQuickbarRemoteUseTests::FVerifyRemoteSelectedUse>(this));
-	ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
-	FAutomationTestFramework::Get().EnqueueLatentCommand(Restore);
-	return true;
+	return CatInventoryQuickbarRemoteUseTests::QueueRemoteSelectedUseScenario(this, true);
 }
 
 #endif

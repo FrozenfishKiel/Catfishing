@@ -1,3 +1,6 @@
+#include "Inventory/Fragments/CatConsumableEffectFragment.h"
+#include "AbilitySystem/Effects/CatFishExperienceEffect.h"
+#include "Growth/CatGrowthComponent.h"
 #include "Inventory/CatFishInventoryItemInstance.h"
 
 #include "Character/CatCharacter.h"
@@ -180,7 +183,8 @@ bool UCatFishInventoryItemInstance::CanUseFromInventory(
 {
 	const UCatFishDefinition* Definition = GetFishDefinition();
 	const ACatCharacter* Character = Cast<ACatCharacter>(UserPawn);
-	const UCatConditionComponent* Condition = Character ? Character->GetConditionComponent() : nullptr;
+	const UCatGrowthComponent* Growth = Character ? Character->GetGrowthComponent() : nullptr;
+	const UCatConsumableEffectFragment* Effect = Definition ? Definition->FindFragment<UCatConsumableEffectFragment>() : nullptr;
 	return InventoryEntry.Instance == this
 		&& InventoryEntry.StackCount == 1
 		&& GetItemInstanceId().IsValid()
@@ -193,8 +197,8 @@ bool UCatFishInventoryItemInstance::CanUseFromInventory(
 		// 不可食用的鱼（咸鱼、湖心巨影）在这里直接拒绝：理由是「它不能吃」，
 		// 不是绕道去看经验系数是不是 0——那是两件事，只是在鱼表里恰好同时成立。
 		&& Definition->IsEdible()
-		&& Condition != nullptr
-		&& (!Character->HasAuthority() || Condition->ValidateFishConsumption(Definition, WeightKilograms) == ECatDomainCommandError::None);
+		&& Growth && Effect && Super::CanUseFromInventory(InventoryEntry, UserPawn)
+		&& (!Character->HasAuthority() || Growth->ValidateFishGrowth(Definition, WeightKilograms) == ECatDomainCommandError::None);
 }
 
 namespace CatFishInventoryConsumePrivate
@@ -219,76 +223,28 @@ namespace CatFishInventoryConsumePrivate
 	}
 }
 
-// 鱼库存 Use 提交流程：
-// 1. 复核来源库存、使用者和鱼定义，失败时不进入库存扣量。
-// 2. 让正式库存按当前槽位和实例 ID 扣除这一条鱼。
-// 3. 库存扣除成功后才提交 Character Condition 的吃鱼效果；身体失败时库存入口会回滚刚才的扣量。
-// 4. 返回公共领域结果给 UI，结果只描述本次吃鱼命令的提交或失败。
-FCatDomainCommandResult UCatFishInventoryItemInstance::UseFromInventorySlotFromAuthority(
-	const FCatInventoryEntry& InventoryEntry, const FCatInventoryItemUseContext& UseContext)
+// 鱼效果流程：实例按冻结重量计算经验参数，定义片段申请 GE；成功后授予知识并释放保留载体，库存扣量归基类事务。
+FCatDomainCommandResult UCatFishInventoryItemInstance::ApplyUseEffectsFromAuthority(const FCatInventoryItemUseContext& UseContext)
 {
-	FCatDomainCommandResult Result;
-	Result.RequestId = UseContext.RequestId;
-
-
-	ACatCharacter* Character = Cast<ACatCharacter>(UseContext.UserPawn);
-	if (Character == nullptr && UseContext.RequestingController != nullptr)
-	{
-		Character = Cast<ACatCharacter>(UseContext.RequestingController->GetPawn());
-	}
-	UCatConditionComponent* Condition = Character ? Character->GetConditionComponent() : nullptr;
-	UCatFishDefinition* Definition = GetFishDefinition();
-	if (InventoryEntry.Instance != this || InventoryEntry.StackCount != 1
-		|| UseContext.SourceInventory == nullptr || Character == nullptr || Condition == nullptr
-		|| Definition == nullptr || !UseContext.RequestId.IsValid())
-	{
-		Result.Error = ECatDomainCommandError::InvalidPayload;
-		return Result;
-	}
-
-	const FString PayloadContext = FString::Printf(TEXT("Fish=%s|Definition=%s|SourceSession=%s"),
-		*GetItemInstanceId().ToString(EGuidFormats::DigitsWithHyphens),
-		*Definition->FishDefinitionId.ToString(),
-		*SourceFishingSessionId.ToString(EGuidFormats::DigitsWithHyphens));
-	const FCatInventoryItemUseResult InventoryResult =
-		UseContext.SourceInventory->UseItemInstanceFromAuthority(UseContext.RequestId,
-			GetItemInstanceId(), 1, PayloadContext,
-			[&](FCatInventoryItemUseResult& MutableResult)
-			{
-				(void)MutableResult;
-				return CanUseFromInventory(InventoryEntry, Character)
-					? ECatDomainCommandError::None : ECatDomainCommandError::DependencyUnavailable;
-			},
-			[&](FCatInventoryItemUseResult& MutableResult)
-			{
-				(void)MutableResult;
-				// 吃鱼经验 ＝ 经验系数 × 实际重量，重量只有鱼实例知道，所以必须由这里一路带到成长槽。
-				const FCatDomainCommandResult BodyResult =
-					Condition->ConsumeCommittedFish(UseContext.RequestId, Definition, WeightKilograms);
-				if (!CatIsAcceptedDomainCommandResult(BodyResult))
-				{
-					return false;
-				}
-				// 知识层：自己吃过才解锁食用效果，谁吃谁记（图鉴 §3.1.4:124）。
-				// 收件人是这次真的把鱼吃下去的人，不是钓到它的人——别人钓的鱼被自己吃掉，效果记进自己的图鉴；
-				// 被拿走吃掉就记进拿鱼那个人的。不可食用的鱼没有这一层，这里也不会走到（吃鱼链本身 fail-closed）。
-				CatFishInventoryConsumePrivate::GrantFishKnowledgeFromAuthority(Character, Definition);
-				// 身体效果已经接受，库存不会再回滚这条鱼；此时才释放容器保管的隐藏 Actor，避免失败回滚留下失配的库存条目。
-				if (ACatFishPickupActor* RetainedFishActor = Cast<ACatFishPickupActor>(GetWorldActor()))
-				{
-					RetainedFishActor->Destroy();
-				}
-				return true;
-			});
-
-	Result.RequestId = InventoryResult.RequestId;
-
-	Result.bCommitted = InventoryResult.bCommitted;
-	Result.bTerminalReplay = InventoryResult.bTerminalReplay;
-	Result.bReplayedTerminalCommitted = InventoryResult.bReplayedTerminalCommitted;
-	Result.Error = InventoryResult.Error;
-	Result.ReplayedTerminalError = InventoryResult.ReplayedTerminalError;
-	return Result;
+ ACatCharacter* Character = Cast<ACatCharacter>(UseContext.UserPawn);
+ const UCatFishDefinition* Definition = GetFishDefinition();
+ const UCatConsumableEffectFragment* Effect = Definition ? Definition->FindFragment<UCatConsumableEffectFragment>() : nullptr;
+ FCatDomainCommandResult Result;
+ Result.RequestId = UseContext.RequestId;
+ if (!Character || !Effect)
+ {
+  Result.Error = ECatDomainCommandError::DependencyUnavailable;
+  return Result;
+ }
+ Result = Effect->ApplyFromAuthority(Character, UseContext.RequestId, this,
+  {{UCatGE_FishExperience::GetExperienceTag(), static_cast<float>(FMath::FloorToInt(Definition->ResolveEatingExperiencePoints(WeightKilograms)))}});
+ if (CatIsAcceptedDomainCommandResult(Result))
+ {
+  CatFishInventoryConsumePrivate::GrantFishKnowledgeFromAuthority(Character, Definition);
+  // 效果已被接受，基类事务不会再回滚实物；此时才销毁容器保留的隐藏载体。
+  if (ACatFishPickupActor* Actor = Cast<ACatFishPickupActor>(GetWorldActor())) Actor->Destroy();
+ }
+ return Result;
 }
 
 // 投掷效果查询流程：只沿鱼定义读那一份逐鱼数据；定义缺失、数据不完整或本鱼没有投掷效果时返回 false。

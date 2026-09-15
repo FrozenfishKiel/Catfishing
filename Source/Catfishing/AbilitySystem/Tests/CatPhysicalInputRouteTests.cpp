@@ -1,4 +1,4 @@
-#if WITH_DEV_AUTOMATION_TESTS
+﻿#if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
@@ -25,6 +25,7 @@
 #include "Fishing/Integration/CatFishingAimLibrary.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Equipment/CatEquipmentComponent.h"
+#include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
@@ -41,6 +42,24 @@
 #include "OnlineSubsystemTypes.h"
 #include "UObject/StrongObjectPtr.h"
 #include "UI/HUD/CatHUDModel.h"
+
+namespace
+{
+	/** 从实际装备来源授予的能力中定位指定类型，避免夹具另造无来源 Spec 而与正式输入重复响应。 */
+	FGameplayAbilitySpecHandle FindSourceAbilityHandle(const UCatAbilitySystemComponent* AbilitySystem, const UObject* SourceObject,
+		const UClass* AbilityClass)
+	{
+		if (!AbilitySystem || !SourceObject || !AbilityClass) return FGameplayAbilitySpecHandle();
+		for (const FGameplayAbilitySpec& Candidate : AbilitySystem->GetActivatableAbilities())
+		{
+			if (Candidate.SourceObject.Get() == SourceObject && Candidate.Ability && Candidate.Ability->IsA(AbilityClass))
+			{
+				return Candidate.Handle;
+			}
+		}
+		return FGameplayAbilitySpecHandle();
+	}
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatPhysicalInputRouteTest,
 	"Catfishing.PhysicalGrab.Runtime.OwnerRodHoldKeepsMouseFishingIndependentAndClearsLifecycle",
@@ -119,10 +138,6 @@ bool FCatPhysicalInputRouteTest::RunTest(const FString& Parameters)
 	if (!Input || !Grab || !ASC) return false;
 	ASC->InitAbilityActorInfo(Cat,Cat);
 	ASC->ClearAllAbilities();
-	FGameplayAbilitySpec PrimarySpec(UCatGA_FishingPrimaryAction::StaticClass());
-	PrimarySpec.GetDynamicSpecSourceTags().AddTag(CatFishingAbilityTags::Input_Fishing_Primary);
-	const auto Spec = ASC->GiveAbility(PrimarySpec);
-	ASC->RegisterAbilityInput(Spec, CatFishingAbilityTags::Input_Fishing_Primary, ECatAbilityActivationPolicy::WhileInputActive);
 	// This isolated authority fixture feeds accepted input through the production Move entry each frame.
 	// Without a client heartbeat it must time out after 0.5 s; real network heartbeat is covered separately.
 	const auto TickInputFrame = [&]()
@@ -146,11 +161,21 @@ bool FCatPhysicalInputRouteTest::RunTest(const FString& Parameters)
 	UCatFishingService* Service = World->GetSubsystem<UCatFishingService>();
 	ACatFishingRodActor* Rod = Service->FindRodOperatedBy(Helper);
 	if (!TestTrue(TEXT("左手抓人时 R 用空闲右手真实持本人鱼竿"),Rod && Grab->IsGripping(false) && Grab->GetGripTarget(false)==Rod)) return false;
+	UCatEquipmentInventoryItemInstance* RodSource = Equipment->ResolveDeployedRodItemInstanceFromAuthority(Equipment->GetSnapshot().RodItemInstanceId);
+	const FGameplayAbilitySpecHandle PrimaryRodSpec = FindSourceAbilityHandle(ASC, RodSource, UCatGA_FishingPrimaryAction::StaticClass());
+	if (!TestTrue(TEXT("实际鱼竿来源授予 Primary Spec"), RodSource && PrimaryRodSpec.IsValid())) return false;
+	// 放竿再抓回会撤销并重新授予 Spec；每次断言都沿相同物品来源解析当前句柄，不能解引用旧句柄。
+	const auto IsSourcePrimaryActive = [&]()
+	{
+		const FGameplayAbilitySpecHandle CurrentHandle = FindSourceAbilityHandle(ASC, RodSource, UCatGA_FishingPrimaryAction::StaticClass());
+		const FGameplayAbilitySpec* CurrentSpec = ASC->FindAbilitySpecFromHandle(CurrentHandle);
+		return CurrentSpec && CurrentSpec->IsActive();
+	};
 	const FGuid RodGripId=Grab->GetGripState(false).GripId;
 	UCatHUDModel* HUDModel=NewObject<UCatHUDModel>();
 	if (!TestTrue(TEXT("真实主控 HUD Model 绑定"),HUDModel->Bind(LocalPlayer.Get(),Controller,Cat))) return false;
-	TestTrue(TEXT("右爪实际持竿提示 R 放竿而非鼠标松键"),HUDModel->GetViewState().PhysicalHandStateText.ToString().Contains(TEXT("右爪：持竿（R 放竿）")));
-	TestTrue(TEXT("另一只抓猫手仍提示松键释放"),HUDModel->GetViewState().PhysicalHandStateText.ToString().Contains(TEXT("左爪：抓住（松键释放）")));
+	TestTrue(TEXT("右爪投影只显示实际持竿状态"),HUDModel->GetViewState().PhysicalHandStateText.ToString().Contains(TEXT("右爪：持竿")));
+	TestTrue(TEXT("另一只抓猫手仍显示实际抓握状态"),HUDModel->GetViewState().PhysicalHandStateText.ToString().Contains(TEXT("左爪：抓住")));
 	HUDModel->Unbind();
 	Input->HandleAbilityInputTagReleased(CatFishingAbilityTags::Input_Fishing_Primary);
 	TestFalse(TEXT("成为明确主控后松左键仍释放原抓猫约束"), Grab->IsGripping(true));
@@ -167,7 +192,9 @@ bool FCatPhysicalInputRouteTest::RunTest(const FString& Parameters)
 	Rod->SetPrimaryOperatorFromAuthority(nullptr,Rod->GetPresentationState().RodActorRevision);
 	Input->HandleAbilityInputTagReleased(CatFishingAbilityTags::Input_Fishing_Primary);
 	TestEqual(TEXT("退主位后松键仍清旧 ASC 按住状态"),ASC->GetHeldInputCount(),0);
-	TestTrue(TEXT("退主位后松键发往原 ASC"),ASC->GetReleasedInputCount()>0);
+	// 退主位立即按来源撤销 Spec 和输入索引；随后松键不能再排队给已经回收的能力。
+	TestEqual(TEXT("退主位后不向已撤销能力残留松键"),ASC->GetReleasedInputCount(),0);
+	TestFalse(TEXT("退主位后原 ASC 不再持有该鱼竿主控能力"),FindSourceAbilityHandle(ASC, RodSource, UCatGA_FishingPrimaryAction::StaticClass()).IsValid());
 	ASC->ResetAbilityInput(); // 本用例不激活正式抛竿领域命令。
 	Rod->SetPrimaryOperatorFromAuthority(Helper,Rod->GetPresentationState().RodActorRevision);
 	Input->HandleAbilityInputTagPressed(CatFishingAbilityTags::Input_Fishing_Primary);
@@ -176,11 +203,11 @@ bool FCatPhysicalInputRouteTest::RunTest(const FString& Parameters)
 	int64 HeldSequence=0;
 	TestTrue(TEXT("真实 GAS 激活进入服务器瞄准按住状态"),Commands->TryGetHeldFightInputStateFromAuthority(bPrimaryHeld,bSlackHeld,HeldSequence)&&bPrimaryHeld&&!bSlackHeld);
 	TestTrue(TEXT("GAS 主控按下仍保留 R 的同一条持竿约束"),Grab->IsGripping(false)&&Grab->GetGripState(false).GripId==RodGripId);
-	TestTrue(TEXT("正式 Primary Ability 保持活跃等待松键"),ASC->FindAbilitySpecFromHandle(Spec)->IsActive());
+	TestTrue(TEXT("正式 Primary Ability 保持活跃等待松键"),IsSourcePrimaryActive());
 	const int64 EquipmentBeforeCancel=Equipment->GetSnapshot().Revision;
 	const int64 SequenceBeforeCancel=HeldSequence;
 	Controller->ClearPhysicalControlInput(TEXT("MenuOpened"));
-	TestFalse(TEXT("菜单取消真实活跃 Ability，不能等待迟到 Release 抛竿"),ASC->FindAbilitySpecFromHandle(Spec)->IsActive());
+	TestFalse(TEXT("菜单取消真实活跃 Ability，不能等待迟到 Release 抛竿"),IsSourcePrimaryActive());
 	TestTrue(TEXT("菜单清服务器按住状态且序号前进"),Commands->TryGetHeldFightInputStateFromAuthority(bPrimaryHeld,bSlackHeld,HeldSequence)&&!bPrimaryHeld&&!bSlackHeld&&HeldSequence>SequenceBeforeCancel);
 	Input->HandleAbilityInputTagReleased(CatFishingAbilityTags::Input_Fishing_Primary);
 	Input->ProcessAbilityInput(1.0f/60.0f,false);
@@ -241,7 +268,7 @@ bool FCatPhysicalInputRouteTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("正式相机射线实际命中测试水域"), bHitsWater)) return false;
 	Input->HandleAbilityInputTagPressed(CatFishingAbilityTags::Input_Fishing_Primary);
 	Input->ProcessAbilityInput(1.0f/60.0f,false);
-	TestTrue(TEXT("抓回后新鼠标按下真实激活 Primary Ability"),ASC->FindAbilitySpecFromHandle(Spec)->IsActive());
+	TestTrue(TEXT("抓回后新鼠标按下真实激活 Primary Ability"),IsSourcePrimaryActive());
 	Input->HandleAbilityInputTagReleased(CatFishingAbilityTags::Input_Fishing_Primary);
 	Input->ProcessAbilityInput(1.0f/60.0f,false);
 	FGuid CastSessionId;

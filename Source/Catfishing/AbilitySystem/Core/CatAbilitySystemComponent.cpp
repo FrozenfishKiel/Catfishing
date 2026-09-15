@@ -1,4 +1,4 @@
-#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+﻿#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Data/CatFishDefinition.h"
 #include "Growth/CatGrowthComponent.h"
 
@@ -127,9 +127,12 @@ void UCatAbilitySystemComponent::ProcessAbilityInput(const float DeltaTime, cons
 		{
 			if (Spec->IsActive())
 			{
+				// Task 订阅当前能力实例的激活键；Spec 上的旧键不能用于实例化能力的输入事件。
+				const UGameplayAbility* Instance = Spec->GetPrimaryInstance();
+				const FPredictionKey ActivationKey = Instance ? Instance->GetCurrentActivationInfo().GetActivationPredictionKey() : Spec->ActivationInfo.GetActivationPredictionKey();
 				AbilitySpecInputPressed(*Spec);
 				InvokeReplicatedEvent(EAbilityGenericReplicatedEvent::InputPressed, Handle,
-					Spec->ActivationInfo.GetActivationPredictionKey());
+					ActivationKey);
 			}
 			else if (ActivationPolicyByHandle.FindRef(Handle) != ECatAbilityActivationPolicy::OnGranted)
 			{
@@ -145,9 +148,12 @@ void UCatAbilitySystemComponent::ProcessAbilityInput(const float DeltaTime, cons
 	{
 		if (FGameplayAbilitySpec* Spec = FindAbilitySpecFromHandle(Handle); Spec && Spec->IsActive())
 		{
+			// 与 WaitInputRelease 使用同一实例激活键，避免松开事件留在无人监听的旧 Spec 键下。
+			const UGameplayAbility* Instance = Spec->GetPrimaryInstance();
+			const FPredictionKey ActivationKey = Instance ? Instance->GetCurrentActivationInfo().GetActivationPredictionKey() : Spec->ActivationInfo.GetActivationPredictionKey();
 			AbilitySpecInputReleased(*Spec);
 			InvokeReplicatedEvent(EAbilityGenericReplicatedEvent::InputReleased, Handle,
-				Spec->ActivationInfo.GetActivationPredictionKey());
+				ActivationKey);
 		}
 	}
 	InputPressedSpecHandles.Reset();

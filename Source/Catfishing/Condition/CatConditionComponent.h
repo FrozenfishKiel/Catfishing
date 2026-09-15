@@ -6,7 +6,6 @@
 #include "Components/ActorComponent.h"
 #include "CatConditionComponent.generated.h"
 
-class UCatFishDefinition;
 
 /** Condition 完整快照发生提交或复制变化的本机通知；订阅者必须重新读取 GetSnapshot，不使用增量载荷拼状态。 */
 DECLARE_MULTICAST_DELEGATE(FCatConditionSnapshotChanged);
@@ -37,12 +36,6 @@ public:
 	/** 服务器更新纯表现疲惫档；相同值不发布，不影响体力或物品效果。 */
 	void SetFatigueTierFromAuthority(ECatFatigueTier NewTier);
 
-	/** 在实物鱼被不可逆移除前只读校验食用定义、实例实际重量（千克）和成长入口；返回 None 才允许上层提交库存事务。 */
-	ECatDomainCommandError ValidateFishConsumption(const UCatFishDefinition* FishDefinition, double WeightKilograms) const;
-
-	/** 实物鱼消费提交后按实际重量（千克）推进成长经验，并按请求标识重放首次结果，避免重试重复授予成长。 */
-	FCatDomainCommandResult ConsumeCommittedFish(FGuid RequestId, const UCatFishDefinition* FishDefinition, double WeightKilograms);
-
 	/** 服务器开发验证入口设置离散倒地状态；首次倒地会收口进行中的钓鱼，重复同值不会重复发布。 */
 	bool SetDownedFromAuthority(bool bNewDowned);
 
@@ -54,18 +47,12 @@ private:
 	UFUNCTION()
 	void OnRep_Snapshot();
 
-	/** 构造操作+RequestId 的局内幂等键；身份由上层 Controller 权限另行验证。 */
-	static FString MakeTerminalKey(const TCHAR* Operation, FGuid RequestId);
-
 	/** authority 提交后请求复制并广播，客户端 RepNotify 只广播；集中保证 UI 不漏掉任何完整快照变化。 */
 	void PublishSnapshot();
 
 	/** Wet/Downed/水域暴露 的唯一复制事实；Condition 写入、UI 和表现层读取，Wet 本身不由任何 Ability 清除或触发。 */
 	UPROPERTY(ReplicatedUsing = OnRep_Snapshot)
 	FCatConditionSnapshot Snapshot;
-
-	/** 本组件处理的身体命令首次完整终态；防止网络重试重复吃鱼。 */
-	TMap<FString, FCatDomainCommandResult> TerminalCache;
 
 	/** 当前脚点持续处在危险水深中的确认时长，单位为 World 秒；水域暴露更新写入它，用来给危险水域进入判定提供滞回前的累计证据。 */
 	double DangerousWaterBuildUpSeconds = 0.0;
