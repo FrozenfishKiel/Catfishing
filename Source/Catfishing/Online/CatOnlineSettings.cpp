@@ -2,6 +2,14 @@
 
 #include "Misc/PackageName.h"
 
+bool UCatOnlineSettings::HasValidAdmissionTimeouts() const
+{
+	return FMath::IsFinite(AdmissionConnectTimeoutSeconds) && FMath::IsFinite(AdmissionRequestTimeoutSeconds)
+		&& FMath::IsFinite(AdmissionOperationTimeoutSeconds) && AdmissionConnectTimeoutSeconds > 0.0f
+		&& AdmissionRequestTimeoutSeconds > AdmissionConnectTimeoutSeconds
+		&& AdmissionOperationTimeoutSeconds > AdmissionRequestTimeoutSeconds;
+}
+
 // 玩法地图读取流程：不加载 World 资产，只把配置软路径规范化为可供旅行、到达判定和 Session 过滤共用的长包名。
 bool UCatOnlineSettings::TryGetGameplayMapPackage(FString& OutPackageName) const
 {

@@ -15,6 +15,8 @@ namespace CatFrontendRoomModelText
 		case ECatOnlineError::PasswordRequired: return FText::FromString(TEXT("此房间需要密码。"));
 		case ECatOnlineError::PasswordIncorrect: return FText::FromString(TEXT("密码不正确，请重新输入。"));
 		case ECatOnlineError::AdmissionUnavailable: return FText::FromString(TEXT("房主暂时无法接受加入，可能正在开始游戏，请稍后重试。"));
+		case ECatOnlineError::AdmissionTimedOut: return FText::FromString(TEXT("连接房间超时，请检查网络后重试。"));
+		case ECatOnlineError::AdmissionConnectionFailed: return FText::FromString(TEXT("无法连接房间，请检查网络和 Steam 状态后重试。"));
 		case ECatOnlineError::AdmissionRateLimited: return FText::FromString(TEXT("尝试过于频繁，请一分钟后重试。"));
 		case ECatOnlineError::AdmissionDenied: return FText::FromString(TEXT("房主拒绝了加入请求，请重新获取邀请。"));
 		case ECatOnlineError::InvalidInviteCode: return FText::FromString(TEXT("邀请码无效或房间已关闭。"));
@@ -127,6 +129,18 @@ FCatOnlineResult UCatFrontendRoomModel::CreateRoom()
 	Result = OnlineSubsystem->RequestCreateSession();
 	CaptureResult(Result);
 	return Result;
+}
+
+bool UCatFrontendRoomModel::CanCancelAdmission() const
+{
+	const UCatOnlineSubsystem* Source = Online.Get();
+	return Source && Source->CanCancelRoomAdmission();
+}
+
+bool UCatFrontendRoomModel::CancelAdmission()
+{
+	UCatOnlineSubsystem* Source = Online.Get();
+	return Source && Source->CancelRoomAdmission();
 }
 
 // 离开房间流程：先确认 Online 来源仍绑定；有效时直接转交 Leave，前台新局不会触发保存，玩法内 Host 的保存收口完全保留在 Online/GameMode 链路。
@@ -251,7 +265,8 @@ void UCatFrontendRoomModel::HandleOnlineChanged()
 		}
 		else if (Snapshot.ActiveOperation == ECatOnlineOperation::ResolveJoin)
 		{
-			LastResultText = FText::FromString(TEXT("正在查询房间并等待 Steam 响应…"));
+			LastResultText = FText::FromString(CanCancelAdmission()
+				? TEXT("正在连接房间，可点击返回取消…") : TEXT("正在查询房间并等待 Steam 响应…"));
 		}
 		else if (Snapshot.bFriendsRefreshPending)
 		{

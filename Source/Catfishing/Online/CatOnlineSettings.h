@@ -18,13 +18,22 @@ enum class ECatRecoverableFailure : uint8
 };
 ENUM_CLASS_FLAGS(ECatRecoverableFailure);
 
-/** 集中的 Online 策略入口；所有 O 值默认保持 Undecided、零或负值哨兵，运行路径不得自行补产品结论。 */
+/** 集中的 Online 策略入口；未裁定的 O 值保持哨兵，已确认的入房技术时限使用显式默认值。 */
 UCLASS(Config = Game, DefaultConfig)
 class CATFISHING_API UCatOnlineSettings : public UObject
 {
 	GENERATED_BODY()
 
 public:
+	/** 入房专用时限，单位秒；必须满足 0 < 初始建连 < 整个请求 < 外层兜底。 */
+	bool HasValidAdmissionTimeouts() const;
+	UPROPERTY(Config, EditAnywhere, Category = "Admission", meta = (ClampMin = "1"))
+	float AdmissionConnectTimeoutSeconds = 20.0f;
+	UPROPERTY(Config, EditAnywhere, Category = "Admission", meta = (ClampMin = "1"))
+	float AdmissionRequestTimeoutSeconds = 30.0f;
+	UPROPERTY(Config, EditAnywhere, Category = "Admission", meta = (ClampMin = "1"))
+	float AdmissionOperationTimeoutSeconds = 35.0f;
+
 	/** 读取配置的玩法地图对象路径并规范化为长包名；空值或非法包名保持 fail-closed。 */
 	bool TryGetGameplayMapPackage(FString& OutPackageName) const;
 

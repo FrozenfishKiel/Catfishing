@@ -28,6 +28,10 @@ public:
    TFunction<void(ECatOnlineError)> Callback);
  void CancelClient();
  void CompleteClient(ECatOnlineError Error);
+ /** 网络回执只能完成当前 Beacon 的请求，旧连接清理不能影响重试。 */
+ void CompleteClient(class ACatRoomAdmissionClient* Source, ECatOnlineError Error);
+ bool IsCurrentClient(const class ACatRoomAdmissionClient* Source) const;
+ bool HasPendingClient() const { return Client.IsValid() && bool(ClientCallback); }
  ECatOnlineError ValidateSettings(const FString& Name, int32 Capacity, const FString& NewPassword) const;
  void ApplySettings(const FString& Name, int32 Capacity, const FString& NewPassword, bool bClearPassword);
  FString GetCode() const { return Code; }
@@ -40,6 +44,7 @@ public:
  static FString PeerIdentity(UNetConnection* Connection);
 private:
  friend class FCatRoomAdmissionContractTest;
+ friend class FCatRoomAdmissionTimeoutTest;
  ECatOnlineError AuthorizePeer(const FString& Peer, const FString& Secret, bool bCode);
  struct FGrant { double Expires = 0; bool bObservedMember = false; };
  struct FAttempts { double Until = 0; int32 Count = 0; };
@@ -61,6 +66,7 @@ private:
  TWeakObjectPtr<class ACatRoomAdmissionClient> Client;
  TFunction<void(ECatOnlineError)> ClientCallback;
  double ClientDeadline = 0;
+ double ClientStartedAt = 0;
 };
 
 UCLASS(Transient, NotPlaceable)
@@ -69,6 +75,9 @@ class CATFISHING_API ACatRoomAdmissionHost : public AOnlineBeaconHost
  GENERATED_BODY()
 public:
  ACatRoomAdmissionHost();
+protected:
+ virtual bool InitBase() override;
+ friend class FCatRoomAdmissionTimeoutTest;
 };
 
 UCLASS(Transient, NotPlaceable)
@@ -93,8 +102,11 @@ public:
  virtual void OnConnected() override;
  virtual FString GetLoginOptions(const FUniqueNetIdRepl& PlayerId) override { return FString(); }
  virtual void OnFailure(EBeaconFailureReason Reason, FStringView ErrorMessage) override;
+ virtual void HandleNetworkFailure(UWorld* World, UNetDriver* Driver, ENetworkFailure::Type FailureType, const FString& ErrorString) override;
  UFUNCTION(Server, Reliable) void ServerAuthorize(const FString& Lobby, const FString& Secret, bool bCode, FGuid CorrelationId);
  UFUNCTION(Client, Reliable) void ClientDecision(ECatOnlineError Error, FGuid CorrelationId);
 private:
+ friend class FCatRoomAdmissionTimeoutTest;
+ virtual bool InitBase() override;
  bool bSubmitted = false;
 };

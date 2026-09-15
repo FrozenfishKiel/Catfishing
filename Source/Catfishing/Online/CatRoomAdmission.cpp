@@ -1,5 +1,6 @@
 #include "Online/CatRoomAdmission.h"
 #include "Online/CatOnlineSubsystem.h"
+#include "Online/CatOnlineSettings.h"
 #include "Engine/GameInstance.h"
 #include "Engine/NetConnection.h"
 #include "Engine/World.h"
@@ -20,10 +21,33 @@ namespace
  const TCHAR* Alphabet = TEXT("23456789ABCDEFGHJKLMNPQRSTUVWXYZ");
  constexpr double ReservationSeconds = 30.0;
  constexpr double InviteSeconds = 600.0;
+
+ bool ApplyAdmissionTimeouts(const AActor* Beacon, float& InitialTimeout, float& ConnectionTimeout)
+ {
+   const UCatOnlineSettings* Settings = GetDefault<UCatOnlineSettings>();
+   if (!Settings->HasValidAdmissionTimeouts())
+   {
+     UE_LOG(LogCatOnline, Error, TEXT("Event=room_admission_config_invalid World=%s NetMode=%d Actor=%s Result=InvalidTimeoutOrder"),
+       *GetNameSafe(Beacon->GetWorld()), int32(Beacon->GetNetMode()), *GetNameSafe(Beacon));
+     return false;
+   }
+   // InitBase 在配置装载之后、UE 将 Beacon 时限写入驱动之前执行；不依赖构造函数覆盖 Config 属性。
+   InitialTimeout = Settings->AdmissionConnectTimeoutSeconds;
+   ConnectionTimeout = Settings->AdmissionRequestTimeoutSeconds;
+   return true;
+ }
 }
 
 ACatRoomAdmissionHost::ACatRoomAdmissionHost() { NetDriverDefinitionName = TEXT("CatAdmissionNetDriver"); }
 ACatRoomAdmissionClient::ACatRoomAdmissionClient() { NetDriverDefinitionName = TEXT("CatAdmissionNetDriver"); }
+bool ACatRoomAdmissionHost::InitBase()
+{
+ return ApplyAdmissionTimeouts(this, BeaconConnectionInitialTimeout, BeaconConnectionTimeout) && Super::InitBase();
+}
+bool ACatRoomAdmissionClient::InitBase()
+{
+ return ApplyAdmissionTimeouts(this, BeaconConnectionInitialTimeout, BeaconConnectionTimeout) && Super::InitBase();
+}
 ACatRoomAdmissionHostObject::ACatRoomAdmissionHostObject()
 {
  ClientBeaconActorClass = ACatRoomAdmissionClient::StaticClass();
@@ -33,11 +57,15 @@ void ACatRoomAdmissionHostObject::OnClientConnected(AOnlineBeaconClient* NewClie
 {
  Super::OnClientConnected(NewClientActor, Connection);
  if (GetNumClientActors() > 32 || UCatRoomAdmission::PeerIdentity(Connection).IsEmpty()) { DisconnectClient(NewClientActor); return; }
- NewClientActor->SetLifeSpan(20.0f);
+ NewClientActor->SetLifeSpan(GetDefault<UCatOnlineSettings>()->AdmissionRequestTimeoutSeconds);
 }
 void ACatRoomAdmissionClient::OnConnected()
 {
  Super::OnConnected();
+ UCatRoomAdmission* Admission = GetGameInstance() ? GetGameInstance()->GetSubsystem<UCatRoomAdmission>() : nullptr;
+ if (!Admission || !Admission->IsCurrentClient(this)) { return; }
+ UE_LOG(LogCatOnline, Log, TEXT("Event=room_admission_connected RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s Phase=Authorize"),
+   *RequestId.ToString(), *GetNameSafe(GetWorld()), int32(GetNetMode()), HasAuthority(), int32(GetLocalRole()), *GetName());
  ServerAuthorize(PendingLobby, PendingSecret, bPendingCode, RequestId);
  PendingSecret.Reset();
 }
@@ -63,13 +91,26 @@ void ACatRoomAdmissionClient::ServerAuthorize_Implementation(const FString& Lobb
 void ACatRoomAdmissionClient::ClientDecision_Implementation(ECatOnlineError Error, FGuid CorrelationId)
 {
  if (CorrelationId != RequestId) { return; }
- if (UCatRoomAdmission* Admission = GetGameInstance()->GetSubsystem<UCatRoomAdmission>()) { Admission->CompleteClient(Error); }
+ if (UCatRoomAdmission* Admission = GetGameInstance()->GetSubsystem<UCatRoomAdmission>()) { Admission->CompleteClient(this, Error); }
+}
+void ACatRoomAdmissionClient::HandleNetworkFailure(UWorld* World, UNetDriver* Driver, ENetworkFailure::Type FailureType, const FString& ErrorString)
+{
+ if (!Driver || Driver != NetDriver) { return; }
+ // UE 的默认 Beacon 处理会把 ConnectionTimeout 压成 TransportError；在此保留枚举事实，不解析错误原文。
+ OnFailure(FailureType == ENetworkFailure::ConnectionTimeout ? EBeaconFailureReason::TimeOut : EBeaconFailureReason::TransportError,
+   FStringView());
 }
 void ACatRoomAdmissionClient::OnFailure(EBeaconFailureReason Reason, FStringView ErrorMessage)
 {
- // 引擎错误文本可能包含连接身份；只转交稳定错误，不记录原文。
+ // 引擎错误文本可能包含连接身份；只转交稳定错误，不记录原文。终态由当前请求唯一收口。
  if (UCatRoomAdmission* Admission = GetGameInstance() ? GetGameInstance()->GetSubsystem<UCatRoomAdmission>() : nullptr)
- { Admission->CompleteClient(ECatOnlineError::AdmissionUnavailable); }
+ {
+   if (!Admission->IsCurrentClient(this)) { return; }
+   UE_LOG(LogCatOnline, Warning, TEXT("Event=room_admission_connection_failed RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s Reason=%s"),
+     *RequestId.ToString(), *GetNameSafe(GetWorld()), int32(GetNetMode()), HasAuthority(), int32(GetLocalRole()), *GetName(), LexToString(Reason));
+   Admission->CompleteClient(this, Reason == EBeaconFailureReason::TimeOut
+     ? ECatOnlineError::AdmissionTimedOut : ECatOnlineError::AdmissionConnectionFailed);
+ }
 }
 
 FString UCatRoomAdmission::PeerIdentity(UNetConnection* Connection)
@@ -124,8 +165,9 @@ bool UCatRoomAdmission::ResumeListener()
  Listener->RegisterHost(Object);
  Listener->PauseBeaconRequests(false);
  Host = Listener;
- UE_LOG(LogCatOnline, Log, TEXT("Event=room_admission_listening World=%s NetMode=%d Port=%d Result=Ready"),
-   *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), ListenPort);
+ UE_LOG(LogCatOnline, Log, TEXT("Event=room_admission_listening World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s Port=%d ConnectTimeoutSeconds=%.2f RequestTimeoutSeconds=%.2f Result=Ready"),
+   *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), Listener->HasAuthority(), int32(Listener->GetLocalRole()), *Listener->GetName(), ListenPort,
+   GetDefault<UCatOnlineSettings>()->AdmissionConnectTimeoutSeconds, GetDefault<UCatOnlineSettings>()->AdmissionRequestTimeoutSeconds);
  return true;
 }
 void UCatRoomAdmission::SuspendListener()
@@ -210,24 +252,47 @@ bool UCatRoomAdmission::BeginClient(const FString& OwnerId, int32 Port, const FS
 {
  CancelClient();
  if (!GetWorld() || !OwnerId.IsNumeric() || Port <= 0 || Port > 65535 || Secret.Len() > 64) { return false; }
+ const UCatOnlineSettings* Settings = GetDefault<UCatOnlineSettings>();
+ if (!Settings->HasValidAdmissionTimeouts()) { return false; }
  ACatRoomAdmissionClient* Beacon = GetWorld()->SpawnActor<ACatRoomAdmissionClient>();
  if (!Beacon) { return false; }
- Client = Beacon; ClientCallback = MoveTemp(Callback); ClientDeadline = FPlatformTime::Seconds() + 15.0;
+ Client = Beacon; ClientCallback = MoveTemp(Callback); ClientStartedAt = FPlatformTime::Seconds();
+ ClientDeadline = ClientStartedAt + Settings->AdmissionRequestTimeoutSeconds;
  Beacon->PendingLobby = LobbyId; Beacon->PendingSecret = Secret; Beacon->bPendingCode = bCode; Beacon->RequestId = RequestId;
  FURL URL(nullptr, *FString::Printf(TEXT("steam.%s:%d"), *OwnerId, Port), TRAVEL_Absolute);
- if (!Beacon->InitClient(URL)) { CancelClient(); return false; }
+ UE_LOG(LogCatOnline, Log, TEXT("Event=room_admission_requested RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s Port=%d Method=%s Phase=Connect ConnectTimeoutSeconds=%.2f RequestTimeoutSeconds=%.2f OperationTimeoutSeconds=%.2f"),
+   *RequestId.ToString(), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), Beacon->HasAuthority(), int32(Beacon->GetLocalRole()), *Beacon->GetName(), Port,
+   bCode ? TEXT("Code") : TEXT("Standard"), Settings->AdmissionConnectTimeoutSeconds, Settings->AdmissionRequestTimeoutSeconds, Settings->AdmissionOperationTimeoutSeconds);
+ if (!Beacon->InitClient(URL)) { CompleteClient(Beacon, ECatOnlineError::AdmissionConnectionFailed); return false; }
+ if (!IsCurrentClient(Beacon)) { return false; }
  if (!TickHandle.IsValid()) { TickHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &ThisClass::Tick), 0.5f); }
- UE_LOG(LogCatOnline, Log, TEXT("Event=room_admission_requested RequestId=%s World=%s NetMode=%d Method=%s"),
-   *RequestId.ToString(), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), bCode ? TEXT("Code") : TEXT("Standard"));
  return true;
 }
 void UCatRoomAdmission::CancelClient()
 {
- ClientCallback = nullptr; ClientDeadline = 0;
+ if (ACatRoomAdmissionClient* Beacon = Client.Get(); Beacon && ClientCallback)
+ {
+   UE_LOG(LogCatOnline, Log, TEXT("Event=room_admission_cancelled RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s ElapsedSeconds=%.3f Result=Cancelled"),
+     *Beacon->RequestId.ToString(), *GetNameSafe(GetWorld()), int32(Beacon->GetNetMode()), Beacon->HasAuthority(), int32(Beacon->GetLocalRole()), *Beacon->GetName(), FPlatformTime::Seconds() - ClientStartedAt);
+ }
+ ClientCallback = nullptr; ClientDeadline = 0; ClientStartedAt = 0;
  if (ACatRoomAdmissionClient* Beacon = Client.Get()) { Client.Reset(); Beacon->PendingSecret.Reset(); Beacon->DestroyBeacon(); }
+}
+bool UCatRoomAdmission::IsCurrentClient(const ACatRoomAdmissionClient* Source) const
+{
+ return Source && Client.Get() == Source && bool(ClientCallback);
+}
+void UCatRoomAdmission::CompleteClient(ACatRoomAdmissionClient* Source, ECatOnlineError Error)
+{
+ if (IsCurrentClient(Source)) { CompleteClient(Error); }
 }
 void UCatRoomAdmission::CompleteClient(ECatOnlineError Error)
 {
+ if (!ClientCallback) { return; }
+ const ACatRoomAdmissionClient* Beacon = Client.Get();
+ UE_LOG(LogCatOnline, Log, TEXT("Event=room_admission_completed RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s ElapsedSeconds=%.3f Result=%s"),
+   Beacon ? *Beacon->RequestId.ToString() : TEXT("None"), *GetNameSafe(GetWorld()), GetWorld() ? int32(GetWorld()->GetNetMode()) : -1,
+   Beacon ? Beacon->HasAuthority() : false, Beacon ? int32(Beacon->GetLocalRole()) : -1, *GetNameSafe(Beacon), FPlatformTime::Seconds() - ClientStartedAt, *UEnum::GetValueAsString(Error));
  TFunction<void(ECatOnlineError)> Callback = MoveTemp(ClientCallback);
  CancelClient();
  if (Callback) { Callback(Error); }
@@ -266,7 +331,12 @@ void UCatRoomAdmission::PublishFacts()
 bool UCatRoomAdmission::Tick(float DeltaSeconds)
 {
  const double Now = FPlatformTime::Seconds();
- if (ClientDeadline > 0 && Now >= ClientDeadline) { CompleteClient(ECatOnlineError::JoinTargetTimedOut); }
+ if (ClientDeadline > 0 && Now >= ClientDeadline)
+ {
+   UE_LOG(LogCatOnline, Warning, TEXT("Event=room_admission_deadline_expired RequestId=%s World=%s NetMode=%d ElapsedSeconds=%.3f Result=AdmissionTimedOut"),
+     Client.IsValid() ? *Client->RequestId.ToString() : TEXT("None"), *GetNameSafe(GetWorld()), GetWorld() ? int32(GetWorld()->GetNetMode()) : -1, Now - ClientStartedAt);
+   CompleteClient(ECatOnlineError::AdmissionTimedOut);
+ }
 #if WITH_STEAMWORKS
  if (!IsHosting() || !SteamMatchmaking()) { return true; }
  if (bFactsDirty && Now >= NextFactsAttempt) { PublishFacts(); }

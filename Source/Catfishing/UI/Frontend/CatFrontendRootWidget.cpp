@@ -1266,7 +1266,7 @@ void UCatFrontendRootWidget::RefreshJoinPresentation()
 	if (PasteJoinLinkButton) { PasteJoinLinkButton->SetIsEnabled(bIdle); }
 	if (JoinLinkTextBox) { JoinLinkTextBox->SetIsEnabled(bIdle); }
 	if (RefreshJoinFriendsButton) { RefreshJoinFriendsButton->SetIsEnabled(bIdle && !Snapshot.bFriendsRefreshPending); }
-	if (JoinBackButton) { JoinBackButton->SetIsEnabled(bIdle); }
+	if (JoinBackButton) { JoinBackButton->SetIsEnabled(bIdle || (RoomModel && RoomModel->CanCancelAdmission())); }
 	if (JoinFriendsScrollBox)
 	{
 		JoinFriendsScrollBox->ClearChildren();

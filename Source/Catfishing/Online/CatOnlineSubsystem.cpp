@@ -2787,7 +2787,12 @@ bool UCatOnlineSubsystem::TickPlatformInvites(float DeltaSeconds)
 	RebindInviteDelegate();
 	if (ActiveOperation == ECatOnlineOperation::ResolveJoin)
 	{
-		if (FPlatformTime::Seconds() >= JoinResolveDeadline) { FailJoinResolution(ECatOnlineError::JoinTargetTimedOut); return true; }
+		if (FPlatformTime::Seconds() >= JoinResolveDeadline)
+		{
+			const UCatRoomAdmission* Admission = GetGameInstance()->GetSubsystem<UCatRoomAdmission>();
+			FailJoinResolution(Admission && Admission->HasPendingClient() ? ECatOnlineError::AdmissionTimedOut : ECatOnlineError::JoinTargetTimedOut);
+			return true;
+		}
 		if (JoinLink && JoinLink->HasFailed()) { FailJoinResolution(ECatOnlineError::JoinTargetUnavailable); return true; }
 		if (JoinLink && !bJoinLinkLaunched)
 		{

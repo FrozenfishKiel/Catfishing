@@ -200,7 +200,11 @@ enum class ECatOnlineError : uint8
 	InvalidInviteCode,
 	InviteCodeCandidates,
 	RoomSettingsInvalid,
-	RoomSettingsFailed
+	RoomSettingsFailed,
+	/** 入房连接或授权回执等待超时；与房主当前不接受入房分开。 */
+	AdmissionTimedOut,
+	/** 入房传输失败或连接初始化失败；不表示房主主动拒绝。 */
+	AdmissionConnectionFailed
 };
 
 /** 对 UI 暴露的搜索句柄；Value 只在当前 GameInstance 的 Online 子系统内部可解析。 */

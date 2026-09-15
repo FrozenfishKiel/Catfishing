@@ -38,6 +38,8 @@ public:
 	FCatOnlineResult RefreshFriends();
 	FCatOnlineResult JoinFriend(FCatOnlineFriendHandle FriendHandle);
 	FCatOnlineResult JoinLink(const FString& Input);
+	bool CanCancelAdmission() const;
+	bool CancelAdmission();
 	FCatOnlineResult RefreshPublicRooms();
 	FCatOnlineResult JoinPublicRoom(FCatSessionSearchHandle Handle);
 	FCatOnlineResult SubmitPassword(const FString& Password);

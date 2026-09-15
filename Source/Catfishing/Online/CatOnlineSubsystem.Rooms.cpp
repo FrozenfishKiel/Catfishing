@@ -1,5 +1,6 @@
 #include "Online/CatOnlineSubsystem.h"
 #include "Online/CatRoomAdmission.h"
+#include "Online/CatOnlineSettings.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Logging/CatLog.h"
@@ -80,7 +81,13 @@ FCatOnlineResult UCatOnlineSubsystem::BeginRoomAdmission(const FOnlineSessionSea
  }
 #endif
  const uint64 Epoch = OperationEpoch;
- JoinResolveDeadline = FPlatformTime::Seconds() + 20.0;
+ const UCatOnlineSettings* Settings = GetDefault<UCatOnlineSettings>();
+ if (!Settings->HasValidAdmissionTimeouts())
+ {
+   UE_LOG(LogCatOnline, Error, TEXT("Event=room_admission_config_invalid RequestId=%s World=%s Result=InvalidTimeoutOrder"), *ActiveRequestId.ToString(), *GetNameSafe(GetWorld()));
+   FailJoinResolution(ECatOnlineError::AdmissionConnectionFailed); Result.bAccepted = false; Result.Error = LastError; return Result;
+ }
+ JoinResolveDeadline = FPlatformTime::Seconds() + Settings->AdmissionOperationTimeoutSeconds;
  const bool bStarted = GetGameInstance()->GetSubsystem<UCatRoomAdmission>()->BeginClient(OwnerId, Port, LobbyId, JoinCredential, bJoinWithCode,
    ActiveRequestId, [WeakThis = TWeakObjectPtr<UCatOnlineSubsystem>(this), Target, OwnerId, Epoch](ECatOnlineError Error)
    {
@@ -99,8 +106,27 @@ FCatOnlineResult UCatOnlineSubsystem::BeginRoomAdmission(const FOnlineSessionSea
    });
  JoinCredential.Reset();
  if (!bStarted && ActiveOperation == ECatOnlineOperation::ResolveJoin && Epoch == OperationEpoch)
- { FailJoinResolution(ECatOnlineError::AdmissionUnavailable); Result.bAccepted = false; Result.Error = LastError; }
+ { FailJoinResolution(ECatOnlineError::AdmissionConnectionFailed); Result.bAccepted = false; Result.Error = LastError; }
+ if (bStarted && ActiveOperation == ECatOnlineOperation::ResolveJoin && Epoch == OperationEpoch)
+ { BroadcastSnapshot(TEXT("online_admission_started")); }
  return Result;
+}
+bool UCatOnlineSubsystem::CanCancelRoomAdmission() const
+{
+ const UCatRoomAdmission* Admission = GetGameInstance() ? GetGameInstance()->GetSubsystem<UCatRoomAdmission>() : nullptr;
+ return ActiveOperation == ECatOnlineOperation::ResolveJoin && SessionRole == ECatOnlineSessionRole::None
+   && WorldState == ECatOnlineWorldState::Frontend && Admission && Admission->HasPendingClient();
+}
+bool UCatOnlineSubsystem::CancelRoomAdmission()
+{
+ if (!CanCancelRoomAdmission()) { return false; }
+ UE_LOG(LogCatOnline, Log, TEXT("Event=online_admission_cancelled RequestId=%s Epoch=%llu World=%s NetMode=%d Result=Cancelled"),
+   *ActiveRequestId.ToString(), OperationEpoch, *GetNameSafe(GetWorld()), GetWorld() ? int32(GetWorld()->GetNetMode()) : -1);
+ JoinCredential.Reset(); bJoinWithCode = false; CancelRoomPassword();
+ SessionState = ECatOnlineSessionState::NoSession;
+ // 统一终态负责取消 Beacon、移除委托并推进 epoch；不伪造房间或加入成功。
+ FinishOperationSuccess();
+ return true;
 }
 FCatOnlineResult UCatOnlineSubsystem::RequestSubmitRoomPassword(const FString& Password)
 {

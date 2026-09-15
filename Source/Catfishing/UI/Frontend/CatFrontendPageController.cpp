@@ -314,6 +314,12 @@ void UCatFrontendPageController::RequestCancel()
 		const FCatOnlineSnapshot Snapshot = Room->GetSnapshot();
 		if (Snapshot.ActiveOperation != ECatOnlineOperation::None || Snapshot.bIsAcceptedInvitePending)
 		{
+			if (Room->CanCancelAdmission() && Room->CancelAdmission())
+			{
+				SetLocalResultText(FText::GetEmpty());
+				if (UCatFrontendRootWidget* Root = RootWidget.Get()) { Root->ShowMenu(); }
+				return;
+			}
 			SetLocalResultText(FText::FromString(TEXT("房间操作正在进行，暂时不能取消。")), RootWidget.IsValid() ? RootWidget->GetVisibleFeedbackSource() : nullptr);
 			return;
 		}

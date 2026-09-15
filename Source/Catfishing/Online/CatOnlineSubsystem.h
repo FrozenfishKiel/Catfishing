@@ -87,6 +87,9 @@ public:
 	FCatOnlineResult RequestJoinFriend(FCatOnlineFriendHandle FriendHandle);
 	/** 严格校验 Steam 链接或 Lobby ID，经平台数据确认后打开邀请链接。 */
 	FCatOnlineResult RequestJoinLink(const FString& Input);
+	/** 只取消尚未获准的入房请求；OSS Join 或旅行已经开始时不可取消。 */
+	bool CanCancelRoomAdmission() const;
+	bool CancelRoomAdmission();
 
 	/** 使用好友缓存中的 opaque 句柄向当前 Host Lobby 发送 Steam 邀请；调用者不能直接接触平台身份。 */
 	FCatOnlineResult RequestInviteFriend(FCatOnlineFriendHandle FriendHandle);
@@ -109,6 +112,7 @@ private:
 	FCatFrontendListener FrontendListener;
 	friend class FCatOnlinePreloadLifetimeTest;
 	friend class FCatFrontendListenLifecycleTest;
+	friend class FCatRoomAdmissionTimeoutTest;
 	void HandleFindJoinFriendComplete(int32 LocalUserNum, bool bSuccess, const TArray<FOnlineSessionSearchResult>& Results, uint64 Epoch);
 	void FailJoinResolution(ECatOnlineError Error);
 	TUniquePtr<FCatSteamJoinLink> JoinLink;
