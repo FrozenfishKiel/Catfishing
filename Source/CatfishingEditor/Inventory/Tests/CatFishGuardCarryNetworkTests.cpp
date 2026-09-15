@@ -8,6 +8,7 @@
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
 #include "Engine/LocalPlayer.h"
+#include "Engine/SkeletalMesh.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "Framework/Application/SlateApplication.h"
@@ -34,6 +35,7 @@
 #include "Inventory/CatFishInventoryItemInstance.h"
 #include "Inventory/CatFishOnlyInventoryComponent.h"
 #include "Inventory/CatInventorySettings.h"
+#include "Interaction/Carry/CatCarryableActor.h"
 #include "Items/Fish/CatFishPickupActor.h"
 #include "Widgets/SViewport.h"
 #include "Widgets/SWindow.h"
@@ -41,6 +43,12 @@
 #include "UI/Inventory/CatInventoryWidget.h"
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
 #include "UObject/UnrealType.h"
+
+#include <type_traits>
+
+// 共同携带回归首先在编译期锁住两个真实消费者的继承关系；后续运行阶段才验证复制、物理和 UI 行为。
+static_assert(std::is_base_of_v<ACatCarryableActor, ACatFishGuardActor>);
+static_assert(std::is_base_of_v<ACatCarryableActor, ACatFishPickupActor>);
 
 namespace CatFishGuardCarryNetwork
 {
@@ -94,6 +102,8 @@ namespace CatFishGuardCarryNetwork
 		/** 成功、拒绝或超时退出时销毁唯一测试鱼护及其内鱼；后续 EndPIE 销毁世界，再由恢复命令还原设置。 */
 		~FVerifyCarry() override
 		{
+			// 用例可能在晚到 Mesh 的复制窗口超时；析构先还原远端本地表现资产，不能把临时空 Mesh 留给随后 PIE 清理或失败截图。
+			RestoreClientFishMesh();
 			if (OccupiedViewGuard.IsValid()) OccupiedViewGuard->Destroy();
 			if (ServerGuard.IsValid()) ServerGuard->Destroy();
 		}
@@ -105,6 +115,7 @@ namespace CatFishGuardCarryNetwork
 		 * 4. 第二次携带收敛后无参通知服务器丢弃当前携带物，分别采样两端释放后的位移，等真实刚体落稳、位置收敛且嘴空。
 		 * 5. 每次落稳均由拥有客户端重新拾取同一 Actor，连续三次核对原库存、GUID、关闭物理和嘴部附着；权威角色每次移动250厘米，再等客户端角色和鱼护的世界位置共同收敛。
 		 * 6. 第三次重新拾取后的移动收敛后再次丢下，保留原占嘴按钮禁用检查，并从落地原鱼护经真实 Slate 点击取出原鱼和保存前后画面。
+		 * 7. 对同一条原鱼再执行三轮拥有客户端丢弃、物理落地、E 交互再拾取和250厘米移动，确认共同携带基类同时覆盖鱼护与鱼。
 		 * 前提丢失或拾取、放置回执拒绝时立即带阶段报错；丢弃只观察复制结果，未收敛时继续等待并在阶段超时报告原因。 */
 		bool Update() override
 		{
@@ -161,8 +172,73 @@ namespace CatFishGuardCarryNetwork
 			if (Stage == 6)
 			{
 				if (!VerifyFormalFishCarryFromGroundedGuard(*ServerCat, *ClientCat)) return false;
-				Test->AddInfo(TEXT("Event=fish_guard_carry_network Result=CarryButtonDisabledWhileOccupiedThenCarriesOriginalFishAfterGuardDrop Fish=OriginalTwoGUIDs_2.5kg_3.75kg Screenshots=ClientBeforeCarry,ClientAfterCarry"));
-				return true;
+				ServerCarriedFish = Cast<ACatFishPickupActor>(ServerCat->GetMouthCarriedActor());
+				ClientCarriedFish = Cast<ACatFishPickupActor>(ClientCat->GetMouthCarriedActor());
+				if (!ServerCarriedFish.IsValid() || !ClientCarriedFish.IsValid()) return false;
+				OriginalFishWorldScale = ServerCarriedFish->GetActorScale3D();
+				Stage = 9;
+				StageStartedAt = Now;
+				StableSince = 0.0;
+				return false;
+			}
+			if (Stage == 9)
+			{
+				if (!BothSidesFishMatch(true, false)) return false;
+				// 正式 UI 已经把原鱼叼起；此处仍只经拥有客户端调用原有 RPC，避免测试直接操纵附件或刚体绕过网络链路。
+				ClientController->ServerDropCarriedItem();
+				Stage = 10;
+				StageStartedAt = Now;
+				StableSince = 0.0;
+				FishDropSampled[0] = FishDropSampled[1] = false;
+				FishDropMoved[0] = FishDropMoved[1] = false;
+				return false;
+			}
+			if (Stage == 10)
+			{
+				if (!WaitForFishDropAndRequestRepick(*ServerCat, *ClientCat, Now)) return false;
+				return false;
+			}
+			if (Stage == 11)
+			{
+				// 普通 E 交互没有 CampCommand 回执；由此前两端落地到本轮同一鱼嘴叼的真实复制变化证明 RPC 生效。
+				if (!BothSidesFishMatch(true, false)) return false;
+				if (bClientFishMeshRestorePending)
+				{
+					// 空 Mesh 期间只断言附件落在同一个 SkeletalMeshComponent 与 Mouth socket 名；不要求资源未加载时该 socket 可查询。
+					if (Now - ClientFishMeshClearedAt < 0.3) return false;
+					RestoreClientFishMesh();
+					return false;
+				}
+				// 每轮都从两端实际世界位置取基准；鱼的相对嘴部变换正确不足以证明角色复制和共同携带均已收敛。
+				FishCarryMoveStart[0] = ServerCat->GetActorLocation();
+				FishCarryMoveStart[1] = ClientCat->GetActorLocation();
+				FishMoveStart[0] = ServerCarriedFish->GetActorLocation();
+				FishMoveStart[1] = ClientCarriedFish->GetActorLocation();
+				const double Direction = FishDropRepickCount % 2 == 0 ? -1.0 : 1.0;
+				FishCarryMoveTarget = FishCarryMoveStart[0] + ServerCat->GetActorForwardVector().GetSafeNormal2D() * (250.0 * Direction);
+				ServerCat->SetActorLocation(FishCarryMoveTarget, false, nullptr, ETeleportType::None);
+				ServerCat->ForceNetUpdate();
+				ServerCarriedFish->ForceNetUpdate();
+				Stage = 12;
+				StageStartedAt = Now;
+				StableSince = 0.0;
+				return false;
+			}
+			if (Stage == 12)
+			{
+				if (!VerifyFishCarryMovement(*ServerCat, *ClientCat, Now)) return false;
+				if (FishDropRepickCount == 3)
+				{
+					Test->AddInfo(TEXT("Event=fish_guard_carry_network Result=GuardAndFishCompleteThreeDropRepickMoveRounds Fish=OriginalTwoGUIDs_2.5kg_3.75kg Screenshots=ClientBeforeCarry,ClientAfterCarry"));
+					return true;
+				}
+				ClientController->ServerDropCarriedItem();
+				Stage = 10;
+				StageStartedAt = Now;
+				StableSince = 0.0;
+				FishDropSampled[0] = FishDropSampled[1] = false;
+				FishDropMoved[0] = FishDropMoved[1] = false;
+				return false;
 			}
 
 			if (Stage == 5)
@@ -532,6 +608,141 @@ namespace CatFishGuardCarryNetwork
 			return true;
 		}
 
+		/** 等原鱼在双方真正解除嘴部、启用刚体并落到地图地面后，才由拥有客户端通过正式 E 交互 RPC 重新叼起。
+		 * 先记录每端物理释放后的世界位置，排除嘴部解绑瞬移；再要求速度、地面接触和15厘米网络收敛连续一秒成立。
+		 * 条件满足时才分配本轮请求 GUID 并请求 ClientFish，保证服务器空间裁决看到的是合法可触达的落点，而非测试直接改变附件或物理。 */
+		bool WaitForFishDropAndRequestRepick(ACatCharacter& ServerCat, ACatCharacter& ClientCat, const double Now)
+		{
+			for (int32 Peer = 0; Peer < 2; ++Peer)
+			{
+				ACatFishPickupActor* Fish = Peer == 0 ? ServerCarriedFish.Get() : ClientCarriedFish.Get();
+				const UPrimitiveComponent* Body = Fish ? Cast<UPrimitiveComponent>(Fish->GetRootComponent()) : nullptr;
+				if (!Fish || Fish->GetPresentationState().State != ECatFishPickupState::Available || Fish->GetAttachParentActor()
+					|| !Body || !Body->IsSimulatingPhysics()) continue;
+				if (!FishDropSampled[Peer])
+				{
+					FishDropStart[Peer] = Fish->GetActorLocation();
+					FishDropSampled[Peer] = true;
+				}
+				else if (FVector::Dist(Fish->GetActorLocation(), FishDropStart[Peer]) > 2.0) FishDropMoved[Peer] = true;
+			}
+			bool bReady = BothSidesFishMatch(false, true) && FishDropMoved[0] && FishDropMoved[1];
+			for (int32 Peer = 0; Peer < 2 && bReady; ++Peer)
+			{
+				ACatFishPickupActor* Fish = Peer == 0 ? ServerCarriedFish.Get() : ClientCarriedFish.Get();
+				const UPrimitiveComponent* Body = Cast<UPrimitiveComponent>(Fish->GetRootComponent());
+				FCollisionQueryParams Query(SCENE_QUERY_STAT(CatFishCarryDropFloor), false, Fish);
+				Query.AddIgnoredActor(Peer == 0 ? &ServerCat : &ClientCat);
+				FHitResult Hit;
+				bReady = Body->GetPhysicsLinearVelocity().Size() < 10.0
+					&& FVector::Dist(Fish->GetActorLocation(), FishDropStart[Peer]) < 1000.0
+					&& Fish->GetWorld()->LineTraceSingleByChannel(Hit, Body->Bounds.Origin,
+						Body->Bounds.Origin - FVector(0, 0, Body->Bounds.BoxExtent.Z + 10.0), ECC_WorldDynamic, Query)
+					&& Hit.ImpactNormal.Z > 0.5;
+			}
+			WaitingFor = TEXT("both original fish physically move after release, settle on map ground and converge within 15 cm");
+			if (!bReady) { StableSince = 0.0; return false; }
+			if (StableSince <= 0.0) StableSince = Now;
+			if (Now - StableSince < 1.0) return false;
+			RequestId = FGuid::NewGuid();
+			if (FishDropRepickCount == 0)
+			{
+				USkeletalMeshComponent* ClientMesh = ClientCat.GetMesh();
+				if (!ClientMesh)
+				{
+					Test->AddError(TEXT("Fish late-Mesh regression requires the remote character SkeletalMeshComponent."));
+					Stage = -1;
+					return false;
+				}
+				ClientFishMeshAsset = ClientMesh->GetSkeletalMeshAsset();
+				if (!ClientFishMeshAsset.IsValid())
+				{
+					Test->AddError(TEXT("Fish late-Mesh regression requires an already loaded remote character skeletal mesh asset."));
+					Stage = -1;
+					return false;
+				}
+				// 只在本地客户端暂时清除骨骼资源，复现 socket 晚就绪；服务器 Mesh 和鱼自身物理、附件均不被测试直接改写。
+				ClientMesh->SetSkeletalMeshAsset(nullptr);
+				bClientFishMeshRestorePending = true;
+				ClientFishMeshClearedAt = Now;
+			}
+			++FishDropRepickCount;
+			ClientController->ServerRequestInteraction(ClientCarriedFish.Get(), RequestId);
+			Stage = 11;
+			StageStartedAt = Now;
+			StableSince = 0.0;
+			return true;
+		}
+
+		/** 把晚到 Mesh 回归临时清空的远端骨骼资源写回原组件。
+		 * 先检查是否仍处于空 Mesh 窗口，再解析当前远端角色和 Mesh 组件；角色已经销毁时只清标记，让 PIE 清理接管。
+		 * 成功写回后关闭恢复标记，避免 Stage 11 与析构路径重复把同一资源写入已经恢复的组件。 */
+		void RestoreClientFishMesh()
+		{
+			if (!bClientFishMeshRestorePending) return;
+			if (ACatCharacter* ClientCat = ClientController.IsValid() ? Cast<ACatCharacter>(ClientController->GetPawn()) : nullptr)
+			{
+				if (USkeletalMeshComponent* Mesh = ClientCat->GetMesh()) Mesh->SetSkeletalMeshAsset(ClientFishMeshAsset.Get());
+			}
+			bClientFishMeshRestorePending = false;
+		}
+
+		/** 核对同一条原鱼在两端的可用或嘴叼事实。
+		 * 先逐端读取原鱼 Actor、角色和物理根，确认 GUID、重量、状态、缩放、物理模式和嘴部引用都与目标阶段一致。
+		 * 携带态额外要求根组件挂在角色 Mesh 与 Mouth socket；落地态要求完全脱离附件。
+		 * 最后按当前状态比较世界或相对变换，避免只验证单端的表现修正。 */
+		bool BothSidesFishMatch(const bool bCarried, const bool bDrop)
+		{
+			for (int32 Peer = 0; Peer < 2; ++Peer)
+			{
+				ACatFishPickupActor* Fish = Peer == 0 ? ServerCarriedFish.Get() : ClientCarriedFish.Get();
+				ACatCharacter* Character = Cast<ACatCharacter>((Peer == 0 ? ServerController.Get() : ClientController.Get())->GetPawn());
+				const UPrimitiveComponent* Body = Fish ? Cast<UPrimitiveComponent>(Fish->GetRootComponent()) : nullptr;
+				WaitingFor = FString::Printf(TEXT("peer=%d fish=%s carried=%d id=%s weight=%.3f state=%d scale=%s expectedScale=%s sim=%d mouth=%s parent=%s socket=%s"),
+					Peer, *GetNameSafe(Fish), bCarried, Fish ? *Fish->GetPresentationState().FishInstanceId.ToString() : TEXT("None"),
+					Fish ? Fish->GetPresentationState().WeightKilograms : 0.0, Fish ? int32(Fish->GetPresentationState().State) : -1,
+					Fish ? *Fish->GetActorScale3D().ToString() : TEXT("None"), *OriginalFishWorldScale.ToString(), Body && Body->IsSimulatingPhysics(),
+					*GetNameSafe(Character ? Character->GetMouthCarriedActor() : nullptr), *GetNameSafe(Fish ? Fish->GetAttachParentActor() : nullptr),
+					Body ? *Body->GetAttachSocketName().ToString() : TEXT("None"));
+				if (!Fish || !Character || !Body || Fish->GetPresentationState().FishInstanceId != FishIds[0]
+					|| Fish->GetPresentationState().WeightKilograms != 2.5
+					|| Fish->GetPresentationState().State != (bCarried ? ECatFishPickupState::Carried : ECatFishPickupState::Available)
+					|| !Fish->GetActorScale3D().Equals(OriginalFishWorldScale, UE_KINDA_SMALL_NUMBER)
+					|| Body->IsSimulatingPhysics() != bDrop || Character->GetMouthCarriedActor() != (bCarried ? static_cast<AActor*>(Fish) : nullptr)) return false;
+				if (bCarried)
+				{
+					if (Fish->GetAttachParentActor() != Character || Fish->GetRootComponent()->GetAttachParent() != Character->GetMesh()
+						|| Fish->GetRootComponent()->GetAttachSocketName() != GetDefault<UCatFishPickupSettings>()->MouthCarrySocketName) return false;
+				}
+				else if (Fish->GetAttachParentActor()) return false;
+			}
+			const FTransform ServerTransform = bCarried ? ServerCarriedFish->GetRootComponent()->GetRelativeTransform() : ServerCarriedFish->GetActorTransform();
+			const FTransform ClientTransform = bCarried ? ClientCarriedFish->GetRootComponent()->GetRelativeTransform() : ClientCarriedFish->GetActorTransform();
+			WaitingFor = TEXT("both original fish transforms converge");
+			return FVector::Dist(ServerTransform.GetLocation(), ClientTransform.GetLocation()) <= (bDrop ? 15.0 : 2.0)
+				&& ServerTransform.GetRotation().AngularDistance(ClientTransform.GetRotation()) <= FMath::DegreesToRadians(bDrop ? 10.0 : 2.0)
+				&& ServerTransform.GetScale3D().Equals(ClientTransform.GetScale3D(), 0.01);
+		}
+
+		/** 验证本轮250厘米权威移动同时带动两端角色和同一条嘴叼鱼。
+		 * 先复用携带态身份和附件核对，再分别计算服务器/客户端角色与鱼的世界位移，确认都落在200至400厘米窗口。
+		 * 还要检查服务器角色抵达本轮目标点、两端角色位置收敛、两端鱼位置收敛；条件连续0.25秒成立后才允许下一轮丢弃或结束。 */
+		bool VerifyFishCarryMovement(ACatCharacter& ServerCat, ACatCharacter& ClientCat, const double Now)
+		{
+			WaitingFor = TEXT("authority moves 200-400 cm and client cat plus attached original fish converge in world space");
+			const bool bConverged = BothSidesFishMatch(true, false)
+				&& FVector::Dist(ServerCat.GetActorLocation(), FishCarryMoveStart[0]) >= 200.0 && FVector::Dist(ServerCat.GetActorLocation(), FishCarryMoveStart[0]) <= 400.0
+				&& FVector::Dist(ClientCat.GetActorLocation(), FishCarryMoveStart[1]) >= 200.0 && FVector::Dist(ClientCat.GetActorLocation(), FishCarryMoveStart[1]) <= 400.0
+				&& FVector::Dist(ServerCarriedFish->GetActorLocation(), FishMoveStart[0]) >= 200.0 && FVector::Dist(ServerCarriedFish->GetActorLocation(), FishMoveStart[0]) <= 400.0
+				&& FVector::Dist(ClientCarriedFish->GetActorLocation(), FishMoveStart[1]) >= 200.0 && FVector::Dist(ClientCarriedFish->GetActorLocation(), FishMoveStart[1]) <= 400.0
+				&& FVector::Dist(ServerCat.GetActorLocation(), FishCarryMoveTarget) <= 2.0
+				&& FVector::Dist(ServerCat.GetActorLocation(), ClientCat.GetActorLocation()) <= 15.0
+				&& FVector::Dist(ServerCarriedFish->GetActorLocation(), ClientCarriedFish->GetActorLocation()) <= 15.0;
+			if (!bConverged) { StableSince = 0.0; return false; }
+			if (StableSince <= 0.0) StableSince = Now;
+			return Now - StableSince >= 0.25;
+		}
+
 		/** 从当前远端 LocalPlayer 的已入视口根页面中查找指定库存对应的正式 WBP；页面尚未布局或上下文不同则返回空供阶段机等待。 */
 		static UCatInventoryWidget* FindFormalInventoryView(ACatfishingPlayerController& Controller, UCatInventoryComponent* Inventory)
 		{
@@ -578,8 +789,9 @@ namespace CatFishGuardCarryNetwork
 				if (!Guard || Guard->IsActorBeingDestroyed() || !Character || !Inventory || Guard->GetFishInventoryComponent() != Inventory) return false;
 				WaitingFor = FString::Printf(TEXT("peer=%d original world scale expected=%s actual=%s"), Peer,
 					*OriginalGuardWorldScale.ToCompactString(), *Guard->GetActorScale3D().ToCompactString());
-				// 两端都核对拾取前尺寸，只容许浮点变换误差；不能以低精度附着复制为由接受永久缩放漂移。
-				if (!Guard->GetActorScale3D().Equals(OriginalGuardWorldScale, UE_KINDA_SMALL_NUMBER)) return false;
+				// FRepAttachment.RelativeScale3D 是 NetQuantize100；正式 Mouth 父尺度为2，0.325传为0.33后世界尺度为0.66。
+				// 服务器仍须精确保持原尺寸；客户端仅接受一次量化的0.01误差，三轮都对同一初始值比较，不能累计漂移。
+				if (!Guard->GetActorScale3D().Equals(OriginalGuardWorldScale, Peer == 0 ? UE_KINDA_SMALL_NUMBER : 0.0101)) return false;
 				TSet<FGuid> Seen;
 				for (const FCatInventoryEntry& Entry : Inventory->GetInventoryEntries())
 				{
@@ -622,14 +834,14 @@ namespace CatFishGuardCarryNetwork
 			return FVector::Dist(ServerTransform.GetLocation(), ClientTransform.GetLocation()) <= (bDrop ? 15.0 : 2.0)
 				// 四元数夹角以弧度返回；Drop落稳允许10度刚体修正，静态放置与嘴部偏移限2度。
 				&& ServerTransform.GetRotation().AngularDistance(ClientTransform.GetRotation()) <= FMath::DegreesToRadians(bDrop ? 10.0 : 2.0)
-				&& ServerTransform.GetScale3D().Equals(ClientTransform.GetScale3D(), 0.01);
+				&& ServerTransform.GetScale3D().Equals(ClientTransform.GetScale3D(), 0.0101);
 		}
 
 		/** 框架拥有的断言接收者；命令只在队列存活期向其报告结果。 */
 		FAutomationTestBase* Test = nullptr;
 		/** 场景中原鱼护的世界缩放；准备阶段记录非默认尺寸，双方携带和落地阶段读取，防止两端一起变大仍被当作复制正确。 */
 		FVector OriginalGuardWorldScale = FVector::OneVector;
-		/** 当前异步步骤，0准备/1初始复制/2占嘴时 Carry 禁用并放置/3放置/4首次再拾取/5每轮丢弃落稳/6空嘴 Carry/7落地后再拾取/8携带移动收敛；仅在条件齐备后推进，避免重复 RPC。 */
+		/** 当前异步步骤，0至8覆盖原鱼护，9至12覆盖正式 UI 取出的原鱼；仅在本阶段的复制、物理或回执事实齐备后推进，避免重复 RPC。 */
 		int32 Stage = 0;
 		/** 已完成落稳并重新拾取的循环次数；Stage 5 写入，Stage 7/8 消费，达到三次后才允许最终落地进入原 Stage 6 取鱼。 */
 		int32 DropRepickCount = 0;
@@ -655,6 +867,12 @@ namespace CatFishGuardCarryNetwork
 		FGuid OccupiedViewFishId;
 		/** 原鱼护的远端副本；初始复制时按对象名定位，此后丢失即失败，不接受替代 Actor。 */
 		TWeakObjectPtr<ACatFishGuardActor> ClientGuard;
+		/** 正式 WBP 从原鱼护取出的同一条权威世界鱼；Stage 6 保存，后续三轮丢弃与交互都必须使用它，防止替换 Actor 掩盖身份问题。 */
+		TWeakObjectPtr<ACatFishPickupActor> ServerCarriedFish;
+		/** 上述原鱼在远端的复制副本；Stage 6 保存，Stage 10 由拥有客户端以它为交互目标，之后全程核对同名实例的状态。 */
+		TWeakObjectPtr<ACatFishPickupActor> ClientCarriedFish;
+		/** 原鱼进入本回归循环前的世界缩放；Stage 6 在权威端记录，之后每端每态检查，避免两端一起发生尺寸漂移仍被误判为收敛。 */
+		FVector OriginalFishWorldScale = FVector::OneVector;
 		/** 原权威鱼库存组件；播种时保存，后续用于发现组件被重建或内容丢失。 */
 		TWeakObjectPtr<UCatFishOnlyInventoryComponent> ServerFishInventory;
 		/** 初始复制的客户端鱼库存组件；首次观察保存，搬运后必须仍是同一组件。 */
@@ -685,6 +903,26 @@ namespace CatFishGuardCarryNetwork
 		FVector CarryGuardMoveStart[2] = {FVector::ZeroVector, FVector::ZeroVector};
 		/** 服务器角色本轮应抵达的世界位置；Stage 7 由当前朝向计算并写入，作为250厘米移动的权威目标供 Stage 8 排查。 */
 		FVector CarryMoveTarget = FVector::ZeroVector;
+		/** 已完成“原鱼物理丢弃、E 交互再拾取、共同移动”的轮数；每次合法落地后写入，第三轮移动收敛才结束用例。 */
+		int32 FishDropRepickCount = 0;
+		/** 原鱼两端第一次进入物理丢弃态后的世界位置，单位厘米；每轮重置，用来排除仅由嘴部解绑造成的瞬移。 */
+		FVector FishDropStart[2] = {FVector::ZeroVector, FVector::ZeroVector};
+		/** 原鱼两端是否已有本轮物理释放起点；等待阶段写入，下一帧起才比较真实刚体位移。 */
+		bool FishDropSampled[2] = {false, false};
+		/** 原鱼两端是否已在释放后移动超过2厘米；只有两端都发生真实刚体运动时才允许请求重新交互。 */
+		bool FishDropMoved[2] = {false, false};
+		/** 原鱼共同携带移动前两端猫的世界位置，单位厘米；Stage 11 写入，Stage 12 验证角色本身也完成250厘米同步。 */
+		FVector FishCarryMoveStart[2] = {FVector::ZeroVector, FVector::ZeroVector};
+		/** 原鱼共同携带移动前两端鱼的世界位置，单位厘米；与猫的位置配对，防止只验证相对附件而遗漏世界空间随行。 */
+		FVector FishMoveStart[2] = {FVector::ZeroVector, FVector::ZeroVector};
+		/** 本轮服务器猫的250厘米共同携带目标位置；由 Stage 11 写入，Stage 12 用2厘米容差核对权威移动未被物理阻挡。 */
+		FVector FishCarryMoveTarget = FVector::ZeroVector;
+		/** 远端角色原有的骨骼资源；第一轮鱼重拾前保存，Stage 11 或析构写回，确保临时晚资源场景不泄漏到 PIE 结束以后。 */
+		TWeakObjectPtr<USkeletalMesh> ClientFishMeshAsset;
+		/** 远端角色是否仍处在本回归人为制造的空 Mesh 窗口；请求前写入，Stage 11 成功附着并等待0.3秒后清除。 */
+		bool bClientFishMeshRestorePending = false;
+		/** 远端骨骼资源被临时清空时的单调秒数；Stage 11 读取以保证附件在无 socket 资源的状态下至少保持0.3秒。 */
+		double ClientFishMeshClearedAt = 0.0;
 	};
 }
 

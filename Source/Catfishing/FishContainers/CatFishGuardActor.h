@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/Actor.h"
+#include "Interaction/Carry/CatCarryableActor.h"
 #include "Interaction/CatInteractable.h"
 #include "Inventory/CatInventoryWorldItem.h"
 #include "CatFishGuardActor.generated.h"
@@ -17,7 +17,7 @@ class UCatFishGuardInventoryItemInstance;
 
 /** 持有唯一鱼库存的鱼护 Actor；地面时允许开护，入包后保留原库存并按服务器归属附着嘴部或隐藏，不把内鱼搬到角色。 */
 UCLASS(BlueprintType, Blueprintable)
-class CATFISHING_API ACatFishGuardActor : public AActor, public ICatInteractable, public ICatInventoryWorldItem
+class CATFISHING_API ACatFishGuardActor : public ACatCarryableActor, public ICatInteractable, public ICatInventoryWorldItem
 {
 	GENERATED_BODY()
 
@@ -64,11 +64,6 @@ public:
 	virtual bool Interact_Implementation(AController* RequestingController, FGuid RequestId) override;
 
 protected:
-	/** 将附件应用推迟到本批复制通知结束，避免仍在模拟物理的根组件拒绝嘴部附着。 */
-	virtual void OnRep_AttachmentReplication() override;
-	/** 复制通知全部执行后，按服务器 bRepPhysics 先收敛刚体、再应用附件；未解析引用补齐后的重试也走这里，保留原世界尺寸。 */
-	virtual void PostRepNotifies() override;
-
 	/** authority 进入 World 时按配置补齐正式鱼库存槽位；客户端只等待 InventoryComponent 复制。 */
 	virtual void BeginPlay() override;
 

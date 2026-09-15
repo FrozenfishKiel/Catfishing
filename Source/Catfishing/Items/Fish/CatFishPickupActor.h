@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/Actor.h"
+#include "Interaction/Carry/CatCarryableActor.h"
 #include "Interaction/CatInteractable.h"
 #include "FishContainers/CatFishContainerTypes.h"
 #include "Inventory/CatInventoryWorldItem.h"
@@ -48,7 +48,7 @@ struct FCatFishPickupPresentationState
  * 上钩鱼被抄取或力竭拖岸后生成的服务器权威世界物品。Actor 没有“原钓手所有权”；可用时任何合法玩家都可先到先得。
  */
 UCLASS(Blueprintable, meta=(ChildCannotTick))
-class CATFISHING_API ACatFishPickupActor : public AActor, public ICatInteractable, public ICatInventoryWorldItem
+class CATFISHING_API ACatFishPickupActor : public ACatCarryableActor, public ICatInteractable, public ICatInventoryWorldItem
 {
 	GENERATED_BODY()
 	friend class FCatFishingSessionScoopMouthCarryTest;
@@ -81,7 +81,7 @@ public:
 
 	const FCatFishPickupPresentationState& GetPresentationState() const { return PresentationState; }
 
-	/** 查找该角色当前嘴上叼着的唯一世界鱼；没有或附件状态不一致时返回空。 */
+	/** 读取角色唯一嘴部占用并转换为世界鱼；空嘴或叼着其它类型时返回空，不以客户端附件推导占用。 */
 	static ACatFishPickupActor* FindCarriedFish(const ACatCharacter* Character);
 
 	/** 权威占用空嘴并附着本鱼；抄网和地面拾取立即发布，库存 Carry 可延后发布到静默移格完成后，失败会撤销本次 expected-actor 认领。 */
@@ -125,35 +125,28 @@ protected:
 	virtual void BeginPlay() override;
 	/** Actor 被售出、消费或容器清理销毁时按 expected actor 清除嘴部引用；不再依赖角色附件树是否已经先解绑。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
-	/** 附着复制沿用原鱼世界尺寸并按表现与物理事实收敛，防止尺寸漂移或迟到附件覆盖丢弃。 */
-	virtual void OnRep_AttachmentReplication() override;
-	/** 运动复制到达后再次收敛嘴部状态，使先到的物理丢弃不会被旧携带表现回挂。 */
-	virtual void OnRep_ReplicatedMovement() override;
+	/** 只根据共同同步入口实际应用的附件刷新鱼体姿态和交互碰撞；不根据鱼的表现状态重新挂接根组件。 */
+	virtual void RefreshCarryPresentation(bool bForceRefresh) override;
 
 private:
 	friend class ACatFishingSession;
 	friend class FCatFishPickupMouthCarryAndGuardStoreTest;
 
-	/** 客户端消费鱼身份与携带状态后刷新网格、碰撞和附着，通知表现蓝图；不生成捕获记录或经济事务。 */
+	/** 客户端消费鱼身份与携带状态后刷新鱼种网格、鱼体姿态和碰撞，通知表现蓝图；根附件与物理由共同携带基类收敛。 */
 	UFUNCTION() void OnRep_PresentationState(const FCatFishPickupPresentationState& Previous);
 	UFUNCTION() void HandleAuthorityCarrierDestroyed(AActor* DestroyedActor);
 	bool IsAuthorityRequestSpatiallyValid(const AController* RequestingController) const;
-	/** 根组件附着到角色 Mesh 与嘴部Socket并保持原世界尺寸；只纠正位置和朝向，避免复制重试重置缩放。 */
-	bool AttachCarriedRootToMouth(ACatCharacter* Character, const TCHAR* Source, bool bLogCorrection);
-	/** 以复制的 Carried/Available 为最终事实，收敛 AttachmentReplication 与 PresentationState 的到达顺序。 */
-	void ReconcileAttachmentFromPresentation(const TCHAR* Source);
-	void ScheduleAttachmentReconcileRetry();
-	void RetryAttachmentReconcile();
+	/** 服务器建立鱼的嘴部附件并应用鱼专用相对姿态；客户端只消费共同基类的服务器附件结果。 */
+	bool AttachCarriedRootToMouth(ACatCharacter* Character);
 	/** 结束服务器嘴部携带生命周期，解除宿主回调、附着和归属；落点与物理由主动丢弃或宿主销毁入口决定。 */
 	void EndMouthCarryFromAuthority();
 	void ApplyLocalFocus(bool bFocused);
-	/** 沿 FishDefinition 的直接引用解析 Mesh/落地动画；客户端不会维护独立鱼种映射。 */
+	/** 沿 FishDefinition 的直接引用解析 Mesh/落地动画；客户端不会维护独立鱼种映射，也不触碰根附件。 */
 	void RefreshFishPresentation();
 	/** 恢复侧躺姿态与冻结重量缩放，并把网格中心对齐盒形物理根；不修改 Actor 世界位置或运动状态。 */
 	void ApplyLandedVisualTransform();
 	/** Carried 状态清除落地专用 Mesh 位置和旋转，使鱼原点直接对齐嘴部骨骼，同时保留冻结重量缩放。 */
 	void ApplyCarriedVisualTransform();
-	void ApplyVisualScale();
 	/** 首次消费或入护后归档捕获并提交图鉴候选；已归档的库存鱼再次落地不重复生成奖励。 */
 	void ArchiveCommittedCapture(const FCatCaptureCommittedResult& Committed, const FString& PickerStableNetId);
 
@@ -185,8 +178,5 @@ private:
 	TWeakObjectPtr<ACatCharacter> AuthorityCarrier;
 	bool bIdentityInitialized = false;
 	bool bLocallyFocused = false;
-	FTimerHandle AttachmentReconcileTimer;
-	int32 AttachmentReconcileAttemptCount = 0;
-	bool bAttachmentReconcileRetryExhausted = false;
 	TMap<FString, FCatDomainCommandResult> PickupTerminalByRequester;
 };
