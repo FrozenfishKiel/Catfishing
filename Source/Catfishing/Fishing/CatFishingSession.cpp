@@ -11,6 +11,7 @@
 #include "Equipment/Fragments/CatEquipmentFragment_Float.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Fishing/Simulation/CatFishingBiteTimingModel.h"
+#include "Fishing/Simulation/CatFishBehaviorProfile.h"
 
 #include "Character/CatCharacter.h"
 #include "Collection/CatRunImprintService.h"
@@ -1363,6 +1364,18 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		return false;
 	}
 
+	// 已配置的逐鱼节拍和游速覆盖测试模板；未明确的横切等参数仍由同一模板提供。
+	FCatFishResolvedBehavior ResolvedBehavior;
+	if (!Settings->TryResolveFishBehavior(*FishDefinition, ResolvedBehavior)
+		|| !ResolvedBehavior.SteeringConfig.IsValid())
+	{
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_fight_start_rejected SessionId=%s Reason=FishBehaviorUnresolved Fish=%s %s"),
+			*Snapshot.FishingSessionId.ToString(), *FishDefinition->FishDefinitionId.ToString(),
+			*CatLogContext::BuildControllerFields(FisherCharacter->GetController()));
+		return false;
+	}
+
 	// 完美中鱼（钓鱼规则 §3.4:145,149）：鱼力量、鱼体力、初始线长三项在入场直接乘到本场实际值，
 	// 此后运动求解、负载、消耗、碾压判定全用削后值。倍率按鱼册稀有度档取
 	// （09-09 晚裁「四套 Bite_* 性格模板只是测试用，正式口径走鱼册」），不再读那三个已弃用的过渡字段。
@@ -1425,7 +1438,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	Config.StalemateRodWearPerFishStrength = FightBalance->StalemateRodWearPerFishStrength;
 	Config.SlackStaminaRegenPerSecond = FightBalance->SlackStaminaRegenPerSecond;
 	Config.ReelSpeedCentimetersPerSecond = FightBalance->ReelSpeedCentimetersPerSecond;
-	Config.FishFullEffortSpeedCentimetersPerSecond = Personality->FullEffortMovementSpeedCentimetersPerSecond;
+	Config.FishFullEffortSpeedCentimetersPerSecond = ResolvedBehavior.FullEffortSpeedCentimetersPerSecond;
 	Config.ExhaustedCatEscapeSpeedMultiplier = FightBalance->ExhaustedCatEscapeSpeedMultiplier;
 	Config.StrongConfrontationAlignmentThreshold = Personality->StrongConfrontationAlignmentThreshold;
 	Config.StrongConfrontationConfirmationSeconds = Personality->StrongConfrontationConfirmationSeconds;
@@ -1554,7 +1567,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 				Init.bInitialSlackHeld, Init.InitialInputSequence);
 		}
 	}
-	Init.SteeringConfig = Personality->AdaptiveSteeringConfig;
+	Init.SteeringConfig = ResolvedBehavior.SteeringConfig;
 	Init.BehaviorStateTree = FishBehaviorStateTree;
 	// 使用玩家实际点击确认的那一轮咬钩机会种子；入夜收回后的下一轮鱼种与搏斗节奏都能变化，同时服务器仍可复现。
 	Init.RandomSeed = CurrentBiteRandomSeed != 0

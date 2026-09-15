@@ -3,6 +3,7 @@
 #include "Tests/AutomationCommon.h"
 #include "Fishing/CatFishingSession.h"
 #include "Data/CatFishDefinition.h"
+#include "Data/CatFishPersonalityDefinition.h"
 #include "TimerManager.h"
 #include "Growth/CatGrowthComponent.h"
 #include "Fishing/CatFishingSettings.h"
@@ -398,7 +399,8 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 		Boundary.Vertices = {{-5000, -5000}, {5000, -5000}, {5000, 5000}, {-5000, 5000}};
 		const auto L = F.Equipment->GetSnapshot();
 		const auto* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(L.RodDefinitionId);
-		const auto* Fish = Catalog->FindRuntimeDefinition(TEXT("RiverPatternFish"));
+		// 两条正式鱼提供不同游速系数，防止模板基速误读被系数1的样本掩盖。
+		const auto* Fish = Catalog->FindRuntimeDefinition(bPerfect ? TEXT("LittleSilverFish") : TEXT("RiverPatternFish"));
 		const auto* Balance = GetDefault<UCatFishingSettings>()->LoadFightBalanceDefinition();
 		if (!TestTrue(TEXT("正式鱼、竿、平衡资产齐全"), RodDefinition && Fish && Balance)) return false;
 		auto* Rod = World->SpawnActor<ACatFishingRodActor>(RodDefinition->UseActorClass.LoadSynchronous());
@@ -448,9 +450,21 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 		Session->FisherCharacter = F.Cat;
 		Session->CastEquipment = F.Equipment;
 		Session->bStartupInProgress = true;
-		// 冻结一个常规搏斗样本，猫力低于完美后的鱼力，避免瞬断/碾压绕过入场。
+		// 冻结常规搏斗样本，猫鱼力量比保持在瞬断/碾压区间之外，确保经过真实入场。
 		F.Cat->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 10.0f);
 		if (!TestTrue(TEXT("生产搏斗入口启动真实Runner"), Session->TryEnterHookedFightFromAuthority() && Session->IsFightRunnerRunning())) return false;
+		const auto* Template = GetDefault<UCatFishingSettings>()->FindFightPersonality(Fish->FightPersonalityId);
+		if (!TestNotNull(TEXT("未裁横切参数仍有正式模板来源"), Template)) return false;
+		TestTrue(TEXT("生产Runner外冲节拍使用正式逐鱼列"), Session->FightRunner->SteeringConfig.OutwardDurationRangeSeconds.Equals(Fish->OutwardSegmentDurationRangeSeconds, 1e-9));
+		TestTrue(TEXT("生产Runner缓游节拍使用正式逐鱼列"), Session->FightRunner->SteeringConfig.EaseOffDurationRangeSeconds.Equals(Fish->RestSegmentDurationRangeSeconds, 1e-9));
+		const double ExpectedFullEffortSpeed = Template->FullEffortMovementSpeedCentimetersPerSecond * Fish->SwimSpeedCoefficient;
+		TestEqual(TEXT("生产Runner游速消费逐鱼系数"), Session->FightRunner->Config.FishFullEffortSpeedCentimetersPerSecond, ExpectedFullEffortSpeed, 1e-9);
+		TestEqual(TEXT("初始鱼表现消费与Runner相同的逐鱼游速"), double(Encounter->GetPresentationState().IntendedSwimSpeedCentimetersPerSecond), ExpectedFullEffortSpeed, 1e-4);
+		TestTrue(TEXT("真实StateTree首段时长落在逐鱼发力区间"),
+			Session->FightRunner->SteeringState.BehaviorDurationSeconds >= Fish->OutwardSegmentDurationRangeSeconds.X
+			&& Session->FightRunner->SteeringState.BehaviorDurationSeconds <= Fish->OutwardSegmentDurationRangeSeconds.Y);
+		TestTrue(TEXT("横切时长保留模板不借逐鱼发力列重定义"), Session->FightRunner->SteeringConfig.LateralDurationRangeSeconds.Equals(Template->AdaptiveSteeringConfig.LateralDurationRangeSeconds, 1e-9));
+		if (bPerfect) TestTrue(TEXT("游速测试具有区别于模板的正式系数"), Fish->SwimSpeedCoefficient != 1.0);
 		const double Expected = D0 * (bPerfect ? 0.9 : 1.0);
 		const double Actual = Session->FightRunner->State.LineLengthCentimeters;
 		const double Distance = FVector::Distance(Rod->GetRodTipWorldTransform().GetLocation(), Encounter->GetActorLocation());
