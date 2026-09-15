@@ -237,6 +237,22 @@ bool FCatFishingOperatorRunnerIntegrationTest::RunTest(const FString& Parameters
 	const auto Passive = FCatFishingFightSimulator::Step(Runner->Config, Runner->State, Constraint, FVector::ForwardVector);
 	TestTrue(TEXT("passive body movement cannot create a voluntary bill"), Passive.bSucceeded && Runner->ApplyOperatorStaminaChanges(Passive)
 		&& Runner->LastOperatorStaminaDrain == 0.0);
+	// 修正卷线能力不得顺带改变腿部价格：真实身体输入、固定步采样和唯一ASC写口继续保留四方向契约。
+	const FVector InputForward = FRotator(0.0, Movement->GetViewIntent().Yaw, 0.0).Vector();
+	const FVector InputSide(-InputForward.Y, InputForward.X, 0.0);
+	const FVector MoveIntents[] = {InputForward, -InputForward, InputSide, -InputSide};
+	const double ExpectedMovementDrains[] = {0.075, 0.15, 0.0, 0.0};
+	for (int32 DirectionIndex = 0; DirectionIndex < UE_ARRAY_COUNT(MoveIntents); ++DirectionIndex)
+	{
+		Movement->SetMoveIntent(MoveIntents[DirectionIndex]);
+		World->TimeSeconds += 0.05;
+		if (!TestTrue(TEXT("direction-specific movement still uses the primary production sampler"), Runner->UpdateOperatorIntentAndProperties())) return false;
+		FCatFightStepResult MovementOnly;
+		if (!TestTrue(TEXT("direction-specific movement still uses one ASC settlement"), Runner->ApplyOperatorStaminaChanges(MovementOnly))) return false;
+		TestEqual(TEXT("forward/backward rates and the unpriced lateral direction stay unchanged"), Runner->LastOperatorStaminaDrain, ExpectedMovementDrains[DirectionIndex], 1e-5);
+		TestFalse(TEXT("the directional movement bill cannot be replayed"), Runner->ApplyOperatorStaminaChanges(MovementOnly));
+	}
+	Movement->SetMoveIntent(FVector::ZeroVector);
 	for (int32 Phase = 0; Phase < 3; ++Phase)
 	{
 		Runner->State.bFishExhausted = Phase == 1;

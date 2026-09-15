@@ -256,7 +256,6 @@ bool UCatFishingFightRunner::UpdateOperatorIntentAndProperties()
 	Config.SlackStaminaGrowthPerSecond = 0.0;
 	if (const auto* OwnerSession = Session.Get())
 		Config.RodWearMultiplier = 1.0 + OwnerSession->GetFisherGrowthMagnitude(ECatGrowthOptionId::RodWear);
-	OperatorSupportAlignment = 0.0;
 	if (!State.bOperatorPresent)
 	{
 		State.CatStamina = 0.0; RefreshCatAction(); bOperatorSettlementPending = true;
@@ -286,9 +285,7 @@ bool UCatFishingFightRunner::UpdateOperatorIntentAndProperties()
 	FrozenOperatorAbilitySystem = ASC;
 	bFrozenOperatorUnderLoad = Physical->HasExternalLoadFromAuthority();
 	const FVector Intent = FVector(Physical->GetMoveIntent().X, Physical->GetMoveIntent().Y, 0.0).GetClampedToMaxSize(1.0);
-	const FVector ResistanceDirection = ((RodActor.IsValid() ? RodActor->GetRodTipWorldTransform().GetLocation() : FVector::ZeroVector)
-		- State.FishWorldPosition).GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER, -FVector::ForwardVector);
-	OperatorSupportAlignment = 1.0 - Intent.Size() + FVector::DotProduct(Intent, ResistanceDirection);
+	// 身体电机已按本人力量限制实际移动；方向只通过真实竿尖位移影响线力，不能再次削减卷线/操杆能力。
 	const FVector Position = Physical->GetBody()->GetComponentLocation();
 	const auto* Movement = Cast<UCatCharacterMovementComponent>(Character->GetCharacterMovement());
 	const FVector Correction = Movement ? Movement->GetTotalMotionCorrection() : FVector::ZeroVector;
@@ -872,7 +869,7 @@ FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthorit
 	// 地形可改变距离、解除张力或直接触发上岸力竭。转杆必须消费最终事实，
 	// 不得把地形解析前缓存的负载与解析后的松线/落点一起发布。
 	FCatFishingRodResistanceInput RotationInput;
-	RotationInput.CatStrength = FMath::Max(0.0, Config.PrimaryOperatorCatStrength * OperatorSupportAlignment);
+	RotationInput.CatStrength = Config.PrimaryOperatorCatStrength;
 	RotationInput.LineTensionNewtons = State.bFishExhausted || Step.Outcome != ECatFightStepOutcome::None
 		? 0.0 : Step.LineTensionNewtons;
 	RotationInput.ForcePerStrengthNewtons = Config.ForcePerStrengthNewtons;
@@ -1025,7 +1022,6 @@ void UCatFishingFightRunner::HandleFixedStep()
 	RodConstraint.CarrierVelocityCentimetersPerSecond = Rod->GetAuthoritativeHolderVelocity();
 	RodConstraint.bPhysicalRodEndpoint = Rod->IsUsingPhysicalRod();
 	if (RodConstraint.bPhysicalRodEndpoint) Rod->GetPhysicalRodComponent()->PopulateEndpointResponse(RodConstraint);
-	RodConstraint.CatSupportAlignment = OperatorSupportAlignment;
 	RodConstraint.bRodHeld = bRodHeld;
 	const FCatFishingRodRotationEffortSnapshot RotationEffort = RotationEffortSampler.Consume(
 		Rod->GetAuthoritativeRotationEffortSnapshot(), Config.FixedStepSeconds);

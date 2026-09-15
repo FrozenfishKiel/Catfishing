@@ -152,7 +152,6 @@ private:
 	double FrozenOperatorYellowStamina = 0.0;
 	double FrozenOperatorGreenMaximum = 0.0;
 	bool bFrozenOperatorUnderLoad = false;
-	double OperatorSupportAlignment = 1.0;
 	double LastOperatorStaminaDrain = 0.0;
 	double NextStaminaDiagnosticSeconds = 0.0;
 	bool bOperatorSettlementPending = false;

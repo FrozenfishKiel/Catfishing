@@ -144,8 +144,6 @@ struct CATFISHING_API FCatFightRodConstraintInput
 	double PendingLineResponseSeconds = 0;
 	FVector PendingLineImpulseNewtonSeconds = FVector::ZeroVector;
 	FVector PendingLinePositionMomentNewtonSecondsSquared = FVector::ZeroVector;
-	/** Owner movement alignment with line resistance, within [-1, 1]. */
-	double CatSupportAlignment = 1.0;
 	/** False means a static anchor. True uses the dynamic endpoint response or the supplied CMC candidate; movement owns actual poses. */
 	bool bPhysicalRodEndpoint = false;
 	/** 从权威转矩积分采集本步用力平方时间和真实正功转角；不含身体平移。 */

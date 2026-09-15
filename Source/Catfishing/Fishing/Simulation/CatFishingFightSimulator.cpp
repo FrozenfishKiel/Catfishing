@@ -122,8 +122,6 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		|| !IsFiniteVector(RodConstraint.PendingLinePositionMomentNewtonSecondsSquared)
 		|| !IsFiniteVector(RodConstraint.RodPointInverseMassX) || !IsFiniteVector(RodConstraint.RodPointInverseMassY)
 		|| !IsFiniteVector(RodConstraint.RodPointInverseMassZ) || !IsFiniteNonNegative(RodConstraint.PhysicsStepSeconds)
-		|| !FMath::IsFinite(RodConstraint.CatSupportAlignment)
-		|| RodConstraint.CatSupportAlignment < -1.0 || RodConstraint.CatSupportAlignment > 1.0
 		|| !IsFiniteNonNegative(RodConstraint.CatRodExertionSquaredSeconds)
 		|| RodConstraint.CatRodExertionSquaredSeconds > Config.FixedStepSeconds + UE_DOUBLE_KINDA_SMALL_NUMBER
 		|| !IsFiniteNonNegative(RodConstraint.CatRodPositiveWorkRadians)
@@ -199,12 +197,11 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	const double RodLeverage = RodConstraint.bRodHeld
 		? FMath::Lerp(Config.MinimumRodLeverageMultiplier, 1.0, RodLineAlignment) : 1.0;
 	const double OperatorCatStrength = bOperatorPresent ? Config.PrimaryOperatorCatStrength : 0.0;
-	const double SignedCatSupportStrength = OperatorCatStrength * RodLeverage * RodConstraint.CatSupportAlignment;
-	const double EffectiveCatStrength = FMath::Max(0.0, SignedCatSupportStrength);
+	const double EffectiveCatStrength = OperatorCatStrength * RodLeverage;
 	const double FishEffortRatio = State.bFishExhausted ? 0.0 : bExhaustedCatEscape ? 1.0 : State.FishEffortRatio;
 	const double ActiveFishStrength = Config.FishStrength * FishEffortRatio;
 	const double FullEffortThrust = Config.FishStrength * Config.ForcePerStrengthNewtons;
-	const double CatForce = SignedCatSupportStrength * Config.ForcePerStrengthNewtons;
+	const double CatForce = EffectiveCatStrength * Config.ForcePerStrengthNewtons;
 	const double CatDriveAcceleration = 100.0 * CatForce / Config.PrimaryOperatorMassKilograms;
 	const double SwimSpeed = State.bFishExhausted ? 0.0 : bExhaustedCatEscape
 		? Config.FishFullEffortSpeedCentimetersPerSecond * Config.ExhaustedCatEscapeSpeedMultiplier
@@ -478,8 +475,6 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 		|| !IsFiniteVector(Result.ResolvedFishVelocityCentimetersPerSecond)
 		|| !IsFiniteVector(Result.RodLineForceNewtons)
 		|| !IsFiniteVector(Result.FishPositionCorrectionWorldDisplacement)
-		|| !FMath::IsFinite(RodConstraint.CatSupportAlignment)
-		|| RodConstraint.CatSupportAlignment < -1.0 || RodConstraint.CatSupportAlignment > 1.0
 		|| !IsFiniteNonNegative(Result.LineLengthCentimeters) || !IsFiniteNonNegative(Result.LineTensionNewtons))
 	{
 		return RejectResolvedResult();
@@ -510,8 +505,7 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 	const double OperatorCatStrength = Result.OperatorCatStrength;
 	const double FishEffortRatio = State.bFishExhausted ? 0.0 : bExhaustedCatEscape ? 1.0 : State.FishEffortRatio;
 	const double ActiveFishStrength = Config.FishStrength * FishEffortRatio;
-	const double CatForce = OperatorCatStrength * Result.RodLeverageMultiplier
-		* RodConstraint.CatSupportAlignment * Config.ForcePerStrengthNewtons;
+	const double CatForce = OperatorCatStrength * Result.RodLeverageMultiplier * Config.ForcePerStrengthNewtons;
 	Result.Trace.bFreeSpool = bFreeSpool;
 	Result.Trace.bReeling = bReeling;
 	Result.Trace.bStruggling = bStruggling;
@@ -561,7 +555,7 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 	Result.CatNormalizedEffortLoad = FMath::Clamp(LineTension / FMath::Max(CatForce, UE_DOUBLE_SMALL_NUMBER), 0.0, 1.0);
 	const double PerpendicularRodLever = FMath::Sqrt(FMath::Max(0.0, 1.0 - RodLineAlignment * RodLineAlignment));
 	Result.CatRodNormalizedEffortLoad = FMath::Clamp(LineTension * Config.RodPhysicsLengthCentimeters / 100.0
-		* PerpendicularRodLever / FMath::Max(FMath::Max(0.0, OperatorCatStrength * RodConstraint.CatSupportAlignment)
+		* PerpendicularRodLever / FMath::Max(OperatorCatStrength
 			* Config.ForcePerStrengthNewtons, UE_DOUBLE_SMALL_NUMBER), 0.0, 1.0);
 	const bool bChargeFishIntent = !bSlackRecovery && !bExhaustedCatEscape && bOperatorPresent
 		&& OperatorCatStrength > UE_DOUBLE_SMALL_NUMBER && !State.bFishExhausted && State.FishStamina > 0.0;

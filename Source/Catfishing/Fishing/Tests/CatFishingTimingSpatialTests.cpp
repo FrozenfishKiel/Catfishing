@@ -30,6 +30,7 @@
 #include "Social/CatRoomOwnerService.h"
 #include "OnlineSubsystemTypes.h"
 #include "Fishing/Simulation/CatFishingFightSimulator.h"
+#include "Fishing/Simulation/CatFishFightMotionSolver.h"
 #include "Fishing/Config/CatFishingFightBalanceDefinition.h"
 #include "Fishing/Simulation/CatFishingFightRunner.h"
 #include "Environment/CatWaterQuerySubsystem.h"
@@ -462,6 +463,47 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("实际鱼始终在合法线长内"), Distance <= Actual + 0.01);
 		}
 		AddInfo(FString::Printf(TEXT("Event=formal_perfect_line_verified Perfect=%d D0Cm=%.3f ExpectedCm=%.3f RunnerLineCm=%.3f ActorDistanceCm=%.3f"), bPerfect, D0, Expected, Actual, Distance));
+
+		// 同一真实Session/Runner和同一端点几何，只切换身体输入方向。
+		// 不推进身体、不预支移动，验证实际地形/操杆接收方没有再次投影掉主控力量。
+		auto* Runner = Session->FightRunner.Get();
+		auto* Body = F.Cat->GetPhysicalBodyComponent();
+		const auto InitialState = Runner->State;
+		Runner->OperatorState.bPullHeld = true;
+		Runner->OperatorState.bSlackHeld = false;
+		FCatFightRodConstraintInput Constraint;
+		Constraint.RodTipWorldPosition = Rod->GetRodTipWorldTransform().GetLocation();
+		Constraint.RodForwardWorld = Rod->GetAuthoritativeRodForwardVector();
+		Constraint.bRodHeld = true;
+		const FVector Away = (InitialState.FishWorldPosition - Constraint.RodTipWorldPosition).GetSafeNormal2D();
+		const FVector Side(-Away.Y, Away.X, 0.0);
+		double ReferenceReelForce = -1.0, ReferenceReelDistance = -1.0;
+		for (const FVector Intent : {FVector::ZeroVector, Away, -Away, Side, -Side, (Side - Away).GetSafeNormal()})
+		{
+			Body->SetMoveIntent(Intent);
+			Runner->State = InitialState;
+			Runner->State.FishEffortRatio = 0.1;
+			if (!TestTrue(TEXT("真实Runner按身体方向刷新同一主控属性"), Runner->UpdateOperatorIntentAndProperties())) return false;
+			auto Step = FCatFishingFightSimulator::Step(Runner->Config, Runner->State, Constraint, Away);
+			FCatWaterSpatialResult WaterResult;
+			bool bBeached = false;
+			FVector GroundNormal;
+			AActor* GroundActor = nullptr;
+			FCatFishingRodResistanceResult Resistance;
+			const auto Motion = Runner->ResolveFishSurfaceFromAuthority(Step, Constraint, WaterResult, bBeached, GroundNormal, GroundActor, Resistance);
+			if (!TestTrue(TEXT("同一真实水域地形接收方完成线力和操杆结算"), Step.bSucceeded && Motion.bSucceeded && Resistance.bSucceeded)) return false;
+			TestEqual(TEXT("前后左右输入均保留主控完整操杆力量"), Resistance.CatTorqueCapacityStrengthMeters, 10.0, 1e-9);
+			if (ReferenceReelForce < 0.0)
+			{
+				ReferenceReelForce = Step.Trace.ReelForceLimitNewtons;
+				ReferenceReelDistance = Step.ActualReelDistanceCentimeters;
+				TestTrue(TEXT("测试包含可完成的主动收线"), ReferenceReelDistance > 0.0 && ReferenceReelForce > 0.0);
+			}
+			TestEqual(TEXT("身体方向不会在相同真实几何上改变卷线能力"), Step.Trace.ReelForceLimitNewtons, ReferenceReelForce, 1e-9);
+			TestEqual(TEXT("身体方向不会凭空关闭本可完成的卷线"), Step.ActualReelDistanceCentimeters, ReferenceReelDistance, 1e-9);
+		}
+		Body->SetMoveIntent(FVector::ZeroVector);
+		Runner->State = InitialState;
 		Session->FightRunner->Stop();
 		F.Equipment->ReleaseFishingUse(F.SessionId);
 	}
