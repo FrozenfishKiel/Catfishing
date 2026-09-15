@@ -6,7 +6,45 @@
 
 class UAnimSequenceBase;
 class UCatFishAnimInstance;
+class UFXSystemAsset;
 class USkeletalMesh;
+
+/**
+ * 逐鱼的一条「漂讯／水面」表现槽位。
+ *
+ * 鱼表格有三列要落在这里：「鱼刚咬饵时鱼漂的变化」「鱼刚咬饵时水面的变化」「与猫搏斗时水面的变化」。
+ * 此前逐鱼表现的唯一入口只有网格／AnimBP／四段动画／缩放／Transform，这三列无处安放。
+ *
+ * 槽位只描述「放哪个特效、挂多大、持续多久」，不描述什么时候播——触发时机由既有的
+ * ECatFishingBobberPresentationMode 与搏斗表现步决定，本结构不引入第二套时序。
+ * Effect 为空＝这条鱼在该时刻不叠加专属特效，退回全局漂讯／水面表现，不是「未裁」。
+ */
+USTRUCT(BlueprintType)
+struct FCatFishSurfaceCue
+{
+	GENERATED_BODY()
+
+	/**
+	 * 要播放的特效资产（Niagara 或 Cascade，两者都派生自 UFXSystemAsset）。
+	 * 本轮只开槽位，正式 VFX 资产不在范围内，全部留空。
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Cue")
+	TSoftObjectPtr<UFXSystemAsset> Effect;
+
+	/** 特效整体缩放；<= 0 按 1 处理，避免留空的槽位把特效缩成看不见。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Cue", meta = (ClampMin = "0.0"))
+	double EffectScale = 1.0;
+
+	/** 一次性特效的持续秒数；0 表示跟随所在表现状态、由表现层自己收尾。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Cue", meta = (ClampMin = "0.0", Units = "s"))
+	double DurationSeconds = 0.0;
+
+	/** 槽位是否真的配了特效；表现层用它决定叠加逐鱼特效还是只走全局表现。 */
+	bool HasEffect() const
+	{
+		return !Effect.IsNull();
+	}
+};
 
 /**
  * 单一鱼种的完整表现定义。
@@ -76,4 +114,19 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fish|Transform",
 		meta=(ClampMin="-180.0", ClampMax="180.0", Units="deg"))
 	double LandedActorRollDegrees = 90.0;
+
+	/**
+	 * 鱼表格「鱼刚咬饵时，鱼漂的变化」列的落点：真咬瞬间叠加在浮漂上的逐鱼特效。
+	 * 漂讯的三档时序（Calm／BiteWarning／Sunk）仍归 UCatFishingPresentationSettings，这里只加逐鱼那一层。
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fish|Cue")
+	FCatFishSurfaceCue BiteBobberCue;
+
+	/** 鱼表格「鱼刚咬饵时，水面的变化」列的落点：真咬瞬间在浮漂周围水面播放的逐鱼特效。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fish|Cue")
+	FCatFishSurfaceCue BiteWaterSurfaceCue;
+
+	/** 鱼表格「与猫搏斗时，水面的变化」列的落点：搏斗期间跟随鱼位置的持续水面特效。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fish|Cue")
+	FCatFishSurfaceCue FightWaterSurfaceCue;
 };

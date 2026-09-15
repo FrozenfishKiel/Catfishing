@@ -1,4 +1,5 @@
 #include "Fishing/Simulation/CatFishingFightRunner.h"
+#include "Growth/CatGrowthComponent.h"
 
 #include "AbilitySystem/Config/CatPhysicalEffortSettings.h"
 #include "Character/CatCharacterMovementComponent.h"
@@ -85,6 +86,9 @@ bool UCatFishingFightRunner::InitializeFromAuthority(const FCatFishingFightRunne
 		return false;
 	}
 	Config.PrimaryOperatorCatStrength = 0.0;
+	Config.SlackStaminaGrowthPerSecond = 0.0;
+	if (const auto* OwnerSession = Session.Get())
+		Config.RodWearMultiplier = 1.0 + OwnerSession->GetFisherGrowthMagnitude(ECatGrowthOptionId::RodWear);
 	RefreshCatAction();
 	bInitialized = true;
 	return true;
@@ -245,10 +249,13 @@ bool UCatFishingFightRunner::UpdateOperatorIntentAndProperties()
 {
 	bOperatorSettlementPending = false;
 	FrozenOperatorMovementSamples.Reset(); FrozenOperatorAbilitySystem.Reset();
-	FrozenOperatorStamina = FrozenOperatorStaminaMaximum = 0.0;
+	FrozenOperatorTotalStamina = FrozenOperatorTotalCapacity = 0.0;
 	FrozenOperatorGreenStamina = FrozenOperatorYellowStamina = FrozenOperatorGreenMaximum = 0.0;
 	bFrozenOperatorUnderLoad = false;
 	Config.PrimaryOperatorCatStrength = 0.0;
+	Config.SlackStaminaGrowthPerSecond = 0.0;
+	if (const auto* OwnerSession = Session.Get())
+		Config.RodWearMultiplier = 1.0 + OwnerSession->GetFisherGrowthMagnitude(ECatGrowthOptionId::RodWear);
 	OperatorSupportAlignment = 0.0;
 	if (!State.bOperatorPresent)
 	{
@@ -259,21 +266,23 @@ bool UCatFishingFightRunner::UpdateOperatorIntentAndProperties()
 	auto* Character = OperatorState.Character.Get();
 	const auto* Physical = Character ? Character->GetPhysicalBodyComponent() : nullptr;
 	if (!ASC || !Physical || !Physical->GetBody()) return false;
+	if (const auto* Growth = Character->GetGrowthComponent())
+		Config.SlackStaminaGrowthPerSecond = Growth->GetTotalMagnitude(ECatGrowthOptionId::SlackStaminaRegen);
 	const double Strength = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
 	FrozenOperatorGreenStamina = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
 	FrozenOperatorYellowStamina = ASC->GetYellowFightStamina();
 	FrozenOperatorGreenMaximum = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
-	FrozenOperatorStamina = ASC->GetTotalFightStamina();
-	FrozenOperatorStaminaMaximum = ASC->GetTotalFightStaminaCapacity();
-	if (!FMath::IsFinite(Strength) || Strength < 0.0 || !FMath::IsFinite(FrozenOperatorStamina) || FrozenOperatorStamina < 0.0
-		|| !FMath::IsFinite(FrozenOperatorStaminaMaximum) || FrozenOperatorStaminaMaximum <= 0.0 || FrozenOperatorStamina > FrozenOperatorStaminaMaximum) return false;
+	FrozenOperatorTotalStamina = ASC->GetTotalFightStamina();
+	FrozenOperatorTotalCapacity = ASC->GetTotalFightStaminaCapacity();
+	if (!FMath::IsFinite(Strength) || Strength < 0.0 || !FMath::IsFinite(FrozenOperatorTotalStamina) || FrozenOperatorTotalStamina < 0.0
+		|| !FMath::IsFinite(FrozenOperatorTotalCapacity) || FrozenOperatorTotalCapacity <= 0.0 || FrozenOperatorTotalStamina > FrozenOperatorTotalCapacity) return false;
 	OperatorState.BaseFishingStrength = Strength;
-	OperatorState.ActiveFishingStrength = Physical->IsLocomotionEnabled() && FrozenOperatorStamina > 0.0 ? Strength : 0.0;
-	OperatorState.StaminaMaximum = FrozenOperatorStaminaMaximum;
+	OperatorState.ActiveFishingStrength = Physical->IsLocomotionEnabled() && FrozenOperatorTotalStamina > 0.0 ? Strength : 0.0;
+	OperatorState.StaminaMaximum = FrozenOperatorTotalCapacity;
 	Config.PrimaryOperatorCatStrength = OperatorState.ActiveFishingStrength;
 	Config.PrimaryOperatorMassKilograms = Physical->GetBody()->GetBodyInstance()->GetBodyMass();
-	Config.CatStaminaMaximum = FrozenOperatorStaminaMaximum;
-	State.CatStamina = FrozenOperatorStamina;
+	Config.CatStaminaMaximum = FrozenOperatorTotalCapacity;
+	State.CatStamina = FrozenOperatorTotalStamina;
 	FrozenOperatorAbilitySystem = ASC;
 	bFrozenOperatorUnderLoad = Physical->HasExternalLoadFromAuthority();
 	const FVector Intent = FVector(Physical->GetMoveIntent().X, Physical->GetMoveIntent().Y, 0.0).GetClampedToMaxSize(1.0);
@@ -296,6 +305,8 @@ bool UCatFishingFightRunner::UpdateOperatorIntentAndProperties()
 		auto& Sample = OperatorState.PendingMovementSamples.AddDefaulted_GetRef();
 		Sample.DurationSeconds = Now - OperatorState.LastMovementSampleWorldSeconds;
 		Sample.MoveIntentWorld = Intent; Sample.MaximumMoveSpeedCentimetersPerSecond = Physical->MaxMovementSpeedCmS;
+		// 输入前向取视角朝向，不取身体朝向：W 永远是前移（靠水），S 永远是后退（离水）。
+		Sample.InputForwardWorld = FRotator(0.0, Physical->GetViewIntent().Yaw, 0.0).Vector();
 		if (!Intent.IsNearlyZero())
 		{
 			const FVector Direction = Intent.GetSafeNormal();
@@ -350,10 +361,11 @@ bool UCatFishingFightRunner::ApplyOperatorStaminaChanges(const FCatFightStepResu
 		for (const auto& Sample : FrozenOperatorMovementSamples)
 		{
 			FCatFightOperatorMovementCostInput Cost;
-			Cost.MoveIntentWorld = Sample.MoveIntentWorld; Cost.ActualDisplacementCentimeters = Sample.ActualDisplacementCentimeters;
-			Cost.MaximumMoveSpeedCentimetersPerSecond = Sample.MaximumMoveSpeedCentimetersPerSecond; Cost.FixedStepSeconds = Sample.DurationSeconds;
+			Cost.MoveIntentWorld = Sample.MoveIntentWorld; Cost.InputForwardWorld = Sample.InputForwardWorld;
+			Cost.FixedStepSeconds = Sample.DurationSeconds;
 			Cost.ActiveStrength = OperatorState.ActiveFishingStrength;
-			Cost.StaminaPerUnfulfilledMeter = GetDefault<UCatPhysicalEffortSettings>()->StaminaPerUnfulfilledMeter;
+			Cost.ForwardStaminaPerSecond = GetDefault<UCatPhysicalEffortSettings>()->FishingForwardMoveStaminaPerSecond;
+			Cost.BackwardStaminaPerSecond = GetDefault<UCatPhysicalEffortSettings>()->FishingBackwardMoveStaminaPerSecond;
 			Cost.MovementStaminaMultiplier = Config.CatMovementStaminaMultiplier;
 			FCatFightOperatorMovementCostResult Result;
 			if (!FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(Cost, Result)) return false;
@@ -362,16 +374,18 @@ bool UCatFishingFightRunner::ApplyOperatorStaminaChanges(const FCatFightStepResu
 	const double RodDrain = bFreeEffort ? 0.0 : Step.GetRodActionStaminaDrain();
 	const double RequestedDrain = MovementDrain + RodDrain;
 	if (!FMath::IsFinite(RequestedDrain) || RequestedDrain < 0.0) return false;
-	const double Paid = FMath::Min(FrozenOperatorStamina, RequestedDrain);
+	const double Paid = FMath::Min(FrozenOperatorTotalStamina, RequestedDrain);
 	const bool bRecoveryLoaded = bFrozenOperatorUnderLoad || !Step.RodLineForceNewtons.IsNearlyZero(UE_DOUBLE_SMALL_NUMBER);
+	// 放线回体基础为 0（钓鱼规则 §4.5）；这条通道只在猫册三选一给出速率时才有值，
+	// 搏斗外的 5 点/秒自然恢复不走这里，归 CatPhysicalEffortComponent 的周期回体 GE。
 	const double Recovery = Step.bSlackRecoveryActive && !bRecoveryLoaded
-		? FMath::Min(FrozenOperatorStaminaMaximum - FrozenOperatorStamina, Config.SlackStaminaRegenPerSecond * Config.FixedStepSeconds) : 0.0;
+		? FMath::Min(FrozenOperatorGreenMaximum - FrozenOperatorGreenStamina, (Config.SlackStaminaRegenPerSecond + Config.SlackStaminaGrowthPerSecond) * Config.FixedStepSeconds) : 0.0;
 	LastOperatorStaminaDrain = Paid - Recovery;
 	const float AttributeDelta = static_cast<float>(-LastOperatorStaminaDrain);
 	if (AttributeDelta != 0.0f && !ASC->ApplyFishingStaminaDelta(AttributeDelta)) return false;
 	if (!IsValid(ASC) || !ASC->GetOwner() || ASC->GetOwner()->IsActorBeingDestroyed()) return true;
 	State.CatStamina = ASC->GetTotalFightStamina();
-	LastOperatorStaminaDrain = FrozenOperatorStamina - State.CatStamina;
+	LastOperatorStaminaDrain = FrozenOperatorTotalStamina - State.CatStamina;
 	const double RemainingCapacity = ASC->GetTotalFightStaminaCapacity();
 	OperatorState.StaminaMaximum = RemainingCapacity;
 	Config.CatStaminaMaximum = RemainingCapacity;
@@ -382,9 +396,10 @@ bool UCatFishingFightRunner::ApplyOperatorStaminaChanges(const FCatFightStepResu
 		if ((MovementDrain > 0.0 || RodDrain > 0.0 || Recovery > 0.0 || (Step.bSlackRecoveryActive && bRecoveryLoaded)) && OwnerSession->GetWorld()->GetTimeSeconds() >= NextStaminaDiagnosticSeconds)
 		{
 			NextStaminaDiagnosticSeconds = OwnerSession->GetWorld()->GetTimeSeconds() + 1.0;
-			UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_primary_stamina_settled SessionId=%s PlayerId=%d MovementDrain=%.5f RodDrain=%.5f ActualPaid=%.5f Recovery=%.5f RecoveryLoaded=%d Remaining=%.5f World=%s NetMode=%d Authority=1 LocalRole=%d"),
+			UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_primary_stamina_settled SessionId=%s PlayerId=%d MovementDrain=%.5f RodDrain=%.5f ActualPaid=%.5f Recovery=%.5f RecoveryLoaded=%d TotalRemaining=%.5f GreenRemaining=%.5f YellowRemaining=%.5f World=%s NetMode=%d Authority=1 LocalRole=%d"),
 				*OwnerSession->GetSnapshot().FishingSessionId.ToString(), OperatorState.PlayerState.IsValid() ? OperatorState.PlayerState->GetPlayerId() : INDEX_NONE,
-				MovementDrain, RodDrain, Paid, Recovery, bRecoveryLoaded, State.CatStamina, *GetNameSafe(OwnerSession->GetWorld()), int32(OwnerSession->GetNetMode()), int32(OwnerSession->GetLocalRole()));
+				MovementDrain, RodDrain, Paid, Recovery, bRecoveryLoaded, State.CatStamina,
+				ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute()), *GetNameSafe(OwnerSession->GetWorld()), int32(OwnerSession->GetNetMode()), int32(OwnerSession->GetLocalRole()));
 		}
 	}
 	return true;
@@ -712,6 +727,22 @@ FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthorit
 	bFishBeached = bGroundResolved;
 	if (bGroundResolved)
 	{
+		if (!bWasBeached)
+		{
+			// T17：沿本步拖动段二分首个真实干地接触，避免固定步长度把鱼送过岸线才交付。
+			double WetAlpha = 0.0, DryAlpha = 1.0;
+			for (int32 Iteration = 0; Iteration < 12; ++Iteration)
+			{
+				const double Alpha = (WetAlpha + DryAlpha) * 0.5;
+				FVector Point, Normal;
+				AActor* GroundActor = nullptr;
+				if (TryResolveGroundedFishPosition(FMath::Lerp(State.FishWorldPosition, Step.ProposedFishWorldPosition, Alpha), Point, Normal, GroundActor))
+				{
+					DryAlpha = Alpha; GroundedPosition = Point; OutGroundNormal = Normal; OutGroundActor = GroundActor;
+				}
+				else WetAlpha = Alpha;
+			}
+		}
 		Motion.bSucceeded = true;
 		Motion.FishWorldPosition = GroundedPosition;
 		bOutBeachedThisStep = !bWasBeached;
@@ -902,7 +933,17 @@ void UCatFishingFightRunner::HandleFixedStep()
 			SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("PrimaryAbilityResolution"));
 			return;
 		}
-		State.CatStamina = FMath::Clamp(ASC->GetTotalFightStamina(), 0.0, Config.CatStaminaMaximum);
+		State.CatStamina = ASC->GetTotalFightStamina();
+	}
+	// 墓碑（2026-09-14，T14；钓鱼规则 §4.6）：绿＋黄耗尽即结场，不再进入加速拖水等待危险深度。
+	if (SessionActor->bWaterResolutionPending) return;
+	if (State.bOperatorPresent && State.CatStamina <= 0.0)
+	{
+		const FCatFightOperatorRuntime* Primary = GetPrimaryOperator();
+		SessionActor->HandleCatEnteredDangerousWaterFromAuthority(0.0, Primary ? Primary->Character.Get() : nullptr);
+		UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_cat_resource_depleted SessionId=%s TotalStamina=%.3f World=%s NetMode=%d Authority=1 Result=QueuedCatInWater"),
+			*SessionActor->GetSnapshot().FishingSessionId.ToString(), State.CatStamina, *GetNameSafe(World), int32(World->GetNetMode()));
+		return;
 	}
 	bool bWaterDepartureRequested = false;
 	if (State.bOperatorPresent)
@@ -1333,5 +1374,36 @@ void UCatFishingFightRunner::HandleFixedStep()
 	PreviousFishLineTensionNewtons = Step.LineTensionNewtons;
 	PreviousFishEffortDirection = Step.FishEffortDirection;
 	PreviousFishExpectedSwimSpeedCentimetersPerSecond = Step.IntendedSwimSpeedCentimetersPerSecond;
+	// 实际 ASC 扣费后再次查总余额，不能等下一固定步或被放线回复救回资源归零。
+	if (State.bOperatorPresent && ASC && ASC->GetTotalFightStamina() <= 0.0)
+	{
+		const FCatFightOperatorRuntime* Primary = GetPrimaryOperator();
+		SessionActor->HandleCatEnteredDangerousWaterFromAuthority(0.0, Primary ? Primary->Character.Get() : nullptr);
+	}
+	else if (State.bOperatorPresent && !Step.bSlackRecoveryActive && !State.bFishExhausted)
+	{
+		const FCatFightOperatorRuntime* Primary = GetPrimaryOperator();
+		ACatCharacter* Character = Primary ? Primary->Character.Get() : nullptr;
+		const FCatWaterSpatialResult CatShore = Character ? Water->QueryShoreRelation(Character->GetBodyFootPointWorld(), WaterRegion) : FCatWaterSpatialResult{};
+		FVector MovementThisStep = FVector::ZeroVector;
+		for (const FCatFightOperatorMovementSample& Sample : FrozenOperatorMovementSamples)
+			MovementThisStep += Sample.ActualDisplacementCentimeters;
+		const FCatWaterSpatialResult PreviousShore = Character
+			? Water->QueryShoreRelation(Character->GetBodyFootPointWorld() - MovementThisStep, WaterRegion) : FCatWaterSpatialResult{};
+		// CatWaterGeometry 在岸线容差内明确返回 0；连续位移跨岸也视为本步曾到 0。
+		// 内部正值是离岸距离，不能把大水域投影内的整片干地误当岸线；不另加高度/危险水深门槛。
+		const bool bCatReachedShore = CatShore.bSucceeded && (CatShore.SignedDistanceToShoreCm == 0.0
+			|| (PreviousShore.bSucceeded && PreviousShore.SignedDistanceToShoreCm < 0.0 && CatShore.SignedDistanceToShoreCm > 0.0));
+		double TotalStrength = 0.0;
+		// T14：猫岸距归零＋实际外游＋总力量严格小于鱼力；有效松线没有拖拽前提。
+		const bool bOutward = FVector::DotProduct(Step.ResolvedFishVelocityCentimetersPerSecond, CatShore.WaterwardDirection) > 0.0;
+		if (bCatReachedShore && bOutward
+			&& SessionActor->TryResolvePrimaryCombinedStrength(TotalStrength) && TotalStrength < Config.FishStrength)
+		{
+			UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_position_water SessionId=%s ShoreCm=%.3f TotalStrength=%.3f FishStrength=%.3f World=%s NetMode=%d Authority=1 Result=QueuedCatInWater"),
+				*SessionActor->GetSnapshot().FishingSessionId.ToString(), CatShore.SignedDistanceToShoreCm, TotalStrength, Config.FishStrength, *GetNameSafe(World), int32(World->GetNetMode()));
+			SessionActor->HandleCatEnteredDangerousWaterFromAuthority(0.0, Character);
+		}
+	}
 	SessionActor->HandleFightRunnerStepFromAuthority(Step, State.FishStamina, State.MotionIntent);
 }

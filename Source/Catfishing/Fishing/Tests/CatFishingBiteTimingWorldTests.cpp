@@ -211,9 +211,15 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 			if (Portions == 2 && bNightDuringProbePublish)
 			{
 				Wrapper.TickTestWorld(0.02f);
-				TestEqual(TEXT("重入入夜退回 Waiting"), Session->GetSnapshot().Phase, ECatFishingPhase::Waiting);
-				TestFalse(TEXT("重入入夜销毁试探鱼影"), NightProbeFish.IsValid());
+				TestTrue(TEXT("重入入夜按空竿收回并结束会话"), Session->IsTerminal());
+				TestEqual(TEXT("重入入夜为空竿终局"), Session->GetSnapshot().Outcome, ECatFishingOutcome::EmptyHook);
 				TestFalse(TEXT("重入入夜不重启 Probe 计时"), World->GetTimerManager().IsTimerActive(Session->ProbeStayTimerHandle));
+				Session->OnSnapshotChanged.Clear();
+				double TerminalWindow = 0.0;
+				if (!TestTrue(TEXT("终局复制窗口有效"), GetDefault<UCatFishingSettings>()->TryGetTerminalReplicationWindow(TerminalWindow))) return false;
+				for (int32 CleanupFrame = 0; CleanupFrame < FMath::CeilToInt((TerminalWindow + 0.1) / 0.01); ++CleanupFrame)
+					Wrapper.TickTestWorld(0.01f);
+				TestFalse(TEXT("入夜鱼影在终局复制窗口后实际销毁"), NightProbeFish.IsValid());
 				break;
 			}
 			if (ObservedProbeTime < 0.0 && Session->GetSnapshot().Phase == ECatFishingPhase::Probe)
@@ -244,7 +250,7 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 		if (Portions == 2 || Portions == 3)
 		{
 			TestTrue(TEXT("经过真实 Probe 阶段"), ObservedProbeTime >= 0.0 || bNightDuringProbePublish);
-			Session->OnSnapshotChanged.Clear();
+			if (IsValid(Session)) Session->OnSnapshotChanged.Clear();
 			TestEqual(TEXT("真咬前退出保持饵数量"), BaitCharacter->GetInventoryComponent()->CountVisibleInventoryQuantityByDefinitionId(TEXT("BugBait")), 1);
 			continue;
 		}

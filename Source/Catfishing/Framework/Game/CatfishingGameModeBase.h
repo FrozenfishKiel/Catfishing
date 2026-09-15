@@ -13,6 +13,7 @@ class ACatCampHubActor;
 class ACatAltarActor;
 struct FUniqueNetIdRepl;
 #if WITH_DEV_AUTOMATION_TESTS
+namespace CatR3Tests { struct FFixture; }
 class FCatGameModeCommandIntentGateTest;
 class FCatGameModeReconnectAdmissionWhitelistTest;
 class FCatGameModeRunEnvironmentSocialPlayerEntrypointContractTest;
@@ -65,6 +66,11 @@ UCLASS()
 class CATFISHING_API ACatfishingGameModeBase : public AGameModeBase
 {
 	GENERATED_BODY()
+	friend class FCatTerminalSaveQueueTestCommand;
+	friend class FCatShopWorldCheckpointTest;
+	friend class FCatShopSettlementTest;
+	friend class FCatShopSettlementMissingDataTest;
+	friend class FCatRunTransientCleanupTest;
 	friend class FCatFishingSlackAimCommandRoutingTest;
 	friend class FCatFishingSlackAimRodContinuityTest;
 	friend class FCatFishingRodEffortSnapshotLifecycleTest;
@@ -81,6 +87,8 @@ class CATFISHING_API ACatfishingGameModeBase : public AGameModeBase
 	friend class FCatFishingOwnedRodLifecycleTest;
 	friend class FCatFishingGroupNetworkTest;
 public:
+	/** Save 在 StateTree 启动前恢复未完成世界进度；不选择联机玩家档案归属。 */
+	bool RestoreWorldProgressFromSave(int32 Progress, int32 SavedDay);
 	/** 建立 Lake 原生宿主装配；身份注册表属于 GameMode 实例，不进入类默认对象或客户端。 */
 	ACatfishingGameModeBase();
 	/** 身份解除或身体销毁前的 authority 协调入口：释放本人的主控与抓握、托管仍部署的资源，再取消 Social；可重复调用，不依赖 GameMode 已完成 Run 启动。 */
@@ -157,6 +165,21 @@ public:
 
 private:
 	friend class FCatFishingBiteTimingWorldTest;
+#if WITH_DEV_AUTOMATION_TESTS
+	friend struct CatR3Tests::FFixture;
+#endif
+	friend class FCatRunMorningTargetRecoveryTest;
+	/** 人数缺席时保留清晨输入；只校正尚未对玩家展示的目标，已展示的变化交设计裁决。 */
+	void ReconcilePendingMorningTargetFromAuthority();
+	void HandlePendingMorningTargetRefresh();
+	bool bMorningTargetNeedsPlayerCountReconciliation = false;
+	bool bMorningTargetPublishedToPlayer = false;
+	int32 PendingMorningTargetDayIndex = 0;
+	int32 PendingMorningBaseTarget = 0;
+	float PendingMorningTargetMultiplier = 1.0f;
+	float PendingMorningDailyPressure = 1.0f;
+	int32 LastPendingMorningDiagnosticPlayerCount = INDEX_NONE;
+	FTimerHandle PendingMorningTargetRefreshTimer;
 	/** 遮黑计时到达后复核玩家与冻结鱼，调用唯一供品结算并消费实物；拒绝立即解除本轮锁。 */
 	void CommitAltarDayTransition();
 	/** 淡入结束后发布解锁，并从此刻开始新一天的可玩计时；终局不建立白天计时。 */
@@ -229,6 +252,14 @@ private:
 	void ClearDayDeadline();
 	/** 按当前白天截止窗口安排 Morning/Day/Dusk 语义刷新；无效配置只记录诊断，不创建第二套昼夜状态。 */
 	void ScheduleDayEnvironmentRefreshes();
+	/**
+	 * 数「进入这一天那一刻还在局里的玩家」，作为当天任务的清晨人数快照
+	 * （局与进程 §3.1.2:58「清晨按在场人数确定，当天加入或退出都不重算」）。
+	 * 只在进入 DayActive 时调用一次；数不出人（登录尚未完成）时返回 0，由调用方按 1 人兜底并记 Warning。
+	 */
+	int32 CountMorningPlayersFromAuthority() const;
+	/** 开局一次性核对臭鱼供品 ID 是否真的指向正式鱼目录里的鱼；对不上只记 Warning，不阻止启动——它是折扣配置，不是准入。 */
+	void LogStinkyOfferingFishBindingDiagnostics() const;
 	/** 白天时段分界到达时重新发布同一 RunPublicState；只有服务器仍处于有效 DayActive 才递增 Revision。 */
 	void HandleDayEnvironmentRefreshElapsed();
 	/** 白天自然到点和调试提前结束共用的截止入口；撤销原计时器后只关闭新咬钩并发送 DayEnded，保留已有搏斗和操作，旧截止不会跨天触发，夜晚不建立倒计时。 */
@@ -237,6 +268,16 @@ private:
 	bool RefreshEnvironmentAndPublish();
 	/** 当前环境事件首次出现时把显式自然输入提交给唯一 WaterRegion；成功键按 Run+Day+Event+Anchor 去重，失败保留重试机会。 */
 	void SubmitNaturalChumFieldIfConfigured();
+	/**
+	 * 每次发布环境快照后把天气淋湿驱动到每只猫身上（猫册 §3.1.6「雨天渐湿」）。
+	 * 雨天置湿；非雨天只把已经离水的猫擦干，不会把正泡在水里的猫判成干的。
+	 */
+	void ApplyWeatherWetnessToCharacters();
+	/**
+	 * 进入新一天时的身体收口：仍在倒地的自动救起并送回营地醒来（猫册 §3.1.5），
+	 * 黄色体力整段清零（数值成长页 §4「过夜清空」）。
+	 */
+	void ApplyDayBreakBodyResetToCharacters();
 	/** 只向正在运行的 StateTree 发送稳定 GameplayTag；本方法不包含 Phase 转移表。 */
 	bool SendRunStateTreeEvent(FGameplayTag EventTag, ECatRunTransitionReason Reason);
 	/** 在玩法 World 已完成存档恢复后按显式设置启动定期检查点；未加载世界槽或配置无效时保持不调度。 */

@@ -244,6 +244,14 @@ struct FCatRunPhaseSnapshot
 	/** 当前是否接受夜晚供品结算；它只在 NormalNight 内打开，白天不能把鱼直接转换成进度。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bOfferingOpen = false;
+
+	/**
+	 * 本天清晨那一刻在场的玩家数快照（局与进程 §3.1.2:58「当天内不变，中途有人加入或退出都不重算」）。
+	 * 只在进入 DayActive 时写一次，当天内绝不重算；0 表示这一天没有取到快照（旧存档或人数解析失败），
+	 * 读者必须按「没有人数事实」处理，不得把 0 当成「没有人在场」去缩放任务。
+	 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 MorningPlayerCount = 0;
 };
 
 /** Environment 对外发布的最小只读快照；不包含 Run Phase，避免复制第二份日夜真相。 */

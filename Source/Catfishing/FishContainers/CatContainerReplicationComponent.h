@@ -84,6 +84,18 @@ public:
 	/** 提供鱼容器服务已发布的服务器事实或客户端重建结果；只读引用禁止表现绕过聚合写口修改鱼数组。 */
 	const FCatContainerSnapshot& GetSnapshot() const;
 
+	/**
+	 * 同一份快照的蓝图只读出口（按值返回，UFUNCTION 不接受 const 引用返回）。
+	 * 表现层（鱼缸/鱼护里按鱼种游动或摆放的鱼）需要读鱼槽数组，而 C++ 的 GetSnapshot 不是 UFUNCTION，
+	 * 蓝图此前完全够不到这份事实。它仍然只读：拷贝出去改了也不会回到服务器。
+	 */
+	UFUNCTION(BlueprintPure, Category = "Catfishing|FishContainers")
+	FCatContainerSnapshot GetReplicatedContainerSnapshot() const;
+
+	/** 本容器的一局稳定 ID；蓝图用它把表现对象和容器配对，不据此授权任何写入。 */
+	UFUNCTION(BlueprintPure, Category = "Catfishing|FishContainers")
+	FGuid GetReplicatedContainerId() const;
+
 	/** 完整快照变化的订阅入口；authority 提交后立即触发，客户端在元数据与 FastArray 收敛后的下一帧触发。 */
 	FCatContainerSnapshotChanged OnSnapshotChanged;
 
@@ -103,7 +115,7 @@ private:
 	UFUNCTION()
 	void OnRep_ContainerMetadata();
 
-	/** 由复制元数据与 FastArray 组合的本机只读事实；组件自身不持有偷鱼窗口或终态缓存。 */
+	/** 由复制元数据与 FastArray 组合的本机只读事实；组件自身不持有服务端终态缓存。 */
 	UPROPERTY(Transient)
 	FCatContainerSnapshot Snapshot;
 

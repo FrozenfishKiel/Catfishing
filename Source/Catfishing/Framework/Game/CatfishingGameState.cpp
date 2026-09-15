@@ -4,6 +4,7 @@
 #include "AbilitySystem/Attributes/CatRunAttributeSet.h"
 #include "AbilitySystem/Attributes/CatRunModifierAttributeSet.h"
 #include "AbilitySystemComponent.h"
+#include "Collection/CatRunFishCollectionComponent.h"
 #include "Engine/World.h"
 #include "Environment/CatChumFieldReplicationComponent.h"
 #include "Logging/CatLog.h"
@@ -14,6 +15,7 @@
 // ASC 开启复制并采用 Lyra 口径的 Mixed 模式；两套Run属性和独立经济属性共用此ASC，商店不再持有另一份可写余额。
 ACatfishingGameState::ACatfishingGameState()
 {
+	RunFishCollection = CreateDefaultSubobject<UCatRunFishCollectionComponent>(TEXT("RunFishCollection"));
 	ChumFieldReplication = CreateDefaultSubobject<UCatChumFieldReplicationComponent>(TEXT("ChumFieldReplication"));
 	RunAbilitySystemComponent = CreateDefaultSubobject<UAbilitySystemComponent>(TEXT("RunAbilitySystemComponent"));
 	RunAbilitySystemComponent->SetIsReplicated(true);
@@ -94,6 +96,7 @@ void ACatfishingGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>&
 	DOREPLIFETIME(ThisClass, RunPublicState);
 	DOREPLIFETIME(ThisClass, LastHelpSignal);
 	DOREPLIFETIME(ThisClass, ShopEconomySnapshot);
+	DOREPLIFETIME(ThisClass, LastFishSpeciesDiscovery);
 }
 
 // Run 快照写入流程：只接受 authority 实例，把 GameMode 提供的完整 DTO 一次替换并请求立即网络更新；客户端调用不会改本地副本。
@@ -104,6 +107,7 @@ void ACatfishingGameState::SetRunPublicStateFromAuthority(const FCatRunPublicSta
 		return;
 	}
 	RunPublicState = NewState;
+	RunFishCollection->SynchronizeRunFromAuthority(NewState);
 	ForceNetUpdate();
 	OnRunPublicStateChanged.Broadcast();
 }
@@ -151,6 +155,29 @@ const FCatShopPublicEconomySnapshot& ACatfishingGameState::GetShopEconomySnapsho
 	return ShopEconomySnapshot;
 }
 
+// 新鱼种广播写入流程：只接受服务器 authority 且必须带有效 AnnouncementId 与鱼种 ID；整体替换最近一条后立即请求网络更新。
+// 它不写任何人的图鉴——图鉴是每个人自己的 durable Profile，服务器只把「谁第一次记录到什么」这件公开事实说出去。
+void ACatfishingGameState::PublishFishSpeciesDiscoveryFromAuthority(const FCatFishSpeciesDiscoveryAnnouncement& Announcement)
+{
+	if (!HasAuthority() || !Announcement.AnnouncementId.IsValid() || Announcement.FishDefinitionId.IsNone())
+	{
+		return;
+	}
+	LastFishSpeciesDiscovery = Announcement;
+	ForceNetUpdate();
+	OnFishSpeciesDiscoveryChanged.Broadcast();
+	UE_LOG(LogCatfishing, Log,
+		TEXT("Event=fish_species_discovery_published AnnouncementId=%s PlayerId=%d FishDefinitionId=%s"),
+		*Announcement.AnnouncementId.ToString(EGuidFormats::DigitsWithHyphens),
+		Announcement.DiscovererPlayerId, *Announcement.FishDefinitionId.ToString());
+}
+
+// 新鱼种广播读取流程：返回服务器最终值或客户端最近复制值；调用方只能展示提示，不据它推进自己的图鉴。
+const FCatFishSpeciesDiscoveryAnnouncement& ACatfishingGameState::GetLastFishSpeciesDiscovery() const
+{
+	return LastFishSpeciesDiscovery;
+}
+
 // ChumField 复制组件写口读取流程：仅 authority 返回可写组件，客户端得到空指针，防止表现层绕过环境/窝点服务发布公共窝点。
 UCatChumFieldReplicationComponent* ACatfishingGameState::GetChumFieldReplicationFromAuthority()
 {
@@ -173,6 +200,32 @@ void ACatfishingGameState::OnRep_HelpSignal()
 	UE_LOG(LogCatfishing, Verbose, TEXT("Event=help_signal_received Kind=%s Revision=%lld Global=%s"),
 		*UEnum::GetValueAsString(LastHelpSignal.Kind), LastHelpSignal.Revision,
 		LastHelpSignal.bGlobal ? TEXT("true") : TEXT("false"));
+}
+
+// 新鱼种广播复制回调流程：只广播本机重读通知；提示是否要弹、弹给谁由 UI 自己按 PlayerId 判断。
+void ACatfishingGameState::OnRep_LastFishSpeciesDiscovery()
+{
+	OnFishSpeciesDiscoveryChanged.Broadcast();
+	UE_LOG(LogCatfishing, Verbose,
+		TEXT("Event=fish_species_discovery_received AnnouncementId=%s PlayerId=%d FishDefinitionId=%s"),
+		*LastFishSpeciesDiscovery.AnnouncementId.ToString(EGuidFormats::DigitsWithHyphens),
+		LastFishSpeciesDiscovery.DiscovererPlayerId, *LastFishSpeciesDiscovery.FishDefinitionId.ToString());
+}
+
+// 全场钓鱼信号投递流程：服务器与每个客户端都会执行本体；这里只把标签和位置转成本机广播，不写任何玩法状态。
+// 它是「不受距离衰减」的承载点——GameState 对所有客户端恒相关，投递不受发声者的网络相关性影响；
+// 声音本身衰减不衰减由表现层挂的音效资产决定，服务器不替它做这个判断。
+void ACatfishingGameState::Multicast_PlayWorldwideFishingSignal_Implementation(
+	const FGameplayTag SignalTag, const FVector WorldLocation)
+{
+	if (!SignalTag.IsValid())
+	{
+		return;
+	}
+	OnWorldwideFishingSignal.Broadcast(SignalTag, WorldLocation);
+	UE_LOG(LogCatfishing, Verbose,
+		TEXT("Event=worldwide_fishing_signal_received Signal=%s Location=%s NetMode=%d"),
+		*SignalTag.ToString(), *WorldLocation.ToCompactString(), static_cast<int32>(GetNetMode()));
 }
 
 // 商店经济复制回调流程：客户端收到整份公开快照后只广播重读通知并写诊断日志；不在 RepNotify 中确认订单交付或推导余额变化。

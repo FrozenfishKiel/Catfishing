@@ -56,6 +56,7 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 private:
 	friend class FCatFishingPhysicalGripGraphTest;
+	friend class FCatFishingOperatorRunnerIntegrationTest;
 	friend class UCatFishingFightRunner;
 	FCatFishingBeforePhysicsForces BeforePhysicsForces;
 	FSimpleMulticastDelegate PhysicsReceiverUnavailable;

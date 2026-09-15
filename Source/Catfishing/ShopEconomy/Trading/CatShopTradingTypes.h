@@ -52,11 +52,23 @@ struct FCatShopStockSnapshot
 	int64 Revision = 0;
 };
 
-/** 一条经济账本记录；金额、公款和库存事实不可回写，交付状态只由下游回执推进。 */
+/** 一条经济账本记录；金额、公款和库存事实不可回写，购买成交即入库，账本不保留待交付中间态。 */
+/** 一车或一次售鱼包含的全部商品；数量单位是件／条。 */
+USTRUCT(BlueprintType)
+struct FCatShopPublicItem
+{
+	GENERATED_BODY()
+	UPROPERTY(BlueprintReadOnly) FName DefinitionId;
+	UPROPERTY(BlueprintReadOnly) int32 Quantity = 0;
+};
+
 USTRUCT(BlueprintType)
 struct FCatShopTransactionRecord
 {
 	GENERATED_BODY()
+	UPROPERTY(BlueprintReadOnly) FGuid CartId;
+	UPROPERTY(BlueprintReadOnly) TArray<FCatShopPublicItem> Items;
+	UPROPERTY(BlueprintReadOnly) bool bContainsGiantFish = false;
 
 	/** ShopEconomy 为首次提交分配的账本 ID；重复请求返回同一条记录。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -77,18 +89,6 @@ struct FCatShopTransactionRecord
 	/** 这条记录是否来自售鱼入账；它用于公开流水展示，不授权任何库存或 Social 后续操作。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bFishSale = false;
-
-	/** 这条购买记录是否仍等待下游库存回执；售鱼记录和已确认购买都保持 false。 */
-	UPROPERTY(BlueprintReadOnly)
-	bool bDeliveryPending = false;
-
-	/** 下游领域是否已经确认交付完成；重复确认只读取这条事实，支付和发货只发生一次。 */
-	UPROPERTY(BlueprintReadOnly)
-	bool bDeliveryConfirmed = false;
-
-	/** 下游领域成功交付时返回的回执 ID；未交付或售鱼记录保持无效。 */
-	UPROPERTY(BlueprintReadOnly)
-	FGuid DeliveryReceiptId;
 
 	/** 购物车购买时的商店目录项；售鱼可保持 None。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -121,6 +121,20 @@ struct FCatShopTransactionRecord
 	/** 交易提交后的摊位货架版本；售鱼不涉及货架扣减时为 0。 */
 	UPROPERTY(BlueprintReadOnly)
 	int64 StockRevision = 0;
+
+	/**
+	 * 服务器提交这笔交易时的 UTC 时刻；商店册 §3.2 要的「购买时刻」就是它，Playtest 回看用它和录像、日志对齐。
+	 * 它是墙钟事实，不是局内时间轴：一局跨天靠 ShopDayIndex 切片，先后顺序仍以账本自身次序为准。
+	 */
+	UPROPERTY(BlueprintReadOnly)
+	FDateTime CommittedAtUtc;
+
+	/**
+	 * 这笔交易发生在本局第几天；由服务的局级天序号写入，尚未进入正式白天时为 0。
+	 * 「每日余额」「每日购买次数」这类按天切片的 Playtest 指标以它为准，不靠时间戳反推局内天数。
+	 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 ShopDayIndex = 0;
 };
 
 /**
@@ -131,6 +145,9 @@ USTRUCT(BlueprintType)
 struct FCatShopPublicTransaction
 {
 	GENERATED_BODY()
+	UPROPERTY(BlueprintReadOnly) FGuid CartId;
+	UPROPERTY(BlueprintReadOnly) TArray<FCatShopPublicItem> Items;
+	UPROPERTY(BlueprintReadOnly) bool bContainsGiantFish = false;
 
 	/** 对应账本记录的稳定 ID；客户端拿它去重，不用它反查服务器账本。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -150,14 +167,6 @@ struct FCatShopPublicTransaction
 	/** 这条公开流水是否来自售鱼入账；表现层用它选择文案，不回写库存状态。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bFishSale = false;
-
-	/** 购买流水是否仍在等待下游回执；售鱼流水保持 false。 */
-	UPROPERTY(BlueprintReadOnly)
-	bool bDeliveryPending = false;
-
-	/** 购买流水是否已经收到下游回执；售鱼流水保持 false。 */
-	UPROPERTY(BlueprintReadOnly)
-	bool bDeliveryConfirmed = false;
 
 	/** 买的是哪一条目录项；售鱼保持 None。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -192,6 +201,10 @@ USTRUCT(BlueprintType)
 struct FCatShopPublicEconomySnapshot
 {
 	GENERATED_BODY()
+	/** 权威营业门的复制投影；初始未知时保持不可交互。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bCommandsOpen = false;
+
 
 	/** 当前公款余额版本；客户端用它判断手上的快照是不是最新的。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -238,15 +251,29 @@ namespace CatShopCartLimits
 	inline constexpr int32 MaxCartCountPerEntry = 999;
 }
 
-/** 玩家一次支付整个购物车的经济命令；ExpectedRevision 对应团队公款版本。 */
+/** 购物车只提交请求身份；钱包版本是服务器输出，不能成为客户端下单前提。 */
+USTRUCT(BlueprintType)
+struct FCatShopCartCommandContext
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadWrite)
+	FGuid RequestId;
+
+	/** 服务器从当前 PlayerState 重建，保持与其他领域命令相同的身份口径。 */
+	FString StableNetId;
+};
+
+// 墓碑（2026-09-13）：购物车退出带 ExpectedRevision 的公共上下文；其他领域的版本契约不变。
+/** 玩家一次支付整个购物车的经济命令；按服务器当前余额、库存和价格整车结算。 */
 USTRUCT(BlueprintType)
 struct FCatShopCartCommand
 {
 	GENERATED_BODY()
 
-	/** RequestId、ExpectedRevision 与服务器身份；客户端不能提交总价或仓库发货结果。 */
+	/** RequestId 与服务器身份；客户端不能提交总价或仓库发货结果。 */
 	UPROPERTY(BlueprintReadWrite)
-	FCatDomainCommandContext Context;
+	FCatShopCartCommandContext Context;
 
 	/** 服务器确认的来源商店库存；购物车里所有 EntryId 都只在这个摊位范围内解释。 */
 	UPROPERTY(BlueprintReadWrite)
@@ -276,6 +303,7 @@ struct FCatShopResolvedCartLine
 /** 服务器对购物车的只读报价结果；交易控制器用它在扣钱前先询问营地公共仓库能否整批接收。 */
 struct FCatShopResolvedCart
 {
+	FName FailureReason;
 	/** 通过服务器归一化后的购物车命令；重复 EntryId 已合并，行顺序只用于稳定提交。 */
 	FCatShopCartCommand Command;
 
@@ -327,26 +355,6 @@ struct FCatShopFishSaleCommand
 	TArray<FCatShopFishSaleLine> Fish;
 };
 
-/** 下游领域完成购买交付后的确认命令；它只推进账本状态，不重新扣公款或库存。 */
-USTRUCT(BlueprintType)
-struct FCatShopDeliveryConfirmationCommand
-{
-	GENERATED_BODY()
-
-	/** 确认请求的幂等 ID 与服务器身份；StableNetId 必须匹配原订单买家。 */
-	UPROPERTY(BlueprintReadWrite)
-	FCatDomainCommandContext Context;
-
-	/** 要确认的 Shop 账本 ID；客户端不能用 EntryId 或 DefinitionId 猜测待交付订单。 */
-	UPROPERTY(BlueprintReadWrite)
-	FGuid TransactionId;
-
-	/** 下游领域提交成功后生成的回执 ID；Shop 只保存它用于审计和重放恢复。 */
-	UPROPERTY(BlueprintReadWrite)
-	FGuid DeliveryReceiptId;
-
-};
-
 /** 经济命令的统一返回；包含公共终态、公款快照、库存快照和首次账本记录。 */
 USTRUCT(BlueprintType)
 struct FCatShopTransactionResult
@@ -388,7 +396,7 @@ struct FCatShopCartTransactionResult
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatShopStockSnapshot> Stocks;
 
-	/** 整车首次成功提交生成的购买账本行；每种 EntryId 一条，免费商品也通过 0 元账本记录进入交付。 */
+	/** 整车首次成功提交生成的购买账本行；每种 EntryId 一条，免费商品也通过 0 元账本记录进入入库。 */
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatShopTransactionRecord> Transactions;
 };

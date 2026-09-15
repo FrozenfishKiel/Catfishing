@@ -1,6 +1,7 @@
 #include "Inventory/CatBackPackComponent.h"
 
 #include "Inventory/CatInventorySettings.h"
+#include "Growth/CatGrowthComponent.h"
 
 // 构造流程：保留父类全部库存事实和复制行为，只声明背包是角色默认整批收货目标。
 UCatBackPackComponent::UCatBackPackComponent(const FObjectInitializer& ObjectInitializer)
@@ -17,5 +18,8 @@ void UCatBackPackComponent::InitializePlayerInventorySlotCapacityFromAuthority()
 		return;
 	}
 	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
-	SetInventorySlotCountFromAuthority(InventorySettings ? InventorySettings->GetPlayerInventorySlotCapacity() : 0);
+	const auto* Growth = GetOwner()->FindComponentByClass<UCatGrowthComponent>();
+	const double Bonus = Growth ? Growth->GetTotalMagnitude(ECatGrowthOptionId::InventorySlots) : 0.0;
+	SetInventorySlotCountFromAuthority(static_cast<int32>(FMath::Min(double(MAX_int32),
+		double(InventorySettings ? InventorySettings->GetPlayerInventorySlotCapacity() : 0) + Bonus)));
 }

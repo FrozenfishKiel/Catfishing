@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "output_dir": "D:\\LocalGameProject\\Unreal\\Catfishing\\Docs\\gap-analysis\\2026-09-09-1321",
+  "output_dir": "Docs/gap-analysis/2026-09-09-1321",
   "exported_at": "2026-09-09T12:29:48",
   "project_head": "87ba975f3a4a0683de0866d5f168e2f2930036fd",
-  "baseline": "D:\\LocalGameProject\\Unreal\\Catfishing\\Docs\\gap-analysis\\2026-09-09",
+  "baseline": "Docs/gap-analysis/2026-09-09",
   "systems": {
     "ui与交互": {
       "rows": [
@@ -549,7 +549,7 @@
       ],
       "code_only": [],
       "code_only_present": false,
-      "carried_from": "D:\\LocalGameProject\\Unreal\\Catfishing\\Docs\\gap-analysis\\2026-09-09",
+      "carried_from": "Docs/gap-analysis/2026-09-09",
       "docs": [
         {
           "file": "GDD 系统分册/ui/Sheet1.csv",
@@ -968,7 +968,7 @@
       ],
       "code_only": [],
       "code_only_present": false,
-      "carried_from": "D:\\LocalGameProject\\Unreal\\Catfishing\\Docs\\gap-analysis\\2026-09-09",
+      "carried_from": "Docs/gap-analysis/2026-09-09",
       "docs": [
         {
           "file": "GDD 系统分册/印记.md",
@@ -1787,7 +1787,7 @@
       ],
       "code_only": [],
       "code_only_present": false,
-      "carried_from": "D:\\LocalGameProject\\Unreal\\Catfishing\\Docs\\gap-analysis\\2026-09-09",
+      "carried_from": "Docs/gap-analysis/2026-09-09",
       "docs": [
         {
           "file": "GDD 系统分册/猫咪与状态/升级效果.md",
@@ -2033,7 +2033,7 @@
       ],
       "code_only": [],
       "code_only_present": false,
-      "carried_from": "D:\\LocalGameProject\\Unreal\\Catfishing\\Docs\\gap-analysis\\2026-09-09",
+      "carried_from": "Docs/gap-analysis/2026-09-09",
       "docs": [
         {
           "file": "GDD 系统分册/环境与氛围.md",
@@ -2411,7 +2411,7 @@
       ],
       "code_only": [],
       "code_only_present": false,
-      "carried_from": "D:\\LocalGameProject\\Unreal\\Catfishing\\Docs\\gap-analysis\\2026-09-09",
+      "carried_from": "Docs/gap-analysis/2026-09-09",
       "docs": [
         {
           "file": "GDD 系统分册/联机社交.md",
@@ -2823,7 +2823,7 @@
       ],
       "code_only": [],
       "code_only_present": false,
-      "carried_from": "D:\\LocalGameProject\\Unreal\\Catfishing\\Docs\\gap-analysis\\2026-09-09",
+      "carried_from": "Docs/gap-analysis/2026-09-09",
       "docs": [
         {
           "file": "GDD 系统分册/局与进程.md",
@@ -3307,7 +3307,7 @@
       ],
       "code_only": [],
       "code_only_present": false,
-      "carried_from": "D:\\LocalGameProject\\Unreal\\Catfishing\\Docs\\gap-analysis\\2026-09-09",
+      "carried_from": "Docs/gap-analysis/2026-09-09",
       "docs": [
         {
           "file": "GDD 系统分册/道具/窝料/Sheet1.csv",
@@ -3876,7 +3876,7 @@
       ],
       "code_only": [],
       "code_only_present": false,
-      "carried_from": "D:\\LocalGameProject\\Unreal\\Catfishing\\Docs\\gap-analysis\\2026-09-09",
+      "carried_from": "Docs/gap-analysis/2026-09-09",
       "docs": [
         {
           "file": "GDD 系统分册/钓鱼系统/多人钓鱼附篇.md",
@@ -4596,7 +4596,7 @@
       ],
       "code_only": [],
       "code_only_present": false,
-      "carried_from": "D:\\LocalGameProject\\Unreal\\Catfishing\\Docs\\gap-analysis\\2026-09-09",
+      "carried_from": "Docs/gap-analysis/2026-09-09",
       "docs": [
         {
           "file": "GDD 系统分册/钓鱼系统/钓鱼系统.md",

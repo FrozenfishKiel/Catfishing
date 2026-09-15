@@ -33,7 +33,7 @@
 
 `presentation_delivery`：已查看 `Saved/ForceReaction/Screenshots/{Idle,Forward,Backward,Left,Right}.png` 的受控正式 CuteCat 渲染，身体比例及整体朝向保持，动作呈现对应方向的偏移/倾斜。源动作时间曲线派生的动作协调性仍需正式地图多人试玩；新 Cook、Win64 Development 新包房主/客户端无 `-log` 落盘验收未运行，不关闭所属模块。
 
-本轮服务器与两个客户端的实际日志合并在 `D:/develop/Catfishing/Saved/ForceReaction/VerifiedTests.log`，按 `LogCatCharacter`、`force_reaction_started`、`force_reaction_observed`、`force_reaction_rearmed` 和 `BodyId` / `EventId` / `NetMode` 关联；三端成功不是用单端日志推断。打包后仍使用项目标准 `<打包根目录>/Catfishing/Saved/Logs`，未硬编码路径。
+本轮服务器与两个客户端的实际日志合并在 `Saved/ForceReaction/VerifiedTests.log`，按 `LogCatCharacter`、`force_reaction_started`、`force_reaction_observed`、`force_reaction_rearmed` 和 `BodyId` / `EventId` / `NetMode` 关联；三端成功不是用单端日志推断。打包后仍使用项目标准 `<打包根目录>/Catfishing/Saved/Logs`，未硬编码路径。
 
 交付核对时出现 `Source/Catfishing/Online/CatOnlineSubsystem.{h,cpp}` 并行修改，保留且不纳入本功能检查点；上述已执行构建/回归不代表对随后并行修改的重新验证。
 

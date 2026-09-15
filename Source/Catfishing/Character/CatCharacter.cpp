@@ -21,6 +21,7 @@
 #include "Animation/AnimMontage.h"
 #include "Character/Animation/CatForceReactionComponent.h"
 #include "Condition/CatConditionComponent.h"
+#include "Condition/CatConditionSettings.h"
 #include "Condition/CatConditionPresentationComponent.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentSettings.h"
@@ -29,20 +30,9 @@
 #include "Fishing/Presentation/CatFishingCameraComponent.h"
 #include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatBackPackComponent.h"
-#include "Inventory/CatInventorySettings.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "Items/Fish/CatFishPickupActor.h"
-#include "FishContainers/CatFishGuardActor.h"
 #include "Net/UnrealNetwork.h"
-
-namespace
-{
-	// 初始随身库存容量迁移流程：角色创建正式库存时默认读 InventorySettings；旧 EquipmentSettings 被测试或诊断改值时保留一次兼容覆盖。
-	int32 ResolveInitialPlayerInventorySlotCapacity()
-	{
-		return GetDefault<UCatInventorySettings>()->GetPlayerInventorySlotCapacity();
-	}
-}
 
 // 构造流程：一次创建 Character-owned ASC/AttributeSet、离散身体状态、吃鱼成长、正式随身库存和局内装备组件；只开启组件复制，ActorInfo、属性初值与 Ability 仍由显式 runtime gate 启动。
 ACatCharacter::ACatCharacter(const FObjectInitializer& ObjectInitializer)
@@ -354,7 +344,8 @@ void ACatCharacter::PossessedBy(AController* NewController)
 	{
 		if (InventoryComponent)
 		{
-			InventoryComponent->SetInventorySlotCountFromAuthority(ResolveInitialPlayerInventorySlotCapacity());
+			// T02：首次和重新占有共用背包的基础值＋本局成长，不能覆盖已扩出的格数。
+			CastChecked<UCatBackPackComponent>(InventoryComponent)->InitializePlayerInventorySlotCapacityFromAuthority();
 		}
 		if (AbilitySystemComponent)
 		{
@@ -396,7 +387,6 @@ void ACatCharacter::UnPossessed()
 {
 	// 生命周期释放流程：失去控制不能让嘴叼物跟随一个无主 Pawn 停留；对象自己的释放方法负责恢复地面状态，随后按 expected actor 清空引用。
 	if (ACatFishPickupActor* Fish = Cast<ACatFishPickupActor>(MouthCarriedActor)) Fish->ReleaseMouthCarryFromAuthority(GetActorLocation());
-	else if (ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(MouthCarriedActor)) Guard->ReleaseMouthCarryFromAuthority(GetActorLocation());
 	PhysicalBodyComponent->ReleaseConnectionsFromAuthority(TEXT("Unpossessed"));
 	PhysicalBodyComponent->BeginControlEpochFromAuthority();
 	ACatfishingGameModeBase::HandleCharacterUnavailable(this);
@@ -416,7 +406,6 @@ void ACatCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	// 销毁路径复用同一 expected-actor 释放，覆盖直接 Destroy 而没有先走 UnPossessed 的服务器清理。
 	if (ACatFishPickupActor* Fish = Cast<ACatFishPickupActor>(MouthCarriedActor)) Fish->ReleaseMouthCarryFromAuthority(GetActorLocation());
-	else if (ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(MouthCarriedActor)) Guard->ReleaseMouthCarryFromAuthority(GetActorLocation());
 	ConditionComponent->OnSnapshotChanged.RemoveAll(this);
 	PhysicalBodyComponent->ReleaseConnectionsFromAuthority(TEXT("EndPlay"));
 	ACatfishingGameModeBase::HandleCharacterUnavailable(this);
@@ -461,19 +450,43 @@ void ACatCharacter::ConfigureCharacterMovementAuthority()
 	GetMesh()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	GetMesh()->SetGenerateOverlapEvents(false);
 }
-// 身体条件刷新流程：服务器先按最新 Downed 快照更新物理移动；进入倒地时只读取角色当前单嘴引用，分别调用鱼或鱼护的落地释放，随后由各 Actor 清理同一 expected-actor 引用。
+// 身体条件刷新流程：服务器按最新 Downed 快照更新物理移动；进入倒地时只读取角色当前单嘴引用，分别调用鱼或鱼护的落地释放，随后由各 Actor 清理同一 expected-actor 引用。
 // 非服务器只接收复制结果，不在客户端改移动或世界物归属。
+//
+// 倒地 ≠ 不能动（猫册 §3.1.5「倒地者可缓慢爬行」）。
+// 墓碑（2026-09-12）：这里原本是 SetLocomotionEnabledFromAuthority(!bDowned)——倒地即关掉移动意图与地面支撑，
+// 身体只剩被推被拖，和设计写的「可缓慢爬行」正好相反，单人玩家因此没有任何自救位移。
+// 现在移动始终开着，倒地只把速度压到爬行倍率并禁止跳跃。
 void ACatCharacter::RefreshPhysicalCondition()
 {
 	if (HasAuthority())
 	{
-		PhysicalBodyComponent->SetLocomotionEnabledFromAuthority(!ConditionComponent->GetSnapshot().bDowned,TEXT("ConditionChanged"));
+		PhysicalBodyComponent->SetLocomotionEnabledFromAuthority(true, TEXT("ConditionChanged"));
+		RefreshLocomotionSpeedScale();
 		if (ConditionComponent->GetSnapshot().bDowned)
 		{
 			if (ACatFishPickupActor* Fish = Cast<ACatFishPickupActor>(MouthCarriedActor)) Fish->ReleaseMouthCarryFromAuthority(GetActorLocation());
-			else if (ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(MouthCarriedActor)) Guard->ReleaseMouthCarryFromAuthority(GetActorLocation());
 		}
 	}
+}
+
+// 速度缩放合成流程：爬行倍率（倒地）与三选一「移动速度 +10%」（加算、上限 +30%）在这里相乘后一次写进物理身体。
+// 只有服务器合成；客户端读复制值，不自己算加成。
+void ACatCharacter::RefreshLocomotionSpeedScale()
+{
+	if (!HasAuthority() || !PhysicalBodyComponent || !ConditionComponent)
+	{
+		return;
+	}
+	const bool bDowned = ConditionComponent->GetSnapshot().bDowned;
+	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
+	const double CrawlScale = bDowned && Settings && FMath::IsFinite(Settings->DownedCrawlSpeedScale)
+		? FMath::Max(0.0, Settings->DownedCrawlSpeedScale) : 1.0;
+	const double GrowthBonus = GrowthComponent
+		? GrowthComponent->GetTotalMagnitude(ECatGrowthOptionId::MoveSpeed) : 0.0;
+	const double GrowthScale = FMath::IsFinite(GrowthBonus) ? FMath::Max(0.0, 1.0 + GrowthBonus) : 1.0;
+	PhysicalBodyComponent->SetLocomotionSpeedScaleFromAuthority(CrawlScale * GrowthScale, bDowned,
+		bDowned ? TEXT("DownedCrawl") : TEXT("ConditionOrGrowthChanged"));
 }
 void ACatCharacter::Tick(float DeltaSeconds)
 {

@@ -1,9 +1,12 @@
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "Data/CatFishDefinition.h"
+#include "Growth/CatGrowthComponent.h"
 
 #include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "AbilitySystem/Effects/CatFishingStaminaEffect.h"
-#include "AbilitySystem/Effects/CatPoisonEffect.h"
+#include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
+#include "AbilitySystem/Effects/CatGrowthAttributeEffect.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "AbilitySystemBlueprintLibrary.h"
 #include "Abilities/GameplayAbility.h"
@@ -65,6 +68,7 @@ void UCatAbilitySystemComponent::UnregisterAbilityInput(const FGameplayAbilitySp
 
 void UCatAbilitySystemComponent::AbilityInputTagPressed(const FGameplayTag InputTag)
 {
+	if (HasMatchingGameplayTag(CatFishingAbilityTags::Cooldown_Fishing_Scoop)) return;
 	const TArray<FGameplayAbilitySpecHandle>* Handles = SpecHandlesByInputTag.Find(InputTag);
 	if (!Handles)
 	{
@@ -102,7 +106,7 @@ void UCatAbilitySystemComponent::AbilityInputTagReleased(const FGameplayTag Inpu
 void UCatAbilitySystemComponent::ProcessAbilityInput(const float DeltaTime, const bool bGamePaused)
 {
 	(void)DeltaTime;
-	if (bGamePaused)
+	if (bGamePaused || HasMatchingGameplayTag(CatFishingAbilityTags::Cooldown_Fishing_Scoop))
 	{
 		return;
 	}
@@ -241,8 +245,9 @@ void UCatAbilitySystemComponent::RevokeConfiguredDefaultAbilitySet()
 // Character 初始属性播种流程：
 // 1. 先要求已建立 Owner/Avatar 的 authority ASC，且本组件尚未成功播种；ActorInfo 未就绪、客户端调用或重占有都不触碰属性基值。
 // 2. 再按 Character 传入的 CatDefinitionId 读取完整配置；配置缺失、未就绪或数值非法时只记录原有诊断并返回 false，不把半套数值写入 ASC。
-// 3. 配置完整后一次写入 Poison、FishingStrength 与 MaxFightStamina 的基值，确保这些身体数值只通过 GAS 边界进入 AttributeSet。
-// 4. 最后沿用现有会话体力初始化入口按新上限回满 FightStamina；全部成功才清掉可能排队的重置请求并记录一次性状态，失败会保留后续 ActorInfo 刷新时的重试机会。
+// 3. 配置完整后一次写入 FishingStrength、MaxFightStamina 与黄色体力护盾段的基值，确保这些身体数值只通过 GAS 边界进入 AttributeSet。
+// 4. 最后按新上限把 FightStamina 播种到满；这是本身体第一次拿到体力，不是搏斗入口——
+//    2026-09-11 裁决④之后体力是跨竿资源，进搏斗与终局路径都不再回满，只有这里播种一次。
 bool UCatAbilitySystemComponent::InitializeCharacterAttributesFromDefinition(const FName CatDefinitionId)
 {
 	if (!GetOwnerActor() || !GetAvatarActor() || !IsOwnerActorAuthoritative()
@@ -252,10 +257,9 @@ bool UCatAbilitySystemComponent::InitializeCharacterAttributesFromDefinition(con
 	}
 
 	const UCatAbilitySettings* Settings = GetDefault<UCatAbilitySettings>();
-	float Poison = 0.0f;
 	float FishingStrength = 0.0f;
 	float MaxFightStamina = 0.0f;
-	if (!Settings || !Settings->TryGetInitialAttributesForCharacter(CatDefinitionId, Poison, FishingStrength,
+	if (!Settings || !Settings->TryGetInitialAttributesForCharacter(CatDefinitionId, FishingStrength,
 		MaxFightStamina))
 	{
 		if (!CatDefinitionId.IsNone())
@@ -267,10 +271,10 @@ bool UCatAbilitySystemComponent::InitializeCharacterAttributesFromDefinition(con
 		return false;
 	}
 
-	SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(), Poison);
 	SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), FishingStrength);
-	SetNumericAttributeBase(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute(), MaxFightStamina);
+	// 黄色体力是吃鱼/祝福授予的储备，新身体开局一律为 0：它不来自品种模板，也不随播种赠送。
 	SetNumericAttributeBase(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute(), 0.0f);
+	SetNumericAttributeBase(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute(), MaxFightStamina);
 	if (!SeedFightStaminaToMaximumFromAuthority())
 	{
 		return false;
@@ -285,6 +289,8 @@ bool UCatAbilitySystemComponent::SeedFightStaminaToMaximumFromAuthority()
 	// 1. 拒绝缺 Owner/Avatar 或非 authority 的调用。
 	// 2. 读取本身体绿段上限；上限未播种或非法时返回 false。
 	// 3. 最后只提交到上限的 delta，沿用正式 GameplayEffect 写口，保持属性委托、复制和日志观察同源。
+	// 只有身体属性播种会走这里。搏斗入口、终局路径不得调用：连续硬仗要有代价，
+	// 空条靠搏斗外 5 点/秒回满（约 20 秒），小鱼干的价值窗就是省下这 20 秒。
 	if (!GetOwnerActor() || !GetAvatarActor() || !IsOwnerActorAuthoritative())
 	{
 		return false;
@@ -302,44 +308,47 @@ bool UCatAbilitySystemComponent::SeedFightStaminaToMaximumFromAuthority()
 	return FMath::IsNearlyEqual(Current, Baseline) || ApplyFishingStaminaDelta(Baseline - Current);
 }
 
-bool UCatAbilitySystemComponent::ApplyPoisonDelta(const float Delta)
+// 力量提交流程：只接受 authority 的有限增量，通过正式 GE 的 SetByCaller 写进 FishingStrength。
+// 三选一「力量 +10」是唯一调用方；属性的非负规整仍由 AttributeSet 负责，这里不自己夹。
+bool UCatAbilitySystemComponent::ApplyFishingStrengthDelta(const float Delta)
 {
-	// Poison 提交流程：先拒绝非 authority、缺 ActorInfo 和非法数值；再读取当前 Poison，把负向恢复夹到 0。
-	// 夹完没有实际变化仍算成功，因为恢复命令的事务已在上层扣除库存/休息入口完成，不能因已为 0 而变成重试口。
-	// 有真实变化时只通过 UCatGE_PoisonDelta 的 SetByCaller 提交，Condition/Growth 不直接写 AttributeSet。
-	if (!FMath::IsFinite(Delta) || !GetOwnerActor() || !GetAvatarActor() || !IsOwnerActorAuthoritative())
+	if (!FMath::IsFinite(Delta) || Delta == 0.0f || !GetOwnerActor() || !GetAvatarActor()
+		|| !IsOwnerActorAuthoritative())
 	{
 		return false;
 	}
-	const float CurrentPoison = GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute());
-	if (!FMath::IsFinite(CurrentPoison))
-	{
-		return false;
-	}
-	const float TargetPoison = Delta < 0.0f ? FMath::Max(0.0f, CurrentPoison + Delta) : CurrentPoison + Delta;
-	if (!FMath::IsFinite(TargetPoison))
-	{
-		return false;
-	}
-	const float ClampedDelta = TargetPoison - CurrentPoison;
-	if (FMath::IsNearlyZero(ClampedDelta))
-	{
-		return true;
-	}
-	const FGameplayEffectSpecHandle Spec = MakeOutgoingSpec(UCatGE_PoisonDelta::StaticClass(), 1.0f, MakeEffectContext());
+	const FGameplayEffectSpecHandle Spec = MakeOutgoingSpec(UCatGE_FishingStrengthDelta::StaticClass(), 1.0f,
+		MakeEffectContext());
 	if (!Spec.IsValid())
 	{
 		return false;
 	}
-	Spec.Data->SetSetByCallerMagnitude(UCatGE_PoisonDelta::GetPoisonDeltaTag(), ClampedDelta);
+	Spec.Data->SetSetByCallerMagnitude(UCatGE_FishingStrengthDelta::GetFishingStrengthDeltaTag(), Delta);
 	return ApplyGameplayEffectSpecToSelf(*Spec.Data.Get()).WasSuccessfullyApplied();
 }
 
-bool UCatAbilitySystemComponent::IsPoisonAtLeast(const float Threshold) const
+// 体力上限提交流程：先按 GE 改 MaxFightStamina，再对当前体力补同样的差值。
+// 「提升时当场按差值补满」是升级效果页 §2 明写的口径，它只补本次提升的那一段，不是回满——
+// 2026-09-11 裁决④删掉的是「进搏斗补满」，这一条是成长带来的新增上限，两者不冲突。
+bool UCatAbilitySystemComponent::ApplyMaxFightStaminaDelta(const float Delta)
 {
-	// 阈值读取流程：非法阈值直接关闭裁决；合法阈值只读取当前 ASC Poison，不暴露 AttributeSet 写口给 Condition。
-	return FMath::IsFinite(Threshold)
-		&& GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute()) >= Threshold;
+	if (!FMath::IsFinite(Delta) || Delta == 0.0f || !GetOwnerActor() || !GetAvatarActor()
+		|| !IsOwnerActorAuthoritative())
+	{
+		return false;
+	}
+	const FGameplayEffectSpecHandle Spec = MakeOutgoingSpec(UCatGE_MaxFightStaminaDelta::StaticClass(), 1.0f,
+		MakeEffectContext());
+	if (!Spec.IsValid())
+	{
+		return false;
+	}
+	Spec.Data->SetSetByCallerMagnitude(UCatGE_MaxFightStaminaDelta::GetMaxFightStaminaDeltaTag(), Delta);
+	if (!ApplyGameplayEffectSpecToSelf(*Spec.Data.Get()).WasSuccessfullyApplied())
+	{
+		return false;
+	}
+	return Delta <= 0.0f || ApplyFishingStaminaDelta(Delta);
 }
 
 void UCatAbilitySystemComponent::ClearActorInfo()
@@ -423,4 +432,53 @@ double UCatAbilitySystemComponent::GetTotalFightStaminaCapacity() const
 float UCatAbilitySystemComponent::GetYellowFightStamina() const
 {
 	return GetNumericAttribute(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute());
+}
+
+double UCatAbilitySystemComponent::ResolveEatingEffectDuration(const double BaseSeconds) const
+{
+	const auto* Growth = GetAvatarActor() ? GetAvatarActor()->FindComponentByClass<UCatGrowthComponent>() : nullptr;
+	const double Bonus = Growth ? Growth->GetTotalMagnitude(ECatGrowthOptionId::BuffDuration) : 0.0;
+	return BaseSeconds * (1.0 + Bonus);
+}
+
+bool UCatAbilitySystemComponent::ApplyFishTimedEffectFromAuthority(const UCatFishDefinition* Fish, const FGuid RequestId)
+{
+	if (!IsOwnerActorAuthoritative() || !GetAvatarActor() || !Fish || !RequestId.IsValid()) return false;
+	auto Reject = [&](const TCHAR* Reason)
+	{
+		UE_LOG(LogCatCharacter, Warning, TEXT("Event=fish_timed_effect_unavailable Fish=%s RequestId=%s Actor=%s World=%s NetMode=%d Authority=1 LocalRole=%d Reason=%s"),
+			*Fish->FishDefinitionId.ToString(), *RequestId.ToString(), *GetNameSafe(GetAvatarActor()), *GetNameSafe(GetWorld()), GetWorld()->GetNetMode(), GetAvatarActor()->GetLocalRole(), Reason);
+		return false;
+	};
+	if (!Fish->bEatingTimedEffectConfigured) return Reject(TEXT("OwnerBindingUnset"));
+	if (!Fish->EatingTimedEffect) return true; // 已确认无效果，与缺配不同。
+	const UGameplayEffect* Definition = Fish->EatingTimedEffect->GetDefaultObject<UGameplayEffect>();
+	const double Duration = ResolveEatingEffectDuration(Fish->EatingTimedEffectDurationSeconds);
+	if (!FMath::IsFinite(Duration) || Duration <= 0.0 || Duration > MAX_flt
+		|| Definition->DurationPolicy != EGameplayEffectDurationType::HasDuration
+		|| Definition->GetStackingType() != EGameplayEffectStackingType::None)
+		return Reject(TEXT("InvalidDurationOrCrossFishStacking"));
+	if (const FActiveGameplayEffectHandle* Handle = FishTimedEffectHandles.Find(Fish->FishDefinitionId))
+	{
+		if (FActiveGameplayEffect* Active = ActiveGameplayEffects.GetActiveGameplayEffect(*Handle))
+		{
+			if (Active->Spec.Def != Definition) return Reject(TEXT("LiveFishBindingChanged"));
+			// 原 GE 就地刷新，不重新执行数值、不瞬时叠双份；引擎接口同步计时器、复制及 OnTimeChanged。
+			Active->Spec.Duration = static_cast<float>(Duration);
+			ModifyActiveEffectStartTime(*Handle, GetWorld()->GetTimeSeconds() - Active->StartWorldTime);
+			UE_LOG(LogCatCharacter, Log, TEXT("Event=fish_timed_effect_refreshed Fish=%s RequestId=%s Actor=%s DurationSeconds=%.3f World=%s NetMode=%d Authority=1 LocalRole=%d"),
+				*Fish->FishDefinitionId.ToString(), *RequestId.ToString(), *GetNameSafe(GetAvatarActor()), Duration,
+				*GetNameSafe(GetWorld()), GetWorld()->GetNetMode(), GetAvatarActor()->GetLocalRole());
+			return true;
+		}
+	}
+	FGameplayEffectSpec Spec(Definition, MakeEffectContext(), 1.0f);
+	Spec.SetDuration(static_cast<float>(Duration), true);
+	const FActiveGameplayEffectHandle Handle = ApplyGameplayEffectSpecToSelf(Spec);
+	if (!Handle.IsValid()) return Reject(TEXT("GameplayEffectRejected"));
+	FishTimedEffectHandles.Add(Fish->FishDefinitionId, Handle);
+	UE_LOG(LogCatCharacter, Log, TEXT("Event=fish_timed_effect_applied Fish=%s RequestId=%s Actor=%s DurationSeconds=%.3f World=%s NetMode=%d Authority=1 LocalRole=%d"),
+		*Fish->FishDefinitionId.ToString(), *RequestId.ToString(), *GetNameSafe(GetAvatarActor()), Duration,
+		*GetNameSafe(GetWorld()), GetWorld()->GetNetMode(), GetAvatarActor()->GetLocalRole());
+	return true;
 }

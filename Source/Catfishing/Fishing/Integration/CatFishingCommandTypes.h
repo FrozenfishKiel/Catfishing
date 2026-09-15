@@ -15,7 +15,14 @@ enum class ECatFishingCommandType : uint8
 	/** Q 打窝蓄力按下 / 松开；服务器按按住时长换算蓄力并投放。 */
 	ChumPressed, ChumReleased,
 	/** 主动切断当前上钩会话的鱼线；与鱼竿断裂及普通取消分别结算。 */
-	CutLine
+	CutLine,
+	/**
+	 * 换人握手（多人钓鱼附篇 §2.4）：同一个键在两种身份下含义不同，服务器按发起者当时的身份分派——
+	 * 主钓手按＝发起换人请求，再按＝取消；岸上替补按＝接手。请求无时限挂起，本竿结束自然失效。
+	 * 键位随装备栏重构另定（09-11 裁决①「E 换人」保留，指的是主钓手交接、不是已作废的辅助位）。
+	 */
+	RequestHandoff,
+	CancelReleased
 };
 
 UENUM(BlueprintType)
@@ -27,7 +34,16 @@ enum class ECatFishingCommandError : uint8
 	RevisionConflict, CastAttemptConflict, InputSequenceStale, InputSequenceGapTooLarge, InvalidPhase,
 	WindowClosed, AlreadyResolved, NotNearShore, StaleScoopTarget, ScoopGeometryFailed, CooldownActive,
 	GuardCapacityExceeded, CaptureAlreadyCommitted,
-	RodDeploymentLimitReached
+	RodDeploymentLimitReached,
+	/**
+	 * 抢抄拒绝的六个细分原因（钓鱼规则 §5.5:273）。ScoopGeometryFailed 保留为「原因不明的几何失败」兜底，
+	 * 新代码应给出下面这六个之一，玩家提示由 CatFishingCommandFeedback::GetPlayerFacingText 统一映射。
+	 */
+	ScoopOutOfReach, ScoopLineOfSightBlocked, ScoopGroundTooSteep, ScoopVerticalDeltaTooLarge,
+	ScoopMouthOccupied, ScoopNotOnShore,
+	/** 这一竿当前没有挂着换人请求：替补按了接手，但主钓手根本没发起过（或已取消）。 */
+	HandoffNotRequested,
+	// 墓碑（2026-09-14）：删除 HandoffStaminaTooLow；设计修改记录 2026-09-13 裁决④取消体力准入。
 };
 
 USTRUCT(BlueprintType)
@@ -172,3 +188,16 @@ struct FCatBeginCastResult
 };
 
 ECatFishingCommandError MapDomainCommandError(ECatDomainCommandError Error);
+
+/** 把抢抄拒绝原因映射成对应的命令错误码；None 表示这次拒绝不是可抄几何，调用方保留原错误。 */
+ECatFishingCommandError MapScoopRejectReason(ECatScoopRejectReason Reason);
+
+namespace CatFishingCommandFeedback
+{
+	/**
+	 * 钓鱼命令错误的玩家可见提示（ui 表「提示文案」）。
+	 * 抢抄的四种几何原因（够不着／有遮挡／脚下太陡／高差太大）统一回「没够着」，
+	 * 嘴里有鱼与不在岸上各自有话说；没有玩家话术的错误返回空文本，调用方据此不弹提示。
+	 */
+	CATFISHING_API FText GetPlayerFacingText(ECatFishingCommandError Error);
+}

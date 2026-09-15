@@ -383,6 +383,24 @@ FCatChumSample UCatChumFieldSubsystem::SampleChumAtPoint(const FVector& WorldPoi
 
 // 扫描全部活跃窝料场，把已到期的整体下线：释放配额、更新版本号、驱动复制移除、广播事件。
 // 既被 PrepareField 在处理新请求前主动调用（惰性清理），也被定时器周期性调用，清理长时间没有新请求触发的失效窝点。
+// 墓碑（2026-09-14，T19）：只有自然到期的旧清理路径不足以处理翻天。
+// Knowledge/Design/GDD 系统分册/钓鱼系统/钓鱼规则.md:339-341；D-30 挂起，仍复用现行浓度场模型。
+int32 UCatChumFieldSubsystem::ClearFieldsForRunTransition()
+{
+	if (!GetWorld() || GetWorld()->GetNetMode() == NM_Client) return 0;
+	TArray<FGuid> Tokens;
+	PendingByToken.GenerateKeyArray(Tokens);
+	for (const FGuid Token : Tokens) AbortPreparedField({Token});
+	// 只到期当前场，不伪造未来服务器时间；统一移除函数维护预算、Region Revision 和客户端复制。
+	const double ServerTime = GetWorld()->GetTimeSeconds();
+	for (auto& Pair : FieldsById) Pair.Value.ExpireServerTime = ServerTime;
+	const int32 Removed = CleanupExpiredFields(ServerTime);
+	UE_LOG(LogCatEnvironment, Log, TEXT("Event=chum_fields_run_cleared World=%s NetMode=%d Authority=1 Removed=%d Aborted=%d"),
+		*GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), Removed, Tokens.Num());
+	// 成功/失败请求回执保留，避免晚到的昨日重复投放被再次扣费。
+	return Removed;
+}
+
 int32 UCatChumFieldSubsystem::CleanupExpiredFields(const double ServerTime)
 {
 	if (!GetWorld() || GetWorld()->GetNetMode() == NM_Client || !FMath::IsFinite(ServerTime)) return 0;

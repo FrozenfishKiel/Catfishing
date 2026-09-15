@@ -18,6 +18,7 @@ LEGACY_NAMES = (
     "CatFishingFightExchangeTask", "CatFishingFightExchangeTaskInstanceData",
     "CatFishingResolveTrueBiteSelectionTask", "ResolveFightExchangeFromStateTree",
     "SubmitFightAssist", "ForwardLegacyAssist", "ForwardLegacyScoop",
+    "CatGE_FightStaminaRegen", "CatFightStaminaRegenEffect", "FightStaminaRegenPerPeriod",
 )
 
 

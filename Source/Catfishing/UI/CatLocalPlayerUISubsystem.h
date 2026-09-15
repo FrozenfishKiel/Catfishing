@@ -8,6 +8,10 @@
 class APlayerController;
 class APawn;
 class ACatCharacter;
+class ACatfishingGameState;
+class UCatCollectionPageController;
+class UCatCollectionWidget;
+class UCatFishRevealWidget;
 class UCatHUDModel;
 class UCatHUDWidget;
 class UCatItemTooltipController;
@@ -30,7 +34,7 @@ class UCatWorldInfoController;
 struct FCatRunDayTransition;
 enum class ECatHUDAction : uint8;
 
-/** 每个 LocalPlayer 的 UI 生命周期协调器；只装配本地玩家拥有的 HUD、背包、物品提示和交互提示，不预建商店或聚合业务页面。 */
+/** 每个 LocalPlayer 的 UI 生命周期协调器；只装配本地玩家拥有的 HUD、背包、物品提示、交互提示和个人图鉴，不预建商店或聚合业务页面。 */
 UCLASS()
 class CATFISHING_API UCatLocalPlayerUISubsystem : public ULocalPlayerSubsystem
 {
@@ -63,6 +67,19 @@ public:
 
 	/** 返回当前 LocalPlayer 的库存窗口控制器；WBP 只用它关闭窗口，库存 Model 由各库存组件提供。 */
 	UCatInventoryPageController* GetInventoryPageController() const;
+
+	/** 切换当前 LocalPlayer 的个人图鉴页；HUD 猫爪印、图鉴按键和局内派对菜单三个入口都经这里，不各自创建页面。 */
+	void ToggleCollection();
+
+	/** 返回当前 LocalPlayer 的图鉴页面控制器；图鉴 WBP 只用它关闭窗口，记录仍由 Collection Model 单向推送。 */
+	UCatCollectionPageController* GetCollectionPageController() const;
+
+	/**
+	 * 本机此刻是否开着背包、图鉴或局内菜单三页之一。
+	 * 它是「打开界面」这件事的唯一事实源：HUD 读它决定世界进度那一位露不露面（交互册 §42），
+	 * 三页共用一层模态输入锁，所以任一开着都算开着。
+	 */
+	bool IsAnyPlayerPageOpen() const;
 
 	/** 返回此玩家已经装配的唯一悬停控制器；库存格只提交显示意图，不创建各自的 Tooltip。 */
 	UCatItemTooltipController* GetItemTooltipController() const;
@@ -117,6 +134,25 @@ private:
 
 		/** 遮罩条形控件使用的百分制总进度；只由 Start 受理、玩法软资源预热、地图包加载、Travel、World、BeginPlay、Transport 和本地 UI 的真实完成事实累加。 */
 		float ProgressPercent = 0.0f;
+
+		/**
+		 * 本机是否拿到了一份可展示的本局摘要。
+		 * 来源只有一个：本机 Save 子系统当前活动槽的摘要——也就是「存档记录的那一天」，不是本局实时天数。
+		 * 客户端没有活动槽（世界槽在房主那边），所以这里为 false，遮罩上写「房主尚未提供」而不是编一个 0。
+		 */
+		bool bHasRunSummary = false;
+
+		/** 存档记录的天数；bHasRunSummary 为 false 时不得显示。 */
+		int32 RunSummaryDayIndex = 0;
+
+		/** 存档记录的世界进度（原参考稿的「献祭进度」已作废，改称世界进度，主界面.md:71）。 */
+		int32 RunSummaryWorldProgress = 0;
+
+		/** 存档记录的当日任务点数；0 表示那份存档没记到目标。 */
+		int32 RunSummaryDailyOfferingTarget = 0;
+
+		/** 存档记录的缸内可献点数；INDEX_NONE 表示那份存档没记过这个量。 */
+		int32 RunSummaryTankOfferingPoints = INDEX_NONE;
 	};
 
 	/** 响应 Online 事实变更；实现按当前 World 调和 Frontend Root，并刷新局内 HUD 的只读投影。 */
@@ -130,6 +166,13 @@ private:
 
 	/** 从当前 Online 子系统重读事实并刷新遮罩；事件和遮罩存活期的 Slate 观察共用此入口，完成与否仍由实际就绪条件决定。 */
 	void RefreshGlobalLoadingScreenFromCurrentSnapshot();
+
+	/**
+	 * 把本机 Save 子系统当前活动槽的摘要填进遮罩表现（加载页三个量：世界进度、当日任务点数、缸内可献点数）。
+	 * 它读的是「存档记录的那一天」，不是本局实时天数——加载期玩法 World 还没起来，没有实时事实可读。
+	 * 客户端没有活动槽，填不出来就保持 bHasRunSummary=false，由写入侧显示「房主尚未提供」。
+	 */
+	void FillRunSummaryIntoLoadingPresentation(FCatGlobalLoadingPresentation& OutPresentation) const;
 
 	/** 从 Online、Lyra 式引擎 gate 与本地 UI 就绪事实生成遮罩表现；进入游戏会同步给出真实 gate 合成总进度。 */
 	bool ShouldShowGlobalLoadingScreen(const FCatOnlineSnapshot& Snapshot, FCatGlobalLoadingPresentation& OutPresentation) const;
@@ -198,6 +241,35 @@ private:
 	/** HUD 入口动作入口；背包和局内菜单都转交各自控制器，HUD 不创建或持有业务页面。 */
 	void HandleHUDActionRequested(ECatHUDAction Action);
 
+	/** 页面开合之后让 HUD 立刻重读一次投影；世界进度那一位的显隐只跟着这件事变，不另存一份开合状态。 */
+	void RefreshHUDAfterPageVisibilityChanged();
+
+	/**
+	 * 本机玩家自己的图鉴首次记录到达时，在钓点附近弹一次鱼种特写（ui 表第 14 行、主界面.md:121-125）。
+	 * 浮层 Widget 资产不在本轮范围：类没配置时只记录一次诊断，不创建原生白盒替身。
+	 */
+	void HandleLocalFishSpeciesFirstRecorded(FName FishDefinitionId, double WeightKilograms);
+
+	/**
+	 * 同房其他玩家解锁了新鱼种时给一条不打断操作的提示（主界面.md「当玩家解锁新鱼，他人视角」）。
+	 * 本人那一条走 HandleLocalFishSpeciesFirstRecorded 的特写，不在这里重复。
+	 */
+	void HandleFishSpeciesDiscoveryAnnounced();
+
+	/** 接上当前 World 的 GameState 新鱼种广播；换 Controller、换 World 时成对解绑。 */
+	void RefreshFishDiscoveryBinding();
+
+	/** 成对解除新鱼种广播与本机图鉴首记订阅；不清除已经记下的鱼种，只停止后续通知。 */
+	void ClearFishDiscoveryBinding();
+
+	/**
+	 * 把正式 IMC 里解析到的背包开关键名落一条日志。
+	 * ui 表第 6 行与主界面.md:95 都写「按 B 弹出背包、再按 B 关闭」，而键位本体在 IMC 资产里，
+	 * 代码这一侧看不见——对表因此连着两轮只能判 ❓。这里只记录不断言：
+	 * 键位改哪边仍要策划确认，程序不替它决定，也不为一个未裁的键把背包判死。
+	 */
+	void LogInventoryToggleKeyBinding();
+
 	/** 当前 LocalPlayer 的正式 Frontend 根 WBP，代表进入玩法前的顶层主界面；只在 Frontend World 创建，加载表现交给全局遮罩。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatFrontendRootWidget> FrontendRootWidget;
@@ -263,6 +335,44 @@ private:
 	/** 本玩家唯一的正式物品提示 View；显示在库存上层且不参与命中，卸载时移出视口。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatItemTooltipWidget> ItemTooltipWidget;
+
+	/** 当前 LocalPlayer 的个人图鉴 WBP；装配时创建但不入视口，三个图鉴入口打开时才由页面控制器挂上去。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatCollectionWidget> CollectionWidget;
+
+	/** 当前 LocalPlayer 的首解锁鱼种特写浮层；资产配置后才创建，一次性展示完由它自己请求收起。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatFishRevealWidget> FishRevealWidget;
+
+	/** 本机图鉴首次记录订阅的配对解绑句柄；AttachPlayerLakeUI 写入，DetachPlayerLakeUI 消费。 */
+	FDelegateHandle FishSpeciesFirstRecordedHandle;
+
+	/** GameState 新鱼种广播订阅的配对解绑句柄；接上 GameState 时写入，换绑或卸载时消费。 */
+	FDelegateHandle FishSpeciesDiscoveryHandle;
+
+	/** 当前订阅新鱼种广播的 GameState；换 World 时先从旧宿主解绑，避免迟到通知打到已失效的 UI 上。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<ACatfishingGameState> BoundDiscoveryGameState;
+
+	/** 已经播报过的新鱼种广播序号；复制重发同一条时不重复刷提示。 */
+	FGuid LastAnnouncedFishDiscoveryId;
+
+	/** 正式浮层 WBP 缺失时只记录一次，避免每条新鱼都刷同一条诊断。 */
+	bool bHasLoggedMissingFishRevealWidget = false;
+
+	/**
+	 * 首解锁特写的兜底收起计时。它不是设计里的「自动关闭」——设计给的出口是「Space 继续」，
+	 * 而本轮没有对应的 InputAction 资产，浮层又刻意不抢键盘焦点（抢了就违反「你仍可移动」）。
+	 * 所以留一个有界计时，保证这层绝不会卡死在屏幕上；资产接上之后这条计时只是个上限，不改变按键出口。
+	 */
+	FTimerHandle FishRevealDismissTimerHandle;
+
+	/** 背包开关键名只在装配完成后落一次日志，避免每次刷新都刷同一行。 */
+	bool bHasLoggedInventoryToggleKey = false;
+
+	/** 当前 LocalPlayer 的图鉴页面控制器；它管理图鉴页的开关、模态输入与焦点，并持有只读 Collection Model。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatCollectionPageController> CollectionPageController;
 
 	/** 当前 LocalPlayer 的局内主菜单 WBP；它只展示设置、保存和退出入口，不持有 Save 或 Online 系统。 */
 	UPROPERTY(Transient)

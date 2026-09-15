@@ -3,42 +3,16 @@
 #include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Character/CatCharacter.h"
-#include "Components/CapsuleComponent.h"
-#include "Condition/CatHerbRecoveryItemFragment.h"
 #include "Environment/CatWaterQuerySubsystem.h"
-#include "Equipment/CatEquipmentComponent.h"
 #include "Logging/CatLog.h"
 #include "Logging/CatLogContext.h"
 #include "Condition/CatConditionSettings.h"
 #include "Data/CatFishDefinition.h"
 #include "Fishing/CatFishingService.h"
-#include "Framework/Game/CatfishingGameModeBase.h"
 #include "GameFramework/Controller.h"
-#include "GameFramework/Pawn.h"
-#include "GameFramework/PlayerState.h"
 #include "Growth/CatGrowthComponent.h"
-#include "Inventory/CatInventoryComponent.h"
-#include "Inventory/CatInventoryItemDefinition.h"
-#include "Inventory/CatInventoryItemInstance.h"
 #include "Net/UnrealNetwork.h"
-
-namespace CatConditionComponentPrivate
-{
-// 草药库存终态键只按 RequestId 分组；载荷差异交给签名检查，使网络重试和冲突请求能被明确区分。
-FString MakeHerbInventoryTerminalKey(const FGuid RequestId)
-{
-	return FString::Printf(TEXT("HerbInventory|%s"), *RequestId.ToString(EGuidFormats::DigitsWithHyphens));
-}
-
-// 草药库存载荷签名记录施药者、目标和实例身份；同一个 RequestId 如果换目标或换药，会被视为非法重放。
-FString MakeHerbInventoryPayloadSignature(const AController* HelpingController, const ACatCharacter* TargetCharacter,
-	const FGuid HerbItemInstanceId)
-{
-	return FString::Printf(TEXT("Helper=%s|Target=%s|Herb=%s"),
-		*GetPathNameSafe(HelpingController), *GetPathNameSafe(TargetCharacter),
-		*HerbItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
-}
-}
+#include "TimerManager.h"
 
 // 构造流程：开启默认复制并关闭 Tick；Snapshot 初始 Revision=0 表示尚未提交身体离散事实。
 UCatConditionComponent::UCatConditionComponent()
@@ -54,13 +28,24 @@ void UCatConditionComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty
 	DOREPLIFETIME(ThisClass, Snapshot);
 }
 
+// 结束流程：收掉自愈计时器；Character 被销毁或局末清场后不得再有定时回调改一个已消失身体的状态。
+void UCatConditionComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (const UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(DownedSelfRecoveryTimer);
+		World->GetTimerManager().ClearTimer(StenchTimer);
+	}
+	Super::EndPlay(EndPlayReason);
+}
+
 // Snapshot 读取流程：返回本机服务器真相或客户端最近复制值，不把 ASC 数值复制进第二个 DTO。
 const FCatConditionSnapshot& UCatConditionComponent::GetSnapshot() const
 {
 	return Snapshot;
 }
 
-// Wet 写入流程：只接受落水、天气等 authority 反馈和真实变化；提交后增加 Revision/强制更新，明确不触碰 Poison、成长、搏斗体力、移动能力或 BodyAction。
+// Wet 写入流程：只接受落水、天气等 authority 反馈和真实变化；提交后增加 Revision/强制更新，明确不触碰成长、搏斗体力、移动能力或 BodyAction。
 void UCatConditionComponent::SetWetFromAuthority(const bool bNewWet)
 {
 	AActor* Owner = GetOwner();
@@ -100,15 +85,15 @@ ECatWaterExposureUpdate UCatConditionComponent::UpdateWaterExposureFromAuthority
 		return ECatWaterExposureUpdate::Unavailable;
 	}
 	OutImmersionDepthCentimeters = Immersion.ImmersionDepthCentimeters;
-	const bool bWet = Immersion.Containment != ECatWaterContainment::Outside
+	const bool bInWater = Immersion.Containment != ECatWaterContainment::Outside
 		&& OutImmersionDepthCentimeters >= Settings->WetWaterDepthCentimeters;
-	ECatWaterExposureState NewExposure = bWet ? ECatWaterExposureState::Shallow : ECatWaterExposureState::Dry;
+	ECatWaterExposureState NewExposure = bInWater ? ECatWaterExposureState::Shallow : ECatWaterExposureState::Dry;
 	if (Snapshot.WaterExposure == ECatWaterExposureState::Dangerous
-		&& bWet && OutImmersionDepthCentimeters > Settings->DangerousWaterExitDepthCentimeters)
+		&& bInWater && OutImmersionDepthCentimeters > Settings->DangerousWaterExitDepthCentimeters)
 	{
 		NewExposure = ECatWaterExposureState::Dangerous;
 	}
-	else if (bWet && OutImmersionDepthCentimeters >= Settings->DangerousWaterDepthCentimeters)
+	else if (bInWater && OutImmersionDepthCentimeters >= Settings->DangerousWaterDepthCentimeters)
 	{
 		DangerousWaterBuildUpSeconds += DeltaSeconds;
 		// 危险水域按 World 秒累计；极小容差只吸收浮点边界，避免正好到确认阈值的那帧被漏判。
@@ -123,13 +108,16 @@ ECatWaterExposureUpdate UCatConditionComponent::UpdateWaterExposureFromAuthority
 		DangerousWaterBuildUpSeconds = 0.0;
 	}
 
+	// 出水不等于立刻变干：天气也会把猫淋湿（见 GameMode 的雨天驱动），所以离水只清水域档，
+	// 湿毛本身留给唯一的 Wet 写口按当前天气与浸没一起裁决。
+	const bool bNewWet = bInWater || (Snapshot.bWet && NewExposure != ECatWaterExposureState::Dry);
 	const bool bDangerousEntered = Snapshot.WaterExposure != ECatWaterExposureState::Dangerous
 		&& NewExposure == ECatWaterExposureState::Dangerous;
-	if (Snapshot.bWet == bWet && Snapshot.WaterExposure == NewExposure)
+	if (Snapshot.bWet == bNewWet && Snapshot.WaterExposure == NewExposure)
 	{
 		return ECatWaterExposureUpdate::Unchanged;
 	}
-	Snapshot.bWet = bWet;
+	Snapshot.bWet = bNewWet;
 	Snapshot.WaterExposure = NewExposure;
 	++Snapshot.Revision;
 	PublishSnapshot();
@@ -154,176 +142,46 @@ ECatWaterExposureUpdate UCatConditionComponent::UpdateWaterExposureFromAuthority
 		: ECatWaterExposureUpdate::Changed;
 }
 
-// 食用预检流程：只读核对 authority、正式身体 runtime、鱼定义、ASC、倒地阈值与 Growth 入口；不修改实物鱼、Attribute、Snapshot 或终态缓存。
-ECatDomainCommandError UCatConditionComponent::ValidateFishConsumption(const UCatFishDefinition* FishDefinition) const
+// 疲惫档写入流程：纯演出，只在 authority 侧改快照。它不读写任何 Attribute、不影响倒地、不参与搏斗公式——
+// 疲惫数值制 2026-08-15 已废除，这里只准好笑，不准碍事。
+void UCatConditionComponent::SetFatigueTierFromAuthority(const ECatFatigueTier NewTier)
+{
+	const AActor* Owner = GetOwner();
+	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
+	if (!Owner || !Owner->HasAuthority() || !Settings || !Settings->IsRuntimeReady()
+		|| Snapshot.FatigueTier == NewTier)
+	{
+		return;
+	}
+	Snapshot.FatigueTier = NewTier;
+	++Snapshot.Revision;
+	PublishSnapshot();
+	UE_LOG(LogCatCharacter, Log, TEXT("Event=character_fatigue_tier_changed Character=%s Tier=%s Revision=%lld"),
+		*Owner->GetName(), *UEnum::GetValueAsString(NewTier), Snapshot.Revision);
+}
+
+// 食用预检流程：只读核对 authority、正式身体 runtime、鱼定义、ASC 与 Growth 入口；不修改实物鱼、Attribute、Snapshot 或终态缓存。
+ECatDomainCommandError UCatConditionComponent::ValidateFishConsumption(const UCatFishDefinition* FishDefinition,
+	const double WeightKilograms) const
 {
 	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
 	const ACatCharacter* Character = Cast<ACatCharacter>(GetOwner());
 	const UCatGrowthComponent* Growth = Character ? Character->GetGrowthComponent() : nullptr;
 	return GetOwner() && GetOwner()->HasAuthority() && GetDefault<UCatAbilitySettings>()->IsRuntimeEnabled()
 		&& FishDefinition && FishDefinition->IsRuntimeDefinitionReady() && ResolveAbilitySystem()
-		&& Settings && Settings->HasDownedThresholds()
-		&& Growth && Growth->ValidateFishGrowth(FishDefinition) == ECatDomainCommandError::None
+		&& Settings && Settings->IsRuntimeReady()
+		&& Growth && Growth->ValidateFishGrowth(FishDefinition, WeightKilograms) == ECatDomainCommandError::None
 		? ECatDomainCommandError::None : ECatDomainCommandError::DependencyUnavailable;
 }
 
-// 草药预检流程：只读核对 authority、施药者 Pawn、正式身体 runtime、ASC、倒地阈值、恢复量和服务器距离；不扣库存、不写 Attribute，也不制造临时占用状态。
-ECatDomainCommandError UCatConditionComponent::ValidateHerbRecovery(AController* HelpingController) const
-{
-	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
-	const APawn* HelpingPawn = HelpingController ? HelpingController->GetPawn() : nullptr;
-	const AActor* Owner = GetOwner();
-	return Owner && Owner->HasAuthority() && GetDefault<UCatAbilitySettings>()->IsRuntimeEnabled()
-		&& ResolveAbilitySystem() && Settings && Settings->HasDownedThresholds()
-		&& FMath::IsFinite(Settings->HerbPoisonRelief) && Settings->HerbPoisonRelief > 0.0
-		&& FMath::IsFinite(Settings->HerbUseRangeCentimeters) && Settings->HerbUseRangeCentimeters > 0.0
-		&& HelpingPawn && HelpingPawn->GetWorld() == Owner->GetWorld()
-		&& FVector::DistSquared(HelpingPawn->GetActorLocation(), Owner->GetActorLocation())
-			<= FMath::Square(Settings->HerbUseRangeCentimeters)
-		? ECatDomainCommandError::None : ECatDomainCommandError::PolicyUndecided;
-}
-
-FCatDomainCommandResult UCatConditionComponent::UseHerbOnCharacterFromAuthority(AController* HelpingController,
-	const FGuid RequestId, const FGuid HerbItemInstanceId)
-{
-	// 草药库存恢复流程：
-	// 1. 先确认请求键、施药者当前 Pawn、双方组件、正式库存和目标 World；草药消耗没有正式库存时直接失败。
-	// 2. 重放命中时直接返回首次库存和身体提交终态，避免网络重试再次扣草药或重新恢复目标。
-	// 3. 不是重放时才检查玩法 gate、正式库存里的草药实例、施药者状态、范围和目标恢复预检，随后在库存组件扣草药并提交身体恢复。
-	// 4. Equipment 只在正式扣药成功后刷新钓具选择读模型；草药数量和幂等终态都由正式库存链路裁决。
-	FCatDomainCommandResult Result;
-	Result.RequestId = RequestId;
-	UWorld* World = GetWorld();
-	ACatCharacter* TargetCharacter = Cast<ACatCharacter>(GetOwner());
-	ACatCharacter* ControlledCharacter = HelpingController ? Cast<ACatCharacter>(HelpingController->GetPawn()) : nullptr;
-	UCatEquipmentComponent* Equipment = ControlledCharacter ? ControlledCharacter->GetEquipmentComponent() : nullptr;
-	UCatInventoryComponent* OwnerInventory = ControlledCharacter ? ControlledCharacter->GetInventoryComponent() : nullptr;
-	UCatConditionComponent* SourceConditions = ControlledCharacter ? ControlledCharacter->GetConditionComponent() : nullptr;
-	if (!RequestId.IsValid() || !HerbItemInstanceId.IsValid() || !ControlledCharacter || !Equipment
-		|| !SourceConditions || !TargetCharacter || TargetCharacter->GetWorld() != World)
-	{
-		Result.Error = ECatDomainCommandError::InvalidPayload;
-		return Result;
-	}
-	if (!OwnerInventory)
-	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-		return Result;
-	}
-
-	const FString HerbTerminalKey = CatConditionComponentPrivate::MakeHerbInventoryTerminalKey(RequestId);
-	const FString HerbPayloadSignature = CatConditionComponentPrivate::MakeHerbInventoryPayloadSignature(
-		HelpingController, TargetCharacter, HerbItemInstanceId);
-	FCatDomainCommandResult CachedResult;
-	const ECatTerminalReplayOutcome ReplayOutcome = CatQueryTerminalReplay(TerminalCache,
-		TerminalPayloadByKey, HerbTerminalKey, HerbPayloadSignature, CachedResult,
-		[](FCatDomainCommandResult& Cached)
-		{
-			MarkCommandReplayed(Cached);
-		});
-	if (ReplayOutcome == ECatTerminalReplayOutcome::Replayed)
-	{
-		return CachedResult;
-	}
-	if (ReplayOutcome == ECatTerminalReplayOutcome::PayloadMismatch)
-	{
-		Result.Error = ECatDomainCommandError::InvalidPayload;
-		return Result;
-	}
-
-	const auto StoreHerbTerminal = [&](const FCatDomainCommandResult& TerminalResult)
-	{
-		// 草药库存分支把失败和成功都缓存为同一个终态；后续同 RequestId 重试只回放结果，避免读取已经变化的库存格。
-		TerminalCache.Add(HerbTerminalKey, TerminalResult);
-		TerminalPayloadByKey.Add(HerbTerminalKey, HerbPayloadSignature);
-		return TerminalResult;
-	};
-	const auto LogBodyFailure = [&]
-	{
-		// 身体提交失败时保持 Equipment 终态；日志只记录本次草药与身体结果。
-		UE_LOG(LogCatCharacter, Error,
-			TEXT("Event=herb_recovery_body_commit_failed RequestId=%s Helper=%s Target=%s HerbItem=%s BodyError=%s BodyReplay=%s BodyReplayError=%s BodyRevision=%lld"),
-			*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-			*GetNameSafe(ControlledCharacter), *GetNameSafe(TargetCharacter),
-			*HerbItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
-			*UEnum::GetValueAsString(Result.Error),
-			Result.bTerminalReplay ? TEXT("true") : TEXT("false"),
-			*UEnum::GetValueAsString(Result.ReplayedTerminalError), Result.Revision);
-	};
-
-	const ACatfishingGameModeBase* GameMode = World ? World->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
-	const UCatConditionSettings* ConditionSettings = GetDefault<UCatConditionSettings>();
-	if (!GameMode || !GameMode->CanAcceptGameplayCommand(HelpingController))
-	{
-		Result.Error = ECatDomainCommandError::CommandsClosed;
-		return Result;
-	}
-	if (SourceConditions->GetSnapshot().bDowned || !ConditionSettings
-		|| !FMath::IsFinite(ConditionSettings->HerbUseRangeCentimeters)
-		|| ConditionSettings->HerbUseRangeCentimeters <= 0.0
-		|| FVector::DistSquared(ControlledCharacter->GetActorLocation(), TargetCharacter->GetActorLocation())
-			> FMath::Square(ConditionSettings->HerbUseRangeCentimeters))
-	{
-		Result.Error = ECatDomainCommandError::InvalidPayload;
-		return Result;
-	}
-
-	const int32 HerbSlotIndex = OwnerInventory->FindInventorySlotIndexFromInstanceId(HerbItemInstanceId);
-	const FCatInventoryEntry* HerbEntry = OwnerInventory->GetInventoryEntryAtSlot(HerbSlotIndex);
-	const UCatInventoryItemInstance* HerbInstance = HerbEntry != nullptr ? HerbEntry->Instance.Get() : nullptr;
-	const UCatInventoryItemDefinition* Definition = HerbInstance != nullptr
-		? HerbInstance->GetItemDefinition() : nullptr;
-	const bool bHasHerbRecoveryFragment = Definition != nullptr
-		&& Definition->FindFragmentByClass(UCatHerbRecoveryItemFragment::StaticClass()) != nullptr;
-	const bool bHasCurrentHerb = HerbEntry != nullptr
-		&& HerbEntry->StackCount > 0
-		&& HerbInstance != nullptr
-		&& HerbInstance->GetItemInstanceId() == HerbItemInstanceId
-		&& Definition != nullptr
-		&& Definition->IsInventoryRuntimeDefinitionReady()
-		&& bHasHerbRecoveryFragment;
-	if (!bHasCurrentHerb)
-	{
-		Result.Error = ECatDomainCommandError::InvalidPayload;
-		return Result;
-	}
-	Result.Error = ValidateHerbRecovery(HelpingController);
-	if (Result.Error != ECatDomainCommandError::None)
-	{
-		return Result;
-	}
-	const TArray<FCatInventoryEntry> SavedEntries = OwnerInventory->GetInventoryEntries();
-	if (!OwnerInventory->ConsumeItemAtSlot(HerbSlotIndex, 1))
-	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-		return StoreHerbTerminal(Result);
-	}
-
-	if (!Equipment->RefreshLoadoutFromInventoryComponentFromAuthority())
-	{
-		OwnerInventory->ReplaceInventoryEntriesFromAuthority(SavedEntries, SavedEntries.Num());
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-		return StoreHerbTerminal(Result);
-	}
-
-	UE_LOG(LogCatCharacter, Log,
-		TEXT("Event=herb_inventory_consumed RequestId=%s Helper=%s Target=%s HerbItem=%s"),
-		*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-		*GetNameSafe(ControlledCharacter), *GetNameSafe(TargetCharacter),
-		*HerbItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
-
-	Result = ApplyCommittedHerbRecovery(HelpingController, RequestId);
-	if (!CatIsAcceptedDomainCommandResult(Result))
-	{
-		LogBodyFailure();
-	}
-	return StoreHerbTerminal(Result);
-}
-
-// 进食流程：先按 RequestId 重放，再验证 authority/定义/项目 ASC/Growth；Toxic 鱼只通过 ApplyPoisonDelta/GE 增加 Poison。
-// Poison 或 Growth 任一提交失败都不裁决 Downed；全部身体后置事实成立后才推进 Snapshot 并缓存完整终态。
+// 进食流程：先按 RequestId 重放，再验证 authority/定义/项目 ASC/Growth。
+//
+// 中毒按鱼各配、无渐进升级（猫册 §3.1.4，09-12 收口）：这条鱼是不是重毒由它自己的食用结论说了算，
+// 最重一档＝吃下即倒地，别的档位是按鱼种配置的限时 buff，不累加、不推高任何跨鱼计数。
+// 墓碑（2026-09-12）：原实现是 `Toxic 鱼 → ApplyPoisonDelta(PoisonIncrease)`，再由阈值 100 裁决倒地，
+// 后果是连吃两条轻毒鱼也会倒地——那正是设计 2026-08-21 砍掉的渐进加重模型。
 FCatDomainCommandResult UCatConditionComponent::ConsumeCommittedFish(const FGuid RequestId,
-	const UCatFishDefinition* FishDefinition)
+	const UCatFishDefinition* FishDefinition, const double WeightKilograms)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
@@ -337,104 +195,148 @@ FCatDomainCommandResult UCatConditionComponent::ConsumeCommittedFish(const FGuid
 	UCatAbilitySystemComponent* ASC = ResolveAbilitySystem();
 	const ACatCharacter* Character = Cast<ACatCharacter>(GetOwner());
 	UCatGrowthComponent* Growth = Character ? Character->GetGrowthComponent() : nullptr;
-	if (!RequestId.IsValid() || ValidateFishConsumption(FishDefinition) != ECatDomainCommandError::None)
+	if (!RequestId.IsValid() || ValidateFishConsumption(FishDefinition, WeightKilograms) != ECatDomainCommandError::None)
 	{
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 	}
 	else
 	{
-		if (FishDefinition->FoodSafety == ECatFishFoodSafety::Toxic
-			&& !ASC->ApplyPoisonDelta(static_cast<float>(FishDefinition->PoisonIncrease)))
+		const FCatDomainCommandResult GrowthResult = Growth->ApplyCommittedFish(RequestId, FishDefinition,
+			WeightKilograms);
+		if (!CatIsAcceptedDomainCommandResult(GrowthResult))
 		{
-			Result.Error = ECatDomainCommandError::DependencyUnavailable;
+			Result.Error = GrowthResult.bTerminalReplay ? GrowthResult.ReplayedTerminalError : GrowthResult.Error;
+			Result.Revision = Snapshot.Revision;
 		}
 		else
 		{
-			const FCatDomainCommandResult GrowthResult = Growth->ApplyCommittedFish(RequestId, FishDefinition);
-			if (!CatIsAcceptedDomainCommandResult(GrowthResult))
+			// T02：实物鱼已提交后执行逐鱼限时 GE；缺绑定只拒绝该效果并告警，不虚构属主数值。
+			ASC->ApplyFishTimedEffectFromAuthority(FishDefinition, RequestId);
+			// 黄色体力：来源＝特定鱼种的食用效果（数值成长页 §4）。护盾无上限，正向直接累加。
+			if (FMath::IsFinite(FishDefinition->YellowStaminaGrant) && FishDefinition->YellowStaminaGrant > 0.0)
 			{
-				Result.Error = GrowthResult.bTerminalReplay ? GrowthResult.ReplayedTerminalError : GrowthResult.Error;
-				Result.Revision = Snapshot.Revision;
+				ASC->ApplyYellowFightStaminaDelta(static_cast<float>(FishDefinition->YellowStaminaGrant));
 			}
-			else if (FishDefinition->YellowStaminaGrant > 0
-				&& !ASC->ApplyYellowFightStaminaDelta(static_cast<float>(FishDefinition->YellowStaminaGrant)))
+			if (FishDefinition->FoodSafety == ECatFishFoodSafety::SevereToxic)
 			{
-				Result.Error = ECatDomainCommandError::DependencyUnavailable;
+				ApplySevereToxicityFromAuthority();
 			}
-			else
+			// 臭臭鱼的「请勿靠近」：吃下即起 90 秒臭气（联机社交 §3.1.4、吃鱼效果页）。
+			// 名册与时长都在 CatConditionSettings；哪一项没配都只是这个副作用不发生，进食本身照常成立。
+			const UCatConditionSettings* ConditionSettings = GetDefault<UCatConditionSettings>();
+			if (ConditionSettings->IsStenchFish(FishDefinition->FishDefinitionId))
 			{
-				UE_LOG(LogCatCharacter, Log, TEXT("Event=fish_yellow_stamina_grant RequestId=%s World=%s NetMode=%d Authority=1 Actor=%s FishDefinitionId=%s Grant=%.3f YellowAfter=%.3f Result=Committed"),
-					*RequestId.ToString(), *GetNameSafe(GetWorld()), int32(GetOwner()->GetNetMode()), *GetNameSafe(GetOwner()),
-					*FishDefinition->FishDefinitionId.ToString(), FishDefinition->YellowStaminaGrant, ASC->GetYellowFightStamina());
-				EvaluateDownedFromAttributes(ECatRecoveryMode::None);
-				Result.bCommitted = true;
-				Result.Error = ECatDomainCommandError::None;
-				Result.Revision = Snapshot.Revision;
+				if (ConditionSettings->HasStench())
+				{
+					ApplyStenchFromAuthority(ASC->ResolveEatingEffectDuration(ConditionSettings->StenchSeconds));
+				}
+				else
+				{
+					UE_LOG(LogCatCharacter, Warning,
+						TEXT("Event=character_stench_unconfigured Character=%s Fish=%s Reason=StenchSecondsUnset"),
+						*GetNameSafe(GetOwner()), *FishDefinition->FishDefinitionId.ToString());
+				}
 			}
+			else if (ConditionSettings->StenchFishDefinitionIds.IsEmpty())
+			{
+				// 名册整张空：这不是「这条鱼不臭」，是没人填过名册。记一次，免得「请勿靠近」静默消失。
+				UE_LOG(LogCatCharacter, Warning,
+					TEXT("Event=character_stench_roster_empty Character=%s Fish=%s Reason=StenchFishDefinitionIdsEmpty"),
+					*GetNameSafe(GetOwner()), *FishDefinition->FishDefinitionId.ToString());
+			}
+			Result.bCommitted = true;
+			Result.Error = ECatDomainCommandError::None;
+			Result.Revision = Snapshot.Revision;
 		}
 	}
 	TerminalCache.Add(Key, Result);
 	return Result;
 }
 
-// 野外自救流程：要求请求者正拥有本 Character，再读取显式较慢清毒值；0/非法配置返回 PolicyUndecided，成功交统一恢复路径。
+// 重毒身体后果流程：唯一的「把猫打倒」入口。倒地本身没有数值刻度——按鱼各配、无渐进升级，
+// 所以这里不接受强度参数，只接受「这一口是最重一档」这个结论。
+bool UCatConditionComponent::ApplySevereToxicityFromAuthority()
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || Snapshot.bDowned)
+	{
+		return false;
+	}
+	SetDownedFromAuthority(true, ECatRecoveryMode::None);
+	return Snapshot.bDowned;
+}
+
+// 臭气写入流程：只在 authority 侧提交，重复吃只把结束时间整体后移（没有层数或强度这一说）。
+// 它不碰倒地、不碰恢复方式、不碰任何 Attribute——「请勿靠近」是一层社交屏蔽，不是身体损伤。
+bool UCatConditionComponent::ApplyStenchFromAuthority(const double DurationSeconds)
+{
+	UWorld* World = GetWorld();
+	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !World || !Settings || !Settings->IsRuntimeReady()
+		|| !FMath::IsFinite(DurationSeconds) || DurationSeconds <= 0.0)
+	{
+		return false;
+	}
+	Snapshot.bStench = true;
+	Snapshot.StenchEndsServerTimeSeconds = World->GetTimeSeconds() + DurationSeconds;
+	++Snapshot.Revision;
+	PublishSnapshot();
+	World->GetTimerManager().SetTimer(StenchTimer, this, &ThisClass::HandleStenchElapsed, DurationSeconds, false);
+	UE_LOG(LogCatCharacter, Log,
+		TEXT("Event=character_stench_started Character=%s DurationSeconds=%.2f EndsAt=%.2f Revision=%lld"),
+		*GetOwner()->GetName(), DurationSeconds, Snapshot.StenchEndsServerTimeSeconds, Snapshot.Revision);
+	return true;
+}
+
+// 臭气到点流程：只清这一层状态；此刻猫可能仍倒地、仍湿着，那些各走各的入口。
+void UCatConditionComponent::HandleStenchElapsed()
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !Snapshot.bStench)
+	{
+		return;
+	}
+	Snapshot.bStench = false;
+	Snapshot.StenchEndsServerTimeSeconds = 0.0;
+	++Snapshot.Revision;
+	PublishSnapshot();
+	UE_LOG(LogCatCharacter, Log, TEXT("Event=character_stench_ended Character=%s Revision=%lld"),
+		*GetOwner()->GetName(), Snapshot.Revision);
+}
+
+// 野外自救流程：要求请求者正拥有本 Character；单人局也走得通，不要求其他玩家在场。
+// 休息是解除倒地的两条正式路径之一（猫册 v1.3：草药删除后只剩救援与休息）。
 FCatDomainCommandResult UCatConditionComponent::RequestFieldSelfRecovery(AController* RequestingController,
 	const FGuid RequestId)
 {
 	const ACatCharacter* Character = Cast<ACatCharacter>(GetOwner());
-	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
-	if (!Character || Character->GetController() != RequestingController || !Settings
-		|| !FMath::IsFinite(Settings->FieldRestPoisonRelief) || Settings->FieldRestPoisonRelief <= 0.0)
+	if (!Character || Character->GetController() != RequestingController)
 	{
 		FCatDomainCommandResult Result;
 		Result.RequestId = RequestId;
 		Result.Error = ECatDomainCommandError::PolicyUndecided;
 		return Result;
 	}
-	return ApplyRecovery(RequestId, ECatRecoveryMode::FieldSelfRecovery, Settings->FieldRestPoisonRelief);
+	return ApplyRecovery(RequestId, ECatRecoveryMode::FieldSelfRecovery);
 }
 
-// 营地休息流程：要求调用者拥有本 Character 且上层已验证固定营地范围，再用显式营地清毒值交统一恢复；不会强制等待或启动计时任务。
+// 营地休息流程：要求调用者拥有本 Character 且上层已验证固定营地范围；成功即起身。
 FCatDomainCommandResult UCatConditionComponent::RequestCampRest(AController* RequestingController,
 	const FGuid RequestId, const bool bAtCamp)
 {
 	const ACatCharacter* Character = Cast<ACatCharacter>(GetOwner());
-	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
-	if (!bAtCamp || !Character || Character->GetController() != RequestingController || !Settings
-		|| !FMath::IsFinite(Settings->CampRestPoisonRelief) || Settings->CampRestPoisonRelief <= 0.0)
+	if (!bAtCamp || !Character || Character->GetController() != RequestingController)
 	{
 		FCatDomainCommandResult Result;
 		Result.RequestId = RequestId;
 		Result.Error = ECatDomainCommandError::PolicyUndecided;
 		return Result;
 	}
-	return ApplyRecovery(RequestId, ECatRecoveryMode::CampRest, Settings->CampRestPoisonRelief);
+	return ApplyRecovery(RequestId, ECatRecoveryMode::CampRest);
 }
 
-// 草药恢复流程：上层完成库存事务后调用；先按 Herb+RequestId 重放首次终态，再验证 authority/Controller/显式恢复值和距离，失败也缓存以避免同一库存提交请求搬近后变成成功。
-FCatDomainCommandResult UCatConditionComponent::ApplyCommittedHerbRecovery(AController* HelpingController,
-	const FGuid RequestId)
-{
-	FCatDomainCommandResult Result;
-	Result.RequestId = RequestId;
-	const FString Key = MakeTerminalKey(*UEnum::GetValueAsString(ECatRecoveryMode::Herb), RequestId);
-	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
-	{
-		Result = *Cached;
-		MarkCommandReplayed(Result);
-		return Result;
-	}
-	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
-	if (!HelpingController || ValidateHerbRecovery(HelpingController) != ECatDomainCommandError::None)
-	{
-		Result.Error = ECatDomainCommandError::PolicyUndecided;
-		TerminalCache.Add(Key, Result);
-		return Result;
-	}
-	return ApplyRecovery(RequestId, ECatRecoveryMode::Herb, Settings->HerbPoisonRelief);
-}
-
-// 搬运完成流程：先重放已完成 RequestId，再要求真实救援者、固定营地落点和目标仍处于 Downed；不修改 Attribute，只把恢复方式标为 CarriedToCamp，后续休息/草药继续处理阈值。
+// 搬运完成流程：先重放已完成 RequestId，再要求真实救援者、固定营地落点和目标仍处于 Downed。
+// 「伙伴搬运回营地即解除倒地」（猫册 §3.1.5）：到点就起身，不需要再补一次营地休息。
+// 墓碑（2026-09-12）：原实现只写 RecoveryMode=CarriedToCamp、既不清倒地也不动中毒值，
+// 被搬回营地的猫还得自己再休息一次才能站起来，与设计相反。
 FCatDomainCommandResult UCatConditionComponent::CompleteCarryToCamp(AController* HelpingController,
 	const FGuid RequestId, const bool bAtCampRescuePoint)
 {
@@ -459,14 +361,36 @@ FCatDomainCommandResult UCatConditionComponent::CompleteCarryToCamp(AController*
 		TerminalCache.Add(Key, Result);
 		return Result;
 	}
-	Snapshot.RecoveryMode = ECatRecoveryMode::CarriedToCamp;
-	++Snapshot.Revision;
-	PublishSnapshot();
+	// 臭着的猫搬不动（2026-08-21 裁定：搬运算「帮助」，被臭气屏蔽）。这是设计有意留的段子——
+	// 「太臭了没法救」，他只能自己爬回营、等自愈计时，或者等翻天自动救起。
+	// 注意屏蔽的只有「别人来搬」：自救、营地休息、自愈到点、翻天救起四条路都不读臭气。
+	if (Snapshot.bStench)
+	{
+		Result.Error = ECatDomainCommandError::PermissionDenied;
+		TerminalCache.Add(Key, Result);
+		UE_LOG(LogCatCharacter, Log,
+			TEXT("Event=character_rescue_rejected Character=%s Reason=Stench RequestId=%s"),
+			*GetNameSafe(GetOwner()), *RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+		return Result;
+	}
+	SetDownedFromAuthority(false, ECatRecoveryMode::CarriedToCamp);
 	Result.bCommitted = true;
 	Result.Error = ECatDomainCommandError::None;
 	Result.Revision = Snapshot.Revision;
 	TerminalCache.Add(Key, Result);
 	return Result;
+}
+
+// 翻天自动救起流程：只在 authority 侧对仍倒地的猫生效，传送回营地由调用方先做。
+// 「翻天时仍在倒地的自动救起，清晨在营地醒来」（猫册 §3.1.5）；没倒地的猫是空操作。
+bool UCatConditionComponent::CompleteDayBreakRescueFromAuthority()
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !Snapshot.bDowned)
+	{
+		return false;
+	}
+	SetDownedFromAuthority(false, ECatRecoveryMode::DayBreakAutoRescue);
+	return true;
 }
 
 // Snapshot 复制回调流程：客户端只消费完整离散事实；表现系统可查询它，但这里不写 ASC、不请求救援也不推导死亡。
@@ -475,10 +399,10 @@ void UCatConditionComponent::OnRep_Snapshot()
 	OnSnapshotChanged.Broadcast();
 }
 
-// 统一恢复流程：按 Mode+RequestId 幂等重放，验证 authority/项目 ASC/阈值 gate 后通过 ApplyPoisonDelta 走 GE 减少 Poison。
-// ASC 拒绝恢复时返回 PolicyUndecided 且不重新裁决 Downed；成功才发布恢复后的唯一 Snapshot 并缓存首次终态。
-FCatDomainCommandResult UCatConditionComponent::ApplyRecovery(const FGuid RequestId, const ECatRecoveryMode Mode,
-	const double PoisonRelief)
+// 统一恢复流程：按 Mode+RequestId 幂等重放，验证 authority 与运行 gate 后直接解除倒地。
+// 墓碑（2026-09-12）：原实现是「按各路径的清毒点数减 Poison，再拿阈值重算 bDowned」，
+// 于是营地休息一次只清一半、野外休息要按七次。渐进模型删除后恢复就是布尔的：休息到了就起来。
+FCatDomainCommandResult UCatConditionComponent::ApplyRecovery(const FGuid RequestId, const ECatRecoveryMode Mode)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
@@ -489,54 +413,71 @@ FCatDomainCommandResult UCatConditionComponent::ApplyRecovery(const FGuid Reques
 		MarkCommandReplayed(Result);
 		return Result;
 	}
-	UCatAbilitySystemComponent* ASC = ResolveAbilitySystem();
 	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
-	if (!GetOwner() || !GetOwner()->HasAuthority() || !RequestId.IsValid() || !ASC || !Settings
-		|| !Settings->HasDownedThresholds()
-		|| !FMath::IsFinite(PoisonRelief) || PoisonRelief < 0.0)
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !RequestId.IsValid() || !Settings || !Settings->IsRuntimeReady())
 	{
 		Result.Error = ECatDomainCommandError::PolicyUndecided;
 	}
 	else
 	{
-		if (!ASC->ApplyPoisonDelta(-static_cast<float>(PoisonRelief)))
-		{
-			Result.Error = ECatDomainCommandError::PolicyUndecided;
-		}
-		else
-		{
-			EvaluateDownedFromAttributes(Mode);
-			Result.bCommitted = true;
-			Result.Error = ECatDomainCommandError::None;
-			Result.Revision = Snapshot.Revision;
-		}
+		// 没倒地时休息也算成功：它是猫味动作，不是只有倒地才能按的急救键。
+		SetDownedFromAuthority(false, Mode);
+		Result.bCommitted = true;
+		Result.Error = ECatDomainCommandError::None;
+		Result.Revision = Snapshot.Revision;
 	}
 	TerminalCache.Add(Key, Result);
 	return Result;
 }
 
-// 倒地裁决流程：读取 ASC Poison 与显式阈值，更新唯一 Downed/RecoveryMode；首次进入倒地时终止相关 FishingSession，始终没有死亡分支。
-void UCatConditionComponent::EvaluateDownedFromAttributes(const ECatRecoveryMode RecoveryMode)
+// 倒地写入流程：唯一的 bDowned 写口。
+// 首次倒地释放该身体的钓鱼操作位（钓鱼中倒地＝中断钓鱼），并按配置起一次性自愈计时；
+// 起身时收掉计时器。始终没有死亡分支——项目不存在状态死亡。
+void UCatConditionComponent::SetDownedFromAuthority(const bool bNewDowned, const ECatRecoveryMode RecoveryMode)
 {
-	UCatAbilitySystemComponent* ASC = ResolveAbilitySystem();
+	UWorld* World = GetWorld();
 	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
-	if (!ASC || !Settings->HasDownedThresholds())
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !Settings || !Settings->IsRuntimeReady())
 	{
 		return;
 	}
 	const bool bWasDowned = Snapshot.bDowned;
-	Snapshot.bDowned = ASC->IsPoisonAtLeast(static_cast<float>(Settings->PoisonDownedThreshold));
-	Snapshot.RecoveryMode = Snapshot.bDowned ? RecoveryMode : ECatRecoveryMode::None;
+	Snapshot.bDowned = bNewDowned;
+	Snapshot.RecoveryMode = bNewDowned ? ECatRecoveryMode::None : RecoveryMode;
 	++Snapshot.Revision;
 	PublishSnapshot();
-	if (!bWasDowned && Snapshot.bDowned)
+	if (!bWasDowned && bNewDowned)
 	{
-		UE_LOG(LogCatCharacter, Warning, TEXT("Event=character_downed Character=%s Revision=%lld Recovery=%s"),
-			*GetOwner()->GetName(), Snapshot.Revision, *UEnum::GetValueAsString(Snapshot.RecoveryMode));
-		if (UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
+		UE_LOG(LogCatCharacter, Warning, TEXT("Event=character_downed Character=%s Revision=%lld"),
+			*GetOwner()->GetName(), Snapshot.Revision);
+		if (UCatFishingService* Fishing = World ? World->GetSubsystem<UCatFishingService>() : nullptr)
 		{
 			Fishing->ReleaseFishingOperatorForCharacter(Cast<ACatCharacter>(GetOwner()));
 		}
+		if (World && Settings->HasDownedSelfRecovery())
+		{
+			World->GetTimerManager().SetTimer(DownedSelfRecoveryTimer, this,
+				&ThisClass::HandleDownedSelfRecoveryElapsed, Settings->DownedSelfRecoverySeconds, false);
+		}
+	}
+	else if (bWasDowned && !bNewDowned)
+	{
+		UE_LOG(LogCatCharacter, Log, TEXT("Event=character_recovered Character=%s Recovery=%s Revision=%lld"),
+			*GetOwner()->GetName(), *UEnum::GetValueAsString(RecoveryMode), Snapshot.Revision);
+		if (World)
+		{
+			World->GetTimerManager().ClearTimer(DownedSelfRecoveryTimer);
+		}
+	}
+}
+
+// 自愈到点流程：倒地满配置时长后自己站起来。
+// 它让爬回营地与队友搬运降级为加速手段而不是唯一出路，也解掉「全队都倒地、这一天结束不了」的死锁。
+void UCatConditionComponent::HandleDownedSelfRecoveryElapsed()
+{
+	if (Snapshot.bDowned)
+	{
+		SetDownedFromAuthority(false, ECatRecoveryMode::SelfHealTimeout);
 	}
 }
 

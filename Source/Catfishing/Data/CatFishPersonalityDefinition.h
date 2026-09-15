@@ -5,6 +5,11 @@
 #include "Fishing/Simulation/CatFishSteeringModel.h"
 #include "CatFishPersonalityDefinition.generated.h"
 
+/**
+ * 咬钩节奏的测试期模板。
+ * 2026-09-09 晚裁「四套性格模板是测试用，正式口径逐鱼配」；咬钩节奏那几列还没进鱼表格，
+ * T10 已移除生产时间消费者，仅保留旧资产反射兼容；最终鱼资产迁移后再核查退役。
+ */
 UCLASS(BlueprintType)
 class CATFISHING_API UCatBitePersonalityDefinition : public UPrimaryDataAsset
 {
@@ -12,15 +17,28 @@ class CATFISHING_API UCatBitePersonalityDefinition : public UPrimaryDataAsset
 public:
 	bool IsRuntimeDefinitionReady() const;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly) FName BitePersonalityId = NAME_None;
-	/** 只保留旧资产序列化载荷；不参与运行时窗口与就绪判定。 */
-	UPROPERTY(meta=(DeprecatedProperty)) double ProbeDurationSeconds = 0.0;
-	UPROPERTY(meta=(DeprecatedProperty)) double TrueBiteWindowSeconds = 0.0;
-	UPROPERTY(meta=(DeprecatedProperty)) double PerfectHookWindowSeconds = 0.0;
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0", ClampMax="1")) double PerfectFishStrengthMultiplier = 0.0;
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0", ClampMax="1")) double PerfectFishStaminaMultiplier = 0.0;
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0", ClampMax="1")) double PerfectInitialLineLengthMultiplier = 0.0;
+	/** 墓碑（T10，钓鱼规则 §3.4）：只为旧 Bite 资产保留反射，生产改读鱼定义。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(DeprecatedProperty, ClampMin="0", Units="s")) double ProbeDurationSeconds = 0.0;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(DeprecatedProperty, ClampMin="0")) double TrueBiteWindowSeconds = 0.0;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(DeprecatedProperty, ClampMin="0")) double PerfectHookWindowSeconds = 0.0;
+	/**
+	 * 以下三项完美削减倍率已退为过渡字段：正式口径按鱼册稀有度档取，
+	 * 见 UCatFishCatalogSettings::ResolvePerfectHookReduction（2026-09-09 晚裁「四套性格模板是测试用」）。
+	 * 2026-09-13：生产会话与 Debug 均已改读目录；这三项不参与就绪校验，也不产生玩法输出。
+	 * 旧 Bite 资产仍序列化它们，二进制 Blueprint/外部消费者尚未经编辑器迁移核实；本轮只保留反射兼容。
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(DeprecatedProperty, ClampMin="0", ClampMax="1")) double PerfectFishStrengthMultiplier = 0.0;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(DeprecatedProperty, ClampMin="0", ClampMax="1")) double PerfectFishStaminaMultiplier = 0.0;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(DeprecatedProperty, ClampMin="0", ClampMax="1")) double PerfectInitialLineLengthMultiplier = 0.0;
 };
 
+/**
+ * 搏斗节奏的测试期模板。
+ * 2026-09-09 晚裁「四套性格模板是测试用，正式口径逐鱼配（鱼表格食性、发力段长、休息段长、游速系数四列）」，
+ * 台账 D-16「不恢复旧模型」同批被推翻。四套 Fight_* 资产不删，但只作为鱼表某列未填时的兜底。
+ * 取值必须走 UCatFishingSettings::TryResolveFishBehavior，不要直接读下面的 AdaptiveSteeringConfig
+ * 与 FullEffortMovementSpeedCentimetersPerSecond ——直接读会绕过鱼表，让那四列白填。
+ */
 UCLASS(BlueprintType)
 class CATFISHING_API UCatFightPersonalityDefinition : public UPrimaryDataAsset
 {
@@ -36,8 +54,10 @@ public:
 	/** 0 仅为旧序列化格式；完成迁移后为 1，后续非法零游速不得回退旧参数。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Adaptive Motion")
 	int32 AdaptiveMotionVersion = 0;
+	/** 满力游速基数（厘米/秒）；本鱼实际满力游速 ＝ 本值 × 鱼表「游速系数」列，见 TryResolveFishBehavior。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Adaptive Motion", meta=(ClampMin="1", Units="cm/s"))
 	double FullEffortMovementSpeedCentimetersPerSecond = 0.0;
+	/** 转向/出力/段长的模板值；其中发力段长与休息段长两项会被鱼表同名列覆盖，其余仍以本模板为准。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Adaptive Motion")
 	FCatFishSteeringConfig AdaptiveSteeringConfig;
 	/** 仅保留已序列化资产的迁移载荷；正式蓝图引用未全部迁移前不移除反射身份。 */

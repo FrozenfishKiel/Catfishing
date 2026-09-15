@@ -168,7 +168,7 @@ bool FCatFishingFormalPhysicalRunnerTest::RunTest(const FString& Parameters)
 		// Only the already-hooked starting transaction and heavy-fish sample are seeded.
 		// All subsequent timers, behavior, forces, surface queries and payments are production consumers.
 		UCatFishDefinition* FishDefinition = DuplicateObject<UCatFishDefinition>(FishAsset, Session);
-		FishDefinition->FishFightStamina = 1000;
+		FishDefinition->FishFightStaminaPerKilogram = 1000;
 		const FVector Outward = FVector(1, .4, 0).GetSafeNormal();
 		FVector FishStart = Rod->GetRodTipWorldTransform().GetLocation() + Outward * 500;
 		FishStart.Z = 0;
@@ -188,7 +188,7 @@ bool FCatFishingFormalPhysicalRunnerTest::RunTest(const FString& Parameters)
 		Session->Snapshot.RodActor = Rod;
 		Session->Snapshot.FisherPlayerState = Player;
 		Session->Snapshot.FishEncounterActor = Fish;
-		Session->Snapshot.FishFightStaminaRemaining = FishDefinition->FishFightStamina;
+		Session->Snapshot.FishFightStaminaRemaining = FishDefinition->FishFightStaminaPerKilogram;
 		Session->AttemptSnapshot.RodItemInstanceId = Loadout.RodItemInstanceId;
 		Session->AttemptSnapshot.CastAttemptId = CastAttemptId;
 		Session->AttemptSnapshot.WaterRegion = Region->GetWaterRegionHandle();

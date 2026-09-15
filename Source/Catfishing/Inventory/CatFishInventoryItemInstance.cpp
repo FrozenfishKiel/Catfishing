@@ -1,8 +1,13 @@
 #include "Inventory/CatFishInventoryItemInstance.h"
 
 #include "Character/CatCharacter.h"
+#include "Collection/CatFishCollectionLayers.h"
+#include "Collection/CatRunImprintService.h"
 #include "Condition/CatConditionComponent.h"
 #include "Data/CatFishDefinition.h"
+#include "Engine/World.h"
+#include "GameFramework/Controller.h"
+#include "GameFramework/PlayerState.h"
 #include "Inventory/CatInventoryComponent.h"
 #include "Items/Fish/CatFishPickupActor.h"
 #include "Net/UnrealNetwork.h"
@@ -115,8 +120,33 @@ bool UCatFishInventoryItemInstance::CanUseFromInventory(
 		&& WeightKilograms > 0.0
 		&& Definition != nullptr
 		&& Definition->IsRuntimeDefinitionReady()
+		// 不可食用的鱼（咸鱼、湖心巨影）在这里直接拒绝：理由是「它不能吃」，
+		// 不是绕道去看经验系数是不是 0——那是两件事，只是在鱼表里恰好同时成立。
+		&& Definition->IsEdible()
 		&& Condition != nullptr
-		&& Condition->ValidateFishConsumption(Definition) == ECatDomainCommandError::None;
+		&& Condition->ValidateFishConsumption(Definition, WeightKilograms) == ECatDomainCommandError::None;
+}
+
+namespace CatFishInventoryConsumePrivate
+{
+	// 知识层授予流程：从吃鱼的猫解析服务器私有身份，交给一局图鉴服务生成 FishKnowledge Grant。
+	// 授予按「接收者+鱼种」去重，吃第二条同种鱼不会再生成待 ACK 的 Grant；本函数不改身体状态也不碰库存。
+	void GrantFishKnowledgeFromAuthority(const ACatCharacter* EatingCharacter, const UCatFishDefinition* Definition)
+	{
+		if (!CatFishCollectionLayers::HasKnowledgeLayer(Definition) || !EatingCharacter)
+		{
+			return;
+		}
+		const AController* Controller = EatingCharacter->GetController();
+		const APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
+		UCatRunImprintService* Imprint = EatingCharacter->GetWorld()
+			? EatingCharacter->GetWorld()->GetSubsystem<UCatRunImprintService>() : nullptr;
+		if (!Imprint || !PlayerState || !PlayerState->GetUniqueId().IsValid())
+		{
+			return;
+		}
+		Imprint->RecordFishKnowledge(Definition->FishDefinitionId, PlayerState->GetUniqueId()->ToString());
+	}
 }
 
 // 鱼库存 Use 提交流程：
@@ -162,12 +192,17 @@ FCatDomainCommandResult UCatFishInventoryItemInstance::UseFromInventorySlotFromA
 			[&](FCatInventoryItemUseResult& MutableResult)
 			{
 				(void)MutableResult;
+				// 吃鱼经验 ＝ 经验系数 × 实际重量，重量只有鱼实例知道，所以必须由这里一路带到成长槽。
 				const FCatDomainCommandResult BodyResult =
-					Condition->ConsumeCommittedFish(UseContext.RequestId, Definition);
+					Condition->ConsumeCommittedFish(UseContext.RequestId, Definition, WeightKilograms);
 				if (!CatIsAcceptedDomainCommandResult(BodyResult))
 				{
 					return false;
 				}
+				// 知识层：自己吃过才解锁食用效果，谁吃谁记（图鉴 §3.1.4:124）。
+				// 收件人是这次真的把鱼吃下去的人，不是钓到它的人——别人钓的鱼被自己吃掉，效果记进自己的图鉴；
+				// 被拿走吃掉就记进拿鱼那个人的。不可食用的鱼没有这一层，这里也不会走到（吃鱼链本身 fail-closed）。
+				CatFishInventoryConsumePrivate::GrantFishKnowledgeFromAuthority(Character, Definition);
 				// 身体效果已经接受，库存不会再回滚这条鱼；此时才释放容器保管的隐藏 Actor，避免失败回滚留下失配的库存条目。
 				if (ACatFishPickupActor* RetainedFishActor = Cast<ACatFishPickupActor>(GetWorldActor()))
 				{
@@ -184,4 +219,20 @@ FCatDomainCommandResult UCatFishInventoryItemInstance::UseFromInventorySlotFromA
 	Result.Error = InventoryResult.Error;
 	Result.ReplayedTerminalError = InventoryResult.ReplayedTerminalError;
 	return Result;
+}
+
+// 投掷效果查询流程：只沿鱼定义读那一份逐鱼数据；定义缺失、数据不完整或本鱼没有投掷效果时返回 false。
+bool UCatFishInventoryItemInstance::HasThrowEffect() const
+{
+	const UCatFishDefinition* Definition = GetFishDefinition();
+	return Definition && Definition->ThrowEffect.Kind != ECatFishThrowEffectKind::None
+		&& Definition->ThrowEffect.IsRuntimeEffectReady();
+}
+
+// 投掷效果读取流程：数据不完整时返回空效果而不是半份数据，调用方拿到 Kind=None 就该当作「这条鱼扔出去只是掉地上」。
+FCatFishThrowEffect UCatFishInventoryItemInstance::GetThrowEffect() const
+{
+	const UCatFishDefinition* Definition = GetFishDefinition();
+	return Definition && Definition->ThrowEffect.IsRuntimeEffectReady()
+		? Definition->ThrowEffect : FCatFishThrowEffect();
 }

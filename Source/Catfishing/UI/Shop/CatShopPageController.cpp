@@ -85,7 +85,8 @@ void UCatShopPageController::OpenShop()
 	APlayerController* Controller = BoundPlayerController.Get();
 	UCatShopWidget* View = BoundView.Get();
 	UCatShopModel* Model = BoundModel.Get();
-	if (!Controller || !View || !Model || bShopOpen)
+	if (!Controller || !View || !Model || bShopOpen || !BoundSourceShop.IsValid()
+		|| !BoundSourceShop->IsShopTradingOpen())
 	{
 		return;
 	}
@@ -130,6 +131,11 @@ bool UCatShopPageController::IsShopOpen() const
 // 渲染转交流程：Model 已聚合商品、公款和结果文本，PageController 只交给 View。
 void UCatShopPageController::HandleModelViewStateChanged()
 {
+	if (bShopOpen && BoundSourceShop.IsValid() && !BoundSourceShop->IsShopTradingOpen())
+	{
+		CloseShop();
+		return;
+	}
 	UCatShopModel* Model = BoundModel.Get();
 	UCatShopWidget* View = BoundView.Get();
 	if (Model && View)
@@ -223,26 +229,26 @@ void UCatShopPageController::HandleViewPayCartRequested()
 	}
 
 	const FGuid RequestId = FGuid::NewGuid();
-	const int64 ExpectedWalletRevision = State.Economy.WalletRevision;
 	PendingShopRequestId = RequestId;
 	Model->MarkCartPaymentSubmitted();
 	if (CatController->HasAuthority())
 	{
 		CatController->ServerSubmitShopCartAtKiosk_Implementation(
-			SourceShop, Lines, RequestId, ExpectedWalletRevision);
+			SourceShop, Lines, RequestId);
 	}
 	else
 	{
-		CatController->ServerSubmitShopCartAtKiosk(SourceShop, Lines, RequestId, ExpectedWalletRevision);
+		CatController->ServerSubmitShopCartAtKiosk(SourceShop, Lines, RequestId);
 	}
-	UE_LOG(LogCatUI, Log, TEXT("Event=ui_shop_cart_payment_submitted LineCount=%d WalletRevision=%lld"),
-		Lines.Num(), ExpectedWalletRevision);
+	UE_LOG(LogCatUI, Log, TEXT("Event=ui_shop_cart_payment_submitted RequestId=%s LineCount=%d World=%s NetMode=%d Authority=%d LocalRole=%d"),
+		*RequestId.ToString(), Lines.Num(), *GetNameSafe(CatController->GetWorld()),
+		CatController->GetNetMode(), CatController->HasAuthority(), CatController->GetLocalRole());
 }
 
 // 购物车结果流程：
 // 1. 只接受当前页面自己提交的 RequestId，其他营地/身体/容器命令结果不会改商店提示。
 // 2. 成功或合法重放会清空本地购物车；失败结果立即解除 pending 并保留购物车内容。
-// 3. 依赖缺失时明确告诉玩家没有可用营地公共仓库，其余失败提示玩家重试或重新打开页面核对同步事实。
+// 3. 按权威 FailureReason 区分余额、库存、设施与交付；失败保留购物车，不用统一重试词掩盖原因。
 void UCatShopPageController::HandleCampCommandResultReceived(const FCatDomainCommandResult& Result)
 {
 	if (!PendingShopRequestId.IsValid() || Result.RequestId != PendingShopRequestId)
@@ -264,9 +270,22 @@ void UCatShopPageController::HandleCampCommandResultReceived(const FCatDomainCom
 		PendingShopRequestId = FGuid();
 		return;
 	}
-	const FText Reason = Result.Error == ECatDomainCommandError::DependencyUnavailable
-		? FText::FromString(TEXT("商店：没有可用营地公共仓库，未扣款"))
-		: FText::FromString(TEXT("商店：支付没有完成，请重试或重新打开商店查看公款和仓库"));
+	FText Reason;
+	if (Result.Error == ECatDomainCommandError::CommandsClosed)
+		Reason = FText::FromString(TEXT("商店已打烊，本车未成交"));
+	else if (Result.FailureReason == TEXT("InsufficientFunds"))
+		Reason = FText::FromString(TEXT("公款不足，整车未成交"));
+	else if (Result.FailureReason == TEXT("OutOfStock"))
+		Reason = FText::FromString(TEXT("所选商品库存不足，整车未成交"));
+	else if (Result.FailureReason == TEXT("DeliveryCapacity"))
+		Reason = FText::FromString(TEXT("公共架或公库容量不足，整车未成交"));
+	else if (Result.FailureReason == TEXT("FacilityUpgradeInvalid"))
+		Reason = FText::FromString(TEXT("鱼缸升级档位不连续或已经购买，整车未成交"));
+	else if (Result.FailureReason == TEXT("PaymentRejected"))
+		Reason = FText::FromString(TEXT("公款结算失败，货物与库存已恢复"));
+	else
+		Reason = FText::FromString(FString::Printf(TEXT("交付未完成，本车未扣款（%s / %s）"),
+			*UEnum::GetValueAsString(Result.Error), *Result.FailureReason.ToString()));
 	Model->MarkFeedbackRejected(Reason);
 	PendingShopRequestId = FGuid();
 }

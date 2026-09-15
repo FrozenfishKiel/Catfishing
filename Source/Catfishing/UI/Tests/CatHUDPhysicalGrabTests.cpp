@@ -98,6 +98,18 @@ bool FCatHUDPersonalStaminaTest::RunTest(const FString& Parameters)
 		FMath::IsNearlyEqual(Model->GetViewState().YellowStaminaBarFraction, 20.0f/120.0f));
 	TestEqual(TEXT("yellow-only personal bar remains visible after leaving the rod"), Widget->CatStaminaProgressBar->GetVisibility(), ESlateVisibility::HitTestInvisible);
 	TestTrue(TEXT("text exposes the reserve explicitly"), Widget->CatStaminaTextBlock->GetText().ToString().Contains(TEXT("黄色储备 20")));
+	// 裁决②：保留分段条契约，真实 Model -> Widget 消费不能把黄段当作耗尽。
+	AbilitySystem->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(),0.0f);
+	AbilitySystem->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute(),80.0f);
+	Model->Refresh();
+	Widget->RenderHUD(Model->GetViewState());
+	TestFalse(TEXT("黄段仍可用时不显示濒死"),Model->GetViewState().bNearDeath);
+	TestEqual(TEXT("绿条字段仍表示绿段"),Model->GetViewState().FightStamina,0.0f);
+	TestEqual(TEXT("黄条字段仍表示黄段"),Model->GetViewState().YellowFightStamina,80.0f);
+	TestTrue(TEXT("HUD 文本显示总体力"),Widget->CatStaminaTextBlock->GetText().ToString().Contains(TEXT("80 / 180")));
+	AbilitySystem->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute(),0.0f);
+	Model->Refresh();
+	TestTrue(TEXT("两段均耗尽时才显示见底"),Model->GetViewState().bNearDeath);
 	Model->Unbind();
 	return !HasAnyErrors();
 }

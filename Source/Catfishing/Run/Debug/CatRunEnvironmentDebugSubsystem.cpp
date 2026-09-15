@@ -258,41 +258,7 @@ namespace
 		}
 	}
 
-	// 通用领域命令错误面板格式化流程：用于本机 Social 偷鱼结果，和 Run 命令错误分开避免两个枚举混读。
-	FString FormatDomainCommandErrorForPanel(const ECatDomainCommandError Error)
-	{
-		switch (Error)
-		{
-		case ECatDomainCommandError::None:
-			return TEXT("无");
-		case ECatDomainCommandError::InvalidPayload:
-			return TEXT("参数无效");
-		case ECatDomainCommandError::InvalidIdentity:
-			return TEXT("身份无效");
-		case ECatDomainCommandError::PolicyUndecided:
-			return TEXT("策略未裁决");
-		case ECatDomainCommandError::InvalidPhase:
-			return TEXT("阶段不接受");
-		case ECatDomainCommandError::NotFound:
-			return TEXT("目标不存在");
-		case ECatDomainCommandError::RevisionConflict:
-			return TEXT("Revision 冲突");
-		case ECatDomainCommandError::PermissionDenied:
-			return TEXT("权限不足");
-		case ECatDomainCommandError::CapacityExceeded:
-			return TEXT("容量不足");
-		case ECatDomainCommandError::AlreadyResolved:
-			return TEXT("已处理过");
-		case ECatDomainCommandError::Cancelled:
-			return TEXT("已取消");
-		case ECatDomainCommandError::DependencyUnavailable:
-			return TEXT("依赖不可用");
-		case ECatDomainCommandError::CommandsClosed:
-			return TEXT("命令门关闭");
-		default:
-			return TEXT("未知错误");
-		}
-	}
+	// 这里曾有 FormatDomainCommandErrorForPanel：面板上唯一的使用者是偷鱼两行，随偷鱼协议 2026-09-11 退役一并删除，留着会是无人调用的静态函数。
 
 	// 调试控制器选择流程：优先取当前 World 的第一个本地 Controller；没有本地 Controller 时回退第一个 Controller，保证服务器命令行也能输出 GameState 快照。
 	APlayerController* FindDebugController(UWorld* World)
@@ -473,9 +439,8 @@ namespace
 			AuthoritySnapshotPtr = AuthoritySnapshot.bHasAuthorityGameMode ? &AuthoritySnapshot : nullptr;
 		}
 
-		const ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(Controller);
-		const FCatTheftResult TheftResult = CatController ? CatController->GetLastTheftResult() : FCatTheftResult();
-
+		// 面板曾有「偷鱼结果／偷鱼状态」两行，随偷鱼协议在 2026-09-11 整条退役一并删除；
+		// 拿鱼是一次普通库存移动，没有协议 ID、窗口或阶段可看，本机也就没有对应读模型。
 		Lines.Add({ TEXT("—— 时间 / 昼夜 ——"), SectionColor });
 		Lines.Add({ FString::Printf(TEXT("服务器时间：当前 %.2f 秒 ｜ 白天锚点 %.2f ｜ 白天截止 %.2f"),
 			ServerNow, RunState.Phase.ServerTimeAnchorSeconds, RunState.Phase.DeadlineServerTimeSeconds), TextColor });
@@ -530,14 +495,6 @@ namespace
 			*HelpSignal.SignalId.ToString(EGuidFormats::DigitsWithHyphens)), TextColor });
 		Lines.Add({ FString::Printf(TEXT("求助位置：X %.1f ｜ Y %.1f ｜ Z %.1f"),
 			HelpSignal.SourceLocation.X, HelpSignal.SourceLocation.Y, HelpSignal.SourceLocation.Z), TextColor });
-		Lines.Add({ FString::Printf(TEXT("偷鱼结果：协议 %s ｜ 鱼 %s"),
-			*TheftResult.TheftProtocolId.ToString(EGuidFormats::DigitsWithHyphens),
-			*TheftResult.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens)), TextColor });
-		Lines.Add({ FString::Printf(TEXT("偷鱼状态：错误 %s ｜ 窗口 %s ｜ 已追回 %s ｜ 已吃掉 %s"),
-			*FormatDomainCommandErrorForPanel(TheftResult.Command.Error),
-			FormatBoolForPanel(TheftResult.bRecoveryWindowOpen),
-			FormatBoolForPanel(TheftResult.bReturned),
-			FormatBoolForPanel(TheftResult.bConsumed)), TextColor });
 		Lines.Add({ FString::Printf(TEXT("窝点：公开窝点 %d ｜ 自然事件窝点 %d"),
 			ChumFieldCount, NaturalChumFieldCount), TextColor });
 
@@ -628,11 +585,8 @@ namespace
 		int32 NaturalChumFieldCount = 0;
 		CountPublicChumFields(*GameState, ChumFieldCount, NaturalChumFieldCount);
 
-		const ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(Controller);
-		const FCatTheftResult TheftResult = CatController ? CatController->GetLastTheftResult() : FCatTheftResult();
-
 		UE_LOG(LogCatRun, Display,
-			TEXT("Event=run_environment_social_debug_snapshot Trigger=%s World=%s NetMode=%s RunId=%s Revision=%lld Day=%d Phase=%s End=%s ServerNow=%.3f Anchor=%.3f Deadline=%.3f DayElapsed=%.3f DayLength=%.3f DeadlineRemaining=%.3f DayProgress=%.3f HasDeadline=%s NewFishingBitesAllowed=%s OfferingOpen=%s LastOfferingPoints=%d DailyOfferingTarget=%d Weather=%s TimeOfDay=%s HasEvent=%s ActiveEvent=%s EnvRevision=%lld EnvRevisionMatch=%s PlayerCount=%d HelpKind=%s HelpRevision=%lld HelpGlobal=%s HelpRadius=%.3f HelpSignalId=%s HelpX=%.3f HelpY=%.3f HelpZ=%.3f TheftProtocolId=%s TheftFishId=%s TheftError=%s TheftWindow=%s TheftReturned=%s TheftConsumed=%s ChumFields=%d NaturalChumFields=%d TeardownComplete=%s"),
+			TEXT("Event=run_environment_social_debug_snapshot Trigger=%s World=%s NetMode=%s RunId=%s Revision=%lld Day=%d Phase=%s End=%s ServerNow=%.3f Anchor=%.3f Deadline=%.3f DayElapsed=%.3f DayLength=%.3f DeadlineRemaining=%.3f DayProgress=%.3f HasDeadline=%s NewFishingBitesAllowed=%s OfferingOpen=%s LastOfferingPoints=%d DailyOfferingTarget=%d Weather=%s TimeOfDay=%s HasEvent=%s ActiveEvent=%s EnvRevision=%lld EnvRevisionMatch=%s PlayerCount=%d HelpKind=%s HelpRevision=%lld HelpGlobal=%s HelpRadius=%.3f HelpSignalId=%s HelpX=%.3f HelpY=%.3f HelpZ=%.3f ChumFields=%d NaturalChumFields=%d TeardownComplete=%s"),
 			Trigger, *World->GetName(), *FormatNetMode(World->GetNetMode()),
 			*RunState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunState.Revision,
 			RunState.Phase.DayIndex, *UEnum::GetValueAsString(RunState.Phase.Phase),
@@ -650,12 +604,6 @@ namespace
 			FormatBoolForLog(HelpSignal.bGlobal), HelpSignal.RadiusCentimeters,
 			*HelpSignal.SignalId.ToString(EGuidFormats::DigitsWithHyphens),
 			HelpSignal.SourceLocation.X, HelpSignal.SourceLocation.Y, HelpSignal.SourceLocation.Z,
-			*TheftResult.TheftProtocolId.ToString(EGuidFormats::DigitsWithHyphens),
-			*TheftResult.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
-			*UEnum::GetValueAsString(TheftResult.Command.Error),
-			FormatBoolForLog(TheftResult.bRecoveryWindowOpen),
-			FormatBoolForLog(TheftResult.bReturned),
-			FormatBoolForLog(TheftResult.bConsumed),
 			ChumFieldCount, NaturalChumFieldCount, FormatBoolForLog(RunState.bTeardownComplete));
 	}
 

@@ -37,10 +37,11 @@ bool UCatShopInteractionComponent::OpenShopForPlayer(APlayerController* PlayerCo
 		return false;
 	}
 	ACatShopKioskActor* SourceShop = Cast<ACatShopKioskActor>(GetOwner());
-	if (!SourceShop)
+	if (!SourceShop || !SourceShop->IsShopTradingOpen())
 	{
-		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_shop_owner_invalid Owner=%s"),
-			*GetNameSafe(GetOwner()));
+		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_shop_open_rejected World=%s NetMode=%d Owner=%s Reason=%s"),
+			*GetNameSafe(GetWorld()), GetWorld() ? GetWorld()->GetNetMode() : INDEX_NONE,
+			*GetNameSafe(GetOwner()), SourceShop ? TEXT("CommandsClosed") : TEXT("OwnerInvalid"));
 		return false;
 	}
 	UCatShopInventoryComponent* ShopInventory = SourceShop->GetShopInventory();

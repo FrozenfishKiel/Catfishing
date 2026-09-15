@@ -11,7 +11,18 @@ class ACatCampInventoryActor;
 class APawn;
 class USceneComponent;
 
-/** 篝火公共回看请求；它只启动可跳过表现，不参与普通夜晚供品结算或 StateTree 转移。 */
+/**
+ * 结算夜的全员合影封面请求；它只启动可跳过表现，不参与普通夜晚供品结算或 StateTree 转移。
+ *
+ * 墓碑（2026-09-12）：这条链原名「篝火回看」，而设计 v1.14 已删掉回看仪式本身，v1.22 把篝火改成
+ * 入夜自动点亮的自由交互点（现落在 ACatCampfireActor）。**但这条链没有跟着删**，因为它现在承担的
+ * 是另一件仍然成立的事：结算夜按全员在场建 CapturePlan，是共同印记分发的三个来源之一
+ * （联机社交 §38；另两个是被抓与收鱼）。删掉它等于把那一路分发一起删掉——那是回退，不是清理。
+ *
+ * 名字没改：`AbilityEvent_Body_CampfirePlayback` 标签与 `AM_BodyAction_CampfirePlayback` 动画资产都按它命名，
+ * 改名要动资产，本轮不碰 .uasset。语义以本注释为准：它是「结算夜合影封面」，不是「篝火回看仪式」。
+ * 局末的趣味头衔与全员合影（局与进程 §87）仍未实现，要做那件事时不要改写这条链。
+ */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatCampfirePlaybackRequested, FGuid);
 
 /** 玩法世界唯一固定营地宿主；同时承载玩家出生点语义、休息、救援落点、共享鱼缸引用和可选回看，不支持建造/装饰/搬迁。 */
@@ -30,8 +41,14 @@ public:
 	/** 本人位于营地范围时请求快速休息；Character ConditionComponent 拥有最终身体写入。 */
 	FCatDomainCommandResult RequestRest(AController* RequestingController, FGuid RequestId);
 
-	/** 伙伴把倒地目标送到固定 RescuePoint；Teleport 成功后才提交 CarriedToCamp 事实。 */
+	/** 伙伴把倒地目标送到固定 RescuePoint；Teleport 成功后才提交 CarriedToCamp 事实，到点即解除倒地。 */
 	FCatDomainCommandResult RescueToCamp(AController* HelpingController, ACatCharacter* TargetCharacter, FGuid RequestId);
+
+	/**
+	 * 读取固定救援落点的世界 Transform；翻天自动救起要把仍在倒地的猫放回营地醒来，
+	 * 用的是和队友搬运同一个落点，不另建「清晨出生点」。落点未配置时返回 false。
+	 */
+	bool TryGetRescuePointTransform(FTransform& OutTransform) const;
 
 	/** 判断传入鱼缸是否就是本营地显式关联的共享鱼缸；交互组件只用它解析 Camp 上下文，不取得写权限。 */
 	bool IsSharedFishTank(const ACatFishTankActor* Candidate) const;
@@ -43,7 +60,8 @@ public:
 	/** 商店发货询问本营地能否提供公共仓库；PlayerController 全图扫描命中后调用它，空值表示本营地当前不能接收购买物。 */
 	ACatCampInventoryActor* ResolvePublicInventoryForShopOrder() const;
 
-	/** 幂等请求可跳过的篝火回看；结算封面先为全体在场玩家批量建齐 Planned 事实，成功才广播一次表现意图，且不写 Run ready。 */
+	/** 幂等请求结算夜合影封面；先为全体在场玩家批量建齐 Planned 事实，成功才广播一次表现意图，且不写 Run ready。
+	 *  它要求结算夜与全员在场，因为它产出的是「这一局的合影」；坐火边那件事没有任何这类条件，见 ACatCampfireActor。 */
 	FCatDomainCommandResult RequestCampfirePlayback(AController* RequestingController, FGuid RequestId);
 
 	/** 服务器完成营地、结算夜和全员 CapturePlan 校验后，把同一 RequestId 可靠送到该营地的相关客户端；每端只复用本地表现委托，不保存播放状态。 */
@@ -53,7 +71,7 @@ public:
 	/** 只读判断 Controller 当前 Character 是否位于固定营地交互范围；供需要营地位置前提的领域调用，不产生回看或休息副作用。 */
 	bool IsControllerInCamp(AController* Controller) const;
 
-	/** 篝火表现订阅入口；表现结束/跳过无需回写 Run。 */
+	/** 结算夜合影封面的表现订阅入口；表现结束/跳过无需回写 Run。 */
 	FCatCampfirePlaybackRequested OnCampfirePlaybackRequested;
 
 private:

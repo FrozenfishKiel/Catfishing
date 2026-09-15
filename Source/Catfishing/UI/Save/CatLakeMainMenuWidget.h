@@ -5,6 +5,7 @@
 #include "Online/CatOnlineTypes.h"
 #include "CatLakeMainMenuWidget.generated.h"
 
+class APlayerState;
 class UButton;
 class UCheckBox;
 class UComboBoxString;
@@ -64,12 +65,21 @@ enum class ECatLakeMainMenuAction : uint8
 	OpenParty,
 	CloseParty,
 	RefreshParty,
-	PausePlaceholder
+	PausePlaceholder,
+
+	/** 请求打开个人图鉴页；Controller 会先关闭本菜单，再把意图交给 LocalPlayer UI 的图鉴页面控制器。 */
+	OpenCollection
 };
 
 /** 局内菜单按钮点击通知；订阅者收到后读取 Action 并调用各自权威系统。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatLakeMainMenuActionRequested, ECatLakeMainMenuAction);
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatLakePartyInviteRequested, FCatOnlineFriendHandle);
+
+/**
+ * 房主请求把某人踢出本局的通知（联机社交 §3.1.1 兜底）。
+ * 它没有走上面那个无参 Action 枚举，因为踢人必须带目标；订阅者只把目标转交服务器，本地不裁决资格。
+ */
+DECLARE_MULTICAST_DELEGATE_OneParam(FCatLakeMainMenuKickRequested, APlayerState*);
 
 /** 局内菜单的只读显示状态；按钮可用性和反馈文本来自 Controller，不从 Widget 反推业务状态。 */
 USTRUCT(BlueprintType)
@@ -100,6 +110,10 @@ struct FCatLakeMainMenuViewState
 	/** 退出游戏按钮是否可点击；点击后走本地 Quit，通常不会停留在菜单里等待异步离局。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bExitEnabled = true;
+
+	/** 图鉴按钮是否可点击；只有本地 UI 真的装配出图鉴页面控制器时才为 true。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bCollectionEnabled = false;
 
 	/** 当前是否处于退出到主菜单的等待状态；View 据此锁住命令页输入，实际等待遮罩由全局 UI 显示。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -153,6 +167,19 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|LakeMenu")
 	void RequestOpenSettings();
 
+	/** 提交图鉴入口意图；本 Widget 不创建图鉴页，也不读取任何 Profile 记录。 */
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|LakeMenu")
+	void RequestOpenCollection();
+
+	/**
+	 * 提交把某人踢出本局的意图（联机社交 §3.1.1）。
+	 * 这颗按钮长什么样、放在菜单哪一层由 WBP 决定——主界面.md 只画了「组队管理」页、没画踢人按钮，
+	 * 形态未裁，所以原生层不建控件，只留这条入口。露不露它读 ACatfishingPlayerState::IsRoomOwner()；
+	 * 能不能踢成仍以服务器为准，本地不预判也不隐藏拒绝结果。
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|LakeMenu")
+	void RequestKickPlayer(APlayerState* TargetPlayerState);
+
 	/** 提交手动保存意图；是否保存、保存哪个活动槽以及失败原因全部交给 Save 子系统。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|LakeMenu")
 	void RequestSave();
@@ -199,6 +226,9 @@ public:
 
 	/** 所有菜单按钮的统一原生广播；LocalPlayer UI Controller 订阅它，不让 HUD 或 Widget 持有业务系统。 */
 	FCatLakeMainMenuActionRequested OnActionRequested;
+
+	/** 房主点了「踢出」时的原生广播；Controller 订阅后转交服务器，Widget 自己不判断谁是房主。 */
+	FCatLakeMainMenuKickRequested OnKickRequested;
 
 protected:
 	/** Slate/UMG 构造完成后绑定命令与设置控件，并回到命令页，保证 ESC 和按钮都从稳定初始页开始。 */
@@ -352,6 +382,10 @@ private:
 	/** WBP Designer 中的可选关闭按钮；存在时只关闭菜单并恢复输入，不提交保存或退出游戏。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UButton> CloseButton;
+
+	/** WBP Designer 中的派对菜单图鉴按钮；存在时点击广播 OpenCollection，由 Controller 关菜单后转交图鉴页面控制器。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UButton> CollectionButton;
 
 	/** WBP Designer 中的结果文本；存在时显示保存、设置、回主菜单或退出进程入口返回的明确反馈。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))

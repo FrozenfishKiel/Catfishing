@@ -71,6 +71,8 @@ public:
 	FCatChumSample SampleChumAtPoint(const FVector& WorldPoint,
 		const FCatWaterRegionHandle& ExpectedHandle, double ServerTime) const;
 	int32 CleanupExpiredFields(double ServerTime);
+	/** 翻天/终局清理当前模型的活跃场和未提交预留，沿用到期移除的预算与复制通知。 */
+	int32 ClearFieldsForRunTransition();
 
 	FCatChumFieldActivated OnFieldActivated;
 	FCatChumFieldRemoved OnFieldRemoved;

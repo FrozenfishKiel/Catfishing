@@ -117,6 +117,14 @@ public:
 	bool IsGrounded() const;
 	bool HasMovementSample() const;
 	bool IsLocomotionEnabled() const { return bLocomotionEnabled; }
+	/** 当前是否只能爬行（倒地）；爬行仍是自主移动，但不允许跳跃。 */
+	bool IsCrawlOnly() const { return bCrawlOnly; }
+	/**
+	 * 当前生效的移动速度上限：基础走速乘以速度缩放。
+	 * 缩放同时承载倒地爬行（<1，猫册 §3.1.5「倒地者可缓慢爬行」）与三选一「移动速度 +10%」（>1）；
+	 * 两者由 ACatCharacter 合成后一次写进来，物理层不认识它们各自的来源。
+	 */
+	double GetEffectiveMaxMovementSpeedCmS() const;
 	uint32 GetResetEpoch() const { return Snapshot.ResetEpoch; }
 	uint32 GetControlEpoch() const { return ControlEpoch; }
 	FVector GetSupportFootPointWorld() const;
@@ -136,6 +144,8 @@ public:
 	void BeginControlEpochFromAuthority();
 	void ReleaseConnectionsFromAuthority(FName Reason);
 	void SetLocomotionEnabledFromAuthority(bool bEnabled, FName Reason);
+	/** authority 设置移动速度缩放与爬行限制；两者一起复制，客户端预测读到的是同一份事实。 */
+	void SetLocomotionSpeedScaleFromAuthority(double NewScale, bool bNewCrawlOnly, FName Reason);
 	bool TeleportBodyFromAuthority(const FTransform& Transform, FName Reason);
 	/** Each source replaces its own force. Units are kg*cm/s^2; multiply Newtons by 100 once. */
 	void SetExternalForceFromAuthority(const UObject* Source, FVector ForceKgCmS2, bool bVerticalGripTraction = false, bool bBodyContact = false, bool bCharacterInteraction = false);
@@ -181,6 +191,10 @@ private:
 	UPROPERTY(Replicated) FGuid BodyId;
 	UPROPERTY(Replicated) uint32 ControlEpoch = 1;
 	UPROPERTY(Replicated) bool bLocomotionEnabled = true;
+	/** 移动速度缩放；1 表示不修正。倒地爬行与三选一移速加成合成后写在这里。 */
+	UPROPERTY(Replicated) double LocomotionSpeedScale = 1.0;
+	/** 只能爬行：仍可自主移动，但不允许跳跃。倒地时为真。 */
+	UPROPERTY(Replicated) bool bCrawlOnly = false;
 	struct FExternalForce
 	{
 		FVector Force = FVector::ZeroVector;

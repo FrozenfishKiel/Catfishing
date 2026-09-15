@@ -1,9 +1,10 @@
 #include "ShopEconomy/CatShopKioskActor.h"
+#include "ShopEconomy/CatShopEconomyService.h"
+#include "Framework/Game/CatfishingGameState.h"
 
 #include "Components/SceneComponent.h"
 #include "Components/SphereComponent.h"
 #include "GameFramework/Controller.h"
-#include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "Interaction/CatInteractionSettings.h"
 #include "UI/Shop/CatShopInteractionComponent.h"
@@ -38,24 +39,36 @@ void ACatShopKioskActor::BeginPlay()
 	}
 }
 
+bool ACatShopKioskActor::IsShopTradingOpen() const
+{
+	if (!GetWorld()) return false;
+	if (HasAuthority())
+	{
+		const auto* Shop = GetWorld()->GetSubsystem<UCatShopEconomyService>();
+		return Shop && Shop->AreCommandsOpen();
+	}
+	const auto* State = GetWorld()->GetGameState<ACatfishingGameState>();
+	return State && State->GetShopEconomySnapshot().bCommandsOpen;
+}
+
 bool ACatShopKioskActor::CanInteract_Implementation(AController* RequestingController) const
 {
 	// 交互 gate 流程：只允许本地玩家在页面未打开时进入 UI；营地和公共仓库留到服务端订单提交时检查。
 	const APlayerController* PlayerController = Cast<APlayerController>(RequestingController);
-	return bInteractionEnabled && PlayerController && PlayerController->IsLocalController()
+	return IsShopTradingOpen() && bInteractionEnabled && PlayerController && PlayerController->IsLocalController()
 		&& ShopInteraction && !ShopInteraction->IsShopOpen();
 }
 
 FText ACatShopKioskActor::GetInteractionPrompt_Implementation() const
 {
 	// 提示读取流程：复用交互开关和页面状态决定是否展示文案；不可交互时返回空文本防止提示残留。
-	return bInteractionEnabled && ShopInteraction && !ShopInteraction->IsShopOpen()
+	return IsShopTradingOpen() && bInteractionEnabled && ShopInteraction && !ShopInteraction->IsShopOpen()
 		? InteractionPrompt : FText::GetEmpty();
 }
 
 double ACatShopKioskActor::GetInteractionRadius_Implementation() const
 {
-	// 半径读取流程：把编辑器配置裁到非负有限值；服务端距离证明和本地交互提示因此使用同一边界。
+	// 半径读取流程：把编辑器配置裁到非负有限值；本地准星提示与交互检测继续使用同一边界。
 	return FMath::IsFinite(InteractionRadiusCentimeters)
 		? FMath::Max(0.0, InteractionRadiusCentimeters) : 0.0;
 }
@@ -80,23 +93,4 @@ UCatShopInventoryComponent* ACatShopKioskActor::GetShopInventory() const
 	return ShopInventory;
 }
 
-// 下单资格流程：
-// 1. 服务器只让启用中的摊位接受订单，客户端不能拿本地 UI 里的 Actor 指针直接绕过校验。
-// 2. 再读取服务器侧 Pawn 位置，要求玩家仍在摊位交互半径内，避免远处页面迟到提交。
-// 3. 本函数不查营地、不查公共仓库；发货目标由 PlayerController 在当前 World 全图寻找营地后再询问营地接口。
-bool ACatShopKioskActor::CanServeOrderFromAuthority(AController* RequestingController) const
-{
-	if (!HasAuthority() || !bInteractionEnabled || !RequestingController)
-	{
-		return false;
-	}
-	APawn* RequestingPawn = RequestingController->GetPawn();
-	if (!RequestingPawn || RequestingPawn->GetWorld() != GetWorld())
-	{
-		return false;
-	}
-	const double InteractionRadius = GetInteractionRadius_Implementation();
-	return InteractionRadius > 0.0
-		&& FVector::DistSquared(RequestingPawn->GetActorLocation(), GetActorLocation())
-			<= FMath::Square(InteractionRadius);
-}
+// 墓碑（2026-09-13，09-09 裁决）：删除下单时的摊位距离二次证明；交互半径与开页入口保留。

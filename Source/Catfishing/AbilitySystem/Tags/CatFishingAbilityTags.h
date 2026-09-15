@@ -10,7 +10,11 @@ namespace CatFishingAbilityTags
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_Fishing_Scoop);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_Fishing_Chum);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_Fishing_Slack);
+	/** 换人握手输入（多人钓鱼附篇 §2.4）；键位随装备栏重构另定，现按 E 设计。 */
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_Fishing_Handoff);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Fishing_RodInteract);
+	/** 换人握手 Ability；主钓手按＝挂出/撤回请求，岸上替补按＝接手。 */
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Fishing_Handoff);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Fishing_Primary);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Fishing_Cancel);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Fishing_Scoop);
@@ -67,4 +71,6 @@ namespace CatFishingAbilityTags
 	/** 夜晚供品结算 GE 读取的本日基础失败损失；来源是 RunSettings 日程，不由客户端提交。 */
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Data_Run_Offering_BaseProgressLoss);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cosmetic_Fishing_LineBroken);
+	/** 铃铛漂咬钩铃响；由 GameState 全场广播投递，表现层挂一个不随距离衰减的音效。 */
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cosmetic_Fishing_BiteBell);
 }

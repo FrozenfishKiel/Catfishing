@@ -11,6 +11,11 @@ class CATFISHING_API UCatAbilitySystemComponent : public UAbilitySystemComponent
 	GENERATED_BODY()
 
 public:
+	/** 食用提交后的限时效果接收端：同鱼种刷新同一 GE，异鱼并存。 */
+	bool ApplyFishTimedEffectFromAuthority(const class UCatFishDefinition* Fish, FGuid RequestId);
+	/** 只有食用调用方使用成长倍率；祝福保留其独立入口与时长。 */
+	double ResolveEatingEffectDuration(double BaseSeconds) const;
+
 	/** 从任意 Actor 解析项目 ASC；调用方只拿到 Cat ASC 能力面，不需要知道当前身体类如何实现 AbilitySystemInterface。 */
 	static UCatAbilitySystemComponent* FindCatAbilitySystemFromActor(AActor* Actor);
 
@@ -62,20 +67,39 @@ public:
 	/** Character 的 ActorInfo 就绪后按 CatDefinitionId 整体播种身体初始属性；仅 authority 写入，已成功播种后重占有不会重置局内消耗。 */
 	bool InitializeCharacterAttributesFromDefinition(FName CatDefinitionId);
 
-	/** 仅供新身体首次播种和测试夹具使用；会话开始/结束不得调用。 */
+	/**
+	 * 身体属性播种时把 FightStamina 拉到当前 MaxFightStamina；上限未播种时 fail-closed。
+	 * 只服务角色初始播种与测试夹具：2026-09-11 裁决④删掉了「每次进搏斗把主控体力补满」，
+	 * 体力是跨竿资源，搏斗入口和任何终局路径都不得再调用它回满。
+	 */
 	bool SeedFightStaminaToMaximumFromAuthority();
+
+	/** authority 通过正式 GameplayEffect 给力量加一次三选一增量；调用方只提交增量，不直接写属性基值。 */
+	bool ApplyFishingStrengthDelta(float Delta);
+
+	/** authority 提高（或降低）搏斗体力上限；提升时当场按同样的差值补当前体力，见升级效果页 §2。 */
+	bool ApplyMaxFightStaminaDelta(float Delta);
+
+	/** authority 增减黄色体力护盾段；负向扣盾夹到 0，正向无上限（数值成长页 §4）。 */
 	bool ApplyYellowFightStaminaDelta(float Delta);
+
+	/** 翻天时把黄色体力整段清零；过夜清空是这段护盾的唯一自然终点。 */
 	bool ClearYellowFightStaminaFromAuthority();
-	/** 总余额与本帧可用容量（绿上限 + 黄存量）；不是黄段上限。 */
-	double GetTotalFightStamina() const;
-	double GetTotalFightStaminaCapacity() const;
+
+	/** 读取当前黄色体力存量；主动查看面板与体力条黄段渲染都读这一份。 */
 	float GetYellowFightStamina() const;
 
-	/** authority 通过正式 GameplayEffect 修改 Poison；负向恢复会夹到 0，避免调用方直接写属性基值。 */
-	bool ApplyPoisonDelta(float Delta);
+	/** 可出力、可扣费的总体力（点）＝绿段＋黄段；不改变两段的属性或写入契约。 */
+	double GetTotalFightStamina() const;
+	/** 当前总容量（点）＝绿段恢复上限＋当前黄段；黄色不会自然恢复，不是新的持久化上限。 */
+	double GetTotalFightStaminaCapacity() const;
 
-	/** 读取 Poison 是否达到给定阈值；Condition 用它裁决 Downed，但不直接知道 AttributeSet 字段。 */
-	bool IsPoisonAtLeast(float Threshold) const;
+	/*
+	 * 墓碑（2026-09-12）：这里原有 ApplyPoisonDelta / IsPoisonAtLeast 两个写读口，
+	 * 服务的是「跨鱼累加 Poison、到阈值倒地、休息/草药按点数清毒」的渐进中毒模型。
+	 * 09-12 裁决把中毒改成按鱼各配、无渐进升级（最重一档＝吃下即倒地），倒地与解除都变成布尔事实，
+	 * 由 CatConditionComponent 直接裁决，这两个口连同 Poison 属性一起删除。
+	 */
 
 	/** 清理 ActorInfo 前先清输入状态；防止无占有期间失效输入句柄继续激活 Ability。 */
 	virtual void ClearActorInfo() override;
@@ -88,6 +112,9 @@ protected:
 	virtual void OnRemoveAbility(FGameplayAbilitySpec& AbilitySpec) override;
 
 private:
+	// 仅 authority 的鱼种到活跃 GE 索引；时长、复制、到期由 GAS 唯一持有，不跨局保存。
+	TMap<FName, FActiveGameplayEffectHandle> FishTimedEffectHandles;
+
 	/** 输入标签到 Ability Spec 的索引；PlayerController 只提交标签，具体 Ability 由此处解析。 */
 	TMap<FGameplayTag, TArray<FGameplayAbilitySpecHandle>> SpecHandlesByInputTag;
 

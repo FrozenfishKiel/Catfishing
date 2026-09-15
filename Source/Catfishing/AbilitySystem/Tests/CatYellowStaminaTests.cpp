@@ -62,10 +62,10 @@ bool FCatYellowStaminaBalanceTest::RunTest(const FString&)
 		TestEqual(TEXT("each formal grant matches fish table"), Definition->YellowStaminaGrant, 20.0);
 	}
 	const auto Request = FGuid::NewGuid();
-	const auto Result = Cat->GetConditionComponent()->ConsumeCommittedFish(Request, Fish);
+	const auto Result = Cat->GetConditionComponent()->ConsumeCommittedFish(Request, Fish, 0.5);
 	TestTrue(TEXT("formal food chain commits"), Result.bCommitted);
 	TestEqual(TEXT("food grants reserve once"), ASC->GetYellowFightStamina(), 40.0f);
-	const auto Replay = Cat->GetConditionComponent()->ConsumeCommittedFish(Request, Fish);
+	const auto Replay = Cat->GetConditionComponent()->ConsumeCommittedFish(Request, Fish, 0.5);
 	TestTrue(TEXT("food request replay is recognized"), Replay.bTerminalReplay);
 	TestEqual(TEXT("replay cannot double-grant reserve"), ASC->GetYellowFightStamina(), 40.0f);
 	ASC->ClearActorInfo();

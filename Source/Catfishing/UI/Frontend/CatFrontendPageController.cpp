@@ -215,6 +215,15 @@ void UCatFrontendPageController::RequestLoadSelectedSaveSlot()
 		SetLocalResultText(FText::FromString(TEXT("请先选择可读取的存档。")), Save);
 		return;
 	}
+	if (!Save->CanContinueSlot(SelectedSlotId))
+	{
+		SetLocalResultText(Save->IsSlotCompleted(SelectedSlotId)
+			? FText::FromString(TEXT("这一局已完结，请新建存档开始新一局。"))
+			: FText::FromString(TEXT("所选存档当前不可读取。")), Save);
+		UE_LOG(LogCatUI, Warning, TEXT("Event=frontend_save_continue_rejected SlotId=%s Completed=%d Result=KeepSaveList"),
+			*SelectedSlotId.ToString(), Save->IsSlotCompleted(SelectedSlotId));
+		return;
+	}
 	if (UCatFrontendRoomModel* Room = RoomModel.Get())
 	{
 		const FCatOnlineSnapshot Snapshot = Room->GetSnapshot();
@@ -441,6 +450,9 @@ void UCatFrontendPageController::RequestSelectAudioSettings() { if (UCatFrontend
 
 // 控制分类流程：取得有效 SettingsModel 后选择当前受限分类；只由 Model 通知刷新，不生成尚未接线的配置。
 void UCatFrontendPageController::RequestSelectControlsSettings() { if (UCatFrontendSettingsModel* Settings = SettingsModel.Get()) { Settings->SelectControls(); } }
+
+// 辅助功能分类流程：取得有效 SettingsModel 后切换分类；页签本身是正式入口，具体项的可用性由 Model 各自回答。
+void UCatFrontendPageController::RequestSelectAccessibilitySettings() { if (UCatFrontendSettingsModel* Settings = SettingsModel.Get()) { Settings->SelectAccessibility(); } }
 
 // 槽位读取流程：返回当前已验证选择；无有效选择时返回 None 的责任由 SaveModel 变化处理承担。
 FName UCatFrontendPageController::GetSelectedSlotId() const { return SelectedSlotId; }

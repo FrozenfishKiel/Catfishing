@@ -1,7 +1,7 @@
 """Create or validate the formal designer-facing fishing fight balance asset.
 
 Run from the Unreal Editor Python console with:
-    py "D:/develop/Catfishing/Scripts/create_fishing_fight_balance_asset.py"
+    py "Scripts/create_fishing_fight_balance_asset.py"   # 在工程根执行
 
 ``UCatFishingSettings`` only stores the soft reference to this asset. The values
 below initialize new assets only. Existing designer values are preserved and

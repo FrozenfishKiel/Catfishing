@@ -8,7 +8,9 @@ class UStateTree;
 class UCatBitePersonalityDefinition;
 class UCatFishingFightBalanceDefinition;
 class UCatFightPersonalityDefinition;
+class UCatFishDefinition;
 struct FCatFishingBiteTimingParameters;
+struct FCatFishResolvedBehavior;
 
 /** Fishing 长流程与未裁数值的 fail-closed 配置；默认不启动会话且不制造响应窗口或公式。 */
 UCLASS(Config = Game, DefaultConfig, meta = (DisplayName = "Catfishing Fishing"))
@@ -17,6 +19,33 @@ class CATFISHING_API UCatFishingSettings : public UDeveloperSettings
 	GENERATED_BODY()
 
 public:
+
+	/** 翻肚到苏醒逃跑的秒数；拖动期间继续计时，已上岸不苏醒。 */
+	UPROPERTY(Config, EditAnywhere, Category="Tuning|Terminal", meta=(ClampMin="0.01", Units="s"))
+	double ExhaustedFishRevivalSeconds = 30.0;
+	/** 渔获结束额外扣除的竿磨损点；与搏斗累计磨损独立结算一次。 */
+	UPROPERTY(Config, EditAnywhere, Category="Tuning|Terminal", meta=(ClampMin="0"))
+	double CatchCompletionRodWearPoints = 1.0;
+	/** 碾压后沿钓线反方向甩到猫身后的距离，厘米。 */
+	UPROPERTY(Config, EditAnywhere, Category="Tuning|Overpower", meta=(ClampMin="0", Units="cm"))
+	double OverpowerFlingDistanceCentimeters = 250.0;
+	/** 猫力/鱼力达到此倍率即可碾压；竿强瞬断仍先检查。 */
+	UPROPERTY(Config, EditAnywhere, Category="Tuning|Overpower", meta=(ClampMin="1"))
+	double OverpowerStrengthRatio = 2.0;
+	/** 从远到近尝试的甩岸距离比例；首项 1、末项 0（脚下），中间项递减。 */
+	UPROPERTY(Config, EditAnywhere, Category="Tuning|Overpower", meta=(ClampMin="0", ClampMax="1"))
+	TArray<double> OverpowerLandingDistanceFractions = {1.0, 2.0 / 3.0, 1.0 / 3.0, 0.0};
+	/** 每名玩家可部署的鱼竿数量；默认保持两根，不依赖鱼竿资产新增字段。 */
+	UPROPERTY(Config, EditAnywhere, Category="Tuning|Rod", meta=(ClampMin="1"))
+	int32 MaximumDeployedRodsPerPlayer = 2;
+
+	// 以下读取保留旧配置的可用默认值；非法新值只记一次 Warning，不让整条钓鱼链因迁移而关闭。
+	double GetExhaustedFishRevivalSeconds() const;
+	double GetCatchCompletionRodWearPoints() const;
+	double GetOverpowerFlingDistanceCentimeters() const;
+	double GetOverpowerStrengthRatio() const;
+	const TArray<double>& GetOverpowerLandingDistanceFractions() const;
+	int32 GetMaximumDeployedRodsPerPlayer() const;
 	/** 判断正式运行配置是否具备显式总 gate、StateTree 资产、正响应/终态复制窗口与近岸几何；任一未裁字段都返回 false。 */
 	bool IsRuntimeReady() const;
 
@@ -33,8 +62,20 @@ public:
 	bool TryGetTerminalReplicationWindow(double& OutWindowSeconds) const;
 	/** 同步加载唯一正式搏斗平衡资产；缺失、关闭或字段非法时返回空，不回退到 C++/ini 第二套数值。 */
 	const UCatFishingFightBalanceDefinition* LoadFightBalanceDefinition() const;
-	const UCatBitePersonalityDefinition* FindBitePersonality(FName PersonalityId) const;
+	// T10：旧 Bite 查询已删除，三窗口由鱼定义/基础完美窗解析。
 	const UCatFightPersonalityDefinition* FindFightPersonality(FName PersonalityId) const;
+
+	/**
+	 * 解析一条鱼进搏斗时真正生效的行为参数（食性／发力段长／休息段长／游速系数）。
+	 *
+	 * 正式来源是鱼表格那四列（2026-09-09 晚裁「四套性格模板是测试用，正式口径逐鱼配」）；
+	 * 某列还没填时退回该鱼 FightPersonalityId 指向的测试模板。搏斗启动侧只该调这一个入口，
+	 * 不要再直接读 UCatFightPersonalityDefinition::AdaptiveSteeringConfig 或
+	 * FullEffortMovementSpeedCentimetersPerSecond —— 那样会绕过鱼表、让四列白填。
+	 * 返回 false 表示连模板都不足以凑出一份可用参数，调用方按依赖缺失 fail-closed。
+	 */
+	bool TryResolveFishBehavior(const UCatFishDefinition& FishDefinition,
+		FCatFishResolvedBehavior& OutBehavior) const;
 
 	/** 钓鱼正式运行总 gate；默认关闭，由产品配置显式开启，Shipping 不做隐式改写。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Runtime")
@@ -55,14 +96,26 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Runtime", meta = (DisplayName = "搏斗平衡数据资产"))
 	TSoftObjectPtr<UCatFishingFightBalanceDefinition> FightBalanceDefinition;
 
-	/** 仅逐鱼配置与档位默认均缺失时使用的响应秒数兜底；0 表示不可用。 */
+	/** 仅逐鱼与鱼目录档位默认均缺配时使用的旧值；带 Warning，正式目录不应走到。0 则拒绝。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (ClampMin = "0"))
 	double TrueBiteWindowSeconds = 0.0;
 
-	/** 仅资产、逐鱼和档位均未配置时的服务器确定性兜底；正式鱼种不走此范围。 */
-	UPROPERTY(Config, EditAnywhere, Category="Timing")
+	/**
+	 * 咬钩信号「全场可闻」的门槛：本竿鱼漂的 BiteSignalStability 达到它，真咬那一刻就走一次不受距离衰减的全场广播。
+	 *
+	 * 为什么用阈值而不是给鱼漂加一个新 bool：鱼漂表里只有铃铛漂带「咬钩铃响、全场可闻」这条特效，
+	 * 而三款漂已有的差异字段就是信号稳定度。新加一个必填 bool 而资产没人配过，这条玩法会静默死掉——
+	 * 本分支已经为同样的错踩过四次。用阈值则不需要动任何资产，铃铛漂只要是稳定度最高的那一款就自然成立。
+	 *
+	 * > 1.0 表示这条玩法关闭（稳定度本身被夹在 0~1）。真咬时无论过不过门槛都会记一行
+	 * fishing_bite_signal 日志，带上本竿鱼漂、稳定度和阈值，一局就能核出铃铛漂的落值对不对得上。
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (ClampMin = "0.0"))
+	double WorldwideBiteSignalStabilityThreshold = 1.0;
+	/** 鱼表试探期及鱼目录档位默认均未填（0）时使用的随机兜底区间；不参与普通或完美响应窗。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (Units = "s"))
 	FVector2D ProbeDurationRangeSeconds = FVector2D(2.0, 4.0);
-	/** 无窝时落水到 Probe 开始的目标平均秒数，包含预警；到真咬另加逐鱼试探时长。 */
+	/** 无窝时落水到真咬的目标平均秒数；替代旧的每秒频率调参，计入等待上限。 */
 	UPROPERTY(Config, EditAnywhere, Category="Bite|Chum", meta=(ClampMin="0", Units="s"))
 	double NoChumMeanBiteDelaySeconds = 0.0;
 	UPROPERTY(Config, EditAnywhere, Category="Bite|Chum", meta=(ClampMin="0", Units="s"))
@@ -132,6 +185,9 @@ public:
 	/** 服务器权威近岸目标允许抢抄的最大距离，单位厘米；0 表示 Unset，不从客户端命中位置推导。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (ClampMin = "0"))
 	double ScoopReachCentimeters = 0.0;
+	// 墓碑（2026-09-14）：HandoffMinimumStaminaFraction 已删除；
+	// Knowledge/Design/设计修改记录.md 2026-09-13 裁决④，双方同意的握手不设体力准入。
+
 	/** 每次真实挥网尝试的冷却秒数；GAS 做预测表现，服务器命令层用同一个值做最终限流。 */
 	UPROPERTY(Config, EditAnywhere, Category="Scoop", meta=(ClampMin="0", Units="s"))
 	double ScoopCooldownSeconds = 3.0;

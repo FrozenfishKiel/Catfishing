@@ -271,11 +271,26 @@ FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(co
 	{
 		Result.Error = ECatDomainCommandError::InvalidPayload;
 	}
-	else if (!PlayerState || !PlayerState->HasServerAuthorizedEquipmentUnlock(Rod->RequiredUnlockId)
-		|| !PlayerState->HasServerAuthorizedEquipmentUnlock(Bait->RequiredUnlockId)
-		|| !PlayerState->HasServerAuthorizedEquipmentUnlock(Float->RequiredUnlockId)
-		|| (Scoop && !PlayerState->HasServerAuthorizedEquipmentUnlock(Scoop->RequiredUnlockId)))
+	else if (!PlayerState)
 	{
+		// 墓碑（2026-09-13）：这里原来还对竿／饵／漂／抄网各查一次
+		// HasServerAuthorizedEquipmentUnlock(RequiredUnlockId)。删掉这半条件，只留 PlayerState 必须在。
+		//
+		// 为什么删：设计里的「解锁」是**商店上新货**，不是「已有的东西不许装备」——
+		// 道具册 §5（Knowledge/Design/GDD 系统分册/道具/道具.md:123，09-09 拍）
+		// 「图鉴收集里程碑附带装备解锁是完整版预留，Demo 不做：Demo 里三档竿、三种漂、抄网、
+		// 鱼护开局就在货架，全靠商店买」。这条口径在商店侧已经由 FCatShopCatalogEntry 的
+		// RequiredShopUnlockId 正确承载（配了它的货架条目直接判无效，见 CatShopCatalogTypes.cpp:17,55）。
+		//
+		// 而这道装备门是另一套平行概念，且它的授权只能来自已 durable ACK 的 Unlock Grant，
+		// 唯一生产者 UCatRunImprintService::RecordCommittedUnlock 在正式链路上零调用点。
+		// 结果是 10 件配了 RequiredUnlockId 的 Demo 装备一律 PermissionDenied：
+		// 7 种饵、Equip_Float_Bell 与 Equip_Float_YarnBall、商店在卖的 Equip_Rod_ShopT2。
+		// 铃铛漂「咬钩铃响、全场可闻」是 09-12 刚接好的功能，因为漂配不上所以永远触发不了。
+		//
+		// 字段本身保留：CatRodSkinDefinition 上的同名字段是外观解锁（那条确实跟人走，程序页第 127 条
+		// 与外观内容一起挂起），装备定义上的这个留着等完整版的解锁经济，届时按「上新货」而不是
+		// 「禁止装备」重新接。物品仍必须在自己库存里——RodItemInstanceId 等三个实例校验没动。
 		Result.Error = ECatDomainCommandError::PermissionDenied;
 	}
 	else
@@ -1036,6 +1051,82 @@ bool UCatEquipmentComponent::GetFishingRodDurability(const FGuid FishingSessionI
 	return FMath::IsFinite(OutDurability) && OutDurability >= 0.0;
 }
 
+// 断竿报废流程：
+// 1. 先要求 authority、会话记录与正式库存都在；缺任一项都不动库存事实。
+// 2. 按 Begin 冻结的实例 ID 解析当前实例并确认它**真的已断**——没断的竿绝不在这里消失。
+// 3. 按它此刻所在的位置移除：正在部署走 held entry 退役，已经在可见格就清那一格。
+// 4. 最后把指向它的钓具选择清空并重新校正，保持未选竿，等待玩家主动取竿。
+bool UCatEquipmentComponent::RetireBrokenFishingRodFromAuthority(const FGuid FishingSessionId)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return false;
+	}
+	const FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
+	if (Record == nullptr || !Record->RodItemInstanceId.IsValid())
+	{
+		return false;
+	}
+	UCatInventoryComponent* RodInventory = Record->RodInventory.Get();
+	if (RodInventory == nullptr)
+	{
+		return false;
+	}
+	FCatInventoryEntry RodItem;
+	const UCatEquipmentInventoryItemInstance* FormalRodInstance =
+		ResolveFishingRodFormalInstanceFromInventory(*Record, RodItem);
+	if (FormalRodInstance == nullptr || !FormalRodInstance->IsRodBroken())
+	{
+		return false;
+	}
+
+	const FGuid RodItemInstanceId = Record->RodItemInstanceId;
+	bool bRemoved = RodInventory->RetireHeldInventoryEntryFromAuthority(RodItemInstanceId);
+	if (!bRemoved)
+	{
+		const int32 SlotIndex = RodInventory->FindInventorySlotIndexFromInstanceId(RodItemInstanceId);
+		FCatInventoryEntry RemovedEntry;
+		bRemoved = SlotIndex != INDEX_NONE
+			&& RodInventory->RemoveInventoryEntryAtSlotFromAuthority(SlotIndex, RemovedEntry);
+	}
+	if (!bRemoved)
+	{
+		UE_LOG(LogCatEquipment, Warning,
+			TEXT("Event=equipment_broken_rod_retire_failed SessionId=%s RodItemInstanceId=%s Owner=%s Reason=ItemNotFoundInInventory"),
+			*FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			*RodItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(GetOwner()));
+		return false;
+	}
+
+	// 竿可能是借来的：实例住在竿主的库存里，而这条会话记录挂在抛竿者身上。
+	// 两边的选择读模型都可能指着刚被销毁的那根，所以两边都要清并各自重新校正（与磨损写回的处理同源）。
+	UCatEquipmentComponent* RodOwnerEquipment = RodInventory->GetOwner()
+		? RodInventory->GetOwner()->FindComponentByClass<UCatEquipmentComponent>() : nullptr;
+	const auto ClearRetiredRodSelection = [RodItemInstanceId](UCatEquipmentComponent& Equipment)
+	{
+		if (Equipment.Snapshot.RodItemInstanceId == RodItemInstanceId)
+		{
+			Equipment.Snapshot.RodDefinitionId = NAME_None;
+			Equipment.Snapshot.RodItemInstanceId.Invalidate();
+			Equipment.Snapshot.RodDurability = 0.0;
+			Equipment.Snapshot.bRodBroken = false;
+		}
+		Equipment.ReconcileLoadoutSelectionsWithInventory(nullptr, NAME_None);
+		++Equipment.Snapshot.Revision;
+		Equipment.PublishSnapshot();
+	};
+	ClearRetiredRodSelection(*this);
+	if (RodOwnerEquipment != nullptr && RodOwnerEquipment != this)
+	{
+		ClearRetiredRodSelection(*RodOwnerEquipment);
+	}
+	UE_LOG(LogCatEquipment, Log,
+		TEXT("Event=equipment_broken_rod_retired SessionId=%s RodItemInstanceId=%s Owner=%s Revision=%lld Result=ItemDestroyed"),
+		*FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+		*RodItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(GetOwner()), Snapshot.Revision);
+	return true;
+}
+
 FCatFishingUseOperationResult UCatEquipmentComponent::ReleaseFishingUse(const FGuid FishingSessionId)
 {
 	FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
@@ -1440,24 +1531,8 @@ void UCatEquipmentComponent::ReconcileLoadoutSelectionsWithInventory(
 	FCatInventoryEntry PreferredRodSlot;
 	const bool bHasPreferredRodSlot = bPreferredRod
 		&& TryResolveSelectionInventorySlot(PreferredDefinitionId, FGuid(), PreferredRodSlot);
-	FCatInventoryEntry FirstUsableRodSlot;
-	bool bHasFirstUsableRodSlot = false;
-	for (const FCatInventoryEntry& Slot : VisibleSlots)
-	{
-		const UCatEquipmentDefinition* SlotDefinition = InventorySettings != nullptr
-			? InventorySettings->FindRuntimeDefinition<UCatEquipmentDefinition>(Slot.Instance->GetItemDefinitionId()) : nullptr;
-		if (!(Slot.Instance != nullptr && Slot.StackCount > 0)
-			|| SlotDefinition == nullptr || !SlotDefinition->CanServeFishingRod())
-		{
-			continue;
-		}
-		if (!bHasFirstUsableRodSlot && IsSlotUsableRod(Slot))
-		{
-			FirstUsableRodSlot = Slot;
-			bHasFirstUsableRodSlot = true;
-		}
-	}
-
+	// 墓碑（2026-09-14，T35，商店 §3.1.2）：库存校正不再扫描备用竿自动替换断竿。
+	// 只有明确入库/选择传来的 PreferredDefinition 可以建立新选择。
 	FCatInventoryEntry SelectedStoredRod;
 	const bool bSelectedStoredRodMatches =
 		TryFindInventorySlotByInstanceId(Snapshot.RodItemInstanceId, SelectedStoredRod)
@@ -1478,11 +1553,6 @@ void UCatEquipmentComponent::ReconcileLoadoutSelectionsWithInventory(
 	if (bHasPreferredRodSlot && IsSlotUsableRod(PreferredRodSlot))
 	{
 		ReplacementRodSlot = PreferredRodSlot;
-		bHasReplacementRodSlot = true;
-	}
-	else if (bHasFirstUsableRodSlot)
-	{
-		ReplacementRodSlot = FirstUsableRodSlot;
 		bHasReplacementRodSlot = true;
 	}
 	const bool bShouldReplaceRod = (bSelectedRodBrokenOrInvalid || bSelectedRodMissing)

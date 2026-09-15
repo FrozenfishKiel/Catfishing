@@ -1,7 +1,9 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
+#include "Collection/CatRunFishCollectionTypes.h"
 #include "FishContainers/CatFishContainerTypes.h"
+#include "Inventory/CatInventoryComponent.h"
 #include "GameFramework/SaveGame.h"
 #include "CatRunSaveGame.generated.h"
 
@@ -19,7 +21,7 @@ struct FCatSavedRunInventorySlot
 	UPROPERTY(SaveGame)
 	FGuid ItemInstanceId;
 
-	/** 持久化格的堆叠数量；Inventory 导出会把合法 held 实例放回空格，未提交偷鱼窗口不能保存。 */
+	/** 持久化格的堆叠数量；Inventory 导出会把合法 held 实例放回空格，未提交的容器事务不能保存。 */
 	UPROPERTY(SaveGame)
 	int32 Quantity = 0;
 
@@ -42,6 +44,9 @@ struct FCatSavedRunInventorySlot
 	/** 鱼的捕获者稳定标识；仅在本机磁盘与服务器恢复链使用，不写日志或复制给其他玩家。 */
 	UPROPERTY(SaveGame)
 	FString FishOwnerStableNetId;
+	/** 鱼护实例引用的世界容器；先重建容器，再恢复库存实例的双向关联。 */
+	UPROPERTY(SaveGame)
+	FName FishGuardHostName;
 };
 
 /** 磁盘中的玩家钓具选择载荷；随身库存由玩家运行状态单独保存。 */
@@ -110,6 +115,30 @@ struct FCatSavedCampInventory
 	TArray<FCatSavedRunInventorySlot> InventorySlots;
 };
 
+/** 现行公共仓库、鱼护与鱼缸的磁盘事实；宿主名在同一关卡内稳定，动态宿主保留类与位置。 */
+USTRUCT()
+struct FCatSavedWorldInventory
+{
+	GENERATED_BODY()
+	UPROPERTY(SaveGame)
+	FName HostName;
+	UPROPERTY(SaveGame)
+	TSoftClassPtr<AActor> HostClass;
+	UPROPERTY(SaveGame)
+	FTransform HostTransform = FTransform::Identity;
+	UPROPERTY(SaveGame)
+	bool bRuntimeCreated = false;
+	UPROPERTY(SaveGame)
+	ECatTeamStorageRole TeamStorageRole = ECatTeamStorageRole::Unspecified;
+	UPROPERTY(SaveGame)
+	int32 Capacity = 0;
+	/** 仅鱼缸使用，其他宿主为 INDEX_NONE。 */
+	UPROPERTY(SaveGame)
+	int32 CapacityTier = INDEX_NONE;
+	UPROPERTY(SaveGame)
+	TArray<FCatSavedRunInventorySlot> InventorySlots;
+};
+
 /** 本机玩家在某个世界槽中的可恢复运行事实；长期档案、解锁和 Profile 不进入这份世界存档。 */
 USTRUCT()
 struct FCatSavedPlayerRunState
@@ -174,6 +203,19 @@ struct FCatSaveSlotSummary
 	/** 最近一次保存时 Run 公开的上一晚世界进度变化；它只用于摘要解释，不参与后续 Run 恢复。 */
 	UPROPERTY(SaveGame, BlueprintReadOnly)
 	int32 LastWorldProgressDelta = 0;
+
+	/**
+	 * 最近一次保存时共享鱼缸里那些鱼折算出的可献点数（加载页要给的第三个量，交互册 §42）。
+	 * 它和上面三项一样只是列表/加载展示元数据，不参与 Run 恢复——恢复靠的是 WorldFishContainers 里的鱼本身。
+	 * INDEX_NONE 表示这份存档没记过这个量（本字段之前写的旧档），前端必须显示「未记录」而不是 0 点。
+	 */
+	UPROPERTY(SaveGame, BlueprintReadOnly)
+	int32 TankOfferingPoints = INDEX_NONE;
+
+	/** 这一局是否已经终局（毕业或团灭）；true 的槽只能当战绩回看，前端不得提供「继续」，读档入口也会拒绝。
+	 *  文件永远保留：游戏自己不删档，删档只能由玩家在前端主动做（2026-09-11 拍）。 */
+	UPROPERTY(SaveGame, BlueprintReadOnly)
+	bool bRunCompleted = false;
 };
 
 /** 存档请求的同步受理结果；异步磁盘完成情况由 UCatSaveSubsystem 委托单独通知。 */
@@ -209,7 +251,7 @@ public:
 	/** 返回本项目当前载荷版本；引擎在保存前写入 SavedDataVersion，读取方据此拒绝未知格式。 */
 	virtual int32 GetLatestDataVersion() const override;
 
-	/** 读盘后只迁移已知 v5 数据，不访问 World 或角色；库存与位置等到正式宿主就绪后再应用。 */
+	/** 读盘后只迁移已知 v5/v6 数据，不访问 World 或角色；库存与位置等到正式宿主就绪后再应用。 */
 	virtual void HandlePostLoad() override;
 
 	/** 写盘完成后接收引擎真实结果，并消费一次完成委托；不会把受理成功当作落盘成功。 */
@@ -218,13 +260,17 @@ public:
 	/** 当前不可变写盘候选的完成接收者；Subsystem 写盘前绑定，完成时清空，不进入磁盘。 */
 	FCatRunSaveFinished OnSaveFinished;
 
-	/** 旧 USaveGame 文件的格式标记；保留字段名以识别 v5，加载时升级为 v6，新文件同时由引擎记录数据版本。 */
+	/** 旧 USaveGame 文件的格式标记；保留字段名以识别 v5/v6，加载时升级为 v7，新文件同时由引擎记录数据版本。 */
 	UPROPERTY(SaveGame)
-	int32 FormatVersion = 6;
+	int32 FormatVersion = 7;
 
 	/** 是否已采集过正式世界；新建空槽为 false，首次采样后为 true，区分新局和缺失世界载荷。 */
 	UPROPERTY(SaveGame)
 	bool bHasWorldSnapshot = false;
+
+	/** 本局公共板子的领域记录，随世界断点恢复；纯新增字段，旧 v6 档默认空数组，不进个人 Profile。 */
+	UPROPERTY(SaveGame)
+	TArray<FCatRunFishCollectionCapture> RunFishCollectionCaptures;
 
 	/** 该载荷归属的槽标识；读取时必须与请求槽一致，防止文件串档。 */
 	UPROPERTY(SaveGame)
@@ -242,7 +288,7 @@ public:
 	UPROPERTY(SaveGame)
 	double PlayedDurationSeconds = 0.0;
 
-	/** 写盘时权威 Run 已公开的天数；只给前端摘要或全局遮罩展示，不恢复 Run 的阶段或时钟。 */
+	/** 写盘时权威 Run 的天数；新断点恢复同一天数，当前阶段／时钟仍沿原启动契约。 */
 	UPROPERTY(SaveGame)
 	int32 DayIndex = 0;
 
@@ -258,13 +304,25 @@ public:
 	UPROPERTY(SaveGame)
 	int32 DailyOfferingTarget = 0;
 
-	/** 写盘时权威 Run 公共世界进度；它不成为第二份 Run 真相，也不在恢复时写回 GameMode。 */
+	/** 写盘时权威 Run 世界进度；新断点在开放玩法前恢复唯一 Run ASC，再发布 GameMode 投影。 */
 	UPROPERTY(SaveGame)
 	int32 WorldProgress = 10;
 
 	/** 写盘时权威 Run 上次世界进度变化；它只为存档列表和调试展示保留。 */
 	UPROPERTY(SaveGame)
 	int32 LastWorldProgressDelta = 0;
+
+	/** 这一局是否已经终局（毕业或团灭）；由 Run 的 EndReason 写入且只增不减，房主退出不算终局（那是可续的局中断点）。
+	 *  它是「不再提供继续」的唯一磁盘事实；文件本身一个不动，仍可读出来当战绩回看（2026-09-11 拍）。
+	 *  未携带此字段的旧 v6 反序列化后保持 false，表示「没打完、可以继续」；v7 迁移保留已有完成位。 */
+	UPROPERTY(SaveGame)
+	bool bRunCompleted = false;
+
+	/** 写盘时共享鱼缸里那些鱼折算出的可献点数；它只服务加载页摘要，不在恢复时写回任何鱼缸。
+	 *  INDEX_NONE 表示这份存档没记过（旧 v6 文件，或体重档未裁时算不出来），前端显示「未记录」而不是 0 点。
+	 *  未携带此字段的旧文件保持 INDEX_NONE；v7 迁移保留已有摘要。 */
+	UPROPERTY(SaveGame)
+	int32 TankOfferingPoints = INDEX_NONE;
 
 	/** 本机玩家快照是否已经写入这个槽；新建空槽为 false，首次保存或离开前捕获成功后为 true。 */
 	UPROPERTY(SaveGame)
@@ -274,11 +332,19 @@ public:
 	UPROPERTY(SaveGame)
 	FCatSavedPlayerRunState PlayerSnapshot;
 
-	/** 当前世界唯一共享营地仓库的已提交内容；多营地或无营地时保存与恢复都拒绝。 */
+	/** 旧 v6 单仓载荷，只为已有文件读取保留；新写入使用 WorldInventories。 */
 	UPROPERTY(SaveGame)
 	FCatSavedCampInventory CampInventory;
 
-	/** 世界鱼容器的已提交鱼；每项用关卡稳定键重新关联，而非运行期随机 GUID。 */
+	/** 载荷形状标记（兼容已发布的两种 v6）；旧单仓档没有公款与现行鱼库存，不能把默认零值当成已保存事实。 */
+	UPROPERTY(SaveGame)
+	bool bHasInventoryCheckpoint = false;
+	UPROPERTY(SaveGame)
+	TArray<FCatSavedWorldInventory> WorldInventories;
+	UPROPERTY(SaveGame)
+	int32 TeamWalletBalance = 0;
+
+	/** 旧单仓格式的世界鱼容器；仅为已有文件兼容读取保留，新断点写 WorldInventories。 */
 	UPROPERTY(SaveGame)
 	TArray<FCatPersistentContainerSnapshot> WorldFishContainers;
 };

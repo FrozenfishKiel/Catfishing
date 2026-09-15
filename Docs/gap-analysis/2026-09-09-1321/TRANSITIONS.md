@@ -1,6 +1,6 @@
 # 基线迁移
 
-基线：D:\LocalGameProject\Unreal\Catfishing\Docs\gap-analysis\2026-09-09
+基线：Docs/gap-analysis/2026-09-09
 
 改写是二级匹配的独立计数，可同时计入退步／修复／其他变化；同状态改写不计未变。
 
@@ -133,14 +133,14 @@
 
 ## 沿用基线的系统
 
-- ui与交互：D:\LocalGameProject\Unreal\Catfishing\Docs\gap-analysis\2026-09-09
-- 印记与图鉴：D:\LocalGameProject\Unreal\Catfishing\Docs\gap-analysis\2026-09-09
-- 猫咪与状态：D:\LocalGameProject\Unreal\Catfishing\Docs\gap-analysis\2026-09-09
-- 环境与氛围：D:\LocalGameProject\Unreal\Catfishing\Docs\gap-analysis\2026-09-09
-- 联机社交：D:\LocalGameProject\Unreal\Catfishing\Docs\gap-analysis\2026-09-09
-- 营地与局进程：D:\LocalGameProject\Unreal\Catfishing\Docs\gap-analysis\2026-09-09
-- 道具：D:\LocalGameProject\Unreal\Catfishing\Docs\gap-analysis\2026-09-09
-- 钓鱼系统-打窝聚鱼与多人：D:\LocalGameProject\Unreal\Catfishing\Docs\gap-analysis\2026-09-09
-- 钓鱼系统-核心：D:\LocalGameProject\Unreal\Catfishing\Docs\gap-analysis\2026-09-09
+- ui与交互：Docs/gap-analysis/2026-09-09
+- 印记与图鉴：Docs/gap-analysis/2026-09-09
+- 猫咪与状态：Docs/gap-analysis/2026-09-09
+- 环境与氛围：Docs/gap-analysis/2026-09-09
+- 联机社交：Docs/gap-analysis/2026-09-09
+- 营地与局进程：Docs/gap-analysis/2026-09-09
+- 道具：Docs/gap-analysis/2026-09-09
+- 钓鱼系统-打窝聚鱼与多人：Docs/gap-analysis/2026-09-09
+- 钓鱼系统-核心：Docs/gap-analysis/2026-09-09
 
 合计：未变 643／退步 0／修复 0／其他变化 1／改写 0／新增 4／消失 1；稳定率 99.8%（一级 644 ÷ 基线 645）；二级 0，新增 4，消失 1

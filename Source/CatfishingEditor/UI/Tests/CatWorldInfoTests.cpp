@@ -18,6 +18,9 @@
 #include "HAL/IConsoleManager.h"
 #include "TimerManager.h"
 #include "GameFramework/Actor.h"
+#include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventoryItemInstance.h"
+#include "Inventory/CatInventoryStatics.h"
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/WorldSettings.h"
@@ -29,33 +32,37 @@
 #include "Widgets/SWidget.h"
 #include <limits>
 
-// 双端 PIE 的测试入口；Python 编辑器执行保护会把 RPC 强制当作本地调用，所以只在此安排下一帧发起正式请求。
-// 命令仅编入 Editor 测试模块，不随游戏 Cook；参数是两端已有库存宿主的名字和格位，不创建或直接改写任何库存。
-static FAutoConsoleCommandWithWorldAndArgs GCatWorldInfoProbeMove(
-	TEXT("cat.WorldInfo.Probe.Move"), TEXT("PIE only: SourceActor SourceSlot TargetActor TargetSlot"),
+// 墓碑（T24，联机社交:220）：旧 Probe.Move 直转库存鱼；探针现在只转发正式 Carry/目标交互 RPC。
+// Python 调用栈退出后在下一帧发请求，避免编辑器脚本保护把 RPC 当作本地执行。
+static FAutoConsoleCommandWithWorldAndArgs GCatWorldInfoProbeFish(
+	TEXT("cat.WorldInfo.Probe.Fish"), TEXT("PIE only: Carry Host Slot | Store Host"),
 	FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
 	{
-		// 先限制为正在运行的 PIE，再解析本地玩家和现存宿主；所有对象用弱引用跨过 Python 调用栈，失效就放弃请求。
-		if (!World || World->WorldType != EWorldType::PIE || Args.Num() != 4) return;
-		ACatfishingPlayerController* Player = Cast<ACatfishingPlayerController>(World->GetFirstPlayerController());
-		AActor* Source = nullptr;
-		AActor* Target = nullptr;
+		if (!World || World->WorldType != EWorldType::PIE || Args.Num() < 2) return;
+		auto* Player = Cast<ACatfishingPlayerController>(World->GetFirstPlayerController());
+		AActor* Host = nullptr;
 		for (TActorIterator<AActor> It(World); It; ++It)
-		{
-			if (It->GetName() == Args[0]) Source = *It;
-			if (It->GetName() == Args[2]) Target = *It;
-		}
-		int32 SourceSlot = INDEX_NONE;
-		int32 TargetSlot = INDEX_NONE;
-		if (!Player || !Player->IsLocalController() || !Source || !Target
-			|| !LexTryParseString(SourceSlot, *Args[1]) || !LexTryParseString(TargetSlot, *Args[3])) return;
+			if (It->GetName() == Args[1]) Host = *It;
+		const bool bCarry = Args[0] == TEXT("Carry");
+		int32 Slot = INDEX_NONE;
+		if (!Player || !Player->IsLocalController() || !Host
+			|| (bCarry && (Args.Num() != 3 || !LexTryParseString(Slot, *Args[2])))
+			|| (!bCarry && (Args[0] != TEXT("Store") || Args.Num() != 2))) return;
 		World->GetTimerManager().SetTimerForNextTick(FTimerDelegate::CreateLambda(
-			[Player = TWeakObjectPtr<ACatfishingPlayerController>(Player), Source = TWeakObjectPtr<AActor>(Source),
-			 Target = TWeakObjectPtr<AActor>(Target), SourceSlot, TargetSlot]()
+			[Player = TWeakObjectPtr<ACatfishingPlayerController>(Player), Host = TWeakObjectPtr<AActor>(Host), Slot, bCarry]()
 			{
-				// 此前选定的本地 Controller 和两个宿主下一帧仍有效才调用生产 RPC；距离、身份、库存内容及回执继续由原服务器链处理。
-				if (Player.IsValid() && Source.IsValid() && Target.IsValid())
-					Player->ServerMoveInventoryItemBetweenHosts(FGuid::NewGuid(), Source.Get(), SourceSlot, Target.Get(), TargetSlot);
+				if (!Player.IsValid() || !Host.IsValid()) return;
+				if (!bCarry)
+				{
+					Player->ServerRequestInteraction(Host.Get(), FGuid::NewGuid());
+					return;
+				}
+				TArray<UCatInventoryComponent*> Inventories;
+				UCatInventoryStatics::AppendInventoryComponentsFromActor(Host.Get(), Inventories);
+				const FCatInventoryEntry* Entry = Inventories.IsEmpty() ? nullptr : Inventories[0]->GetInventoryEntryAtSlot(Slot);
+				if (Entry && Entry->Instance)
+					Player->ServerReleaseInventoryItemToWorld(FGuid::NewGuid(), Host.Get(), Slot,
+						Entry->Instance->GetItemInstanceId(), 1, ECatInventoryWorldAction::Carry);
 			}));
 	}));
 

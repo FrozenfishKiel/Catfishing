@@ -23,6 +23,21 @@ struct FCatInventoryCatalogDefinition
 	bool IsRuntimeReady() const;
 };
 
+/**
+ * 随身携带上限的分类；只有这两类消耗品有各自独立的随身总量（道具册：普通饵 8 份、窝料 5 份）。
+ * 它不是物品的用途分类——分类事实仍在装备定义的能力判定里，这里只是「哪一条上限管这件东西」。
+ */
+UENUM()
+enum class ECatInventoryCarryCategory : uint8
+{
+	/** 不受随身总量约束；竿、漂、抄网、鱼护、鱼与一切非饵非窝料的东西都在这一档。 */
+	None = 0,
+	/** 普通饵。 */
+	Bait = 1,
+	/** 窝料。 */
+	Chum = 2
+};
+
 /** Catfishing 的正式库存目录设置；商店、拾取、营地和存档都从这里解析库存定义。 */
 UCLASS(Config = Game, DefaultConfig, meta = (DisplayName = "Catfishing Inventory"))
 class CATFISHING_API UCatInventorySettings : public UDeveloperSettings
@@ -39,7 +54,7 @@ public:
 	/** 按稳定 ID 查找唯一可运行的库存定义资产；重复、缺失或定义配置不一致时返回空。 */
 	UCatInventoryItemDefinition* FindRuntimeDefinition(FName DefinitionId) const;
 
-	/** 按稳定 ID 查找指定定义类型；装备、草药等上层系统用它从正式库存目录窄化自己认识的定义。 */
+	/** 按稳定 ID 查找指定定义类型；装备等上层系统用它从正式库存目录窄化自己认识的定义。 */
 	template <typename DefinitionType>
 	DefinitionType* FindRuntimeDefinition(FName DefinitionId) const
 	{
@@ -55,6 +70,22 @@ public:
 	/** 读取数量型物品的有效单格上限；配置为 0 时返回 MAX_int32，让容量预演和显示使用同一语义。 */
 	int32 GetDefaultQuantityStackLimit() const;
 
+	/** 读取普通饵的随身总量上限；<= 0 表示未设上限，调用方按 MAX_int32 处理。 */
+	int32 GetBaitCarryLimit() const;
+
+	/** 读取窝料的随身总量上限；<= 0 表示未设上限，调用方按 MAX_int32 处理。 */
+	int32 GetChumCarryLimit() const;
+
+	/**
+	 * 判定一份物品定义受哪一条随身总量上限约束。
+	 * 只读装备定义已有的能力判定（CanServeFishingBait / CanServeChumPlacement），不新增任何必填资产字段——
+	 * 八款饵和四款窝料资产今天就能被认出来，不存在「资产没配过所以静默失效」。
+	 */
+	static ECatInventoryCarryCategory ResolveCarryCategory(const UCatInventoryItemDefinition& ItemDefinition);
+
+	/** 读取某一分类的随身总量上限；None 分类与未配置都返回 MAX_int32。 */
+	int32 GetCarryLimitForCategory(ECatInventoryCarryCategory Category) const;
+
 public:
 	/** 正式库存物品目录；商店、营地和随身物品都从这里读取定义。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Catalog")
@@ -67,6 +98,21 @@ public:
 	/** 数量型物品未在定义资产上声明 MaxStackSize 时采用的单格容量；0 表示同类数量物尽量堆进一个格。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Capacity", meta = (ClampMin = "0"))
 	int32 DefaultQuantityStackCapacity = ProjectDefaultQuantityStackCapacity;
+
+	/**
+	 * 普通饵的随身携带上限，单位是份（道具册：8 份，2026-08-19 由 5 改）。
+	 * 0 表示不设总量上限——这是「这条规则还没配」的安全值，不是「一份都不能带」。
+	 * 判定谁算普通饵不新增资产字段：直接问装备定义的 CanServeFishingBait()，已有八款饵资产天然成立。
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Capacity", meta = (ClampMin = "0"))
+	int32 BaitCarryLimit = 0;
+
+	/**
+	 * 窝料的随身携带上限，单位是份（道具册：5 份）。
+	 * 0 的语义与 BaitCarryLimit 相同；判定谁算窝料同样只问 CanServeChumPlacement()，不新增必填字段。
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Capacity", meta = (ClampMin = "0"))
+	int32 ChumCarryLimit = 0;
 
 	/** 自动放置可搜索的最远水平距离，单位厘米；服务器与本地操作提示读取，不能借客户端落点越过该范围。 */
 	UPROPERTY(Config, EditAnywhere, Category = "World", meta = (ClampMin = "1.0", Units = "cm"))

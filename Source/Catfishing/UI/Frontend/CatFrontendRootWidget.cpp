@@ -9,6 +9,7 @@
 #include "Components/Border.h"
 #include "Components/CheckBox.h"
 #include "Components/ComboBoxString.h"
+#include "Settings/CatGameUserSettings.h"
 #include "Components/PanelWidget.h"
 #include "Components/EditableTextBox.h"
 #include "Components/ScrollBox.h"
@@ -49,12 +50,19 @@ void UCatFrontendSaveSlotRowWidget::ConfigureRow(UCatFrontendRootWidget* InRootW
 	{
 		Label->SetText(FText::FromString(bSelected ? TEXT("已选择") : TEXT("选择")));
 	}
+	bRunCompleted = Summary.bRunCompleted;
+	bCanContinue = UCatFrontendSaveModel::CanContinueSummary(Summary);
+	CompletionStatusText = bRunCompleted ? FText::FromString(TEXT("已完结")) : FText::GetEmpty();
+	// 完结行保留选择以供查看/主动删除，只把展示置灰；新建槽按钮不依赖本行状态。
+	SetRenderOpacity(bRunCompleted ? 0.5f : 1.0f);
 	if (SaveSlotNameText) { SaveSlotNameText->SetText(FText::FromString(Summary.DisplayName)); }
 	if (SaveSlotMetaText)
 	{
-		SaveSlotMetaText->SetText(Summary.LastSavedAt.GetTicks() > 0
+		const FText SavedAtText = Summary.LastSavedAt.GetTicks() > 0
 			? FText::FromString(FString::Printf(TEXT("最近保存：%s"), *Summary.LastSavedAt.ToString()))
-			: FText::FromString(TEXT("最近保存时间不可用")));
+			: FText::FromString(TEXT("最近保存时间不可用"));
+		SaveSlotMetaText->SetText(bRunCompleted
+			? FText::Format(FText::FromString(TEXT("已完结 · {0}")), SavedAtText) : SavedAtText);
 	}
 }
 
@@ -457,6 +465,7 @@ void UCatFrontendRootWidget::RequestSelectAudioSettings() { if (PageController) 
 
 // 控制分类点击流程：交给有效 Controller 选择当前受限分类；其 Model 通知驱动只读回填，不创建暂缓实现的控制设置。
 void UCatFrontendRootWidget::RequestSelectControlsSettings() { if (PageController) { PageController->RequestSelectControlsSettings(); } }
+void UCatFrontendRootWidget::RequestSelectAccessibilitySettings() { if (PageController) { PageController->RequestSelectAccessibilitySettings(); } }
 
 // UMG 初始化流程：父类完成 WidgetTree 创建后使 Root 可获得键盘焦点，并解析实际页面子树；协作者稍后注入时会再次幂等绑定。
 void UCatFrontendRootWidget::NativeOnInitialized()
@@ -509,6 +518,7 @@ void UCatFrontendRootWidget::ResolvePageControls()
 	GraphicsSettingsCategoryButton = FindPageControl<UButton>(FrontendSettingsPage, TEXT("GraphicsSettingsCategoryButton"), TEXT("FrontendSettingsPage"));
 	AudioSettingsCategoryButton = FindPageControl<UButton>(FrontendSettingsPage, TEXT("AudioSettingsCategoryButton"), TEXT("FrontendSettingsPage"));
 	ControlsSettingsCategoryButton = FindPageControl<UButton>(FrontendSettingsPage, TEXT("ControlsSettingsCategoryButton"), TEXT("FrontendSettingsPage"));
+	AccessibilitySettingsCategoryButton = FindPageControl<UButton>(FrontendSettingsPage, TEXT("AccessibilitySettingsCategoryButton"), TEXT("FrontendSettingsPage"));
 	SaveResultTextBlock = FindPageControl<UTextBlock>(SaveListPage, TEXT("SaveResultTextBlock"), TEXT("SaveListPage"));
 	SaveRowsScrollBox = FindPageControl<UScrollBox>(SaveListPage, TEXT("SaveRowsScrollBox"), TEXT("SaveListPage"));
 	CreateSaveNameTextBox = FindPageControl<UEditableTextBox>(SaveListPage, TEXT("CreateSaveNameTextBox"), TEXT("SaveListPage"));
@@ -580,6 +590,7 @@ void UCatFrontendRootWidget::BindPageControls()
 	if (GraphicsSettingsCategoryButton) { GraphicsSettingsCategoryButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestSelectGraphicsSettings); }
 	if (AudioSettingsCategoryButton) { AudioSettingsCategoryButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestSelectAudioSettings); }
 	if (ControlsSettingsCategoryButton) { ControlsSettingsCategoryButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestSelectControlsSettings); }
+	if (AccessibilitySettingsCategoryButton) { AccessibilitySettingsCategoryButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestSelectAccessibilitySettings); }
 	if (UButton* ApplyButton = FindPageControl<UButton>(FrontendSettingsPage, TEXT("ApplySettingsButton"), TEXT("FrontendSettingsPage"))) { ApplyButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestApplyFrontendSettings); }
 	if (UButton* RestoreButton = FindPageControl<UButton>(FrontendSettingsPage, TEXT("RestoreSettingsDefaultsButton"), TEXT("FrontendSettingsPage"))) { RestoreButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestRestoreFrontendSettingsDefaults); }
 	if (UButton* CancelButton = FindPageControl<UButton>(FrontendSettingsPage, TEXT("CancelSettingsButton"), TEXT("FrontendSettingsPage"))) { CancelButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestCancelFrontendSettings); }
@@ -590,6 +601,15 @@ void UCatFrontendRootWidget::BindPageControls()
 	if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("VSyncCheckBox"), TEXT("FrontendSettingsPage"))) { Control->OnCheckStateChanged.AddUniqueDynamic(this, &ThisClass::HandleVSyncChanged); }
 	if (USlider* Control = FindPageControl<USlider>(FrontendSettingsPage, TEXT("UIScaleSlider"), TEXT("FrontendSettingsPage"))) { Control->OnValueChanged.AddUniqueDynamic(this, &ThisClass::HandleUIScaleChanged); }
 	if (USlider* Control = FindPageControl<USlider>(FrontendSettingsPage, TEXT("BrightnessSlider"), TEXT("FrontendSettingsPage"))) { Control->OnValueChanged.AddUniqueDynamic(this, &ThisClass::HandleBrightnessChanged); }
+	// 辅助功能六项（界面缩放已在上面的 UIScaleSlider）与控制四项（按键设置无来源，见 IsKeyBindingSettingAvailable）。
+	if (USlider* Control = FindPageControl<USlider>(FrontendSettingsPage, TEXT("TextSizeSlider"), TEXT("FrontendSettingsPage"))) { Control->OnValueChanged.AddUniqueDynamic(this, &ThisClass::HandleTextSizeChanged); }
+	if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("HighContrastCheckBox"), TEXT("FrontendSettingsPage"))) { Control->OnCheckStateChanged.AddUniqueDynamic(this, &ThisClass::HandleHighContrastChanged); }
+	if (UComboBoxString* Control = FindPageControl<UComboBoxString>(FrontendSettingsPage, TEXT("ColorBlindModeComboBox"), TEXT("FrontendSettingsPage"))) { Control->OnSelectionChanged.AddUniqueDynamic(this, &ThisClass::HandleColorBlindModeSelectionChanged); }
+	if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("ReduceCameraShakeCheckBox"), TEXT("FrontendSettingsPage"))) { Control->OnCheckStateChanged.AddUniqueDynamic(this, &ThisClass::HandleReduceCameraShakeChanged); }
+	if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("ReduceFlashingEffectsCheckBox"), TEXT("FrontendSettingsPage"))) { Control->OnCheckStateChanged.AddUniqueDynamic(this, &ThisClass::HandleReduceFlashingEffectsChanged); }
+	if (USlider* Control = FindPageControl<USlider>(FrontendSettingsPage, TEXT("MouseSensitivitySlider"), TEXT("FrontendSettingsPage"))) { Control->OnValueChanged.AddUniqueDynamic(this, &ThisClass::HandleMouseSensitivityChanged); }
+	if (USlider* Control = FindPageControl<USlider>(FrontendSettingsPage, TEXT("CameraSensitivitySlider"), TEXT("FrontendSettingsPage"))) { Control->OnValueChanged.AddUniqueDynamic(this, &ThisClass::HandleCameraSensitivityChanged); }
+	if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("InvertYAxisCheckBox"), TEXT("FrontendSettingsPage"))) { Control->OnCheckStateChanged.AddUniqueDynamic(this, &ThisClass::HandleInvertYAxisChanged); }
 	if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("VibrationCheckBox"), TEXT("FrontendSettingsPage"))) { Control->OnCheckStateChanged.AddUniqueDynamic(this, &ThisClass::HandleVibrationChanged); }
 	if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("VoiceChatCheckBox"), TEXT("FrontendSettingsPage"))) { Control->OnCheckStateChanged.AddUniqueDynamic(this, &ThisClass::HandleVoiceChatChanged); }
 	if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("MuteAudioWhenUnfocusedCheckBox"), TEXT("FrontendSettingsPage"))) { Control->OnCheckStateChanged.AddUniqueDynamic(this, &ThisClass::HandleMuteAudioWhenUnfocusedChanged); }
@@ -637,6 +657,7 @@ void UCatFrontendRootWidget::UnbindPageControls()
 	if (GraphicsSettingsCategoryButton) { GraphicsSettingsCategoryButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestSelectGraphicsSettings); }
 	if (AudioSettingsCategoryButton) { AudioSettingsCategoryButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestSelectAudioSettings); }
 	if (ControlsSettingsCategoryButton) { ControlsSettingsCategoryButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestSelectControlsSettings); }
+	if (AccessibilitySettingsCategoryButton) { AccessibilitySettingsCategoryButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestSelectAccessibilitySettings); }
 	if (UButton* ApplyButton = FindPageControl<UButton>(FrontendSettingsPage, TEXT("ApplySettingsButton"), TEXT("FrontendSettingsPage"))) { ApplyButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestApplyFrontendSettings); }
 	if (UButton* RestoreButton = FindPageControl<UButton>(FrontendSettingsPage, TEXT("RestoreSettingsDefaultsButton"), TEXT("FrontendSettingsPage"))) { RestoreButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestRestoreFrontendSettingsDefaults); }
 	if (UButton* CancelButton = FindPageControl<UButton>(FrontendSettingsPage, TEXT("CancelSettingsButton"), TEXT("FrontendSettingsPage"))) { CancelButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestCancelFrontendSettings); }
@@ -646,6 +667,14 @@ void UCatFrontendRootWidget::UnbindPageControls()
 	if (UComboBoxString* Control = FindPageControl<UComboBoxString>(FrontendSettingsPage, TEXT("OverallQualityComboBox"), TEXT("FrontendSettingsPage"))) { Control->OnSelectionChanged.RemoveDynamic(this, &ThisClass::HandleQualitySelectionChanged); }
 	if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("VSyncCheckBox"), TEXT("FrontendSettingsPage"))) { Control->OnCheckStateChanged.RemoveDynamic(this, &ThisClass::HandleVSyncChanged); }
 	if (USlider* Control = FindPageControl<USlider>(FrontendSettingsPage, TEXT("UIScaleSlider"), TEXT("FrontendSettingsPage"))) { Control->OnValueChanged.RemoveDynamic(this, &ThisClass::HandleUIScaleChanged); }
+	if (USlider* Control = FindPageControl<USlider>(FrontendSettingsPage, TEXT("TextSizeSlider"), TEXT("FrontendSettingsPage"))) { Control->OnValueChanged.RemoveDynamic(this, &ThisClass::HandleTextSizeChanged); }
+	if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("HighContrastCheckBox"), TEXT("FrontendSettingsPage"))) { Control->OnCheckStateChanged.RemoveDynamic(this, &ThisClass::HandleHighContrastChanged); }
+	if (UComboBoxString* Control = FindPageControl<UComboBoxString>(FrontendSettingsPage, TEXT("ColorBlindModeComboBox"), TEXT("FrontendSettingsPage"))) { Control->OnSelectionChanged.RemoveDynamic(this, &ThisClass::HandleColorBlindModeSelectionChanged); }
+	if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("ReduceCameraShakeCheckBox"), TEXT("FrontendSettingsPage"))) { Control->OnCheckStateChanged.RemoveDynamic(this, &ThisClass::HandleReduceCameraShakeChanged); }
+	if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("ReduceFlashingEffectsCheckBox"), TEXT("FrontendSettingsPage"))) { Control->OnCheckStateChanged.RemoveDynamic(this, &ThisClass::HandleReduceFlashingEffectsChanged); }
+	if (USlider* Control = FindPageControl<USlider>(FrontendSettingsPage, TEXT("MouseSensitivitySlider"), TEXT("FrontendSettingsPage"))) { Control->OnValueChanged.RemoveDynamic(this, &ThisClass::HandleMouseSensitivityChanged); }
+	if (USlider* Control = FindPageControl<USlider>(FrontendSettingsPage, TEXT("CameraSensitivitySlider"), TEXT("FrontendSettingsPage"))) { Control->OnValueChanged.RemoveDynamic(this, &ThisClass::HandleCameraSensitivityChanged); }
+	if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("InvertYAxisCheckBox"), TEXT("FrontendSettingsPage"))) { Control->OnCheckStateChanged.RemoveDynamic(this, &ThisClass::HandleInvertYAxisChanged); }
 	if (USlider* Control = FindPageControl<USlider>(FrontendSettingsPage, TEXT("BrightnessSlider"), TEXT("FrontendSettingsPage"))) { Control->OnValueChanged.RemoveDynamic(this, &ThisClass::HandleBrightnessChanged); }
 	if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("VibrationCheckBox"), TEXT("FrontendSettingsPage"))) { Control->OnCheckStateChanged.RemoveDynamic(this, &ThisClass::HandleVibrationChanged); }
 	if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("VoiceChatCheckBox"), TEXT("FrontendSettingsPage"))) { Control->OnCheckStateChanged.RemoveDynamic(this, &ThisClass::HandleVoiceChatChanged); }
@@ -709,7 +738,8 @@ void UCatFrontendRootWidget::HandleSaveModelChanged()
 	}
 	if (CreateSaveButton) { CreateSaveButton->SetIsEnabled(bCanSubmit); }
 	if (CreateSaveNameTextBox) { CreateSaveNameTextBox->SetIsEnabled(bCanSubmit); }
-	if (LoadSelectedSaveButton) { LoadSelectedSaveButton->SetIsEnabled(bCanSubmit && bHasSelection); }
+	if (LoadSelectedSaveButton) { LoadSelectedSaveButton->SetIsEnabled(bCanSubmit && bHasSelection
+		&& SaveModel->CanContinueSlot(PageController->GetSelectedSlotId())); }
 	if (DeleteSelectedSaveButton) { DeleteSelectedSaveButton->SetIsEnabled(bCanSubmit && bHasSelection); }
 	if (ConfirmDeleteSaveButton) { ConfirmDeleteSaveButton->SetIsEnabled(bCanSubmit && PageController && !PageController->GetPendingDeleteSlotId().IsNone()); }
 	if (SaveRowsScrollBox) { SaveRowsScrollBox->SetIsEnabled(bCanSubmit); }
@@ -1112,6 +1142,29 @@ void UCatFrontendRootWidget::HandleUIScaleChanged(float NormalizedValue) { if (!
 
 // 亮度输入流程：把滑块归一化值换算为正式 Gamma 范围，再由 Model 在 Apply 前保留草稿。
 void UCatFrontendRootWidget::HandleBrightnessChanged(float NormalizedValue) { if (!bRefreshingSettingsControls && SettingsModel) { SettingsModel->SetDraftDisplayGamma(0.5f + NormalizedValue * 4.5f); } }
+
+// 辅助功能与控制项输入流程：回填保护外把控件值换算成正式区间写进草稿，真正持久化仍等 Apply。
+// 这十项没有一项能在这里「立刻生效」——它们的消费方是 WBP、表现层与视角输入，所以这里只负责如实记录玩家的选择。
+void UCatFrontendRootWidget::HandleTextSizeChanged(float NormalizedValue) { if (!bRefreshingSettingsControls && SettingsModel) { SettingsModel->SetDraftTextSizeScale(0.75f + NormalizedValue * 1.25f); } }
+void UCatFrontendRootWidget::HandleHighContrastChanged(bool bIsChecked) { if (!bRefreshingSettingsControls && SettingsModel) { SettingsModel->SetDraftHighContrastUI(bIsChecked); } }
+void UCatFrontendRootWidget::HandleColorBlindModeSelectionChanged(FString SelectedItem, ESelectInfo::Type SelectionType)
+{
+	if (bRefreshingSettingsControls || !SettingsModel || SelectionType == ESelectInfo::Direct)
+	{
+		return;
+	}
+	const UComboBoxString* Control = FindPageControl<UComboBoxString>(FrontendSettingsPage,
+		TEXT("ColorBlindModeComboBox"), TEXT("FrontendSettingsPage"));
+	const int32 SelectedIndex = Control ? Control->FindOptionIndex(SelectedItem) : INDEX_NONE;
+	// 下拉项顺序即枚举顺序；越界一律按 None，不猜玩家想选哪一档。
+	SettingsModel->SetDraftColorBlindMode(SelectedIndex >= 0 && SelectedIndex <= static_cast<int32>(ECatColorBlindMode::Tritanopia)
+		? static_cast<ECatColorBlindMode>(SelectedIndex) : ECatColorBlindMode::None);
+}
+void UCatFrontendRootWidget::HandleReduceCameraShakeChanged(bool bIsChecked) { if (!bRefreshingSettingsControls && SettingsModel) { SettingsModel->SetDraftReduceCameraShake(bIsChecked); } }
+void UCatFrontendRootWidget::HandleReduceFlashingEffectsChanged(bool bIsChecked) { if (!bRefreshingSettingsControls && SettingsModel) { SettingsModel->SetDraftReduceFlashingEffects(bIsChecked); } }
+void UCatFrontendRootWidget::HandleMouseSensitivityChanged(float NormalizedValue) { if (!bRefreshingSettingsControls && SettingsModel) { SettingsModel->SetDraftMouseSensitivity(0.1f + NormalizedValue * 2.9f); } }
+void UCatFrontendRootWidget::HandleCameraSensitivityChanged(float NormalizedValue) { if (!bRefreshingSettingsControls && SettingsModel) { SettingsModel->SetDraftCameraSensitivity(0.1f + NormalizedValue * 2.9f); } }
+void UCatFrontendRootWidget::HandleInvertYAxisChanged(bool bIsChecked) { if (!bRefreshingSettingsControls && SettingsModel) { SettingsModel->SetDraftInvertYAxis(bIsChecked); } }
 
 // 震动输入流程：只有当前 LocalPlayer 存在正式 Controller 时才写草稿；失效 UI 不会伪装为可提交。
 void UCatFrontendRootWidget::HandleVibrationChanged(bool bIsChecked) { if (!bRefreshingSettingsControls && SettingsModel && SettingsModel->IsVibrationSettingAvailable()) { SettingsModel->SetDraftVibrationEnabled(bIsChecked); } }

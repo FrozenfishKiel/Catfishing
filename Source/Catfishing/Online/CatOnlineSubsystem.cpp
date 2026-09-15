@@ -1851,7 +1851,7 @@ FCatOnlineResult UCatOnlineSubsystem::RequestJoinInternal(const FOnlineSessionSe
 	return Result;
 }
 
-// Leave 流程：先拒绝并发并核对地图、角色与 Client 主动离局策略；受理时保留真实 Session。前台房间及 Client 可直接清理并在返回后释放本局载荷；Lake Host 不先获释放许可，必须等保存成功才 teardown 和 Destroy。
+// Leave 流程：先拒绝并发并核对地图、角色与 Client 主动离局策略；受理时保留真实 Session。前台房间及 Client 可直接清理并在返回后释放本局载荷；Lake Host 不先获释放许可，保存受理后等待匹配回执；同步拒绝或写失败仍继续 teardown 和 Destroy。
 FCatOnlineResult UCatOnlineSubsystem::RequestLeave()
 {
 	if (ActiveOperation != ECatOnlineOperation::None)
@@ -1894,7 +1894,7 @@ FCatOnlineResult UCatOnlineSubsystem::RequestLeave()
 	return Result;
 }
 
-// 离开保存流程：先确认 Lake Host 与 Save 来源，再绑定完成通知后发起活动世界保存；受理返回的 Save RequestId 与 Online epoch 配对。保存接口拒绝时立刻解绑结案，Session 和 Run 均未开始关闭。
+// 离开保存流程：先确认 Lake Host 与 Save 来源，再绑定完成通知后发起活动世界保存；受理返回的 Save RequestId 与 Online epoch 配对。保存接口拒绝时解绑并继续 teardown，失败事实由 Save 保留。
 bool UCatOnlineSubsystem::BeginHostLeaveSave()
 {
 	UCatSaveSubsystem* SaveSubsystem = GetGameInstance() ? GetGameInstance()->GetSubsystem<UCatSaveSubsystem>() : nullptr;
@@ -1929,8 +1929,10 @@ bool UCatOnlineSubsystem::BeginHostLeaveSave()
 	{
 		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_host_leave_save_rejected RequestId=%s SaveRequestId=%s Epoch=%llu"),
 			*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), *SaveResult.RequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch);
-		FinishOperationFailure(ECatOnlineError::HostSaveFailed);
-		return false;
+		// 墓碑（2026-09-14，T33）：写失败不再卡退出；Knowledge/Design/GDD 系统分册/局与进程.md:103。
+		ClearHostLeaveSaveDelegate();
+		bReleaseActiveRunOnFrontend = true;
+		return BeginHostRunTeardown();
 	}
 	HostLeaveSaveRequestId = SaveResult.RequestId;
 	UE_LOG(LogCatOnline, Log, TEXT("Event=online_host_leave_save_pending RequestId=%s SaveRequestId=%s Epoch=%llu"),
@@ -1939,7 +1941,7 @@ bool UCatOnlineSubsystem::BeginHostLeaveSave()
 	return true;
 }
 
-// 保存完成流程：按 Save RequestId、Online epoch、活动角色和订阅句柄拒绝失效通知；匹配后先解绑，失败只发布退出错误并保留 Session。最终持久化成功才授予回前台后的载荷释放许可并提交 Run teardown，沿用同一次 Leave 关联键。
+// 保存完成流程：按 Save RequestId、Online epoch、活动角色和订阅句柄拒绝失效通知；匹配后先解绑；持久化失败记录警告后仍授予回前台后的载荷释放许可并提交 Run teardown，沿用同一次 Leave 关联键。
 void UCatOnlineSubsystem::HandleHostLeaveSaveCompleted(const FGuid SaveRequestId, const bool bSuccess, const uint64 CallbackEpoch)
 {
 	if (ActiveOperation != ECatOnlineOperation::Leave || OperationRole != ECatOnlineSessionRole::Host
@@ -1950,15 +1952,18 @@ void UCatOnlineSubsystem::HandleHostLeaveSaveCompleted(const FGuid SaveRequestId
 		return;
 	}
 	ClearHostLeaveSaveDelegate();
-	if (!bSuccess || WorldState != ECatOnlineWorldState::Lake)
+	if (WorldState != ECatOnlineWorldState::Lake)
 	{
 		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_host_leave_save_failed RequestId=%s SaveRequestId=%s Epoch=%llu"),
 			*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), *SaveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch);
 		FinishOperationFailure(ECatOnlineError::HostSaveFailed);
 		return;
 	}
-	UE_LOG(LogCatOnline, Log, TEXT("Event=online_host_leave_save_completed RequestId=%s SaveRequestId=%s Epoch=%llu"),
-		*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), *SaveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch);
+	if (!bSuccess)
+		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_host_leave_save_failed_continue RequestId=%s SaveRequestId=%s Epoch=%llu World=%s Result=ContinueTeardown"),
+			*ActiveRequestId.ToString(), *SaveRequestId.ToString(), OperationEpoch, *GetNameSafe(GetWorld()));
+	UE_LOG(LogCatOnline, Log, TEXT("Event=online_host_leave_save_completed RequestId=%s SaveRequestId=%s Epoch=%llu Success=%d"),
+		*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), *SaveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch, bSuccess);
 	bReleaseActiveRunOnFrontend = true;
 	BeginHostRunTeardown();
 }
@@ -1975,7 +1980,7 @@ void UCatOnlineSubsystem::ClearHostLeaveSaveDelegate()
 	HostLeaveSaveRequestId.Invalidate();
 }
 
-// 退出释放流程：只接受本次 Leave 已获许可、NamedSession 已清理且 World 确认 Frontend 的终态；保存失败、Create 失败及仍在路上的 World 均不能进入。
+// 退出释放流程：只接受本次 Leave 已获许可、NamedSession 已清理且 World 确认 Frontend 的终态；Create 失败及仍在路上的 World 均不能进入；保存失败不阻止释放，Save 保留重试。
 // Save busy 时订阅其精确实例并保留 Leave/epoch；变化回调投递游戏线程后复核代际，避免在 Save 自己的 OnChanged/OnSaveCompleted 广播栈中清载荷。
 // 可释放时先解绑并消费许可，再调用会同步广播的 ReleaseActiveRun；返回后复核 epoch，最后发布原退出结果。服务缺失或拒绝明确报错，不伪造已释放。
 void UCatOnlineSubsystem::FinishLeaveAfterRunRelease()
@@ -3258,7 +3263,13 @@ void UCatOnlineSubsystem::ClearRunTeardownDelegate()
 void UCatOnlineSubsystem::ClearOperationDelegates()
 {
 	CodeSearch.Reset();
-	if (GetGameInstance()) { GetGameInstance()->GetSubsystem<UCatRoomAdmission>()->CancelClient(); }
+	if (UGameInstance* Instance = GetGameInstance())
+	{
+		if (UCatRoomAdmission* Admission = Instance->GetSubsystem<UCatRoomAdmission>())
+		{
+			Admission->CancelClient();
+		}
+	}
 	if (OperationSessionInterface.IsValid() && RoomSettingsHandle.IsValid())
 	{ OperationSessionInterface->ClearOnUpdateSessionCompleteDelegate_Handle(RoomSettingsHandle); }
 	RoomSettingsHandle.Reset(); PendingRoomPassword.Reset();

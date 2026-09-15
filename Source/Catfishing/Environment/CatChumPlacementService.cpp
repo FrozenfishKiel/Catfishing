@@ -10,6 +10,7 @@
 #include "Environment/CatWaterQuerySubsystem.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
+#include "Fishing/CatFishingService.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
@@ -82,6 +83,16 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 	const ACatfishingGameModeBase* GameMode = World->GetAuthGameMode<ACatfishingGameModeBase>();
 	if (!GameMode || !GameMode->CanAcceptFishingCommand(RequestingController))
 	{
+		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::CommandsClosed));
+	}
+	// 补窝受主动道具总闸门约束：正在搏斗的猫不能掏窝料（钓鱼规则 §2.1，边界见 §3.3）。
+	// 闸门只拦这只猫自己；同场其他处于可用道具状态的玩家照常能为同一个窝补料，队友补窝这一半不受影响。
+	UCatFishingService* Fishing = World->GetSubsystem<UCatFishingService>();
+	if (Fishing && Fishing->IsActiveItemUseBlockedForController(RequestingController))
+	{
+		UE_LOG(LogCatEnvironment, Warning,
+			TEXT("Event=place_chum_rejected Reason=ActiveFishingItemGate RequestId=%s StableNetId=%s"),
+			*Command.RequestId.ToString(EGuidFormats::DigitsWithHyphensLower), *StableNetId);
 		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::CommandsClosed));
 	}
 	const UCatChumFieldSettings* Settings = GetDefault<UCatChumFieldSettings>();

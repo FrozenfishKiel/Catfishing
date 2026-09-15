@@ -132,9 +132,9 @@ namespace CatCuteNetwork
 				UAnimMontage* Source=LoadObject<UAnimMontage>(nullptr,TEXT("/Game/Animalia/Cat/AM_Attack_Agressive_Legs_01-IP_Montage"));
 				for (ACatCharacter* Cat : {ServerCat,ClientCat}) Test->TestTrue(TEXT("multicast plays mapped CuteCat montage on both endpoints"),
 					Cat->GetMesh()->GetAnimInstance()->Montage_IsPlaying(Cast<UAnimMontage>(Cat->FindComponentByClass<UCatPhysicsPrototypeVisualComponent>()->ResolveAnimationAsset(Source))));
-				ServerCat->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(),115);
 				Test->AddExpectedMessage(TEXT("Event=character_downed"),ELogVerbosity::Warning);
-				Test->TestTrue(TEXT("real condition authority accepts downed transition"),CatIsAcceptedDomainCommandResult(ServerCat->GetConditionComponent()->RequestFieldSelfRecovery(ServerCat->GetController(),FGuid::NewGuid())));
+				// 2026-09-12：倒地来源是单条重毒鱼的结论，不再是 Poison 累加到阈值。
+				Test->TestTrue(TEXT("real condition authority accepts downed transition"),ServerCat->GetConditionComponent()->ApplySevereToxicityFromAuthority());
 				Stage=5; StageAt=Now;
 			}
 			else if (Stage==5 && Now-StageAt>8) {

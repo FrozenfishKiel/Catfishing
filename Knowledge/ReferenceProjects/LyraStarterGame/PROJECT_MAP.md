@@ -6,18 +6,18 @@
 
 ## 事实来源
 
-- `D:\UnreaProjects\LyraStarterGame\LyraStarterGame.uproject`
-- `D:\UnreaProjects\LyraStarterGame\Config\DefaultEngine.ini`
-- `D:\UnreaProjects\LyraStarterGame\Config\DefaultGame.ini`
-- `D:\UnreaProjects\LyraStarterGame\Source\LyraGame\LyraGame.Build.cs`
-- `D:\UnreaProjects\LyraStarterGame\Source\LyraGame.Target.cs`
-- `D:\UnreaProjects\LyraStarterGame\Source\LyraGame\`
-- `D:\UnreaProjects\LyraStarterGame\Plugins\GameFeatures\`
+- `LyraStarterGame.uproject`
+- `Config\DefaultEngine.ini`
+- `Config\DefaultGame.ini`
+- `Source\LyraGame\LyraGame.Build.cs`
+- `Source\LyraGame.Target.cs`
+- `Source\LyraGame\`
+- `Plugins\GameFeatures\`
 - Catfishing 引用核对：`Source/Catfishing/Input/CatInputConfig.h`、`Source/Catfishing/Framework/Game/CatfishingGameState.h/.cpp`、`Docs/DataAsset字段含义.md`、`Docs/Architecture/属性系统重构子技术方案.md`、`Docs/Architecture/项目架构讨论纪要.md`
 
 ## 地图定位
 
-Lyra 根目录是 `D:\UnreaProjects\LyraStarterGame`，与当前项目 `D:\UnreaProjects\Catfishing-verify-01` 同级。当前搜索没有发现 Catfishing 直接 include Lyra 源码、依赖 Lyra 模块或引用 Lyra 插件模块的文本证据；已看到的关系是“参考 Lyra 风格/口径”的本地实现说明。
+Lyra 根目录是 `<参考工程根>`，与当前项目（当时的工作副本 Catfishing-verify-01）同级。当前搜索没有发现 Catfishing 直接 include Lyra 源码、依赖 Lyra 模块或引用 Lyra 插件模块的文本证据；已看到的关系是“参考 Lyra 风格/口径”的本地实现说明。
 
 Catfishing 的当前源码事实仍由 `Knowledge/Framework/PROJECT_MAP.md` 负责。阅读 Lyra 后形成的任何实现判断，都必须回到 Catfishing 的 `Source/`、`Config/`、`Content/` 和当前架构文档核对，不能直接把 Lyra 的宿主、字段、插件或资产链路当作本项目事实。
 

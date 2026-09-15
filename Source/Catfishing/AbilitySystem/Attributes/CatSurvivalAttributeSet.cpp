@@ -12,7 +12,7 @@ namespace
 		return FMath::IsFinite(Value) ? FMath::Max(0.0f, Value) : 0.0f;
 	}
 
-	// 体力上限规整流程：MaxFightStamina 是搏斗恢复和模拟的硬上限，不能低于 1，避免后续除法和会话配置出现无意义零上限。
+	// 体力上限规整流程：MaxFightStamina 是绿段恢复的硬上限；模拟总容量另加当前黄段，不能低于 1，避免后续除法和会话配置出现无意义零上限。
 	float ClampMaxFightStaminaValue(const float Value)
 	{
 		return FMath::IsFinite(Value) ? FMath::Max(1.0f, Value) : 1.0f;
@@ -41,7 +41,6 @@ void UCatSurvivalAttributeSet::GetLifetimeReplicatedProps(TArray<FLifetimeProper
 	DOREPLIFETIME_CONDITION_NOTIFY(UCatSurvivalAttributeSet, FightStamina, COND_None, REPNOTIFY_Always);
 	DOREPLIFETIME_CONDITION_NOTIFY(UCatSurvivalAttributeSet, MaxFightStamina, COND_None, REPNOTIFY_Always);
 	DOREPLIFETIME_CONDITION_NOTIFY(UCatSurvivalAttributeSet, YellowFightStamina, COND_None, REPNOTIFY_Always);
-	DOREPLIFETIME_CONDITION_NOTIFY(UCatSurvivalAttributeSet, Poison, COND_None, REPNOTIFY_Always);
 }
 
 // 基础值变化流程：配置播种或 GE 覆盖属性前统一清理坏数值；当前体力读取已经存在的 MaxFightStamina，所以上层必须先写上限再回满体力。
@@ -56,7 +55,7 @@ void UCatSurvivalAttributeSet::PreAttributeBaseChange(const FGameplayAttribute& 
 	{
 		NewValue = ClampMaxFightStaminaValue(NewValue);
 	}
-	else if (Attribute == GetFishingStrengthAttribute() || Attribute == GetPoisonAttribute() || Attribute == GetYellowFightStaminaAttribute())
+	else if (Attribute == GetFishingStrengthAttribute() || Attribute == GetYellowFightStaminaAttribute())
 	{
 		NewValue = ClampSurvivalNonNegativeValue(NewValue);
 	}
@@ -74,7 +73,7 @@ void UCatSurvivalAttributeSet::PreAttributeChange(const FGameplayAttribute& Attr
 	{
 		NewValue = ClampMaxFightStaminaValue(NewValue);
 	}
-	else if (Attribute == GetFishingStrengthAttribute() || Attribute == GetPoisonAttribute() || Attribute == GetYellowFightStaminaAttribute())
+	else if (Attribute == GetFishingStrengthAttribute() || Attribute == GetYellowFightStaminaAttribute())
 	{
 		NewValue = ClampSurvivalNonNegativeValue(NewValue);
 	}
@@ -117,15 +116,11 @@ void UCatSurvivalAttributeSet::OnRep_MaxFightStamina(const FGameplayAttributeDat
 	GAMEPLAYATTRIBUTE_REPNOTIFY(UCatSurvivalAttributeSet, MaxFightStamina, OldMaxFightStamina);
 }
 
-// Poison 复制通知流程：使用标准 RepNotify 更新中毒累积的客户端读模型；客户端不自行判断倒地、恢复或死亡。
-void UCatSurvivalAttributeSet::OnRep_Poison(const FGameplayAttributeData& OldPoison)
-{
-	GAMEPLAYATTRIBUTE_REPNOTIFY(UCatSurvivalAttributeSet, Poison, OldPoison);
-}
-
+// 黄色体力复制通知流程：使用标准 RepNotify 更新护盾段的客户端读模型；黄段无自然回复，客户端也不自行扣减。
 void UCatSurvivalAttributeSet::OnRep_YellowFightStamina(const FGameplayAttributeData& OldYellowFightStamina)
 {
 	GAMEPLAYATTRIBUTE_REPNOTIFY(UCatSurvivalAttributeSet, YellowFightStamina, OldYellowFightStamina);
+	// 裁决②：绿段归零后仍需观察黄段消费；不引入第二份复制余额。
 	if (const auto* ASC = GetOwningAbilitySystemComponent())
 		if (AActor* Avatar = ASC->GetAvatarActor())
 			if (auto* Effort = Avatar->FindComponentByClass<UCatPhysicalEffortComponent>())

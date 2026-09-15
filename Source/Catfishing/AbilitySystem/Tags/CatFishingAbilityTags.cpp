@@ -8,7 +8,9 @@ namespace CatFishingAbilityTags
 	UE_DEFINE_GAMEPLAY_TAG(Input_Fishing_Scoop, "Cat.Input.Fishing.Scoop");
 	UE_DEFINE_GAMEPLAY_TAG(Input_Fishing_Chum, "Cat.Input.Fishing.Chum");
 	UE_DEFINE_GAMEPLAY_TAG(Input_Fishing_Slack, "Cat.Input.Fishing.Slack");
+	UE_DEFINE_GAMEPLAY_TAG(Input_Fishing_Handoff, "Cat.Input.Fishing.Handoff");
 	UE_DEFINE_GAMEPLAY_TAG(Ability_Fishing_RodInteract, "Cat.Ability.Fishing.RodInteract");
+	UE_DEFINE_GAMEPLAY_TAG(Ability_Fishing_Handoff, "Cat.Ability.Fishing.Handoff");
 	UE_DEFINE_GAMEPLAY_TAG(Ability_Fishing_Primary, "Cat.Ability.Fishing.Primary");
 	UE_DEFINE_GAMEPLAY_TAG(Ability_Fishing_Cancel, "Cat.Ability.Fishing.Cancel");
 	UE_DEFINE_GAMEPLAY_TAG(Ability_Fishing_Scoop, "Cat.Ability.Fishing.Scoop");
@@ -45,4 +47,5 @@ namespace CatFishingAbilityTags
 	UE_DEFINE_GAMEPLAY_TAG(Data_Run_Offering_BaseProgressGain, "Cat.Data.Run.Offering.BaseProgressGain");
 	UE_DEFINE_GAMEPLAY_TAG(Data_Run_Offering_BaseProgressLoss, "Cat.Data.Run.Offering.BaseProgressLoss");
 	UE_DEFINE_GAMEPLAY_TAG(Cosmetic_Fishing_LineBroken, "Cat.Cosmetic.Fishing.LineBroken");
+	UE_DEFINE_GAMEPLAY_TAG(Cosmetic_Fishing_BiteBell, "Cat.Cosmetic.Fishing.BiteBell");
 }

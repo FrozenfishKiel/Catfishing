@@ -234,10 +234,10 @@ namespace CatPhysicalCharacterAnimationNetwork
 					MaximumSourceRootZ, MaximumVisibleRootZ, MaximumVisibleRootOffsetCm, ClientVisual->GetVisualMesh()->BoneSpaceTransforms[0].GetTranslation().Z));
                 StandingHeadZ = ClientVisual->GetVisualMesh()->GetBoneLocationByName(TEXT("RigHead"), EBoneSpaces::WorldSpace).Z;
                 SupportedHeightZ = ServerCat->GetActorLocation().Z;
-                ServerCat->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(), 115);
                 Test->AddExpectedMessage(TEXT("Event=character_downed"), ELogVerbosity::Warning);
-                if (!Test->TestTrue(TEXT("authority evaluates the real downed threshold"), CatIsAcceptedDomainCommandResult(
-                    ServerCat->GetConditionComponent()->RequestFieldSelfRecovery(ServerCat->GetController(), FGuid::NewGuid())))) return true;
+                // 2026-09-12：倒地来源是单条重毒鱼的结论，不再是 Poison 累加到阈值。
+                if (!Test->TestTrue(TEXT("authority downs the cat through the only downed entry"),
+                    ServerCat->GetConditionComponent()->ApplySevereToxicityFromAuthority())) return true;
                 Stage = 3;
                 StageStarted = WorldNow;
             }

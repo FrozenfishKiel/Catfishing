@@ -99,7 +99,19 @@ public:
 		double AbsoluteTotal);
 	/** 从该会话绑定的正式库存鱼竿实例读取耐久，不读取当前选择的另一根竿。 */
 	bool GetFishingRodDurability(FGuid FishingSessionId, double& OutDurability, bool& OutBroken) const;
-	/** 结束使用记录并解除竿锁；不改变鱼饵数量，无退款或延迟退款。 */
+	/**
+	 * 声明：把这场钓鱼绑定的那根**已断**鱼竿从库存事实里整条移除——不返还、不占格、不进存档。
+	 * 依据：道具册「鱼竿断裂后直接消失」（不返还／不替换／不回退三条此前已成立，缺的是「消失」这一条）。
+	 * 实现：按会话记录找到绑定实例，确认它确实已断，再按它当前所在的位置移除：
+	 *       正在部署 → 退役 held entry；已经收回可见格 → 直接清那一格。
+	 *       随后清掉指向它的钓具选择并重新校正，让自动改选按「库存里已经没有这根竿」跑。
+	 * 边界：竿没断、会话记录不存在或不是服务器时返回 false 且不动任何状态；本函数不销毁世界里的鱼竿 Actor，
+	 *       那是钓鱼侧的事（Actor 与库存实例是两件东西，同一次断竿要两边都收）。
+	 */
+	bool RetireBrokenFishingRodFromAuthority(FGuid FishingSessionId);
+
+	/** 结束使用记录并解除竿锁；不改变鱼饵数量，不建立退款或延迟退款。 */
+	// 墓碑（2026-09-13）：删除 bReturnCaughtBait 参数；钓鱼规则 §3.3/§3.4 规定真咬后任何结局均消耗 1 份饵。
 	FCatFishingUseOperationResult ReleaseFishingUse(FGuid FishingSessionId);
 	/** 当前是否有仍未结束的 Fishing 使用记录；失败预算用它避开进行中的钓鱼结算。 */
 	bool HasActiveFishingUse() const;

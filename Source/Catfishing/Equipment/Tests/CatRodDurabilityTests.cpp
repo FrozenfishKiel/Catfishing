@@ -85,6 +85,7 @@ namespace CatRodDurabilityTests
 				AddDefinition(TEXT("DurabilityTestRod"), UCatEquipmentDefinition::FishingRodLoadoutSlotId());
 			UCatEquipmentFragment_Rod* RodFragment = NewObject<UCatEquipmentFragment_Rod>(Rod);
 			Rod->Fragments.Add(RodFragment);
+			RodFragment->FishingStrength = 25.0; // 竿强度按鱼竿表 1 级树枝竿；耐久与强度是两个量，本夹具只动耐久。
 			RodFragment->MaximumRodDurability = 100.0;
 			RodFragment->MaximumLineLengthCentimeters = 1500.0;
 			RodFragment->HighTensionWearMultiplier = 1.0;
@@ -373,7 +374,14 @@ bool FCatRodSessionDurabilityTest::RunTest(const FString& Parameters)
 	Second->HandleFightRunnerStepFromAuthority(Step, 0.0, ECatFishMotionIntent::StrugglingOutward);
 	TestEqual(TEXT("depletion is a rod-broken terminal"), Second->GetSnapshot().Outcome, ECatFishingOutcome::RodBroken);
 	TestEqual(TEXT("terminal mirror stays at zero"), Second->GetSnapshot().RodDurabilityRemaining, 0.0);
-	TestTrue(TEXT("the real item is broken"), Fixture.Equipment->GetSnapshot().bRodBroken);
+	// 2026-09-12 裁决一「竿强瞬断也报废鱼竿」落地后，断竿不再以「坏的」形式留在装备里：
+	// FinalizeSession 会把实例整条报废。所以「磨损真的落到了正式实例上」这一点
+	// 改由「那件物品确实被报废掉了」来证（报废入口本身就以 IsRodBroken() 为闸）。
+	const UCatEquipmentInventoryItemInstance* RetiredRod = nullptr;
+	TestFalse(TEXT("the broken real item is scrapped out of the formal inventory"),
+		Fixture.FindRod(Fixture.RodId, RetiredRod));
+	TestFalse(TEXT("the scrapped rod leaves no selection behind"),
+		Fixture.Equipment->GetSnapshot().RodItemInstanceId.IsValid());
 	TestTrue(TEXT("the deployed rod replicates broken state"), Rod->GetPresentationState().bBroken);
 	TestEqual(TEXT("broken rod releases every operator"), Rod->GetOperatorCount(), 0);
 	TestFalse(TEXT("broken session no longer blocks inventory recall"), Fixture.Equipment->HasActiveFishingUse());

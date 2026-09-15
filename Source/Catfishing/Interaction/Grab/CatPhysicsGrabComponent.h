@@ -12,7 +12,9 @@ class UCatPhysicsGrabComponent;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogCatPhysicsGrab, Log, All);
 
-/** Server-owned contact, independent of fishing membership and cosmetic hand posing. */
+/** Server-owned contact, independent of fishing membership and cosmetic hand posing.
+ *  Participation is recorded separately (see GripContributions): the force math still reads no fishing
+ *  membership, but every cat that touched the rod is remembered so the imprint/collection credit list has a source. */
 USTRUCT(BlueprintType)
 struct FCatPhysicsGripState
 {
@@ -63,6 +65,14 @@ public:
 	FCatPhysicalGripChanged OnGripChanged;
 	void ReleaseAllFromAuthority(FName Reason);
 	void ReleaseTargetFromAuthority(AActor* Target, FName Reason);
+	/** 本次搏斗期间这具身体是否摸过 Target：从 SinceServerTimeSeconds 起抓住过，或此刻仍抓着。
+	 *  权威侧记录，供印记与图鉴的演出贡献名单消费；它不参与牵引力计算，也不改变谁是主钓手。 */
+	bool HasGrippedTargetSince(const AActor* Target, double SinceServerTimeSeconds) const;
+	/** 收集本世界里从 SinceServerTimeSeconds 起摸过 Target 的所有玩家身份，按稳定顺序去重输出。
+	 *  「摸过竿的人」这份名单的唯一来源：合力拉竿的猫据此进巨物合影，收集层仍归上钩者一人（2026-09-08 拍）。
+	 *  只认对 Target 的直接抓握；抓着队友、队友再抓竿这种链式出力算不算，设计未裁，这里不替它决定。 */
+	static void CollectGripContributorStableNetIds(const UWorld* World, const AActor* Target,
+		double SinceServerTimeSeconds, TArray<FString>& OutStableNetIds);
 	void BeginInputEpochFromAuthority();
 	bool IsReaching(bool bLeft) const { return GetGripState(bLeft).bReaching; }
 	bool IsGripping(bool bLeft) const { return GetGripState(bLeft).bGripped; }
@@ -96,6 +106,19 @@ private:
 	void ReleaseHand(bool bLeft, FName Reason, bool bStopReaching);
 	UPrimitiveComponent* ResolveTarget(const FCatPhysicsGripState& State) const;
 	void LogGrip(bool bLeft, FName Event, FName Result) const;
+	/** 抓住或松开时更新本目标的贡献记录；只有权威侧写，客户端不保存第二份名单。 */
+	void RecordGripContribution(const AActor* Target, bool bGripAcquired);
+	/** 一具身体对一个目标的抓握痕迹；只记「最后一次摸到的服务器时刻」和「现在还抓着没有」，
+	 *  贡献名单据此按调用方给的搏斗起始时间筛选，本组件自己不知道搏斗什么时候开始或结束。 */
+	struct FCatGripContribution
+	{
+		/** 最近一次抓住该目标的服务器世界时间，单位秒。 */
+		double LastGripServerTimeSeconds = 0.0;
+		/** 此刻是否仍有一只手抓着该目标；两只手共用一条记录，松开一只手不清另一只。 */
+		bool bHolding = false;
+	};
+	/** 本局本身体抓握过的目标；键为弱引用，目标销毁后条目自然失效并在下次收集时跳过。 */
+	TMap<TWeakObjectPtr<const AActor>, FCatGripContribution> GripContributions;
 	UPROPERTY(ReplicatedUsing=OnRep_GripState) FCatPhysicsGripState LeftGrip;
 	UPROPERTY(ReplicatedUsing=OnRep_GripState) FCatPhysicsGripState RightGrip;
 	UPROPERTY(Replicated) uint32 InputEpoch = 1;

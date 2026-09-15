@@ -19,11 +19,149 @@ enum class ECatHUDAction : uint8
 	/** 打开局内主页或 ESC 菜单入口；正式页面由蓝图或上层控制器决定。 */
 	OpenMainMenu,
 	/** 打开随身背包入口；当前原生协调层会把它转交给 Inventory PageController。 */
-	OpenInventory
+	OpenInventory,
+	/** 打开个人图鉴入口；左上角猫爪印图标提交它，原生协调层转交 Collection PageController。 */
+	OpenCollection
 };
 
 /** HUD View 向 LocalPlayer UI 协调层广播的纯入口意图；接收方决定具体页面和输入模式。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatHUDActionRequested, ECatHUDAction);
+
+/**
+ * 一条对全场播报的购买事件。商店 §7 定「一车一条」，所以它对应玩家的一次整车成交，
+ * 而不是账本里的一行；同一车的多种商品在这里折成同一条。它只是展示事实，
+ * 不能据此补发物品、改公款或确认交付。
+ */
+USTRUCT(BlueprintType)
+struct FCatHUDPurchaseBroadcast
+{
+	GENERATED_BODY()
+
+	/** 这一车里第一条公开流水的账本 ID；HUD 用它做整车去重，同车后到的行只更新这一条广播。 */
+	UPROPERTY(BlueprintReadOnly)
+	FGuid CartId;
+
+	/** 购买者的公开身份名；操作者已离局或身份尚未解析时退成“某只猫”。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText BuyerNameText;
+
+	/** 这一车的商品摘要；多种商品时为“首件 等 N 样”。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText ItemsText;
+
+	/** 这一车实际花掉的公款；整车一次成交，数值来自公开流水 WalletDelta 之和取反。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 SpentCoins = 0;
+
+	/** 这一车包含的公开流水行数；一行等于一种商品，不等于件数。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 EntryCount = 0;
+
+	/** 这一车发放的物品总件数；免费商品也计数。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 ItemCount = 0;
+
+	/** 给全场提示控件直接显示的整句中文；至少含购买者、商品和支出。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText BroadcastText;
+
+	/** 本机首次看到这一车时的服务器时间；WBP 只用它做淡出，不用它判断交易是否成立。 */
+	UPROPERTY(BlueprintReadOnly)
+	double AnnouncedServerTime = 0.0;
+};
+
+/** 队友在 HUD 顶部的方向图标；它来自那只猫自己的移动意图（复制加速度）在它自己朝向上的投影，不读别人的控制旋转。 */
+UENUM(BlueprintType)
+enum class ECatHUDMoveDirection : uint8
+{
+	/** 这一刻没有移动意图；对应静止，不是「方向未知」。 */
+	None,
+	/** W：朝这只猫的正前方。钓鱼中的 W／S 语义见钓鱼规则（W 前移靠水、S 后退离水）。 */
+	Forward,
+	/** S：朝这只猫的正后方。 */
+	Backward,
+	/** A：朝这只猫的左手边。 */
+	Left,
+	/** D：朝这只猫的右手边。 */
+	Right
+};
+
+/**
+ * 屏幕上方一名队友的只读投影（多人钓鱼附篇 §4.3:129）。
+ * 它只装客观可读的三件事：方向、体力、力竭；合力档位那套「齐步走／被拖行／原地打转／顶牛中」
+ * 随 2026-09-11 裁决①（ρ 三档与六个群体动作整套作废）退场，本结构不再产生那四个词。
+ */
+USTRUCT(BlueprintType)
+struct FCatHUDTeammateState
+{
+	GENERATED_BODY()
+
+	/** 队友的公开显示名；PlayerState 没给名字时退成空，由 WBP 决定占位写法，HUD 不编造身份。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText DisplayNameText;
+
+	/** 这名队友在 GameState 里的 PlayerId；WBP 用它做行去重与排序，不作为身份凭据。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 PlayerId = 0;
+
+	/** 是否是本机玩家自己；顶部队友条一般排除自己，但保留这一位让布局自己决定。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bIsLocalPlayer = false;
+
+	/** 当前移动意图方向。 */
+	UPROPERTY(BlueprintReadOnly)
+	ECatHUDMoveDirection MoveDirection = ECatHUDMoveDirection::None;
+
+	/** 给移动状态文字控件直接显示的短句；当前只表达「移动中／静止／力竭」这三件客观事实。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText MovementStatusText;
+
+	/** 头顶体力条比例，已夹到 [0,1]；上限尚未复制到本机时为 0 且 bHasStamina 为 false。 */
+	UPROPERTY(BlueprintReadOnly)
+	float NormalizedStamina = 0.0f;
+
+	/** 本机是否已经拿到这名队友的体力上限；false 时体力条应显示未同步而不是空条。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bHasStamina = false;
+
+	/** 体力归零＝力竭；头顶体力条按多人附篇 §4.3 变灰。 */
+	UPROPERTY(BlueprintReadOnly)
+	// 兼容 Blueprint 的只读余额提示：绿＋黄为零，不是持续力竭状态（09-13 裁决②⑥）。
+	bool bExhausted = false;
+
+	/** 体力不高于濒死阈值；ui 表第 23 行的换人濒死强提示读它。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bNearDeath = false;
+
+	/** 这名队友当前是否倒地；它来自 Condition 快照，不由体力推导。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bDowned = false;
+};
+
+namespace CatHUDFightStaminaLimits
+{
+	/**
+	 * 濒死强提示的体力比例阈值（ui 表第 23 行「主钓手体力低于 5%」、多人钓鱼附篇 §2.4:63「体力不高于 5%」）。
+	 * 两处原文一个写「低于」一个写「不高于」，这里取对玩家有利的一侧：到 5% 就提示。
+	 * 数值是快照，正式值以参数页为准。
+	 */
+	inline constexpr float NearDeathStaminaFraction = 0.05f;
+}
+
+namespace CatHUDFishDiscoveryBroadcastLimits
+{
+	/** 「别人解锁了新鱼种」这条提示在 HUD 上停留的秒数；它只是本地表现时长，不影响任何图鉴事实。 */
+	inline constexpr double VisibleSeconds = 5.0;
+}
+
+namespace CatHUDPurchaseBroadcastLimits
+{
+	/** 一条全场购买广播在 HUD 上的展示秒数；Model 发布投影和 Widget 本地淡出用同一个数。 */
+	inline constexpr double VisibleSeconds = 6.0;
+
+	/** HUD 同时保留的全场购买广播条数上限；更早的车只留在公开流水里，不再占屏幕。 */
+	inline constexpr int32 MaxKeptEntries = 8;
+}
 
 /** 主界面 HUD 的只读显示投影；它聚合天数、默认入口和必要玩法提示，不持有任何玩法写口。 */
 USTRUCT(BlueprintType)
@@ -39,9 +177,104 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	FText DayText;
 
-	/** 当前猫中毒值；来源是 Character ASC，HUD 只展示，不据此裁决倒地。 */
+	/**
+	 * 当前时段文案：清晨／白天／黄昏／夜晚（主界面.md:75 要「左上角同时显示当前时段」）。
+	 * 它由 Run 公开快照的 Phase 与 Environment.TimeOfDay 两件事实合成——白天段从时段轴读，
+	 * 夜晚不在时段轴上（环境册 §3.1.1「夜晚不入时段轴」），所以夜晚由 Phase 直接给。
+	 */
 	UPROPERTY(BlueprintReadOnly)
-	float Poison = 0.0f;
+	FText TimeOfDayText;
+
+	/** 本机是否已经拿到可说明的时段事实；false 时天数位旁不显示时段，而不是显示「未知」。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bShowTimeOfDay = false;
+
+	/** 当天任务点数（ui 表第 18 行「左上角 · 白天常驻」）；0 表示本机还没拿到目标。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 DailyOfferingTarget = 0;
+
+	/** 本机是否已经拿到当日任务点数；false 时显示未同步而不是 0 点。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bHasDailyOfferingTarget = false;
+
+	/** 给当日任务点数控件直接显示的中文文本。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText DailyOfferingTargetText;
+
+	/** 缸内可献点数；来源是共享鱼缸自己复制的只读摘要，HUD 不重算鱼的档位。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 TankOfferablePoints = 0;
+
+	/** 本机是否已经拿到缸内摘要；false 时显示未同步而不是 0 点。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bHasTankOfferablePoints = false;
+
+	/** 给缸内可献点数控件直接显示的中文文本。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText TankOfferableText;
+
+	/** 当日任务点数与缸内可献点数是否露面；按 ui 表第 18 行「白天常驻」，夜晚交给祭坛信息牌。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bShowOfferingCounters = false;
+
+	/** 当前世界进度百分数的数值部分；它是三个量里的第三个，与前两个不是一回事。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 WorldProgress = 0;
+
+	/** 世界进度条比例，已夹到 [0,1]。 */
+	UPROPERTY(BlueprintReadOnly)
+	float NormalizedWorldProgress = 0.0f;
+
+	/** 本机是否已经拿到世界进度事实。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bHasWorldProgress = false;
+
+	/** 给世界进度控件直接显示的中文文本。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText WorldProgressText;
+
+	/**
+	 * 世界进度此刻是否露面。交互册 §42 定「平时隐藏，靠近神像或打开界面时查看」：
+	 * 靠近神像那条路径由祭坛信息牌承担，这里承担「打开界面」那条——
+	 * 背包、图鉴或局内菜单任一打开时为 true，平时为 false。
+	 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bShowWorldProgress = false;
+
+	/**
+	 * 团队公款余额；来源是 GameState 复制的商店公开经济快照。公款对全队常时可见，
+	 * 所以它跟天数一样是常驻位，关掉商店页仍在；HUD 只展示，买得起与否仍由服务器整车裁决。
+	 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 TeamWalletBalance = 0;
+
+	/** 公款余额版本；WBP 可用它做数字跳动去重，不用它判断交易是否成立。 */
+	UPROPERTY(BlueprintReadOnly)
+	int64 TeamWalletRevision = 0;
+
+	/** 本机是否已经拿到公开经济快照来源；为 false 时余额位显示未同步而不是 0。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bHasTeamWallet = false;
+
+	/** 给常驻余额控件直接显示的中文文本。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText TeamWalletText;
+
+	/** 本局至今看到的全场购买广播，一车一条、按发生顺序排列，只保留最近若干条。 */
+	UPROPERTY(BlueprintReadOnly)
+	TArray<FCatHUDPurchaseBroadcast> PurchaseBroadcasts;
+
+	/** 当前是否有一条还在展示窗口内的全场购买广播；过期由 HUD 本地收起，不改公开流水。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bShowPurchaseBroadcast = false;
+
+	/** 最近一条全场购买广播的整句文本；没有广播时为空。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText PurchaseBroadcastText;
+
+	/** 当前黄色体力护盾存量；来源是 Character ASC，体力条把它画在绿段末端，HUD 不据此裁决任何事。 */
+	UPROPERTY(BlueprintReadOnly)
+	float YellowFightStamina = 0.0f;
 
 	/** 当前钓鱼力量；来源是 Character ASC，HUD 只展示，不作为 Fishing 命令参数。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -51,8 +284,6 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	float FightStamina = 0.0f;
 
-	UPROPERTY(BlueprintReadOnly)
-	float YellowFightStamina = 0.0f;
 	UPROPERTY(BlueprintReadOnly)
 	double TotalFightStamina = 0.0;
 	UPROPERTY(BlueprintReadOnly)
@@ -115,9 +346,20 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bCanOpenInventory = true;
 
-	/** 猫状态调试摘要是否显示在主界面上；默认关闭以避免正式 HUD 出现研发态属性文本，只由临时排查显式开启。 */
+	/** 当前是否显示左上角猫爪印图鉴入口；按主界面口径白天常驻，布局可用它隐藏图标而不改变图鉴记录。 */
 	UPROPERTY(BlueprintReadOnly)
-	bool bShowCatStatusDebugText = false;
+	bool bCollectionEntryVisible = true;
+
+	/** 图鉴入口是否可点击；禁用只影响 UI 按钮，图鉴打开仍由 Collection PageController 裁决。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bCanOpenCollection = true;
+
+	/**
+	 * 当前是否有一组等着玩家挑的三选一。
+	 * 它取代了原来那行常驻猫状态调试文本：成长信息只在需要它的时刻露面，而「该选了」正是那个时刻。
+	 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bHasPendingGrowthChoice = false;
 
 	/** 钓鱼调试反馈是否显示在主界面上；默认关闭以避免空闲状态出现流程诊断文案，只由临时排查显式开启。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -134,6 +376,53 @@ struct FCatHUDViewState
 	/** 当前是否显示玩家体力和鱼状态条；只在遛鱼相关阶段为 true。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bShowFightMeters = false;
+
+	/** 当前选中鱼竿实例的剩余耐久；来源是 Equipment 复制的钓鱼选择读模型，HUD 不写回耐久。 */
+	UPROPERTY(BlueprintReadOnly)
+	float RodDurability = 0.0f;
+
+	/** 当前选中鱼竿定义的耐久上限；来源是鱼竿片段资产，0 表示资产未配置该列。 */
+	UPROPERTY(BlueprintReadOnly)
+	float RodDurabilityMaximum = 0.0f;
+
+	/** 鱼竿耐久条比例，已夹到 [0,1]；上限为 0 时保持 0 并由 bHasRodDurability 说明不可用。 */
+	UPROPERTY(BlueprintReadOnly)
+	float NormalizedRodDurability = 0.0f;
+
+	/** 当前选中鱼竿实例是否已断；断竿与耐久归零共用同一结局（钓鱼规则 §4.2，2026-09-12 裁决①）。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bRodBroken = false;
+
+	/** 本机是否已经拿到可显示的耐久上限与当前值；false 时耐久位显示未同步而不是满条。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bHasRodDurability = false;
+
+	/**
+	 * 竿耐久是否常驻在屏幕左下角（ui 表第 17 行「竿旁／屏幕下方，手持鱼竿时，自动显示」）。
+	 * 判据是「手上有竿」：正在持这根竿，或本人有进行中的钓鱼会话（竿已抛出去但仍是这个人的）。
+	 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bShowRodDurability = false;
+
+	/** 给竿耐久控件直接显示的中文文本；断竿时带「（已断裂）」。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText RodDurabilityText;
+
+	/** 屏幕上方的队友只读投影，一人一条，按 PlayerId 稳定排序；单人局为空。 */
+	UPROPERTY(BlueprintReadOnly)
+	TArray<FCatHUDTeammateState> Teammates;
+
+	/** 是否显示顶部队友条；只有确实存在别的玩家时才为 true，单人局不占屏幕。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bShowTeammates = false;
+
+	/** 本机玩家自己是否已进入濒死体力；ui 表第 23 行的强提示读它。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bNearDeath = false;
+
+	/** 给濒死强提示控件直接显示的短句；样式由 WBP 决定（ui 表第 23 行标「样式待定」）。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText NearDeathText;
 
 	/** Personal effort can be visible without granting fishing-session controls or fish information. */
 	UPROPERTY(BlueprintReadOnly, Category="Catfishing|HUD")
@@ -171,9 +460,10 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bHasFishingCommandResult = false;
 
-	/** 给调试 TextBlock 直接绑定的猫状态中文摘要；正式主界面默认不显示它。 */
-	UPROPERTY(BlueprintReadOnly)
-	FText CatStatusText;
+	/*
+	 * 墓碑（2026-09-12）：原有 CatStatusText 是一行常驻拼接的研发态属性摘要，
+	 * 与「无常驻状态条」相反，随 bShowCatStatusDebugText、BlueprintCatStatusText 与 CatStatusTextBlock 一并删除。
+	 */
 
 	/** 给调试 TextBlock 直接绑定的钓鱼反馈中文摘要；正式主界面默认不显示它。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -234,20 +524,31 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|HUD")
 	void RequestOpenInventory();
 
+	/** 提交图鉴入口意图；左上角猫爪印按钮只广播它，页面仍由 Collection PageController 打开。 */
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|HUD")
+	void RequestOpenCollection();
+
+	/**
+	 * 显示一条「别人解锁了新鱼种」的一次性提示（主界面.md「当玩家解锁新鱼，他人视角」）。
+	 * 它只写文字并开始本地计时，不抢焦点、不吃输入、不进模态层——玩家仍可移动、交互和继续钓鱼。
+	 * 本人解锁走的是首解锁特写浮层，不经这里。
+	 */
+	void AnnounceFishSpeciesDiscovery(const FText& BroadcastText);
+
 	/** 用户点击 HUD 入口后的原生广播；LocalPlayer UI 子系统和外部控制器只接收意图。 */
 	FCatHUDActionRequested OnActionRequested;
 
 protected:
-	/** Slate 构造完成后对两个主 HUD 入口按钮去重绑定；没有对应按钮的 WBP 仍保持可用。 */
+	/** Slate 构造完成后对三个主 HUD 入口按钮去重绑定；没有对应按钮的 WBP 仍保持可用。 */
 	virtual void NativeConstruct() override;
 
-	/** 离开视口时解除两个主 HUD 入口按钮绑定，避免重建 Slate 后重复广播同一点击。 */
+	/** 离开视口时解除三个主 HUD 入口按钮绑定，避免重建 Slate 后重复广播同一点击。 */
 	virtual void NativeDestruct() override;
 
 	/** 每帧只刷新本地倒计时表现；提竿窗口裁决仍以服务器 FishingSession 命令结果为准。 */
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
-	/** WBP 可选渲染扩展点；Designer 可在特殊调试布局里读取 BlueprintCatStatusText 和 BlueprintFishingFeedbackText。 */
+	/** WBP 可选渲染扩展点；Designer 可在特殊调试布局里读取 BlueprintFishingFeedbackText。 */
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category = "Catfishing|HUD")
 	void BP_RenderHUD(const FCatHUDViewState& ViewState);
 
@@ -269,6 +570,15 @@ private:
 	/** 正式 WBP 缺失钓鱼体力控件时只记录一次，避免固定步投影反复刷屏。 */
 	bool bHasLoggedMissingFishingMeter = false;
 	bool bHasLoggedMissingPhysicalControls = false;
+	/** 正式 WBP 还没有公款余额位或全场广播位时只记录一次，避免余额每变一次就刷同一条诊断。 */
+	bool bHasLoggedMissingShopHUD = false;
+	/** 正式 WBP 还没有竿耐久位时只记录一次；设计要它在手持鱼竿时常驻左下角（ui 表第 17 行）。 */
+	bool bHasLoggedMissingRodDurability = false;
+	/** 队友数据第一次进入投影时只记录一次；逐队友行由 WBP 自己按 Teammates 数组生成，原生不建行。 */
+	bool bHasLoggedTeammatePanelData = false;
+
+	/** 当前「他人解锁新鱼种」提示的本机到期时间，单位秒；用本地单调时钟，不牵扯服务器时间或 Run 事实。 */
+	double FishDiscoveryBroadcastUntilSeconds = 0.0;
 
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> PhysicalControlTextBlock;
@@ -298,17 +608,9 @@ private:
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|HUD", meta = (AllowPrivateAccess = "true"))
 	FCatHUDViewState LastHUDViewState;
 
-	/** 给 WBP 调试 TextBlock 直接绑定的猫状态文本；默认主界面不会把它显示出来。 */
-	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|HUD", meta = (AllowPrivateAccess = "true"))
-	FText BlueprintCatStatusText;
-
 	/** 给 WBP 调试 TextBlock 直接绑定的钓鱼反馈文本；默认主界面不会把它显示出来。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|HUD", meta = (AllowPrivateAccess = "true"))
 	FText BlueprintFishingFeedbackText;
-
-	/** WBP Designer 中的猫状态调试文本控件；存在时 RenderHUD 会写入摘要，并按调试显隐标记决定是否露出。 */
-	UPROPERTY(Transient, meta = (BindWidgetOptional))
-	TObjectPtr<UTextBlock> CatStatusTextBlock;
 
 	/** WBP Designer 中的钓鱼反馈调试文本控件；存在时 RenderHUD 会写入反馈，并按调试显隐标记决定是否露出。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
@@ -317,6 +619,50 @@ private:
 	/** WBP Designer 中的天数文本控件；存在时 RenderHUD 会写入“第 N 天”。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> DayTextBlock;
+
+	/** WBP Designer 中的时段文本控件；与天数同在左上角，存在时写入清晨／白天／黄昏／夜晚。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> TimeOfDayTextBlock;
+
+	/** WBP Designer 中的当日任务点数控件；白天常驻，夜晚收起。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> DailyOfferingTargetTextBlock;
+
+	/** WBP Designer 中的缸内可献点数控件；白天常驻，夜晚收起。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> TankOfferableTextBlock;
+
+	/** WBP Designer 中的世界进度文本控件；平时收起，打开界面时才露面。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> WorldProgressTextBlock;
+
+	/** WBP Designer 中的世界进度条；显隐规则与世界进度文本一致。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UProgressBar> WorldProgressBar;
+
+	/** WBP Designer 中的竿耐久文本控件；手持鱼竿时常驻左下角。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> RodDurabilityTextBlock;
+
+	/** WBP Designer 中的竿耐久条；显隐规则与竿耐久文本一致。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UProgressBar> RodDurabilityProgressBar;
+
+	/** WBP Designer 中的濒死强提示控件；本人体力到濒死阈值时露面。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> NearDeathTextBlock;
+
+	/** WBP Designer 中的「他人解锁新鱼种」提示控件；一次性显示若干秒后由本地 Tick 收起。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> FishDiscoveryBroadcastTextBlock;
+
+	/** WBP Designer 中的公款余额文本控件；存在时常驻显示团队公款，未同步时显示未同步文案。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> TeamWalletTextBlock;
+
+	/** WBP Designer 中的全场购买广播文本控件；存在时按展示窗口显示最近一车成交，过期本地收起。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> PurchaseBroadcastTextBlock;
 
 	/** WBP Designer 中的真咬钩提示控件；存在时只在 TrueBiteWindow 阶段显示。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
@@ -357,6 +703,10 @@ private:
 	/** WBP Designer 中的旅行包入口按钮；点击时只广播 OpenInventory 意图。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UButton> InventoryButton;
+
+	/** WBP Designer 中的左上角猫爪印入口按钮；点击时只广播 OpenCollection 意图，不创建图鉴页。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UButton> CollectionButton;
 
 	/** WBP Designer 中的体力条；始终读取 NormalizedFightStamina 个人比例。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))

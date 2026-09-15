@@ -137,9 +137,9 @@ public:
 		meta = (DisplayName = "放线体力恢复速度", ClampMin = "0.0"))
 	double SlackStaminaRegenPerSecond = -1.0;
 
-	/** 本步实际扣体后，剩余鱼体力不高于该绝对值时吸附为 0；零费用不触发。 */
+	/** 墓碑（2026-09-14，T14；钓鱼规则 §4.6）：仅保留旧资产/生成脚本序列化，运行不消费。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
-		meta = (DisplayName = "鱼力竭吸附阈值", ClampMin = "0.0", ClampMax = "1.0"))
+		meta = (DeprecatedProperty, DeprecationMessage = "鱼体力仅 <=0 翻肚；旧提前归零阈值不再使用。"))
 	double FishExhaustionThreshold = -1.0;
 
 	/** 仅保留旧资产序列化兼容；疲劳反馈由连续行为配置控制。 */

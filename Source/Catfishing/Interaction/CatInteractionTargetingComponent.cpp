@@ -93,15 +93,17 @@ AActor* UCatInteractionTargetingComponent::TraceInteractableFromCrosshair()
 		QueryParams.AddIgnoredActor(Pawn);
 	}
 	FHitResult Hit;
+	// 准星容差与落岸鱼拾取共用同一个 1.5 米事实源（钓鱼规则 §5.5:273）；观察距离只放长射线、不放宽可交互判定。
+	const double InteractionRadius = Settings->GetInteractionRadiusCentimeters();
 	const FVector TraceEnd = RayOrigin + RayDirection.GetSafeNormal()
-		* FMath::Max(Settings->MaximumTargetingDistanceCentimeters, ObservationDistanceCentimeters);
+		* FMath::Max(InteractionRadius, ObservationDistanceCentimeters);
 	if (!World->LineTraceSingleByChannel(Hit, RayOrigin, TraceEnd, Settings->TargetingTraceChannel, QueryParams))
 	{
 		return nullptr;
 	}
 	AActor* HitActor = Hit.GetActor();
 	ObservedTarget = HitActor;
-	return HitActor && Hit.Distance <= Settings->MaximumTargetingDistanceCentimeters
+	return HitActor && InteractionRadius > 0.0 && Hit.Distance <= InteractionRadius
 		&& HitActor->GetClass()->ImplementsInterface(UCatInteractable::StaticClass())
 		&& ICatInteractable::Execute_CanInteract(HitActor, PlayerController)
 		? HitActor : nullptr;

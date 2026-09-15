@@ -505,7 +505,7 @@ Hooked Fish Behavior
 使用自定义 `CatFishBehaviorStateTreeSchema` 的好处是编辑器会把 Context Actor 限定为鱼 Encounter，鱼专用 Task 不会误挂到 Session 或 GameState。编译好 Editor 模块后，可用命令行编辑器稳定生成/重建默认资产：
 
 ```text
-D:/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe D:/develop/Catfishing/Catfishing.uproject -ExecutePythonScript=D:/develop/Catfishing/Scripts/create_fish_behavior_state_tree.py -unattended -nop4 -NullRHI
+"$env:UE_ROOT/Engine/Binaries/Win64/UnrealEditor-Cmd.exe" "$PWD/Catfishing.uproject" -ExecutePythonScript="$PWD/Scripts/create_fish_behavior_state_tree.py -unattended -nop4 -NullRHI
 ```
 
 未来添加“低体力蓄力冲刺”时，推荐新增一个 StateTree 状态和一个新的 `MotionIntent`，条件只负责决定何时进入；冲刺速度、体力门槛与网络结果仍写在纯 C++ 模拟层并加单元测试。这样 StateTree 是可视化编排，不会变成无法验证的第二套战斗逻辑。

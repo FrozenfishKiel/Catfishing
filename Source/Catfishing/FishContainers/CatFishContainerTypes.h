@@ -102,7 +102,7 @@ struct FCatPersistentContainerSnapshot
 	UPROPERTY(SaveGame)
 	ECatContainerKind Kind = ECatContainerKind::Unknown;
 
-	/** 容器中已提交的鱼；偷鱼窗口、请求缓存和 FastArray 派生投影均被排除。 */
+	/** 容器中已提交的鱼；请求缓存和 FastArray 派生投影均被排除。 */
 	UPROPERTY(SaveGame)
 	TArray<FCatFishInstance> Fish;
 };
@@ -160,43 +160,9 @@ struct FCatFishTransferCommand
 
 };
 
-/** Social 提交给鱼容器服务的单条偷鱼开始命令；身份由服务器重建，客户端不能直接访问写口。 */
-USTRUCT()
-struct FCatFishTheftCommand
-{
-	GENERATED_BODY()
-
-	/** 偷取者身份与 RequestId。 */
-	FCatDomainCommandContext Context;
-
-	/** Social 为首次合法 Begin 分配的服务器唯一协议 ID；鱼容器 escrow 只按此键索引，绝不信任客户端 RequestId 的全局唯一性。 */
-	FGuid TheftProtocolId;
-
-	/** 被偷的唯一实物鱼。 */
-	FGuid FishInstanceId;
-
-	/** 目标地面鱼护箱子或共享鱼缸容器 ID。 */
-	FGuid SourceContainerId;
-};
-
-/** 鱼容器服务建立单条偷鱼 escrow 的不可变结果；鱼已离开容器但尚未吃掉，可在窗口内原位归还。 */
-USTRUCT()
-struct FCatFishTheftResult
-{
-	GENERATED_BODY()
-
-	/** 公共命令终态；Revision 只回传源容器移除后的快照序号。 */
-	FCatDomainCommandResult Command;
-
-	/** 鱼容器服务实际使用的服务器协议 ID；Social 的计时、追回和消费必须复用它。 */
-	FGuid TheftProtocolId;
-
-	/** 进入 escrow 的唯一鱼实例；Social 只用定义 ID/原主人裁决追逐与进食。 */
-	FCatFishInstance Fish;
-
-	/** 待归还槽位所属的源容器 ID。 */
-	FGuid SourceContainerId;
-};
+// FCatFishTheftCommand / FCatFishTheftResult 两个 escrow DTO 于 2026-09-11 随偷鱼协议整条删除。
+// 拿鱼是一次普通的库存移动：鱼从一个容器到另一个容器（或到猫嘴里），成了就是成了，
+// 没有「先移出、可在窗口内放回原槽」的中间态，因此鱼容器不再需要 escrow 这一层。
 
 /** 直接吃鱼的命令；地面鱼护要求捕获者本人，共享鱼缸允许当前 Active 玩家但仍由服务器身份写入。 */
 USTRUCT(BlueprintType)

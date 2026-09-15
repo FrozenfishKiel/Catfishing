@@ -10,20 +10,19 @@ bool UCatAbilitySettings::IsRuntimeEnabled() const
 	return bEnableCharacterAbilityRuntime && ReplicationPolicy == ECatAbilityReplicationPolicy::Full;
 }
 
-// 初始属性读取流程：先清三项输出；只有正式 runtime、显式 tuning、非负 Poison、正力量和正体力上限全部有限时才整体返回，避免半套初值进入 ASC。
-bool UCatAbilitySettings::TryGetInitialAttributes(float& OutPoison, float& OutFishingStrength,
+// 初始属性读取流程：先清两项输出；只有正式 runtime、显式 tuning、正力量和正体力上限全部有限时才整体返回，避免半套初值进入 ASC。
+// 墓碑（2026-09-12）：这里原本还输出一项 InitialPoison，随渐进中毒模型一并删除，黄色体力开局固定为 0、不由配置播种。
+bool UCatAbilitySettings::TryGetInitialAttributes(float& OutFishingStrength,
 	float& OutMaxFightStamina) const
 {
-	OutPoison = 0.0f;
 	OutFishingStrength = 0.0f;
 	OutMaxFightStamina = 0.0f;
-	if (!IsRuntimeEnabled() || !bEnableInitialAttributeTuning || !FMath::IsFinite(InitialPoison)
+	if (!IsRuntimeEnabled() || !bEnableInitialAttributeTuning
 		|| !FMath::IsFinite(InitialFishingStrength) || !FMath::IsFinite(InitialFightStamina)
-		|| InitialPoison < 0.0f || InitialFishingStrength <= 0.0f || InitialFightStamina <= 0.0f)
+		|| InitialFishingStrength <= 0.0f || InitialFightStamina <= 0.0f)
 	{
 		return false;
 	}
-	OutPoison = InitialPoison;
 	OutFishingStrength = InitialFishingStrength;
 	OutMaxFightStamina = InitialFightStamina;
 	return true;
@@ -32,18 +31,17 @@ bool UCatAbilitySettings::TryGetInitialAttributes(float& OutPoison, float& OutFi
 bool UCatAbilitySettings::IsFishingRuntimeReady() const
 {
 	// 运行就绪检查流程：先要求 Ability runtime gate 与两份软引用存在，再同步加载 AbilitySet/InputConfig，
-	// 最后复用默认猫种解析后的三项初始身体属性校验；任何一环缺失都保持 fail-closed。
+	// 最后复用默认猫种解析后的两项初始身体属性校验；任何一环缺失都保持 fail-closed。
 	if (!IsRuntimeEnabled() || DefaultAbilitySet.IsNull() || AbilityInputConfig.IsNull())
 	{
 		return false;
 	}
 	const UCatAbilitySet* AbilitySet = DefaultAbilitySet.LoadSynchronous();
 	const UCatAbilityInputConfig* InputConfig = AbilityInputConfig.LoadSynchronous();
-	float Poison = 0.0f;
 	float FishingStrength = 0.0f;
 	float MaxFightStamina = 0.0f;
 	return AbilitySet && AbilitySet->IsRuntimeReady() && InputConfig && InputConfig->IsRuntimeReady()
-		&& TryGetInitialAttributesForCharacter(NAME_None, Poison, FishingStrength, MaxFightStamina);
+		&& TryGetInitialAttributesForCharacter(NAME_None, FishingStrength, MaxFightStamina);
 }
 
 // 猫种类查询流程：同步解析显式清单并只接受唯一就绪匹配；与装备定义查询同一套"重复返回空"语义。
@@ -71,16 +69,15 @@ const UCatCharacterDefinition* UCatAbilitySettings::FindRuntimeCharacterDefiniti
 }
 
 // 按种类初始属性流程：显式角色 ID 优先，否则使用配置的默认猫种 ID；只有两者都为 None 才使用全局 Initial* 回退，体力数值只作为 MaxFightStamina 播种源。
-bool UCatAbilitySettings::TryGetInitialAttributesForCharacter(const FName CatDefinitionId, float& OutPoison,
+bool UCatAbilitySettings::TryGetInitialAttributesForCharacter(const FName CatDefinitionId,
 	float& OutFishingStrength, float& OutMaxFightStamina) const
 {
-	OutPoison = 0.0f;
 	OutFishingStrength = 0.0f;
 	OutMaxFightStamina = 0.0f;
 	const FName ResolvedDefinitionId = CatDefinitionId.IsNone() ? DefaultCharacterDefinitionId : CatDefinitionId;
 	if (ResolvedDefinitionId.IsNone())
 	{
-		return TryGetInitialAttributes(OutPoison, OutFishingStrength, OutMaxFightStamina);
+		return TryGetInitialAttributes(OutFishingStrength, OutMaxFightStamina);
 	}
 	if (!IsRuntimeEnabled() || !bEnableInitialAttributeTuning)
 	{
@@ -91,7 +88,6 @@ bool UCatAbilitySettings::TryGetInitialAttributesForCharacter(const FName CatDef
 	{
 		return false;
 	}
-	OutPoison = Definition->InitialPoison;
 	OutFishingStrength = Definition->FishingStrength;
 	OutMaxFightStamina = Definition->FightStaminaMaximum;
 	return true;

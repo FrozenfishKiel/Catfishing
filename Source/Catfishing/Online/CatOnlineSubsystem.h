@@ -61,7 +61,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Online")
 	FCatOnlineResult RequestAcceptInvite(FCatSessionInviteHandle InviteHandle);
 
-	/** 根据已确认 SessionRole 选择 Host exit 或 Client leave；Lake Host 先等最终保存成功再 teardown、Destroy 和回前台，释放本局载荷后才结案，保存失败保留会话。 */
+	/**
+	 * 根据已确认 SessionRole 选择 Host exit 或 Client leave；Lake Host 等一次保存回执后 teardown、Destroy 和回前台，
+	 * 释放本局载荷后才结案，保存失败仍退出，Save 保留重试事实。
+	 * 墓碑（2026-09-14，T33）：取消“保存成功才准退出”；Knowledge/Design/GDD 系统分册/局与进程.md:103。
+	 *
+	 * 这里的 Host **不是房主**（2026-09-07 决策点⑩两层论）：它是「本进程正在当 listen server」这个网络事实。
+	 * 房主是房间管理层的社交角色，在 UCatRoomOwnerService 手里，离开时只移交给最早加入者、本局接着打。
+	 * 走到这条 Host 分支的是「世界所在的那个进程要退出」，世界随之消失，所以仍然整局收口——
+	 * 让它也能接着打需要真正的 Host Migration（新 listen server ＋ 世界状态跨机迁移 ＋ 全员重连），尚未实现。
+	 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Online")
 	FCatOnlineResult RequestLeave();
 
@@ -82,7 +91,11 @@ public:
 	/** 使用好友缓存中的 opaque 句柄向当前 Host Lobby 发送 Steam 邀请；调用者不能直接接触平台身份。 */
 	FCatOnlineResult RequestInviteFriend(FCatOnlineFriendHandle FriendHandle);
 
-	/** 接受服务器 Host exit 通知；并发先于关联键/角色校验拒绝且不覆盖活动关联键，Client 绕过主动离局策略复用 Destroy/Frontend 管线，返回后释放本机载荷。 */
+	/**
+	 * 接受服务器「承载世界的进程要退出了」通知；并发先于关联键/角色校验拒绝且不覆盖活动关联键，
+	 * Client 绕过主动离局策略复用 Destroy/Frontend 管线，返回后释放本机载荷。
+	 * 房主移交不经过这条路——换房主不通知任何客户端退出，本局继续（联机社交 §3.1.1）。
+	 */
 	FCatOnlineResult RequestRemoteHostExit(FGuid HostExitRequestId);
 
 	/** 组装当前四类事实、RequestId/epoch、opaque 摘要和真实加载进度；实现只复制 Online 已观察到的资源/包/旅行事实，不推进异步状态。 */
@@ -222,7 +235,7 @@ private:
 	/** Lake Host Leave 启动活动世界保存并订阅最终落盘结果；同步拒绝保留 Session，受理后由匹配 RequestId/epoch 的完成回调继续 teardown。 */
 	bool BeginHostLeaveSave();
 
-	/** 消费离开请求所属的世界保存结果；最终持久化成功才允许 teardown 和返回后的载荷释放，失败或失效回调不会销毁 Session。 */
+	/** 消费离开请求所属的世界保存结果；匹配的成功或失败回执均继续 teardown 和返回后的载荷释放；失效回调仍拒绝。 */
 	void HandleHostLeaveSaveCompleted(FGuid SaveRequestId, bool bSuccess, uint64 CallbackEpoch);
 
 	/** 解除本次离开在精确 Save 子系统上的完成订阅并清除保存关联键；终态与反初始化均可幂等调用。 */
@@ -234,7 +247,7 @@ private:
 	/** 成对解除终态释放所等待的精确 Save 变化通知；不会清除 Save 数据，结案和反初始化均可幂等调用。 */
 	void ClearRunReleaseDelegate();
 
-	/** Host Leave 在世界保存成功后向当前玩法地图 GameMode 提交 Run teardown；同步 Ready、异步 Pending 与失败都保持同一 RequestId/epoch。 */
+	/** Host Leave 在一次世界保存尝试结束后向当前玩法地图 GameMode 提交 Run teardown；同步 Ready、异步 Pending 与失败都保持同一 RequestId/epoch。 */
 	bool BeginHostRunTeardown();
 
 	/** Host 预载完成后的唯一玩法地图 Listen 旅行入口；只提交旅行并等待 PostLoadMap，Lobby ready 还必须通过目标地图的 listen 与 Run 玩法命令门。 */
@@ -515,7 +528,7 @@ private:
 	/** Save 为本次离开保存生成的关联键；受理返回后冻结，完成时与 Online epoch 一起校验，其他检查点写盘不能推进退出。 */
 	FGuid HostLeaveSaveRequestId;
 
-	/** 本次 Leave 在确认回到 Frontend 后可以释放本局载荷的许可；前台离房和 Client 离房可直接获得，Lake Host 只能由匹配的保存成功回执授权，操作结束即失效。 */
+	/** 本次 Leave 在确认回到 Frontend 后可以释放本局载荷的许可；前台离房和 Client 离房可直接获得，Lake Host 由匹配的保存回执或同步保存拒绝授权，操作结束即失效。 */
 	bool bReleaseActiveRunOnFrontend = false;
 
 	/** 终态释放正在等待的 Save 来源；仅 busy 时保存弱引用用于配对解绑，不复制槽标识、载荷或持久化状态。 */

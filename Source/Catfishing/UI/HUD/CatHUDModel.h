@@ -13,6 +13,8 @@ class ACatfishingGameState;
 class UWorld;
 class UAbilitySystemComponent;
 class UCatConditionComponent;
+class UCatEquipmentComponent;
+class UCatFishTankWorldInfoComponent;
 class UCatFishingCommandComponent;
 class UCatFishingViewBridge;
 class UCatGrowthComponent;
@@ -79,6 +81,37 @@ private:
 	/** Run 公开快照变化入口；重读天数和阶段相关 HUD 投影，避免客户端复制到达后界面继续显示旧天数。 */
 	void HandleRunPublicStateChanged();
 
+	/** 商店公开经济快照变化入口；先把新成交的整车折成全场广播，再重读完整 HUD 投影刷新常驻余额。 */
+	void HandleShopEconomySnapshotChanged();
+
+	/**
+	 * 全场购买广播归并入口；把 GameState 复制的公开流水按「一车一条」折成 HUD 广播队列。
+	 * 它只读复制事实，不确认交付、不改公款，也不代表本机看到的车就是全部账本。
+	 */
+	void RefreshPurchaseBroadcasts();
+
+	/** 全场购买广播收口入口；换 GameState 或解绑时清掉本局播报记录，避免跨局跨 World 复播旧车。 */
+	void ResetPurchaseBroadcastState();
+
+	/** Equipment 钓鱼选择读模型变化入口；换竿、磨损与断竿都经它重读完整 HUD 投影。 */
+	void HandleEquipmentSnapshotChanged();
+
+	/**
+	 * 本机此刻是否打开着背包／图鉴／局内菜单之一。
+	 * 交互册 §42 定世界进度平时隐藏、靠近神像或打开界面时查看：靠近神像那条由祭坛信息牌承担，
+	 * 这条由本函数承担。开合事实只有 LocalPlayer UI 协调层那一份，这里只读，不在 HUD 里存第二份。
+	 */
+	bool IsAnyInterfacePageOpen() const;
+
+	/**
+	 * 把当前共享鱼缸的只读摘要填进投影。营地宿主 → 显式关联的共享鱼缸 → 鱼缸自己复制的摘要组件，
+	 * 与祭坛信息牌走同一条解析链，不在 HUD 里重算鱼的档位，也不扫描世界配对鱼缸。
+	 */
+	void RefreshTankOfferingProjection(FCatHUDViewState& NewState);
+
+	/** 把同房其他玩家的方向、移动状态与体力填进投影；只读复制事实，不推断谁在跟谁合力。 */
+	void RefreshTeammateProjection(FCatHUDViewState& NewState);
+
 	/** Fishing 会话投影变化入口；Bridge 已经更新自身，Model 只重建 HUD 文本。 */
 	void HandleFishingViewStateChanged(const FCatFishingViewState& ViewState);
 
@@ -112,6 +145,14 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatGrowthComponent> BoundGrowth;
 
+	/** 当前 Character 的 Equipment 组件弱引用；HUD 只读钓鱼选择读模型里的鱼竿摘要，不改选择也不写耐久。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UCatEquipmentComponent> BoundEquipment;
+
+	/** 已解析到的共享鱼缸摘要组件；弱引用缓存只为省掉每次投影的世界遍历，失效后按同一条链重解析。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UCatFishTankWorldInfoComponent> CachedTankInfo;
+
 	/** 当前 Controller 的 Fishing 命令结果源；HUD 用它显示最近反馈。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatFishingCommandComponent> BoundFishingCommand;
@@ -124,15 +165,14 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UCatFishingViewBridge> FishingViewBridge;
 
-	/** Poison 属性变化解绑句柄。 */
-	FDelegateHandle PoisonChangedHandle;
+	/** 黄色体力属性变化解绑句柄。 */
+	FDelegateHandle YellowFightStaminaChangedHandle;
 
 	/** FishingStrength 属性变化解绑句柄。 */
 	FDelegateHandle FishingStrengthChangedHandle;
 
 	/** FightStamina 属性变化解绑句柄。 */
 	FDelegateHandle FightStaminaChangedHandle;
-	FDelegateHandle YellowFightStaminaChangedHandle;
 
 	/** MaxFightStamina 属性变化解绑句柄；上限变化时 HUD 必须重算体力文本和进度条比例。 */
 	FDelegateHandle MaxFightStaminaChangedHandle;
@@ -143,8 +183,14 @@ private:
 	/** Growth 快照变化解绑句柄。 */
 	FDelegateHandle GrowthChangedHandle;
 
+	/** Equipment 钓鱼选择读模型变化解绑句柄；成对接线成对移除。 */
+	FDelegateHandle EquipmentSnapshotChangedHandle;
+
 	/** Run 公开快照变化解绑句柄。 */
 	FDelegateHandle RunPublicStateChangedHandle;
+
+	/** 商店公开经济快照变化解绑句柄；它和 Run 快照挂在同一个 GameState 上，成对接线成对移除。 */
+	FDelegateHandle ShopEconomySnapshotChangedHandle;
 
 	/** 等待客户端 GameState 出现的本地 Timer；它只保证 HUD 订阅接上线，不保存 Run 天数或阶段。 */
 	FTimerHandle RunGameStateBindingRetryTimerHandle;
@@ -164,6 +210,21 @@ private:
 
 	/** 最近是否收到过钓鱼命令结果。 */
 	bool bHasFishingCommandResult = false;
+
+	/** 本机已经播报过的整车 ID；它只增不减，保证被队列挤掉的旧车不会因为重新遍历账本而二次刷屏。 */
+	TSet<FGuid> AnnouncedPurchaseCartIds;
+
+	/**
+	 * 接上当前 GameState 那一刻的服务器时间。接线后极短时间内到达的公开流水按既往账本处理，只记不播：
+	 * 中途进局的玩家第一次复制会一次性拿到整本流水，那不是刚发生的全场事件。
+	 */
+	double PurchaseBroadcastSeedServerTime = 0.0;
+
+	/** 是否已经记下接线时刻；没有接线时不做既往账本的时间比较。 */
+	bool bHasPurchaseBroadcastSeedTime = false;
+
+	/** 当前留在 HUD 上的全场购买广播，一车一条、按发生顺序排列；Refresh 只把它拷进投影。 */
+	TArray<FCatHUDPurchaseBroadcast> PurchaseBroadcasts;
 
 	/** 最近发布给 HUD View 的完整投影。 */
 	FCatHUDViewState ViewState;

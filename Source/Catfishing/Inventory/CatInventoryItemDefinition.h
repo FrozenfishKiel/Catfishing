@@ -104,7 +104,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "World")
 	TSoftClassPtr<AActor> WorldActorClass;
 
-	/** 物品语义标签；消费者只读取自己认识的语义信号，库存核心不把装备、草药或任务物写成业务枚举。 */
+	/** 物品语义标签；消费者只读取自己认识的语义信号，库存核心不把装备或任务物写成业务枚举。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Identity")
 	FGameplayTagContainer InventorySemanticTags;
 

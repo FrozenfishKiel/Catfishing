@@ -39,6 +39,13 @@ public:
 	/** 客户端经现有 Controller RPC 转发；authority 收货后由实例保管原物，无实例接管的发货载体才销毁。 */
 	virtual bool Interact_Implementation(AController* RequestingController, FGuid RequestId) override;
 
+	/**
+	 * 这件世界物是不是「还躺在地上等人捡」。
+	 * 已被拾取的载体不会立刻销毁——它会被隐藏并继续替背包里那件物品保管世界 Actor 引用，
+	 * 所以翻天清理必须靠这条判据区分二者，不能只看 Actor 还在不在。
+	 */
+	bool IsAwaitingPickup() const { return !bPickupClaimed && !IsHidden(); }
+
 protected:
 	/** 组件与蓝图默认值就绪后调用派生物配置，使关卡放置和运行生成采用同一初始化时序。 */
 	virtual void BeginPlay() override;

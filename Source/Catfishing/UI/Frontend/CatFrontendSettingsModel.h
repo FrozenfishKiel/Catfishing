@@ -6,6 +6,8 @@
 #include "UObject/Object.h"
 #include "CatFrontendSettingsModel.generated.h"
 
+enum class ECatColorBlindMode : uint8;
+
 class UCatGameUserSettings;
 class UCatAudioOutputRequest;
 class ULocalPlayer;
@@ -44,8 +46,11 @@ public:
 	/** 选择声音分类；由 Controller 的明确页面意图调用，通知 View 刷新但不通过字符串或动作枚举做二次分发。 */
 	void SelectAudio();
 
-	/** 选择控制分类；当前没有正式控制字段时只切换分类与说明，不建立临时按键映射表。 */
+	/** 选择控制分类；灵敏度与反转 Y 已有正式字段，按键重绑定仍无来源，由 IsKeyBindingSettingAvailable 说明。 */
 	void SelectControls();
+
+	/** 选择辅助功能分类（主界面.md:91 的第四个页签）；分类状态只属于本页面草稿。 */
+	void SelectAccessibility();
 
 	/** 返回游戏分类是否为当前选择，供 View 控制可见性；分类状态只属于本页面草稿，不参与游戏玩法状态。 */
 	bool IsGameSelected() const;
@@ -58,6 +63,64 @@ public:
 
 	/** 返回控制分类是否为当前选择，供 View 控制可见性；控制项未接线时仍可显示正式入口。 */
 	bool IsControlsSelected() const;
+
+	/** 返回辅助功能分类是否为当前选择，供 View 控制可见性。 */
+	bool IsAccessibilitySelected() const;
+
+	/**
+	 * 返回按键重绑定是否有正式来源（控制页第四项「按键设置」）。
+	 * 当前键位由 IMC 资产固定，重绑定需要 Enhanced Input 的 UserSettings 资产与持久化键位表，工程尚未接入，
+	 * 所以固定为 false——View 必须把这一项显示为不可用，而不是给一个点了没反应的入口。
+	 */
+	bool IsKeyBindingSettingAvailable() const;
+
+	/** 返回待应用的文字大小倍率；辅助功能页第二项。 */
+	float GetDraftTextSizeScale() const;
+
+	/** 更新待应用的文字大小倍率；夹在 0.75 到 2.0，与界面缩放同一可读区间。 */
+	void SetDraftTextSizeScale(float NewTextSizeScale);
+
+	/** 返回待应用的高对比度界面开关。 */
+	bool GetDraftHighContrastUI() const;
+
+	/** 更新待应用的高对比度界面开关。 */
+	void SetDraftHighContrastUI(bool bNewHighContrastUI);
+
+	/** 返回待应用的色觉模式。 */
+	ECatColorBlindMode GetDraftColorBlindMode() const;
+
+	/** 更新待应用的色觉模式。 */
+	void SetDraftColorBlindMode(ECatColorBlindMode NewColorBlindMode);
+
+	/** 返回待应用的「减少镜头晃动」开关。 */
+	bool GetDraftReduceCameraShake() const;
+
+	/** 更新待应用的「减少镜头晃动」开关。 */
+	void SetDraftReduceCameraShake(bool bNewReduceCameraShake);
+
+	/** 返回待应用的「减少闪光效果」开关。 */
+	bool GetDraftReduceFlashingEffects() const;
+
+	/** 更新待应用的「减少闪光效果」开关。 */
+	void SetDraftReduceFlashingEffects(bool bNewReduceFlashingEffects);
+
+	/** 返回待应用的鼠标灵敏度倍率；1.0 表示不缩放。 */
+	float GetDraftMouseSensitivity() const;
+
+	/** 更新待应用的鼠标灵敏度倍率；夹在 0.1 到 3.0。 */
+	void SetDraftMouseSensitivity(float NewMouseSensitivity);
+
+	/** 返回待应用的镜头灵敏度倍率；1.0 表示不缩放。 */
+	float GetDraftCameraSensitivity() const;
+
+	/** 更新待应用的镜头灵敏度倍率；夹在 0.1 到 3.0。 */
+	void SetDraftCameraSensitivity(float NewCameraSensitivity);
+
+	/** 返回待应用的 Y 轴反转开关。 */
+	bool GetDraftInvertYAxis() const;
+
+	/** 更新待应用的 Y 轴反转开关。 */
+	void SetDraftInvertYAxis(bool bNewInvertYAxis);
 
 	/** 返回当前草稿语言 culture 名称；由 Initialize、Cancel、RestoreDefaults 或 SetDraftLanguage 写入，Apply 成功后成为运行时语言。 */
 	const FString& GetDraftLanguage() const;
@@ -262,8 +325,11 @@ private:
 	/** 当前选择的声音分类标志；四个 Select 方法互斥写入，View 读取它决定设置页显示内容。 */
 	bool bAudioSelected = false;
 
-	/** 当前选择的控制分类标志；入口保留但没有虚构的控制字段，View 读取它展示控制细项延期说明。 */
+	/** 当前选择的控制分类标志；灵敏度与反转 Y 已有正式字段，按键重绑定仍由 IsKeyBindingSettingAvailable 说明不可用。 */
 	bool bControlsSelected = false;
+
+	/** 当前选择的辅助功能分类标志；五个 Select 方法互斥写入。 */
+	bool bAccessibilitySelected = false;
 
 	/** 当前草稿是否要求在 Apply 时调用 UE 的 SetToDefaults；RestoreDefaults 写入、ReloadDraftFromSettings 清除，确保取消不会提前修改权威设置。 */
 	bool bDraftDefaultsRequested = false;
@@ -318,6 +384,30 @@ private:
 
 	/** 待应用的后台静音开关；页面输入写入、Apply 时映射到 FApp 的失焦音量倍率，取消时从真实引擎状态重读。 */
 	bool bDraftMuteAudioWhenUnfocused = true;
+
+	/** 待应用的文字大小倍率；Apply 成功后交给正式用户设置持久化，消费方是 WBP 的字号换算。 */
+	float DraftTextSizeScale = 1.0f;
+
+	/** 待应用的高对比度界面开关。 */
+	bool bDraftHighContrastUI = false;
+
+	/** 待应用的色觉模式。 */
+	uint8 DraftColorBlindMode = 0;
+
+	/** 待应用的「减少镜头晃动」开关。 */
+	bool bDraftReduceCameraShake = false;
+
+	/** 待应用的「减少闪光效果」开关。 */
+	bool bDraftReduceFlashingEffects = false;
+
+	/** 待应用的鼠标灵敏度倍率。 */
+	float DraftMouseSensitivity = 1.0f;
+
+	/** 待应用的镜头灵敏度倍率。 */
+	float DraftCameraSensitivity = 1.0f;
+
+	/** 待应用的 Y 轴反转开关。 */
+	bool bDraftInvertYAxis = false;
 
 	/** AudioMixer 最近一次枚举到的设备显示名称；异步成功回调整体替换，View 只按索引读取。 */
 	TArray<FString> AudioOutputDeviceNames;

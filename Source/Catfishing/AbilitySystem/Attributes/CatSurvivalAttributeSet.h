@@ -4,7 +4,17 @@
 #include "AbilitySystem/Attributes/CatAttributeSet.h"
 #include "CatSurvivalAttributeSet.generated.h"
 
-/** Character-owned ASC 的局内身体属性：Poison、力量、跨竿绿色体力及其上限、当天黄色储备。 */
+/**
+ * Character-owned ASC 的唯一局内数值属性集；只复制当前仍是玩法真相的 FishingStrength、FightStamina、
+ * 它的上限，以及黄色体力护盾段。
+ *
+ * 墓碑（2026-09-12，09-12 裁决「中毒按鱼各配、无渐进升级」）：这里原本还有一条 Poison 属性，
+ * 用来做「跨鱼累加中毒值、到阈值 100 倒地」的渐进加重模型。该模型在 2026-08-21 已被设计砍掉
+ * （猫册 v1.13），倒地改由单条鱼的食用结论直接裁决，Poison 因此失去全部消费者，连同
+ * UCatGE_PoisonDelta、ApplyPoisonDelta/IsPoisonAtLeast、CatConditionSettings::PoisonDownedThreshold
+ * 与三处 Recovery 清毒值一并删除。想找「中毒」的现行口径：轻档中毒是按鱼种配置的限时 buff
+ * （吃鱼效果页 §4），重档＝吃下即倒地，由 CatConditionComponent 直接写 bDowned。
+ */
 UCLASS()
 class CATFISHING_API UCatSurvivalAttributeSet : public UCatAttributeSet
 {
@@ -28,25 +38,24 @@ public:
 	FGameplayAttributeData FishingStrength;
 	ATTRIBUTE_ACCESSORS_BASIC(UCatSurvivalAttributeSet, FishingStrength)
 
-	/** FightStamina 代表当前身体跨竿保留的绿色体力；它不是疲惫演出，也不进入跨局 Profile。 */
+	/** FightStamina 仅代表绿色体力（点）；总可用体力另加 YellowFightStamina，不进入跨局 Profile。 */
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_FightStamina, Category = "Catfishing|Fishing")
 	FGameplayAttributeData FightStamina;
 	ATTRIBUTE_ACCESSORS_BASIC(UCatSurvivalAttributeSet, FightStamina)
 
-	/** MaxFightStamina 是绿色段的恢复上限，不限制黄色储备；由角色播种，ASC、会话和 HUD 读取。 */
+	/** MaxFightStamina 代表绿色体力的恢复上限（点）；总容量另加当前黄段，不把黄色纳入可恢复上限。 */
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_MaxFightStamina, Category = "Catfishing|Fishing")
 	FGameplayAttributeData MaxFightStamina;
 	ATTRIBUTE_ACCESSORS_BASIC(UCatSurvivalAttributeSet, MaxFightStamina)
 
-	/** 黄色储备：无上限、绿先扣、不接受恢复；新身体为零，翻天清空。 */
-	UPROPERTY(BlueprintReadOnly, ReplicatedUsing=OnRep_YellowFightStamina, Category="Catfishing|Fishing")
+	/**
+	 * YellowFightStamina 代表加在体力条末端的黄色护盾段（数值成长页 §4）：
+	 * 搏斗消耗先扣绿色段、扣完才动它；不自然回复、不吃任何回复效果，用掉即无；可叠加且无上限；过夜清空。
+	 * 它跟局也跟天走，不进 Profile。
+	 */
+	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_YellowFightStamina, Category = "Catfishing|Survival")
 	FGameplayAttributeData YellowFightStamina;
 	ATTRIBUTE_ACCESSORS_BASIC(UCatSurvivalAttributeSet, YellowFightStamina)
-
-	/** Poison 代表当前猫身体的局内中毒累积；来源只读 FishDefinition，局末随 Character 销毁且不会造成死亡。 */
-	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_Poison, Category = "Catfishing|Survival")
-	FGameplayAttributeData Poison;
-	ATTRIBUTE_ACCESSORS_BASIC(UCatSurvivalAttributeSet, Poison)
 
 protected:
 	/** FishingStrength 到达客户端时交给 GAS 标准预测收敛；不在此计算协作加成。 */
@@ -61,10 +70,7 @@ protected:
 	UFUNCTION()
 	void OnRep_MaxFightStamina(const FGameplayAttributeData& OldMaxFightStamina);
 
-	/** Poison 到达客户端时交给 GAS 标准预测收敛；倒地与表现由服务器 ConditionComponent 单独裁决。 */
-	UFUNCTION()
-	void OnRep_Poison(const FGameplayAttributeData& OldPoison);
-
+	/** 黄色体力到达客户端时交给 GAS 标准预测收敛；体力条的黄段渲染归钓鱼册，客户端不自行增减它。 */
 	UFUNCTION()
 	void OnRep_YellowFightStamina(const FGameplayAttributeData& OldYellowFightStamina);
 

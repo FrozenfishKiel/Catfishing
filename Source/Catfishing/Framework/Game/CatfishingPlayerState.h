@@ -24,6 +24,17 @@ public:
 	bool AuthorizeEquipmentUnlockFromProfileGrant(const FCatProfileGrant& Grant);
 	/** 查询服务器是否持有指定装备解锁的可信证明；None 视为 starter，非空必须来自本局授权快照。 */
 	bool HasServerAuthorizedEquipmentUnlock(FName UnlockId) const;
+
+	/**
+	 * 仅 authority 的 RoomOwnerService 写入本人是否为当前房主；它是移交结果的复制载体，不是移交裁决本身。
+	 * 房主只活在**房间管理层**（踢人、开局、翻天兜底，2026-09-07 决策点⑩）；机制层没有房主——
+	 * 钓鱼、打窝、献祭、拿鱼没有一处读它。UI 读它只决定「踢人」入口露不露面，真正的资格仍由服务器复核。
+	 */
+	void SetRoomOwnerFromAuthority(bool bNewRoomOwner);
+
+	/** 本人当前是不是房主；客户端读的是复制值，空缺期间全场都是 false。 */
+	UFUNCTION(BlueprintPure, Category = "Catfishing|Room")
+	bool IsRoomOwner() const { return bRoomOwner; }
 protected:
 	/** 玩家状态进入 World 后记录继承 UniqueId 是否有效；原始值是否输出由 StableNetIdExposure 策略控制。 */
 	virtual void BeginPlay() override;
@@ -35,4 +46,8 @@ private:
 	/** 服务器当前认可并复制的装备解锁 ID 摘要；Profile Grant ACK 或 owning client durable Profile 摘要写入，Equipment 装配只读它。 */
 	UPROPERTY(Replicated)
 	TArray<FName> AuthorizedEquipmentUnlockIds;
+
+	/** 本人是否为当前房主；authority 的 RoomOwnerService 唯一写入，全场同时最多一个 true。 */
+	UPROPERTY(Replicated)
+	bool bRoomOwner = false;
 };

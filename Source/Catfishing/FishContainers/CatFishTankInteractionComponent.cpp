@@ -19,7 +19,7 @@ UCatFishTankInteractionComponent::UCatFishTankInteractionComponent()
 // 外部库存打开流程：
 // 1. 解析本地 PlayerController、LocalPlayer、鱼缸 Actor、鱼缸正式库存和本地 UI Subsystem；缺任一依赖就只记录拒绝。
 // 2. 把鱼缸库存和正式库存 WBP 类交给同一打开入口，面板只绑定鱼缸自己的 Model。
-// 3. 本交互不挑具体鱼、不移动库存内容、不提交领域服务；真实跨库存移动只能由背包 Drop 后的服务器库存事务完成。
+// 3. 本组件只开UI；嘴鱼入缸由所属Tank Actor权威交互提交，取鱼由Carry按钮走世界鱼交接。
 bool UCatFishTankInteractionComponent::OpenInventoryForPlayer(APlayerController* PlayerController)
 {
 	ACatFishTankActor* Tank = GetOwningFishTank();

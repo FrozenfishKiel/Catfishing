@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/Ticker.h"
 #include "Save/CatRunSaveGame.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "CatSaveSubsystem.generated.h"
@@ -20,6 +21,10 @@ class CATFISHING_API UCatSaveSubsystem : public UGameInstanceSubsystem
 {
 	GENERATED_BODY()
 	friend class FCatPhysicalCharacterSaveRestoreConsumerTest;
+	friend class FCatTerminalSaveQueueTestCommand;
+	friend class FCatShopWorldCheckpointTest;
+	friend class FCatTankCapacityConfigRestoreTest;
+	friend class FCatLegacyBackpackFishRestoreTest;
 public:
 	/** 初始化槽摘要缓存与恢复状态；磁盘文件仍由 RefreshSlotSummaries 读取，避免前端把未扫描目录当成空档。 */
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
@@ -36,14 +41,20 @@ public:
 	/** 新世界槽创建请求会分配稳定 SlotId 并写入单一空载荷文件；成功只表示槽可被后续正式读取，不直接进入玩法。 */
 	FCatSaveResult RequestCreateSlot(const FString& DisplayName);
 
-	/** 异步读取指定槽的真实载荷；成功时暂存待恢复快照并允许 Online 发起玩法旅行。 */
+	/** 异步读取指定槽的真实载荷；成功时暂存待恢复快照并允许 Online 发起玩法旅行。
+	 *  已终局（毕业或团灭）的槽在这里被拒绝——那一局打完了，只能新建一个世界槽，不能继续（2026-09-11 拍）。 */
 	FCatSaveResult RequestLoadSlot(FName SlotId);
 
-	/** 删除请求只接受非活动槽，且会移除该槽唯一载荷文件；忙碌或当前局被拒绝以免玩家跨槽丢档。 */
+	/** 删除请求只接受非活动槽，且会移除该槽唯一载荷文件；忙碌或当前局被拒绝以免玩家跨槽丢档。
+	 *  这是全工程唯一的删档路径，且只能由前端按玩家意愿调用；游戏自身任何流程都不得删档（2026-09-11 拍）。 */
 	FCatSaveResult RequestDeleteSlot(FName SlotId);
 
-	/** 由 Host 在检查点或离开前请求异步保存当前世界；客户端、无活动槽、领域未就绪和可追回的偷鱼窗口都会拒绝。 */
+	/** 由 Host 在检查点或离开前请求异步保存当前世界；客户端、无活动槽和领域未就绪都会拒绝。
+	 *  busy 时排队；终局由 RequestCompleteActiveRun 显式记录并通过同一队列落盘。 */
 	FCatSaveResult RequestSaveActiveRun();
+
+	/** 权威终局先记不可继续事实，再通过活动槽的同一串行写口提交；快照失败仍排队补写完成标记。 */
+	FCatSaveResult RequestCompleteActiveRun();
 
 	/** 已确认取消房间、创建失败或返回前端后释放本局载荷和旅行许可；busy 时拒绝且不清任何状态，不代替离开前保存。 */
 	bool ReleaseActiveRun();
@@ -76,6 +87,26 @@ public:
 	bool CapturePlayerBeforeLogout(AController& Controller, ACatCharacter* DepartingCharacter = nullptr);
 
 private:
+	bool CaptureWorldInventories(UWorld& World, TArray<FCatSavedWorldInventory>& OutInventories, FText& OutFailure) const;
+	bool RestoreWorldInventories(UWorld& World, const TArray<FCatSavedWorldInventory>& Inventories, FText& OutFailure) const;
+	FCatSaveResult EnqueueRunSave(FName SlotId, UCatRunSaveGame* Payload);
+	bool TickSaveQueue(float DeltaSeconds);
+	void StartNextRunSave();
+
+	/** 空载荷表示仅在轮到本请求时读取旧文件并补写完成位，绝不拿旧内存世界覆盖较新落盘。 */
+	TArray<FGuid> QueuedSaveRequests;
+	TMap<FGuid, FName> QueuedSaveSlots;
+	UPROPERTY(Transient)
+	TMap<FGuid, TObjectPtr<UCatRunSaveGame>> QueuedSavePayloads;
+	UPROPERTY(Transient)
+	TMap<FName, TObjectPtr<UCatRunSaveGame>> RetrySavePayloads;
+	TSet<FName> CompletedRunSlots;
+	TSet<FName> PendingCompletionSlots;
+	FGuid ActiveQueuedSaveRequest;
+	FName ActiveQueuedSaveSlot;
+	FTSTicker::FDelegateHandle SaveQueueTicker;
+	double NextSaveRetrySeconds = 0.0;
+
 	/** 根据稳定槽标识生成唯一世界槽文件名；显示名称不参与路径，避免玩家改名导致读不到文件。 */
 	static FString MakeRunSlotFileName(FName SlotId);
 

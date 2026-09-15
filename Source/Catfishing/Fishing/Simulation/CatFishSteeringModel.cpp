@@ -74,7 +74,9 @@ bool FCatFishSteeringConfig::IsValid() const
 		&& FMath::IsFinite(LowStaminaEaseOffDurationMultiplier) && LowStaminaEaseOffDurationMultiplier >= 1.0
 		&& IsUnitInterval(BlockedLoadThreshold) && IsUnitInterval(BlockedProgressFraction)
 		&& FMath::IsFinite(BlockedConfirmationSeconds) && BlockedConfirmationSeconds >= 0.0
-		&& FMath::IsFinite(LoadSmoothingSeconds) && LoadSmoothingSeconds >= 0.0;
+		&& FMath::IsFinite(LoadSmoothingSeconds) && LoadSmoothingSeconds >= 0.0
+		// P_base 默认 0＝未裁，是合法状态，不能因为它没配就判整份配置无效。
+		&& IsUnitInterval(OutwardSegmentProbability);
 }
 
 bool FCatFishSteeringModel::Initialize(const FCatFishSteeringConfig& Config,
@@ -138,6 +140,11 @@ bool FCatFishSteeringModel::BeginBehavior(const FCatFishSteeringConfig& Config,
 		Config.OutwardAngularSpreadDegrees);
 	InOutState.RetargetSecondsRemaining = Random.FRandRange(
 		Config.RetargetDurationRangeSeconds.X, Config.RetargetDurationRangeSeconds.Y);
+	// 段末方向只在进入本段时抽一次并冻结，段内不重抽；模型仍然不选择下一种行为，只把结果交给 StateTree 读。
+	// P_base 未裁时一次随机数也不抽，既定随机序列与既有搏斗回放保持逐帧一致。
+	InOutState.bNextSegmentOutward = Config.OutwardSegmentProbability > 0.0
+		&& Config.OutwardSegmentProbability < 1.0
+		&& Random.FRand() < Config.OutwardSegmentProbability;
 	UpdateTargetDirection(Config, LineOutwardDirection, InOutState);
 	return true;
 }
@@ -192,6 +199,9 @@ bool FCatFishSteeringModel::TestCondition(const FCatFishSteeringConfig& Config,
 	case ECatFishBehaviorCondition::NeedsRecovery:
 		return State.Behavior != ECatFishBehavior::EaseOff && State.ActiveBoutDurationSeconds > 0.0
 			&& State.ActiveBoutElapsedSeconds + UE_DOUBLE_SMALL_NUMBER >= State.ActiveBoutDurationSeconds;
+	case ECatFishBehaviorCondition::OutwardSegmentRoll:
+		// P_base 未裁时恒 false：资产上挂这条边也不会改变现有拓扑。
+		return Config.OutwardSegmentProbability > 0.0 && State.bNextSegmentOutward;
 	default:
 		return false;
 	}

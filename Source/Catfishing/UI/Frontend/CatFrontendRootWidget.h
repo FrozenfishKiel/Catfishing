@@ -37,6 +37,15 @@ public:
 	/** 用 SaveModel 的真实摘要配置本行；写入展示文本和稳定 SlotId，点击以后不通过行索引或文本猜测存档身份。 */
 	void ConfigureRow(UCatFrontendRootWidget* InRootWidget, const FCatSaveSlotSummary& Summary);
 
+	/** 只读展示状态；ConfigureRow 随摘要刷新，资产可据此绑定完成标识与颜色。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category="Catfishing|Save")
+	bool bRunCompleted = false;
+	/** 行内若另有继续按钮，直接绑定其 IsEnabled；选择行仍允许查看摘要或主动删除。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category="Catfishing|Save")
+	bool bCanContinue = false;
+	UPROPERTY(BlueprintReadOnly, Transient, Category="Catfishing|Save")
+	FText CompletionStatusText;
+
 protected:
 	/** WidgetTree 建立后绑定本行选择按钮；按钮缺失时保持不可操作并记录资产合同错误，不生成替身。 */
 	virtual void NativeOnInitialized() override;
@@ -382,6 +391,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
 	void RequestSelectControlsSettings();
 
+	/** 切到辅助功能页签；只提交意图，页面内容由 Model 的草稿与可用性回答决定。 */
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
+	void RequestSelectAccessibilitySettings();
+
 protected:
 	/**
 	 * UMG 子控件完成创建后解析并绑定每页的必需控件；只有背景等扩展表现才可以省略，页面交互不得交给空蓝图事件图承接。
@@ -522,6 +535,22 @@ private:
 	UFUNCTION() void HandleBrightnessChanged(float NormalizedValue);
 	/** 震动勾选输入处理；只在 Model 确认本地 Controller 可用时写入 ForceFeedback 草稿。 */
 	UFUNCTION() void HandleVibrationChanged(bool bIsChecked);
+	/** 辅助功能：文字大小滑块（归一化 0~1 换算到 0.75~2.0，与界面缩放同区间）。 */
+	UFUNCTION() void HandleTextSizeChanged(float NormalizedValue);
+	/** 辅助功能：高对比度界面。 */
+	UFUNCTION() void HandleHighContrastChanged(bool bIsChecked);
+	/** 辅助功能：色觉模式；下拉项的序号即枚举值，越界按 None 处理。 */
+	UFUNCTION() void HandleColorBlindModeSelectionChanged(FString SelectedItem, ESelectInfo::Type SelectionType);
+	/** 辅助功能：减少镜头晃动。 */
+	UFUNCTION() void HandleReduceCameraShakeChanged(bool bIsChecked);
+	/** 辅助功能：减少闪光效果。 */
+	UFUNCTION() void HandleReduceFlashingEffectsChanged(bool bIsChecked);
+	/** 控制：鼠标灵敏度滑块（归一化 0~1 换算到 0.1~3.0）。 */
+	UFUNCTION() void HandleMouseSensitivityChanged(float NormalizedValue);
+	/** 控制：镜头灵敏度滑块（同上区间）。 */
+	UFUNCTION() void HandleCameraSensitivityChanged(float NormalizedValue);
+	/** 控制：反转 Y 轴。 */
+	UFUNCTION() void HandleInvertYAxisChanged(bool bIsChecked);
 	/** 网络语音勾选输入处理；只在 OSS Voice 正式可用时写入 Start/Stop 草稿。 */
 	UFUNCTION() void HandleVoiceChatChanged(bool bIsChecked);
 	/** 后台静音勾选输入处理；只写失焦音量草稿，Apply 前不改变当前窗口音频。 */
@@ -628,6 +657,10 @@ private:
 	/** FrontendSettingsPage 子 WidgetTree 中的控制分类按钮；当前只会显示正式不可用状态，不会生成临时键位配置。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UButton> ControlsSettingsCategoryButton;
+
+	/** 设置页的辅助功能页签按钮；WBP 里叫 AccessibilitySettingsCategoryButton，缺控件时该页签不可达但其余页签照常。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UButton> AccessibilitySettingsCategoryButton;
 
 	/** SaveListPage 子 WidgetTree 中的结果文本；Root 原生写入 SaveModel 的真实反馈，槽位详情仍由列表渲染图读取 Model。 */
 	UPROPERTY(Transient)

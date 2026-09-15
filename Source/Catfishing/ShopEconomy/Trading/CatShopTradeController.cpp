@@ -5,7 +5,10 @@
 #include "Camp/CatCampSettings.h"
 #include "Character/CatCharacter.h"
 #include "Condition/CatConditionComponent.h"
+#include "Equipment/CatEquipmentDefinition.h"
+#include "FishContainers/CatFishContainerSettings.h"
 #include "FishContainers/CatFishGuardActor.h"
+#include "FishContainers/CatFishTankActor.h"
 #include "Inventory/CatFishOnlyInventoryComponent.h"
 #include "Items/Fish/CatFishPickupActor.h"
 #include "ShopEconomy/CatFishBuyerActor.h"
@@ -21,6 +24,7 @@
 #include "Logging/CatLog.h"
 #include "ShopEconomy/CatShopCartCommandUtils.h"
 #include "ShopEconomy/CatShopEconomyService.h"
+#include "ShopEconomy/CatShopEconomySettings.h"
 #include "ShopEconomy/CatShopInventoryComponent.h"
 #include "ShopEconomy/CatShopKioskActor.h"
 #include "UObject/Class.h"
@@ -46,18 +50,146 @@ namespace
 		return nullptr;
 	}
 
-	// 购物车交付批次构建流程：商店账本只保存稳定定义 ID 和数量，这里把它解析成正式库存定义批次；容量、实例创建和幂等仍由 InventoryComponent 负责。
-	bool AppendShopDeliveryEntryToInventoryBatch(const FName DefinitionId, const int32 Quantity,
-		FCatInventoryReceiveBatch& OutReceiveBatch)
+	/**
+	 * 一车货的全部去处。
+	 *
+	 * 商店册 §3.1.2 把购买物分成三种落法，工程这里一一对应：
+	 *   竿、漂这类功能装备 → 公共架（EquipmentRack）
+	 *   饵、窝料这类本局消耗品 → 公库（SupplyStore）
+	 *   鱼缸容量升级 → 设施类，不进团队装备库，直接作用在营地那口缸上
+	 * Fallback 是关卡里没人声明角色时的旧去处（唯一的营地公共仓库），保证这条改动不会让购买链断掉。
+	 */
+	struct FCatShopDeliveryTargets
 	{
-		const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
-		UCatInventoryItemDefinition* Definition = InventorySettings
-			? InventorySettings->FindRuntimeDefinition(DefinitionId) : nullptr;
-		if (Definition == nullptr || Quantity <= 0 || !Definition->IsInventoryRuntimeDefinitionReady())
+		UCatInventoryComponent* EquipmentRack = nullptr;
+		UCatInventoryComponent* SupplyStore = nullptr;
+		UCatInventoryComponent* Fallback = nullptr;
+		ACatFishTankActor* FishTank = nullptr;
+		bool bLoggedRoleFallback = false;
+		bool bAmbiguous = false;
+
+		/** 这一车至少要有一个能收货的去处，否则整单在扣钱之前就被拒。 */
+		bool HasAnyInventoryTarget() const
+		{
+			return EquipmentRack != nullptr || SupplyStore != nullptr || Fallback != nullptr;
+		}
+	};
+
+	/** 判定某个稳定 ID 是不是鱼缸容量升级这类设施商品；返回它对应的档位序号，不是升级商品时返回 INDEX_NONE。 */
+	int32 ResolveFishTankUpgradeTier(const FName DefinitionId)
+	{
+		const UCatFishContainerSettings* ContainerSettings = GetDefault<UCatFishContainerSettings>();
+		return ContainerSettings ? ContainerSettings->FindSharedFishTankUpgradeTierByDefinitionId(DefinitionId)
+			: INDEX_NONE;
+	}
+
+	// 交付去处解析流程：
+	// 1. 保留旧单仓的显式 Hub 绑定；仅世界仍为一个未分角色仓库时允许兼容回退。
+	// 2. 再遍历本 World 的营地容器，按各自库存组件上声明的角色认领公共架与公库；同一角色出现多次拒绝交付，不能按遍历次序选仓。
+	// 3. 最后找本局共享鱼缸，作为设施类交付的收货方。
+	FCatShopDeliveryTargets ResolveDeliveryTargetsForShopOrder(UWorld* World,
+		ACatCampInventoryActor* FallbackInventory)
+	{
+		FCatShopDeliveryTargets Targets;
+		Targets.Fallback = FallbackInventory ? FallbackInventory->GetInventoryComponent() : nullptr;
+		if (World == nullptr)
+		{
+			return Targets;
+		}
+		int32 CampCount = 0;
+		for (TActorIterator<ACatCampInventoryActor> It(World); It; ++It)
+		{
+			ACatCampInventoryActor* CampInventory = *It;
+			UCatInventoryComponent* Inventory = IsValid(CampInventory)
+				? CampInventory->GetInventoryComponent() : nullptr;
+			if (Inventory == nullptr || !CampInventory->HasAuthority())
+			{
+				continue;
+			}
+			++CampCount;
+			switch (Inventory->GetTeamStorageRole())
+			{
+			case ECatTeamStorageRole::EquipmentRack:
+				Targets.bAmbiguous |= Targets.EquipmentRack != nullptr;
+				Targets.EquipmentRack = Inventory;
+				break;
+			case ECatTeamStorageRole::SupplyStore:
+				Targets.bAmbiguous |= Targets.SupplyStore != nullptr;
+				Targets.SupplyStore = Inventory;
+				break;
+			default:
+				break;
+			}
+		}
+		if (CampCount != 1 || Targets.EquipmentRack || Targets.SupplyStore) Targets.Fallback = nullptr;
+		for (TActorIterator<ACatFishTankActor> It(World); It; ++It)
+		{
+			if (ACatFishTankActor* Tank = *It; IsValid(Tank) && Tank->HasAuthority())
+			{
+				Targets.bAmbiguous |= Targets.FishTank != nullptr;
+				Targets.FishTank = Tank;
+			}
+		}
+		return Targets;
+	}
+
+	/**
+	 * 一行货该进哪个容器：消耗品进公库，其余备装进公共架；对应角色的容器不存在时退回单一公共仓库。
+	 * 多仓或已声明角色后缺收货方会拒绝；不能在迁移后把消耗品悄悄送到公共架。
+	 */
+	UCatInventoryComponent* ResolveInventoryTargetForDefinition(const UCatInventoryItemDefinition& Definition,
+		FCatShopDeliveryTargets& Targets)
+	{
+		const UCatEquipmentDefinition* Equipment = Cast<UCatEquipmentDefinition>(&Definition);
+		const bool bRunConsumable = (Equipment != nullptr && Equipment->bRunConsumable)
+			|| Definition.GetInventoryDefinitionId() == GetDefault<UCatShopEconomySettings>()->SettlementDriedFishDefinitionId;
+		UCatInventoryComponent* Preferred = bRunConsumable ? Targets.SupplyStore : Targets.EquipmentRack;
+		if (Preferred != nullptr)
+		{
+			return Preferred;
+		}
+		if (!Targets.bLoggedRoleFallback)
+		{
+			Targets.bLoggedRoleFallback = true;
+			UE_LOG(LogCatfishing, Warning,
+				TEXT("Event=shop_delivery_role_container_missing Role=%s Result=%s"),
+				bRunConsumable ? TEXT("SupplyStore") : TEXT("EquipmentRack"),
+				Targets.Fallback ? TEXT("FellBackToSinglePublicInventory") : TEXT("DeliveryTargetMissing"));
+		}
+		return Targets.Fallback;
+	}
+
+	// 购物车交付批次构建流程：商店账本只保存稳定定义 ID 和数量，这里把它解析成正式库存定义批次并按去处分组；
+	// 容量、实例创建和幂等仍由各自的 InventoryComponent 负责。设施类商品（鱼缸升级）不进任何库存，单独归到 OutFacilityTiers。
+	bool AppendShopDeliveryEntry(const FName DefinitionId, const int32 Quantity,
+		FCatShopDeliveryTargets& Targets,
+		TMap<UCatInventoryComponent*, FCatInventoryReceiveBatch>& OutBatchesByTarget,
+		TArray<int32>& OutFacilityTiers)
+	{
+		if (Quantity <= 0)
 		{
 			return false;
 		}
-		FCatInventoryDefinitionEntry& Entry = OutReceiveBatch.DefinitionEntries.AddDefaulted_GetRef();
+		if (const int32 UpgradeTier = ResolveFishTankUpgradeTier(DefinitionId); UpgradeTier != INDEX_NONE)
+		{
+			// 一件商品对应一个定价档位；不能用第一档的价格连升两档。
+			if (Quantity != 1) return false;
+			OutFacilityTiers.Add(UpgradeTier);
+			return true;
+		}
+		const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+		UCatInventoryItemDefinition* Definition = InventorySettings
+			? InventorySettings->FindRuntimeDefinition(DefinitionId) : nullptr;
+		if (Definition == nullptr || !Definition->IsInventoryRuntimeDefinitionReady())
+		{
+			return false;
+		}
+		UCatInventoryComponent* Target = ResolveInventoryTargetForDefinition(*Definition, Targets);
+		if (Target == nullptr)
+		{
+			return false;
+		}
+		FCatInventoryDefinitionEntry& Entry = OutBatchesByTarget.FindOrAdd(Target).DefinitionEntries.AddDefaulted_GetRef();
 		Entry.ItemDefinition = Definition;
 		Entry.Count = Quantity;
 		return true;
@@ -80,12 +212,11 @@ bool UCatShopTradeController::ShouldCreateSubsystem(UObject* Outer) const
 }
 
 FCatShopOrderResult UCatShopTradeController::SubmitCartFromKiosk(AController* RequestingController,
-	ACatShopKioskActor* ShopKiosk, const TArray<FCatShopCartLineCommand>& Lines, const FGuid RequestId,
-	const int64 ExpectedWalletRevision)
+	ACatShopKioskActor* ShopKiosk, const TArray<FCatShopCartLineCommand>& Lines, const FGuid RequestId)
 {
 	// 摊位购物车提交流程：
 	// 1. 先重读服务器玩法 gate 和原始 RPC 载荷大小，拒绝无效局状态或异常购物车。
-	// 2. 再从请求 Controller 重建稳定玩家身份，并要求摊位在当前 World 内证明玩家仍在服务半径。
+	// 2. 再从请求 Controller 重建稳定玩家身份，并确认来源摊位属于当前 World。
 	// 3. 摊位只给来源货架库存，营地收货仓库由 ShopEconomy 在 World 中解析，Controller 只保留交易意图。
 	// 4. 所有前提成立后才构造购物车命令并进入订单链；任一前置失败都会带 Delivery 结果回到 UI。
 	FCatShopOrderResult Result;
@@ -112,8 +243,8 @@ FCatShopOrderResult UCatShopTradeController::SubmitCartFromKiosk(AController* Re
 
 	const APlayerState* CurrentPlayerState = RequestingController ? RequestingController->PlayerState : nullptr;
 	UCatShopInventoryComponent* ShopInventory = nullptr;
-	if (World && ShopKiosk && ShopKiosk->GetWorld() == World
-		&& ShopKiosk->CanServeOrderFromAuthority(RequestingController))
+	// 墓碑（2026-09-13）：下单不再二次检查摊位距离，货架仍从本 World 的来源摊位解析。
+	if (World && ShopKiosk && ShopKiosk->GetWorld() == World)
 	{
 		ShopInventory = ShopKiosk->GetShopInventory();
 	}
@@ -132,17 +263,21 @@ FCatShopOrderResult UCatShopTradeController::SubmitCartFromKiosk(AController* Re
 
 	FCatShopCartCommand Command;
 	Command.Context.RequestId = RequestId;
-	Command.Context.ExpectedRevision = ExpectedWalletRevision;
 	Command.Context.StableNetId = CurrentPlayerState->GetUniqueId()->ToString();
 	Command.ShopInventoryId = ShopInventory->GetShopInventoryId();
 	Command.Lines = Lines;
 	Result = RunCartOrder(Command, ShopInventory, DeliveryInventory);
 	Result.Delivery.RequestId = RequestId;
+	// 成交行上带着当时的商店天序号，日志跟着写一份，Playtest 不用先把服务器账本导出来就能按天切「每日余额」。
+	// 一车里所有行的天序号必然相同，取第一行即可；整车被拒时没有可归日的成交，写 -1 表示不属于任何一天。
+	const int32 CommittedShopDayIndex = Result.CartTransaction.Transactions.IsEmpty()
+		? -1 : Result.CartTransaction.Transactions[0].ShopDayIndex;
 	UE_LOG(LogCatfishing, Log,
-		TEXT("Event=shop_cart_submitted RequestId=%s LineCount=%d Order=%s Delivery=%s"),
+		TEXT("Event=shop_cart_submitted RequestId=%s LineCount=%d Order=%s Delivery=%s ShopDay=%d Balance=%d"),
 		*RequestId.ToString(EGuidFormats::DigitsWithHyphens), Lines.Num(),
 		*UEnum::GetValueAsString(Result.CartTransaction.Command.Error),
-		*UEnum::GetValueAsString(Result.Delivery.Error));
+		*UEnum::GetValueAsString(Result.Delivery.Error),
+		CommittedShopDayIndex, Result.CartTransaction.Wallet.Balance);
 	return Result;
 }
 
@@ -172,9 +307,13 @@ FCatShopOrderResult UCatShopTradeController::SubmitFishSaleFromPlayer(AControlle
 			FishSaleTerminalCache.Add(Key, Result);
 			FishSaleTerminalPayloadByKey.Add(Key, Payload);
 		}
-		const FString Event = FString::Printf(TEXT("Event=fish_sale_order RequestId=%s Buyer=%s Guard=%s FishCount=%d Result=%s Balance=%d World=%s NetMode=%d Authority=1 LocalRole=%d Player=%s"),
+		// 与整车购买同一口径：入账行带着当时的商店天序号就照写，没成交则 -1，好让「每日余额」两侧都能按天切。
+		const int32 CommittedShopDayIndex = Result.Transaction.Transaction.TransactionId.IsValid()
+			? Result.Transaction.Transaction.ShopDayIndex : -1;
+		const FString Event = FString::Printf(TEXT("Event=fish_sale_order RequestId=%s Buyer=%s Guard=%s FishCount=%d Result=%s ShopDay=%d Balance=%d World=%s NetMode=%d Authority=1 LocalRole=%d Player=%s"),
 			*RequestId.ToString(), *GetNameSafe(Buyer), *GetNameSafe(Guard), Guard ? FishInstanceIds.Num() : 1,
-			*UEnum::GetValueAsString(Error), Result.Transaction.Wallet.Balance, *GetNameSafe(GetWorld()), GetWorld()->GetNetMode(),
+			*UEnum::GetValueAsString(Error), CommittedShopDayIndex, Result.Transaction.Wallet.Balance,
+			*GetNameSafe(GetWorld()), GetWorld()->GetNetMode(),
 			RequestingController ? static_cast<int32>(RequestingController->GetLocalRole()) : -1, *GetNameSafe(RequestingController));
 		if (Error == ECatDomainCommandError::None || Error == ECatDomainCommandError::AlreadyResolved)
 		{ UE_LOG(LogCatfishing, Log, TEXT("%s"), *Event); }
@@ -298,11 +437,8 @@ FCatShopOrderResult UCatShopTradeController::SubmitFishSaleFromPlayer(AControlle
 	return Result;
 }
 
-// 购物车订单链流程：
-// 1. 取商店依赖和来源摊位库存，首次请求先解析整车报价，再在扣钱之前问完公共仓库整批接收前提。
-// 2. 前提成立后提交整车购买，随后用购物车 RequestId 和服务器身份把完整购物车批次一次放入营地公共仓库。
-// 3. 重放时发货 payload 仍按整车账本重建，只给仍 Pending 的账本补确认，避免部分确认失败后拿缩水批次撞仓库幂等签名。
-// 4. 每条购买账本用自己的 TransactionId 作为交付确认 RequestId，避免一车多行互相撞同一个确认幂等键。
+// 整车事务：先静默交付，再扣公款；任何交付或扣款拒绝都恢复所有收货方，经济服务同时恢复货架。
+// 成功账本和一车一通知由经济服务在完整提交后发布，库存观察者随后才收到变化。
 FCatShopOrderResult UCatShopTradeController::RunCartOrder(const FCatShopCartCommand& Command,
 	UCatShopInventoryComponent* ShopInventory, ACatCampInventoryActor* DeliveryInventory)
 {
@@ -310,155 +446,126 @@ FCatShopOrderResult UCatShopTradeController::RunCartOrder(const FCatShopCartComm
 	Result.CartTransaction.Command.RequestId = Command.Context.RequestId;
 	Result.Delivery.RequestId = Command.Context.RequestId;
 	UWorld* World = GetWorld();
-	UCatShopEconomyService* Shop = World ? World->GetSubsystem<UCatShopEconomyService>() : nullptr;
-	if (!Shop || !ShopInventory || ShopInventory->GetShopInventoryId() != Command.ShopInventoryId)
+	auto* Shop = World ? World->GetSubsystem<UCatShopEconomyService>() : nullptr;
+	if (!Shop || !ShopInventory)
 	{
 		Result.CartTransaction.Command.Error = ECatDomainCommandError::DependencyUnavailable;
-		Result.Delivery.Error = ECatDomainCommandError::DependencyUnavailable;
+		Result.Delivery = Result.CartTransaction.Command;
 		return Result;
 	}
-
-	// 交付侧的前提必须问在扣钱之前。整车购买一提交就会把总价从公款划走、把限量条目的库存也扣掉，
-	// 而商店服务没有退款写口，所以首次请求必须先让公共仓库按整批物品模拟一次容量和堆叠。
-	// 同 RequestId 重放不跑这道前置 gate：钱和货架库存可能已经在首次提交里改变了，重试要拿回既有回执或补交付确认。
-	UCatInventoryComponent* DeliveryInventoryComponent = DeliveryInventory
-		? DeliveryInventory->GetInventoryComponent() : nullptr;
-	if (!Shop->HasCatalogCartTerminal(Command))
+	// 已有终态只重放完整订单，不读取可能已被玩家取走的交付物，也不会补发。
+	if (Shop->HasCatalogCartTerminal(Command))
 	{
-		FCatShopResolvedCart ResolvedCart;
-		ECatDomainCommandError QuoteRejection = ECatDomainCommandError::None;
-		if (!Shop->ResolveCatalogCartForAuthority(Command, ShopInventory, ResolvedCart, QuoteRejection))
+		Result.CartTransaction = Shop->PurchaseCatalogCart(Command, ShopInventory, [](TFunctionRef<bool()> Pay) { return false; });
+		Result.Delivery = Result.CartTransaction.Command;
+		return Result;
+	}
+	FCatShopResolvedCart Quote;
+	ECatDomainCommandError Error;
+	if (!Shop->ResolveCatalogCartForAuthority(Command, ShopInventory, Quote, Error))
+	{
+		Result.CartTransaction.Command.Error = Error;
+		Result.CartTransaction.Command.FailureReason = Quote.FailureReason;
+		Result.CartTransaction.Wallet = Shop->GetWalletSnapshot();
+		Result.Delivery = Result.CartTransaction.Command;
+		return Result;
+	}
+	auto Targets = ResolveDeliveryTargetsForShopOrder(World, DeliveryInventory);
+	if (Targets.bAmbiguous)
+	{
+		Result.CartTransaction.Command.Error = ECatDomainCommandError::DependencyUnavailable;
+		Result.CartTransaction.Command.FailureReason = TEXT("DeliveryAmbiguous");
+		Result.Delivery = Result.CartTransaction.Command;
+		return Result;
+	}
+	TMap<UCatInventoryComponent*, FCatInventoryReceiveBatch> Batches;
+	TArray<int32> Tiers;
+	for (const auto& Line : Quote.Lines)
+	{
+		if (!AppendShopDeliveryEntry(Line.Entry.DefinitionId, Line.DeliveryQuantity, Targets, Batches, Tiers))
 		{
-			Result.CartTransaction.Wallet = Shop->GetWalletSnapshot();
-			Result.CartTransaction.Command.Error = QuoteRejection;
-			Result.CartTransaction.Command.Revision = Result.CartTransaction.Wallet.Revision;
-			Result.Delivery.Error = QuoteRejection;
-			return Result;
-		}
-		FCatInventoryReceiveBatch DeliveryBatch;
-		DeliveryBatch.DefinitionEntries.Reserve(ResolvedCart.Lines.Num());
-		bool bDeliveryBatchReady = true;
-		for (const FCatShopResolvedCartLine& Line : ResolvedCart.Lines)
-		{
-			bDeliveryBatchReady &= AppendShopDeliveryEntryToInventoryBatch(
-				Line.Entry.DefinitionId, Line.DeliveryQuantity, DeliveryBatch);
-		}
-		const ECatDomainCommandError DeliveryRejection = !DeliveryInventoryComponent
-			? ECatDomainCommandError::DependencyUnavailable
-			: (!bDeliveryBatchReady
-				? ECatDomainCommandError::InvalidPayload
-				: DeliveryInventoryComponent->ValidateInventoryDefinitionBatchGrantFromAuthority(
-					Command.Context.RequestId, Command.Context.StableNetId, DeliveryBatch));
-		if (DeliveryRejection != ECatDomainCommandError::None)
-		{
-			// 订单这一段报的是交付侧的错误码，因为订单压根没提交：公款、商店库存和账本一个字都没动。
-			// Revision 仍给当前公款版本，调用方据此重读并决定要不要换个条件重试。
-			Result.CartTransaction.Wallet = Shop->GetWalletSnapshot();
-			Result.CartTransaction.Command.Error = DeliveryRejection;
-			Result.CartTransaction.Command.Revision = Result.CartTransaction.Wallet.Revision;
-			Result.Delivery.Error = DeliveryRejection;
-			UE_LOG(LogCatfishing, Warning,
-				TEXT("Event=shop_cart_delivery_precheck_rejected RequestId=%s LineCount=%d Error=%s"),
-				*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-				DeliveryBatch.DefinitionEntries.Num(),
-				*UEnum::GetValueAsString(DeliveryRejection));
+			Result.CartTransaction.Command.Error = ECatDomainCommandError::DependencyUnavailable;
+			Result.CartTransaction.Command.FailureReason = TEXT("DeliveryUnavailable");
+			Result.Delivery = Result.CartTransaction.Command;
 			return Result;
 		}
 	}
-
-	Result.CartTransaction = Shop->PurchaseCatalogCart(Command, ShopInventory);
-	const bool bOrderStanding = !Result.CartTransaction.Transactions.IsEmpty()
-		&& (Result.CartTransaction.Command.bCommitted
-			|| Result.CartTransaction.Command.Error == ECatDomainCommandError::AlreadyResolved);
-	if (!bOrderStanding)
+	Tiers.Sort();
+	if (!Tiers.IsEmpty() && (!Targets.FishTank || !Targets.FishTank->CanApplyCapacityUpgradeSequenceFromAuthority(Tiers, Command.Context.RequestId)))
 	{
-		Result.Delivery.Error = Result.CartTransaction.Command.Error;
+		Result.CartTransaction.Command.Error = ECatDomainCommandError::InvalidPhase;
+		Result.CartTransaction.Command.FailureReason = TEXT("FacilityUpgradeInvalid");
+		Result.Delivery = Result.CartTransaction.Command;
 		return Result;
 	}
-	if (!DeliveryInventoryComponent)
+	TMap<UCatInventoryComponent*, TArray<FCatInventoryEntry>> Before;
+	for (const auto& Pair : Batches)
 	{
-		Result.Delivery.Error = ECatDomainCommandError::DependencyUnavailable;
-		UE_LOG(LogCatfishing, Warning,
-			TEXT("Event=shop_cart_camp_inventory_grant_failed RequestId=%s Error=NoCampInventory"),
-			*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens));
-		return Result;
-	}
-
-	FCatInventoryReceiveBatch DeliveryBatch;
-	DeliveryBatch.DefinitionEntries.Reserve(Result.CartTransaction.Transactions.Num());
-	bool bAllDelivered = true;
-	for (const FCatShopTransactionRecord& Record : Result.CartTransaction.Transactions)
-	{
-		if (!Record.bPurchase || Record.DefinitionId.IsNone() || Record.PurchaseQuantity <= 0
-			|| (!Record.bDeliveryPending && !Record.bDeliveryConfirmed))
+		if (!Pair.Key->CanFullyAcceptInventoryBatch(Pair.Value))
 		{
-			Result.Delivery.Error = ECatDomainCommandError::InvalidPhase;
+			Result.CartTransaction.Command.Error = ECatDomainCommandError::CapacityExceeded;
+			Result.CartTransaction.Command.FailureReason = TEXT("DeliveryCapacity");
+			Result.Delivery = Result.CartTransaction.Command;
 			return Result;
 		}
-		if (!AppendShopDeliveryEntryToInventoryBatch(Record.DefinitionId, Record.PurchaseQuantity, DeliveryBatch))
-		{
-			Result.Delivery.Error = ECatDomainCommandError::InvalidPayload;
-			return Result;
-		}
-		if (!Record.bDeliveryConfirmed)
-		{
-			bAllDelivered = false;
-		}
+		Before.Add(Pair.Key, Pair.Key->GetInventoryEntries());
 	}
-	if (bAllDelivered)
+	const int32 PreviousTier = Targets.FishTank ? Targets.FishTank->GetCapacityTier() : 0;
+	TArray<FCatInventoryEntry> TankBefore;
+	TSet<FGuid> UpgradeIdsBefore;
+	if (Targets.FishTank && !Tiers.IsEmpty())
 	{
-		Result.Delivery.Error = ECatDomainCommandError::AlreadyResolved;
-		return Result;
+		TankBefore = Targets.FishTank->FishInventory->GetInventoryEntries();
+		UpgradeIdsBefore = Targets.FishTank->CommittedUpgradeRequestIds;
 	}
-
-	const FCatDomainCommandResult Grant = DeliveryInventoryComponent->GrantInventoryDefinitionBatchFromAuthority(
-		Command.Context.RequestId, Command.Context.StableNetId, DeliveryBatch);
-	const bool bDeliveryReady = Grant.bCommitted || Grant.Error == ECatDomainCommandError::AlreadyResolved;
-	if (!bDeliveryReady)
+	const auto Rollback = [&]()
 	{
-		Result.Delivery = Grant;
-		Result.Delivery.RequestId = Command.Context.RequestId;
-		UE_LOG(LogCatfishing, Warning,
-			TEXT("Event=shop_cart_camp_inventory_grant_failed RequestId=%s LineCount=%d Error=%s"),
-			*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-			DeliveryBatch.DefinitionEntries.Num(),
-			*UEnum::GetValueAsString(Grant.Error));
-		return Result;
-	}
-	Result.Delivery = Grant;
-	for (FCatShopTransactionRecord& Record : Result.CartTransaction.Transactions)
+		for (const auto& Pair : Before)
+			verify(Pair.Key->ReplaceInventoryEntriesFromAuthority(Pair.Value, Pair.Value.Num(), false));
+		if (Targets.FishTank && !Tiers.IsEmpty())
+		{
+			Targets.FishTank->CapacityTier = PreviousTier;
+			Targets.FishTank->CommittedUpgradeRequestIds = UpgradeIdsBefore;
+			auto* Inventory = Targets.FishTank->FishInventory.Get();
+			verify(Inventory->ReplaceInventoryEntriesFromAuthority(TankBefore, TankBefore.Num(), false));
+			Inventory->NumSlots = TankBefore.Num();
+		}
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=shop_cart_rolled_back RequestId=%s World=%s NetMode=%d Authority=1 Targets=%d Wallet=Unchanged Stock=RestoredByEconomy"),
+			*Command.Context.RequestId.ToString(), *GetNameSafe(World), World->GetNetMode(), Before.Num());
+	};
+	Result.CartTransaction = Shop->PurchaseCatalogCart(Command, ShopInventory, [&](TFunctionRef<bool()> Pay)
 	{
-		if (Record.bDeliveryConfirmed)
+		int32 Step = 0;
+		for (const auto& Pair : Batches)
 		{
-			continue;
+#if WITH_DEV_AUTOMATION_TESTS
+			if (FailDeliveryStepForTest == Step++) { Rollback(); return false; }
+#endif
+			if (!Pair.Key->TryAddInventoryBatchInternal(Pair.Value, false)) { Rollback(); return false; }
 		}
-		FCatShopDeliveryConfirmationCommand Confirmation;
-		// 每条购买账本各用自己的 TransactionId 做确认请求号；公共仓库入库回执仍然是整车 RequestId。
-		Confirmation.Context.RequestId = Record.TransactionId;
-		Confirmation.Context.ExpectedRevision = Record.WalletRevision;
-		Confirmation.Context.StableNetId = Command.Context.StableNetId;
-		Confirmation.TransactionId = Record.TransactionId;
-		Confirmation.DeliveryReceiptId = Command.Context.RequestId;
-		const FCatShopTransactionResult Confirmed = Shop->ConfirmTransactionDelivery(Confirmation);
-		if (Confirmed.Transaction.TransactionId == Record.TransactionId)
+		for (const int32 Tier : Tiers)
 		{
-			Record = Confirmed.Transaction;
+#if WITH_DEV_AUTOMATION_TESTS
+			if (FailDeliveryStepForTest == Step++) { Rollback(); return false; }
+#endif
+			const FGuid ItemId = FGuid::NewDeterministicGuid(FString::Printf(TEXT("CartUpgrade|%s|%d"),
+				*Command.Context.RequestId.ToString(), Tier));
+			if (!Targets.FishTank->ApplyCapacityUpgradeFromAuthority(Tier, ItemId, false)) { Rollback(); return false; }
 		}
-		if (Confirmed.Command.Error != ECatDomainCommandError::None
-			&& Confirmed.Command.Error != ECatDomainCommandError::AlreadyResolved)
+		if (!Pay()) { Rollback(); return false; }
+		return true;
+	});
+	Result.Delivery = Result.CartTransaction.Command;
+	if (Result.CartTransaction.Command.bCommitted)
+	{
+		for (const auto& Pair : Batches) Pair.Key->BroadcastInventoryChange();
+		if (Targets.FishTank && !Tiers.IsEmpty())
 		{
-			Result.Delivery.Error = Confirmed.Command.Error;
-			Result.Delivery.Revision = Confirmed.Command.Revision;
-			Result.Delivery.RequestId = Command.Context.RequestId;
-			UE_LOG(LogCatfishing, Warning,
-				TEXT("Event=shop_cart_delivery_confirmation_failed RequestId=%s TransactionId=%s Error=%s"),
-				*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-				*Record.TransactionId.ToString(EGuidFormats::DigitsWithHyphens),
-				*UEnum::GetValueAsString(Confirmed.Command.Error));
-			return Result;
+			Targets.FishTank->FishInventory->BroadcastInventoryChange();
+			Targets.FishTank->ForceNetUpdate();
 		}
+		UE_LOG(LogCatfishing, Log, TEXT("Event=shop_cart_delivered RequestId=%s World=%s NetMode=%d Authority=1 Targets=%d FacilityLines=%d"),
+			*Command.Context.RequestId.ToString(), *GetNameSafe(World), World->GetNetMode(), Batches.Num(), Tiers.Num());
 	}
-	Result.Delivery.Error = ECatDomainCommandError::None;
-	Result.Delivery.RequestId = Command.Context.RequestId;
 	return Result;
 }

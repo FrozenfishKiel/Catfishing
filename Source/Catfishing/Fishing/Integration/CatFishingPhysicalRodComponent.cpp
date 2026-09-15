@@ -358,9 +358,10 @@ void UCatFishingPhysicalRodComponent::UpdatePrimaryMotorBudget()
 	BudgetBody = Physical;
 	if (!Physical || !ASC) return;
 	const auto* Balance = GetDefault<UCatFishingSettings>()->LoadFightBalanceDefinition();
+	// 墓碑（2026-09-14）：电机与转矩不再绿零清力量；设计修改记录 2026-09-13 裁决②，体力＝绿＋黄。
 	const double Stamina = ASC->GetTotalFightStamina();
 	const double Strength = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
-	const double Force = Balance && Stamina > 0.0 && FMath::IsFinite(Strength)
+	const double Force = Balance && FMath::IsFinite(Stamina) && Stamina > 0.0 && FMath::IsFinite(Strength)
 		? FMath::Max(0.0, Strength) * Balance->ForcePerStrengthNewtons * 100.0 : 0.0;
 	Physical->SetFishingMotorBudget(this, Force, Physical->MaxMovementSpeedCmS);
 }
