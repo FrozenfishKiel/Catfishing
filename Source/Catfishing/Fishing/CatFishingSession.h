@@ -254,14 +254,14 @@ private:
 	FCatFishSelectionContext FrozenSelectionContext;
 	FCatFishSelectionResult FrozenSelectionResult;
 	ECatFishSelectionResolution SelectionResolution = ECatFishSelectionResolution::None;
-	/** 当前是本次抛竿的第几个咬钩机会；漏按后递增，使下一轮等待与选鱼拥有新的确定性随机流。 */
+	/** 本次抛竿的咬钩机会序号；入夜撤销后次日递增，以新的确定性随机流等待和选鱼。 */
 	uint32 BiteOpportunitySequence = 0;
 	/** 从抛竿种子和 BiteOpportunitySequence 派生；等待采样、选鱼与后续搏斗共用。 */
 	uint64 CurrentBiteRandomSeed = 0;
-	/** 服务器是否仍接受当前真咬窗口的首次左键；计时器先关闸，再把 WindowExpired 交给 StateTree。 */
+	/** 服务器是否仍接受当前真咬窗口的首次左键；计时器或过期请求关闸并终止会话。 */
 	bool bTrueBiteWindowAcceptingHook = false;
 	FTimerHandle BiteWarningTimerHandle;
-	/** 当前真咬成立时的鱼情；仅用于这次窗口跨夜后的选鱼，不是另一份世界昼夜状态。 */
+	/** Probe 开始选鱼时冻结的鱼情；响应期间不重抽，不是另一份世界昼夜状态。 */
 	ECatEnvironmentTimeOfDay BiteTimeOfDay = ECatEnvironmentTimeOfDay::Unknown;
 	ECatEnvironmentWeather BiteWeather = ECatEnvironmentWeather::Unknown;
 	FTimerHandle ProbeTimerHandle;

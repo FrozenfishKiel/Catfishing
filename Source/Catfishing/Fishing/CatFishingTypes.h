@@ -13,7 +13,7 @@ enum class ECatFishingPhase : uint8
 	Created = 0,
 	/** 鱼只给试探信号；此阶段提竿不能直接形成捕获。 */
 	Probe = 1,
-	/** 真咬响应窗口；此时只存在浮漂信号，鱼种与鱼 Actor 要等合法左键到达服务器后才创建。 */
+	/** 真咬响应窗口；复用 Probe 已选鱼与 Actor，合法左键按独立完美截止时间判定后启动搏斗。 */
 	TrueBiteWindow = 2,
 	/** Hooked 后唯一允许多人协作的搏斗阶段。 */
 	HookedFight = 3,
