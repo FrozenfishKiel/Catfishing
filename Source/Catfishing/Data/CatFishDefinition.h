@@ -151,7 +151,13 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing", meta = (ClampMin = "0.0"))
 	double FishFightStamina = 0.0;
 
-	/** 试探/真咬节奏的稳定内容模板 ID；Fishing StateTree 消费模板而不改变三阶段规则。 */
+	/** 逐鱼窗口，单位秒；0 由 Fish Catalog 的逐鱼配置或档位默认接管。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing|Bite Timing", meta=(ClampMin="0", Units="s"))
+	double ProbeDurationSeconds = 0.0;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing|Bite Timing", meta=(ClampMin="0", Units="s"))
+	double TrueBiteWindowSeconds = 0.0;
+
+	/** 仅承载本地完美提竿折减倍率的模板 ID；窗口时间由逐鱼配置拥有。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Personality")
 	FName BitePersonalityId = NAME_None;
 

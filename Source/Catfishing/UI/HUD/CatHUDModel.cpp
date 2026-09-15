@@ -238,7 +238,8 @@ void UCatHUDModel::Refresh()
 	NewState.bShowHookSuccessFeedback = NewState.bHasFishingCommandResult
 		&& NewState.LastFishingCommandResult.CommandType == ECatFishingCommandType::RequestHook
 		&& NewState.LastFishingCommandResult.Error == ECatFishingCommandError::None;
-	NewState.BitePromptText = FText::FromString(TEXT("鱼儿咬钩啦！提竿"));
+	NewState.BitePromptText = FText::FromString(ServerNowSeconds <= NewState.Fishing.PerfectWindowEndsServerTime
+		? TEXT("完美时机！提竿") : TEXT("鱼儿咬钩啦！提竿"));
 	NewState.HookSuccessFeedbackText = FText::FromString(TEXT("提竿成功！"));
 	NewState.CatStaminaText = NewState.FightStaminaMaximum > 0.0f
 			? FText::FromString(FString::Printf(TEXT("玩家体力 %.0f / %.0f"),

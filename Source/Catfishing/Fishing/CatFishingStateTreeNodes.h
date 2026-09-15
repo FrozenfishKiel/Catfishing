@@ -71,8 +71,8 @@ struct CATFISHING_API FCatFishingScheduleWaitingProbeTask : public FStateTreeTas
 	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;
 };
 
-/** Probe 进入后只把浮漂切到猛沉并打开响应计时器；不会在玩家左键前创建鱼。 */
-USTRUCT(meta=(DisplayName="Cat Fishing Open True Bite Window", Category="Catfishing|Fishing"))
+/** 正式 ST_FishingSession 序列化引用此类型：进入 Probe 并安排逐鱼停留，结束才开真咬。 */
+USTRUCT(meta=(DisplayName="Cat Fishing Begin Probe", Category="Catfishing|Fishing"))
 struct CATFISHING_API FCatFishingOpenTrueBiteWindowTask : public FStateTreeTaskCommonBase
 {
 	GENERATED_BODY()

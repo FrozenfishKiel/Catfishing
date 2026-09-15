@@ -1,4 +1,9 @@
 #include "Inventory/CatInventorySettings.h"
+#include "Data/CatFishCatalogSettings.h"
+#include "Data/CatFishDefinition.h"
+#include "Framework/Game/CatfishingPlayerController.h"
+#include "OnlineSubsystemTypes.h"
+#include "UI/CatFishingViewTypes.h"
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -38,8 +43,18 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("正式窝料资产可加载"), ChumDefinition)) return false;
 	FCatFishingBiteTimingParameters Timing;
 	if (!TestTrue(TEXT("正式等待配置可读取"), GetDefault<UCatFishingSettings>()->TryGetBiteTimingParameters(Timing))) return false;
+	const auto* Catalog = GetDefault<UCatFishCatalogSettings>();
+	TestEqual(TEXT("正式窗口覆盖 16 个运行时鱼 ID"), Catalog->BiteTimingOverridesByFishDefinitionId.Num(), 16);
+	for (const auto& Pair : Catalog->BiteTimingOverridesByFishDefinitionId)
+	{
+		const auto* Fish = Catalog->FindRuntimeDefinition(Pair.Key);
+		if (!TestNotNull(*FString::Printf(TEXT("正式鱼资产 %s"), *Pair.Key.ToString()), Fish)) return false;
+		const auto Resolved = Catalog->ResolveBiteTiming(*Fish);
+		TestEqual(TEXT("正式资产解析试探秒数"), Resolved.ProbeDurationSeconds, Pair.Value.ProbeDurationSeconds);
+		TestEqual(TEXT("正式资产解析响应秒数"), Resolved.TrueBiteWindowSeconds, Pair.Value.TrueBiteWindowSeconds);
+	}
 	// 只准备抛竿事务的已冻结输入；后续采样、计时器、正式 StateTree 和正式 Hook BP 都走生产代码。
-	for (const int32 Portions : {0, 1, 5})
+	for (const int32 Portions : {0, 1, 5, 2, 3})
 	{
 		FTestWorldWrapper Wrapper;
 		if (!Wrapper.CreateTestWorld(EWorldType::Game)) return false;
@@ -49,7 +64,7 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 		URL.AddOption(TEXT("game=/Script/Catfishing.CatfishingGameModeBase"));
 		if (!TestTrue(TEXT("使用正式昼夜准入宿主"), World->SetGameMode(URL))) return false;
 		FCatWaterGeometryBuildInput WaterInput;
-		WaterInput.RegionId = TEXT("BiteTimingTestWater");
+		WaterInput.RegionId = Catalog->FindRuntimeDefinition(TEXT("RiverPatternFish"))->RegionIds[0];
 		WaterInput.WaterPointVerticalToleranceCm = 100.0;
 		WaterInput.BankHeightToleranceCm = 50.0;
 		WaterInput.BoundaryToleranceCm = 1.0;
@@ -121,7 +136,17 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 		auto* BaitPlayer = World->SpawnActor<ACatfishingPlayerState>();
 		auto* BaitRod = World->SpawnActor<ACatFishingRodActor>();
 		if (!BaitCharacter || !BaitPlayer || !BaitRod) return false;
+		auto* Controller = World->SpawnActor<ACatfishingPlayerController>();
+		if (!Controller) return false;
+		Controller->PlayerState = BaitPlayer;
 		BaitCharacter->SetPlayerState(BaitPlayer);
+		Controller->Possess(BaitCharacter);
+		const FUniqueNetIdRef UniqueId = FUniqueNetIdString::Create(TEXT("WindowTimingFisher"), FName(TEXT("CAT_TEST")));
+		BaitPlayer->SetUniqueId(FUniqueNetIdRepl(UniqueId));
+		ACatfishingGameModeBase::FAdmissionRecord Admission;
+		Admission.Phase = ACatfishingGameModeBase::EAdmissionPhase::Active;
+		Admission.Controller = Controller;
+		Mode->AdmissionRecords.Add(ACatfishingGameModeBase::MakeStableNetIdKey(BaitPlayer->GetUniqueId()), Admission);
 		// 本夹具只验证计时和库存；没有角色地板，禁止无控制器角色自由落出世界。
 		BaitCharacter->GetCharacterMovement()->SetComponentTickEnabled(false);
 		auto* BaitEquipment = BaitCharacter->GetEquipmentComponent();
@@ -152,6 +177,19 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 		Hook->InitializeAuthoritativeIdentity(Session->Snapshot.FishingSessionId, Session->Snapshot.CastAttemptId);
 		Hook->SetActorLocation(FVector(-2000, 0, 100)); // 飞行起点在窝外，必须读冻结落点。
 		if (!TestTrue(TEXT("真实抛竿飞行启动"), Hook->BeginAuthoritativeFlight(FVector::ZeroVector))) return false;
+		bool bNightDuringProbePublish = false;
+		TWeakObjectPtr<ACatFishEncounterActor> NightProbeFish;
+		if (Portions == 2) Session->OnSnapshotChanged.AddLambda([&]()
+		{
+			if (bNightDuringProbePublish || Session->GetSnapshot().Phase != ECatFishingPhase::Probe
+				|| !Session->GetSnapshot().FishEncounterActor) return;
+			bNightDuringProbePublish = true;
+			NightProbeFish = Session->GetSnapshot().FishEncounterActor;
+			Mode->RunPublicState.Phase.RunId = FGuid::NewGuid();
+			Mode->bRunStartupInProgress = true;
+			TestTrue(TEXT("Probe 发布回调内正式入夜"), Mode->EnterRunPhaseFromStateTree(ECatRunPhase::NormalNight, ECatRunTransitionReason::DayEnded).bApplied);
+			Mode->bRunStartupInProgress = false;
+		});
 		if (!TestTrue(TEXT("正式会话 StateTree 进入等待"), Session->StartPreparedSessionLogicFromAuthority())) return false;
 		TestEqual(TEXT("运行阶段为等待"), Session->GetSnapshot().Phase, ECatFishingPhase::Waiting);
 		FCatFishingBiteTimingDistribution Distribution;
@@ -165,9 +203,37 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("生产计时器消费冻结落点的新模型并加飞行时间"), BiteRemaining, ExpectedWait + FlightSeconds, 1.e-4);
 		TestEqual(TEXT("计时器保证完整1.5秒预警"), BiteRemaining - WarningRemaining, 1.5, 1.e-4);
 		double ObservedWarningTime = -1.0;
-		for (int32 Frame = 0; Frame < 5000 && Session->GetSnapshot().Phase != ECatFishingPhase::TrueBiteWindow; ++Frame)
+		double ObservedProbeTime = -1.0;
+		ACatFishEncounterActor* ProbeFish = nullptr;
+		for (int32 Frame = 0; Frame < 5000 && !Session->IsTerminal() && Session->GetSnapshot().Phase != ECatFishingPhase::TrueBiteWindow; ++Frame)
 		{
 			Wrapper.TickTestWorld(0.01f);
+			if (Portions == 2 && bNightDuringProbePublish)
+			{
+				Wrapper.TickTestWorld(0.02f);
+				TestEqual(TEXT("重入入夜退回 Waiting"), Session->GetSnapshot().Phase, ECatFishingPhase::Waiting);
+				TestFalse(TEXT("重入入夜销毁试探鱼影"), NightProbeFish.IsValid());
+				TestFalse(TEXT("重入入夜不重启 Probe 计时"), World->GetTimerManager().IsTimerActive(Session->ProbeStayTimerHandle));
+				break;
+			}
+			if (ObservedProbeTime < 0.0 && Session->GetSnapshot().Phase == ECatFishingPhase::Probe)
+			{
+				ObservedProbeTime = World->GetTimeSeconds();
+				ProbeFish = Session->GetSnapshot().FishEncounterActor;
+				if (!TestNotNull(TEXT("Probe 已生成正式鱼影"), ProbeFish)) return false;
+				TestFalse(TEXT("Probe 尚未启动搏斗"), Session->IsFightRunnerRunning());
+				TestEqual(TEXT("Probe 不扣饵"), BaitCharacter->GetInventoryComponent()->CountVisibleInventoryQuantityByDefinitionId(TEXT("BugBait")), 1);
+				TestEqual(TEXT("鱼影使用实际鱼重比例"), ProbeFish->GetPresentationState().VisualScale, Session->FishVisualScale);
+				TestEqual(TEXT("选鱼幂等"), Session->ResolveHookSelectionFromAuthority().FishDefinitionId, Session->Snapshot.FishDefinitionId);
+				if (Portions == 3)
+				{
+					AddExpectedErrorPlain(TEXT("Outcome=ECatFishingOutcome::EmptyHook"), EAutomationExpectedErrorFlags::Contains, 1);
+					TestTrue(TEXT("试探提前提竿"), Session->RequestHookFromAuthority(FGuid::NewGuid()).bCommitted);
+					TestEqual(TEXT("试探提竿为空钩"), Session->GetSnapshot().Outcome, ECatFishingOutcome::EmptyHook);
+					TestFalse(TEXT("提前提竿清除 Probe 计时"), World->GetTimerManager().IsTimerActive(Session->ProbeStayTimerHandle));
+					break;
+				}
+			}
 			if (ObservedWarningTime < 0.0 && Hook->GetPresentationState().BobberMode == ECatFishingBobberPresentationMode::BiteWarning)
 			{
 				ObservedWarningTime = World->GetTimeSeconds();
@@ -175,19 +241,34 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 					BaitCharacter->GetInventoryComponent()->CountVisibleInventoryQuantityByDefinitionId(TEXT("BugBait")), 1);
 			}
 		}
+		if (Portions == 2 || Portions == 3)
+		{
+			TestTrue(TEXT("经过真实 Probe 阶段"), ObservedProbeTime >= 0.0 || bNightDuringProbePublish);
+			Session->OnSnapshotChanged.Clear();
+			TestEqual(TEXT("真咬前退出保持饵数量"), BaitCharacter->GetInventoryComponent()->CountVisibleInventoryQuantityByDefinitionId(TEXT("BugBait")), 1);
+			continue;
+		}
+		if (!TestEqual(TEXT("真咬阶段成功"), Session->GetSnapshot().Phase, ECatFishingPhase::TrueBiteWindow)) return false;
+		const auto ResolvedTiming = Catalog->ResolveBiteTiming(*Session->FishDefinition);
+		TestEqual(TEXT("实际逐鱼试探时长"), World->GetTimeSeconds() - ObservedProbeTime, ResolvedTiming.ProbeDurationSeconds, 0.04);
+		TestEqual(TEXT("逐鱼响应截止时间"), Session->Snapshot.WindowEndsServerTime - Session->Snapshot.PhaseStartedServerTime, ResolvedTiming.TrueBiteWindowSeconds, 0.001);
+		TestEqual(TEXT("基础完美窗独立为一秒"), Session->Snapshot.PerfectWindowEndsServerTime - Session->Snapshot.PhaseStartedServerTime, 1.0, 0.001);
+		const auto View = FCatFishingViewState::FromSnapshot(Session->GetSnapshot());
+		TestEqual(TEXT("HUD 完美截止来自权威快照"), View.PerfectWindowEndsServerTime, Session->Snapshot.PerfectWindowEndsServerTime);
+		TestEqual(TEXT("HUD 响应截止来自权威快照"), View.WindowEndsServerTime, Session->Snapshot.WindowEndsServerTime);
+		TestTrue(TEXT("普通提竿区间独立存在"), Session->Snapshot.WindowEndsServerTime > Session->Snapshot.PerfectWindowEndsServerTime);
 		TestTrue(TEXT("运行时观察到预警模式"), ObservedWarningTime >= 0.0);
 		TestEqual(TEXT("正式 StateTree 真正打开咬钩窗口"), Session->GetSnapshot().Phase, ECatFishingPhase::TrueBiteWindow);
 		TestEqual(TEXT("真咬才确认鱼饵消耗"), BaitEquipment->CommitFishingBaitDeferred(Session->Snapshot.FishingSessionId).Error,
 			ECatDomainCommandError::AlreadyResolved);
 		TestEqual(TEXT("浮漂真咬时下沉"), Hook->GetPresentationState().BobberMode, ECatFishingBobberPresentationMode::Sunk);
-		TestEqual(TEXT("实际预警持续完整时段（帧量化容差）"), World->GetTimeSeconds() - ObservedWarningTime, 1.5, 0.04);
+		TestEqual(TEXT("实际预警持续完整时段（帧量化容差）"), World->GetTimeSeconds() - ObservedWarningTime, 1.5 + ResolvedTiming.ProbeDurationSeconds, 0.06);
 		TestEqual(TEXT("true bite consumes exactly one actual bait"), BaitCharacter->GetInventoryComponent()->CountVisibleInventoryQuantityByDefinitionId(TEXT("BugBait")), 0);
 		const double D0 = Session->TrueBiteDistanceCentimeters;
-		TestEqual(TEXT("D0 uses fish/cat distance at true bite"), D0, FVector::Distance(BaitCharacter->GetActorLocation(), Hook->GetActorLocation()), 0.01);
+		TestEqual(TEXT("D0 uses fish/cat distance at true bite"), D0, FVector::Distance(BaitCharacter->GetActorLocation(), ProbeFish->GetActorLocation()), 0.01);
 		BaitCharacter->SetActorLocation(FVector(-1200, 0, 0));
 		TestEqual(TEXT("response-window movement does not recalculate D0"), Session->TrueBiteDistanceCentimeters, D0);
-		TestNull(TEXT("未提竿不提前创建鱼"), Session->GetSnapshot().FishEncounterActor.Get());
-		TestTrue(TEXT("未提竿不提前选鱼"), Session->GetSnapshot().FishDefinitionId.IsNone());
+		TestEqual(TEXT("真咬复用 Probe 同一条鱼"), Session->GetSnapshot().FishEncounterActor.Get(), ProbeFish);
 		// 正式 Morning/Day/Dusk timer 在等待期间会刷新鱼情，必须捕获实际真咬时的环境。
 		const FCatEnvironmentSnapshot BiteEnvironment = World->GetGameState<ACatfishingGameState>()->GetRunPublicState().Environment;
 		TestTrue(TEXT("真咬发生于正式可用的白天鱼情"), BiteEnvironment.TimeOfDay != ECatEnvironmentTimeOfDay::Unknown);
@@ -203,7 +284,7 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("跨夜真咬保留发生时的时段"), Session->BiteTimeOfDay, BiteEnvironment.TimeOfDay);
 		TestEqual(TEXT("跨夜真咬保留发生时的天气"), Session->BiteWeather, BiteEnvironment.Weather);
 		AddExpectedErrorPlain(TEXT("Outcome=ECatFishingOutcome::HookWindowExpired"), EAutomationExpectedErrorFlags::Contains, 1);
-		for (int32 Frame = 0; Frame < 500 && !Session->IsTerminal(); ++Frame) Wrapper.TickTestWorld(0.01f);
+		for (int32 Frame = 0; Frame < 1600 && !Session->IsTerminal(); ++Frame) Wrapper.TickTestWorld(0.01f);
 		TestEqual(TEXT("true bite timeout ends this cast"), Session->GetSnapshot().Outcome, ECatFishingOutcome::HookWindowExpired);
 		TestFalse(TEXT("timeout clears future bite scheduling"), World->GetTimerManager().IsTimerActive(Session->ProbeTimerHandle));
 		TestFalse(TEXT("timeout closes equipment use"), BaitEquipment->HasActiveFishingUse());
@@ -236,7 +317,8 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 			BoundarySession->Snapshot.HookActor = BoundaryHook;
 			BoundarySession->Snapshot.RodActor = BaitRod;
 			BoundarySession->Snapshot.Phase = ECatFishingPhase::Probe;
-			BoundarySession->AttemptSnapshot.RodDefinitionId = BaitLoadout.RodDefinitionId;
+			BoundarySession->AttemptSnapshot = Session->AttemptSnapshot;
+			BoundarySession->CurrentBiteRandomSeed = 321;
 			BoundarySession->CastEquipment = BaitEquipment;
 			BoundarySession->FisherCharacter = BaitCharacter;
 			BoundarySession->bStartupInProgress = true;
@@ -248,8 +330,24 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 			if (!BaitEquipment->BeginFishingUse(BoundarySession->Snapshot.FishingSessionId, Loadout.RodItemInstanceId,
 				Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId, Loadout.RodDefinitionId, Loadout.BaitDefinitionId,
 				Loadout.FloatDefinitionId, Loadout.Revision).bUseAccepted) return false;
+			if (!TestTrue(TEXT("距离边界先开始 Probe"), BoundarySession->BeginProbeFromStateTree())) return false;
+			World->GetTimerManager().ClearTimer(BoundarySession->ProbeStayTimerHandle);
+			if (Distance == Lmax)
+			{
+				auto* FormalFish = BoundarySession->FishDefinition.Get();
+				auto* InvalidFish = DuplicateObject<UCatFishDefinition>(FormalFish, BoundarySession);
+				InvalidFish->TrueBiteWindowSeconds = 7;
+				InvalidFish->ProbeDurationSeconds = -1;
+				BoundarySession->FishDefinition = InvalidFish;
+				double InvalidSeconds = 0;
+				TestFalse(TEXT("拒绝负数试探覆盖"), BoundarySession->TryResolveProbeDurationSeconds(InvalidSeconds));
+				AddExpectedErrorPlain(TEXT("Event=fishing_bite_timing_rejected"), EAutomationExpectedErrorFlags::Contains, 1);
+				TestFalse(TEXT("响应越界拒绝开窗"), BoundarySession->OpenTrueBiteWindowFromAuthority());
+				TestEqual(TEXT("非法配置未扣饵"), BaitCharacter->GetInventoryComponent()->CountVisibleInventoryQuantityByDefinitionId(TEXT("BugBait")), 1);
+				BoundarySession->FishDefinition = FormalFish;
+			}
 			if (Distance > Lmax) AddExpectedErrorPlain(TEXT("Outcome=ECatFishingOutcome::Escaped"), EAutomationExpectedErrorFlags::Contains, 1);
-			TestEqual(TEXT("true bite admits exact Lmax and rejects over-limit distance"), BoundarySession->OpenTrueBiteWindowFromStateTree(), Distance <= Lmax);
+			TestEqual(TEXT("true bite admits exact Lmax and rejects over-limit distance"), BoundarySession->OpenTrueBiteWindowFromAuthority(), Distance <= Lmax);
 			TestEqual(TEXT("both boundary outcomes pay one bait"), BaitCharacter->GetInventoryComponent()->CountVisibleInventoryQuantityByDefinitionId(TEXT("BugBait")), 0);
 			TestEqual(TEXT("the frozen distance is not clamped"), BoundarySession->TrueBiteDistanceCentimeters, Distance);
 			TestTrue(TEXT("float inventory survives the distance decision"), BaitEquipment->GetSnapshot().FloatItemInstanceId.IsValid());
@@ -261,11 +359,47 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 			else
 			{
 				AddExpectedErrorPlain(TEXT("Outcome=ECatFishingOutcome::HookWindowExpired"), EAutomationExpectedErrorFlags::Contains, 1);
-				BoundarySession->HandleTrueBiteWindowExpired();
+				World->GetTimerManager().ClearTimer(BoundarySession->TrueBiteTimerHandle);
+				for (int32 Frame = 0; Frame < 1600 && World->GetTimeSeconds() <= BoundarySession->Snapshot.WindowEndsServerTime; ++Frame)
+					Wrapper.TickTestWorld(0.01f);
+				TestFalse(TEXT("计时器未回调也不能接受过期提竿"), BoundarySession->RequestHookFromAuthority(FGuid::NewGuid()).bCommitted);
+				TestEqual(TEXT("过期请求裁决为响应超时"), BoundarySession->Snapshot.Outcome, ECatFishingOutcome::HookWindowExpired);
 			}
 		}
 
 	}
+	return !HasAnyErrors();
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishBiteTimingConfigurationTest,
+	"Catfishing.Unit.Fishing.BiteTiming.ConfigurationPriorityAndInvalidValues",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishBiteTimingConfigurationTest::RunTest(const FString& Parameters)
+{
+	auto* Catalog = NewObject<UCatFishCatalogSettings>();
+	Catalog->BiteTimingOverridesByFishDefinitionId.Reset();
+	Catalog->BiteTimingDefaultsByRarityTier.Reset();
+	auto* Fish = NewObject<UCatFishDefinition>();
+	Fish->FishDefinitionId = TEXT("WindowTestFish");
+	Fish->RarityTierId = TEXT("WindowTestTier");
+	FCatFishBiteTimingDefaults Rarity;
+	Rarity.ProbeDurationSeconds = 3; Rarity.TrueBiteWindowSeconds = 15;
+	Catalog->BiteTimingDefaultsByRarityTier.Add(Fish->RarityTierId, Rarity);
+	TestEqual(TEXT("旧鱼回退档位响应"), Catalog->ResolveBiteTiming(*Fish).TrueBiteWindowSeconds, 15.0);
+	FCatFishBiteTimingDefaults Override;
+	Override.ProbeDurationSeconds = 2; Override.TrueBiteWindowSeconds = 11;
+	Catalog->BiteTimingOverridesByFishDefinitionId.Add(Fish->FishDefinitionId, Override);
+	TestEqual(TEXT("逐鱼优先于旧档位"), Catalog->ResolveBiteTiming(*Fish).TrueBiteWindowSeconds, 11.0);
+	Fish->ProbeDurationSeconds = 1.5;
+	TestEqual(TEXT("资产优先且按字段独立回退"), Catalog->ResolveBiteTiming(*Fish).ProbeDurationSeconds, 1.5);
+	TestEqual(TEXT("资产另一空字段继续读逐鱼"), Catalog->ResolveBiteTiming(*Fish).TrueBiteWindowSeconds, 11.0);
+	Fish->TrueBiteWindowSeconds = -1;
+	TestEqual(TEXT("非法资产不能被默认值掩盖"), Catalog->ResolveBiteTiming(*Fish).TrueBiteWindowSeconds, -1.0);
+	Fish->TrueBiteWindowSeconds = 0;
+	Catalog->BiteTimingOverridesByFishDefinitionId[Fish->FishDefinitionId].TrueBiteWindowSeconds = -2;
+	TestEqual(TEXT("非法逐鱼值不能被档位掩盖"), Catalog->ResolveBiteTiming(*Fish).TrueBiteWindowSeconds, -2.0);
 	return !HasAnyErrors();
 }
 

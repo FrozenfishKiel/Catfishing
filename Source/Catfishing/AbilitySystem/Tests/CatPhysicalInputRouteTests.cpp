@@ -270,6 +270,9 @@ bool FCatPhysicalInputRouteTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("完整随机咬钩等待仍保持同一条显式抓握"),bWaitingGripSurvived)
 		|| !TestTrue(TEXT("等待与提竿始终处于真实岸地支撑范围，没有掉出夹具"),bHasShoreSupport && MinimumWaitingBodyZ>-1)) return false;
 	if (!TestEqual(TEXT("真实飞行和等口计时器推进到提竿窗口"),CastSession->GetSnapshot().Phase,ECatFishingPhase::TrueBiteWindow)) return false;
+	// 完美窗结束后，真实鼠标输入仍能在逐鱼响应窗内启动普通搏斗。
+	while (World->GetTimeSeconds() <= CastSession->GetSnapshot().PerfectWindowEndsServerTime + 0.1)
+		Scene.TickTestWorld(0.01f);
 	auto* StaminaASC = Cat->GetCatAbilitySystemComponent();
 	StaminaASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), 23.0f);
 	StaminaASC->ApplyYellowFightStaminaDelta(20.0f);
@@ -277,6 +280,7 @@ bool FCatPhysicalInputRouteTest::RunTest(const FString& Parameters)
 	Input->ProcessAbilityInput(1.0f/60.0f,false);
 	for (int32 Frame=0; Frame<10 && !CastSession->IsFightRunnerRunning(); ++Frame) TickInputFrame();
 	if (!TestTrue(TEXT("鼠标提竿启动真实 FightRunner"),CastSession->IsFightRunnerRunning())) return false;
+	TestFalse(TEXT("完美窗结束后的合法提竿按普通中鱼"), CastSession->GetSnapshot().bPerfectHook);
 	TestTrue(TEXT("真实提竿入口保留跨竿余额，不补满绿色体力"),
 		StaminaASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()) < 24.0f);
 	TestTrue(TEXT("提竿入口保留黄色储备"), StaminaASC->GetYellowFightStamina() > 0.0f);

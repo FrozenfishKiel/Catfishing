@@ -55,10 +55,14 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Runtime", meta = (DisplayName = "搏斗平衡数据资产"))
 	TSoftObjectPtr<UCatFishingFightBalanceDefinition> FightBalanceDefinition;
 
-	/** 真咬响应窗口秒数；0 表示 Unset，资产 Task 不应启动计时。 */
+	/** 仅逐鱼配置与档位默认均缺失时使用的响应秒数兜底；0 表示不可用。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (ClampMin = "0"))
 	double TrueBiteWindowSeconds = 0.0;
-	/** 无窝时落水到真咬的目标平均秒数；替代旧的每秒频率调参，计入等待上限。 */
+
+	/** 仅资产、逐鱼和档位均未配置时的服务器确定性兜底；正式鱼种不走此范围。 */
+	UPROPERTY(Config, EditAnywhere, Category="Timing")
+	FVector2D ProbeDurationRangeSeconds = FVector2D(2.0, 4.0);
+	/** 无窝时落水到 Probe 开始的目标平均秒数，包含预警；到真咬另加逐鱼试探时长。 */
 	UPROPERTY(Config, EditAnywhere, Category="Bite|Chum", meta=(ClampMin="0", Units="s"))
 	double NoChumMeanBiteDelaySeconds = 0.0;
 	UPROPERTY(Config, EditAnywhere, Category="Bite|Chum", meta=(ClampMin="0", Units="s"))
@@ -74,10 +78,10 @@ public:
 	/** 抛竿落水后、开始快速抖动前，浮漂至少保持慢浮的秒数。 */
 	UPROPERTY(Config, EditAnywhere, Category="Bite", meta=(ClampMin="0", Units="s"))
 	double MinimumBiteDelaySeconds = 0.0;
-	/** 从落水到真咬下沉的总时间上限，必须容纳慢浮下限与完整预警。 */
+	/** 从落水到 Probe 开始的等待上限，包含慢浮与预警，不包含逐鱼试探期。 */
 	UPROPERTY(Config, EditAnywhere, Category="Bite", meta=(ClampMin="0", Units="s"))
 	double MaximumBiteDelaySeconds = 0.0;
-	/** 真咬前浮漂快速点动的服务器权威预警时长；当前产品口径为 1.5 秒。 */
+	/** 进入 Probe 前的浮漂点动预警；Probe 继续轻点逐鱼秒数，随后真咬下沉。 */
 	UPROPERTY(Config, EditAnywhere, Category="Bite", meta=(ClampMin="0", Units="s"))
 	double BiteWarningSeconds = 1.5;
 

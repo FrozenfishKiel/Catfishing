@@ -139,6 +139,8 @@ struct FCatFishingSessionSnapshot
 	/** 真咬窗口的服务器截止时间；未配置窗口时保持零。 */
 	UPROPERTY(BlueprintReadOnly)
 	double WindowEndsServerTime = 0.0;
+	/** 完美判定与提示共用的权威截止时间；响应窗截止后不得提竿。 */
+	UPROPERTY(BlueprintReadOnly) double PerfectWindowEndsServerTime = 0.0;
 
 	/** 当前钓手的公开 PlayerState 身份；StableNetId 不复制。 */
 	UPROPERTY(BlueprintReadOnly)

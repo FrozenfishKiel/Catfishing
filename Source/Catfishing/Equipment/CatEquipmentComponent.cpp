@@ -1068,6 +1068,14 @@ bool UCatEquipmentComponent::IsFishingUseActive(const FGuid FishingSessionId) co
 	return FishingSessionId.IsValid() && Record && !Record->bReleased;
 }
 
+FName UCatEquipmentComponent::GetCurrentFishingBaitDefinitionId(const FGuid FishingSessionId) const
+{
+	const FCatFishingUseRecord* Record = FishingUseRecords.Find(FishingSessionId);
+	const UCatEquipmentComponent* Source = Record && !Record->bReleased ? Record->BaitSourceEquipment.Get() : nullptr;
+	return Source && IsValid(Source->GetOwner()) && !Source->GetOwner()->IsActorBeingDestroyed()
+		? Source->GetSnapshot().BaitDefinitionId : NAME_None;
+}
+
 bool UCatEquipmentComponent::IsFishingBaitCommitted(const FGuid FishingSessionId) const
 {
 	const FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);

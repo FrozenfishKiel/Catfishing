@@ -248,6 +248,8 @@ void UCatHUDWidget::NativeTick(const FGeometry& MyGeometry, const float InDeltaT
 	}
 	if (BitePromptTextBlock)
 	{
+		BitePromptTextBlock->SetText(FText::FromString(ServerNowSeconds <= LastHUDViewState.Fishing.PerfectWindowEndsServerTime
+			? TEXT("完美时机！提竿") : TEXT("鱼儿咬钩啦！提竿")));
 		BitePromptTextBlock->SetVisibility(CountdownVisibility);
 	}
 }

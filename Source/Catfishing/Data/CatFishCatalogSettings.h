@@ -8,6 +8,19 @@
 
 class UCatFishDefinition;
 
+/** 逐鱼窗口的配置值，单位秒；分别供内部鱼 ID 覆盖表和旧档位回退表使用。 */
+USTRUCT()
+struct FCatFishBiteTimingDefaults
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, Config, meta = (ClampMin = "0.0", Units = "s"))
+	double ProbeDurationSeconds = 0.0;
+
+	UPROPERTY(EditAnywhere, Config, meta = (ClampMin = "0.0", Units = "s"))
+	double TrueBiteWindowSeconds = 0.0;
+};
+
 /** 正式鱼表资产目录；它是运行时鱼定义的唯一枚举入口，不从文件名或 Content 扫描猜内容。 */
 UCLASS(Config = Game, DefaultConfig, meta = (DisplayName = "Catfishing Fish Catalog"))
 class CATFISHING_API UCatFishCatalogSettings : public UDeveloperSettings
@@ -15,6 +28,13 @@ class CATFISHING_API UCatFishCatalogSettings : public UDeveloperSettings
 	GENERATED_BODY()
 
 public:
+	/** 0 表示未配置；非法非零值不回退，交由调用者拒绝。 */
+	FCatFishBiteTimingDefaults ResolveBiteTiming(const UCatFishDefinition& Definition) const;
+	UPROPERTY(Config, EditAnywhere, Category="Bite Timing")
+	TMap<FName, FCatFishBiteTimingDefaults> BiteTimingOverridesByFishDefinitionId;
+	UPROPERTY(Config, EditAnywhere, Category="Bite Timing")
+	TMap<FName, FCatFishBiteTimingDefaults> BiteTimingDefaultsByRarityTier;
+
 	/** 按稳定 ID 查找完整且启用的鱼定义；重复 ID 或加载失败返回空。 */
 	UCatFishDefinition* FindRuntimeDefinition(FName FishDefinitionId) const;
 

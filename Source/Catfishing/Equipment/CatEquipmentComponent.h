@@ -107,6 +107,8 @@ public:
 	bool IsFishingUseActive(FGuid FishingSessionId) const;
 	/** 捕获收口只检查真咬已扣饵，不允许在捕获时补扣当前选择。 */
 	bool IsFishingBaitCommitted(FGuid FishingSessionId) const;
+	/** 钓鱼选鱼只读原抛竿者当前饵种；托管协调器不改来源，不扣数量。 */
+	FName GetCurrentFishingBaitDefinitionId(FGuid FishingSessionId) const;
 
 	/** 本机随身库存或钓鱼选择变化通知；不携带可写指针或客户端授权。 */
 	FCatEquipmentSnapshotChanged OnSnapshotChanged;

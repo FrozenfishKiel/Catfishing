@@ -71,7 +71,7 @@ EStateTreeRunStatus FCatFishingOpenTrueBiteWindowTask::EnterState(FStateTreeExec
 {
 	(void)Transition;
 	ACatFishingSession* Session = Cast<ACatFishingSession>(Context.GetOwner());
-	return Session && Session->OpenTrueBiteWindowFromStateTree()
+	return Session && Session->BeginProbeFromStateTree()
 		? EStateTreeRunStatus::Succeeded : EStateTreeRunStatus::Failed;
 }
 

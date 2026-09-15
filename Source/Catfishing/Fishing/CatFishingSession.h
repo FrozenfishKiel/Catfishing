@@ -51,8 +51,8 @@ public:
 	bool ScheduleWaitingProbeFromStateTree();
 	/** 仅刷新尚未真咬的计时；次日重新采样，已有真咬和搏斗不受影响。 */
 	void RefreshBiteAvailabilityFromAuthority();
-	/** Probe 状态只打开响应窗口，不选鱼、不生成鱼、不扣饵；鱼只在合法 RequestHook 到达后创建。 */
-	bool OpenTrueBiteWindowFromStateTree();
+	/** Probe 进入时冻结鱼种并发布鱼影，逐鱼停留结束才开真咬。 */
+	bool BeginProbeFromStateTree();
 	FCatFishingCommandResult RequestHookFromAuthority(FGuid RequestId);
 	FCatFishingCommandResult CancelFromAuthority(FGuid RequestId);
 	/** 上钩后的主动止损写口；只接受当前钓手和精确 Revision，提交后鱼/饵丢失，不追加或退还鱼竿磨损。 */
@@ -179,8 +179,12 @@ private:
 	bool CommitCatchEquipmentFromAuthority();
 	void HandleBiteWarningTimer();
 	void HandleProbeTimer();
+	void HandleProbeStayTimer();
+	bool OpenTrueBiteWindowFromAuthority();
+	bool TryResolveProbeDurationSeconds(double& OutSeconds, const TCHAR** OutSource = nullptr) const;
+	bool TryResolveTrueBiteWindowSeconds(double& OutSeconds, const TCHAR** OutSource = nullptr) const;
 	void HandleTrueBiteWindowExpired();
-	/** 真咬窗口内收到合法左键后，冻结选择上下文、选鱼、生成 Encounter 并提交饵料。 */
+	/** Probe 开始时冻结上下文、选鱼和生成 Encounter；不扣饵、不启动搏斗。 */
 	FCatFishSelectionCommitResult ResolveHookSelectionFromAuthority();
 	bool TryReadNearShoreFishSpatial(FCatWaterSpatialResult& OutSpatial) const;
 
@@ -196,6 +200,8 @@ private:
 	FCatFishingSessionSnapshot Snapshot;
 	/** 客户端体力到达诊断限频，不参与会话裁决。 */
 	double NextStaminaReceivedDiagnosticSeconds = 0.0;
+	/** 客户端窗口日志按阶段去重，不建立玩法状态。 */
+	int64 LastReceivedWindowPhaseEpoch = -1;
 	/** 客户端耐久到达诊断按档位/终态过滤，不参与耐久裁决。 */
 	int32 LastReceivedRodDurabilityBand = INDEX_NONE;
 	bool bReceivedRodTerminal = false;
@@ -259,6 +265,7 @@ private:
 	ECatEnvironmentTimeOfDay BiteTimeOfDay = ECatEnvironmentTimeOfDay::Unknown;
 	ECatEnvironmentWeather BiteWeather = ECatEnvironmentWeather::Unknown;
 	FTimerHandle ProbeTimerHandle;
+	FTimerHandle ProbeStayTimerHandle;
 	FTimerHandle TrueBiteTimerHandle;
 	TMap<FGuid, FCatFishingCommandResult> HookTerminalByRequest;
 	TMap<FGuid, FCatFishingCommandResult> CancelTerminalByRequest;

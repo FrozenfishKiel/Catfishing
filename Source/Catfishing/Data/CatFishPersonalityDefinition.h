@@ -12,9 +12,10 @@ class CATFISHING_API UCatBitePersonalityDefinition : public UPrimaryDataAsset
 public:
 	bool IsRuntimeDefinitionReady() const;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly) FName BitePersonalityId = NAME_None;
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0")) double ProbeDurationSeconds = 0.0;
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0")) double TrueBiteWindowSeconds = 0.0;
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0")) double PerfectHookWindowSeconds = 0.0;
+	/** 只保留旧资产序列化载荷；不参与运行时窗口与就绪判定。 */
+	UPROPERTY(meta=(DeprecatedProperty)) double ProbeDurationSeconds = 0.0;
+	UPROPERTY(meta=(DeprecatedProperty)) double TrueBiteWindowSeconds = 0.0;
+	UPROPERTY(meta=(DeprecatedProperty)) double PerfectHookWindowSeconds = 0.0;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0", ClampMax="1")) double PerfectFishStrengthMultiplier = 0.0;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0", ClampMax="1")) double PerfectFishStaminaMultiplier = 0.0;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0", ClampMax="1")) double PerfectInitialLineLengthMultiplier = 0.0;
