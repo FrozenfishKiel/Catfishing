@@ -21,13 +21,13 @@ migrated_at: 2026-09-11
 | 3 | [鱼](https://qcniqd0mjfwg.feishu.cn/wiki/SlFcwt3BdidWCRkz2S4cIplJnnV) | 张佳 | 鱼种数据 SSOT——分布（含无窝料基础池）/ 窝料轴 / 体重轴 / 鱼饵偏好 / 吃鱼效果字段（图鉴 2026-08-27 拆出，见第 8 册） | 已成稿 |
 | 4 | [猫咪与状态](https://qcniqd0mjfwg.feishu.cn/wiki/BIeHwP14vigUEBkI3UxciEionxf) | 钱成澔 | 猫行为表现 + 吃鱼成长（buff＋经验三选一）/ 淋湿与疲惫演出 / 中毒倒地与救援 / 通用动画规范 | 已成稿 |
 | 5 | [营地](https://qcniqd0mjfwg.feishu.cn/wiki/EE9vwzWE2iHVXGkduzGcEx4bnjh) | 张佳 | 篝火据点 / 共用鱼缸与局内图鉴 / 渔获归宿 / 休息与局末赖着（建设与烹饪玩法已删除） | 已成稿 |
-| 6 | [联机社交](https://qcniqd0mjfwg.feishu.cn/wiki/EH0LwpHihiFR8Ukh6s6cXTqUnXc) | 李前臻 | 局制联机 / 事故放大通道 / 偷鱼与恶作剧社交规则 / 求助与围观 | 已成稿 |
+| 6 | [联机社交](https://qcniqd0mjfwg.feishu.cn/wiki/EH0LwpHihiFR8Ukh6s6cXTqUnXc) | 李前臻 | 局制联机 / 事故放大通道 / 拿鱼与恶作剧的社交规则 / 求助与围观 | 已成稿 |
 | 7 | [环境与氛围](https://qcniqd0mjfwg.feishu.cn/wiki/Bg2jwBdkViHRgRkOtx2crCgAnHh) | 李前臻 | 局内时间流与昼夜天气 / 双区域 / 自然事件与聚鱼时刻 / 看花观鸟 | 已成稿 |
 | 8 | [图鉴](https://qcniqd0mjfwg.feishu.cn/wiki/Kiz5wpRKRiIFF6kfjhOcOmwrncQ) | 李前臻 | 分层解锁与「待解锁」/ 按贡献登记 / 图鉴页呈现 / 局内互看；记鱼与道具，以后可扩 | 已成稿 |
 | 9 | [印记](https://qcniqd0mjfwg.feishu.cn/wiki/EPi4wjG5IigRTwkH8stcGWoUnUh) | 李前臻 | 高光抓拍 / 三层相册 / 分发与隐私 / 回看素材 | 已成稿，**功能 Demo 后置**（2026-08-27 拍定） |
 | 10 | [局与进程](https://qcniqd0mjfwg.feishu.cn/wiki/Ca49ww71ai2IAlklmsZcqF7Tnzb) | 李前臻 | 局的生命周期 / 祭坛目标结构 / 跨局归属清单 / 单多人形态（纵向骨架册） | 已成稿 |
 | 11 | [商店](https://qcniqd0mjfwg.feishu.cn/wiki/U0JtwqFJ8ijKxakb1egcRXhvnKg) | 王甜甜 | 商店与货币——收鱼定价 / 货架购买 / 断竿购新 / 货币形态 | 已成稿 |
-| 12 | [ui](https://qcniqd0mjfwg.feishu.cn/wiki/UZ3ywmA0WiN8MKkSyOrcvuvknDb) | 张佳 | 界面呈现规格——各系统 UI 的布局、信息层级、视觉稿（表格页） | 草稿 |
+| 12 | [ui](https://qcniqd0mjfwg.feishu.cn/wiki/UZ3ywmA0WiN8MKkSyOrcvuvknDb) | 张佳 | 界面呈现规格——各系统 UI 的布局、信息层级、视觉稿（表格页） | 现行（表格页，页头 csv 为准） |
 | 13 | [交互](https://qcniqd0mjfwg.feishu.cn/wiki/PjD4w3XrJi4UT4k3fthcTCOrnhf) | 张佳 | 按键与操作的规矩、界面文案口径的集中出处（「交互总规」一节待建） | 草稿 |
 
 分册按设计推进增删改名（例如后续出现经济 / 商店再单独立册）；增删后同步更新本表。横切规范（世界观边界、猫世界化命名、美术基调）见 [世界观与美术基调](https://qcniqd0mjfwg.feishu.cn/wiki/FsLmwaQypioUnPkA3ZUcsjNKnAd)。
@@ -100,7 +100,7 @@ migrated_at: 2026-09-11
 - 规则口径：本页目录下各系统分册正文；钓鱼系统的实现规格书＝「钓鱼规则」子页（主文，多人扩展见附篇「多人钓鱼机制」页；页内数字为实现快照）。
 - 数值：先看挂号表格（鱼表格／鱼竿／鱼漂／窝料／鱼饵／道具总表等，表的值最优先），表里没有的看「数值模拟与参数记录」页拍定表；改数流程与依据都在那一页。规则听分册，意图听愿景，三者冲突按此裁决。
 - 演出：「动作表现集」是全项目演出素材唯一标准。
-- 排期与验收：「里程碑」；谁在做什么：「任务进度板」；跨属主改动的对账：「裁决同步」下两页（钓鱼系统／装备与商店）。原「总览」页 2026-08-19 并入本节后删除。
+- 排期与验收：「里程碑」；谁在做什么：「任务进度板」；跨属主改动的对账：「裁决同步」下四张属主页（钓鱼系统／道具与商店／鱼·营地·UI 与交互／程序）。原「总览」页 2026-08-19 并入本节后删除。
 
 # 统一模板
 
@@ -173,3 +173,4 @@ migrated_at: 2026-09-11
 | v4.12 | 2026-09-08 | 三处随裁决对表：接口表「图鉴登记」改收集层归上钩者（钓鱼规则 v1.2、图鉴 v2.13）；术语表「共用大鱼缸」去掉旧名「额度」；废词清单收「额度／每日额度」。文档一致性检查 2026-09-08 后代做 |
 | v4.13 | 2026-09-08 | 术语表与接口表「聚鱼时刻」两行改单源：本版只有投料触发，环境自然事件归完整版（09-07 决策点 4）；环境册 §5 待下一轮过稿对表（李前臻 09-08 定） |
 | v4.14 | 2026-09-13 | 死概念清理 1 处，口径零变更：接口表「偷窃」行改「拿鱼」，去掉已退役的追回窗与权限开关，补 §3.1.5 的三条客观规则与「「偷」不是机制」 |
+| v4.15 | 2026-09-15 | 三处（Claude 代做）：分册一览联机社交范围列「偷鱼」改拿鱼（账本 09-11 裁决二）；ui 行状态由「草稿」改「现行（表格页）」与页头 csv 对齐，交互册仍草稿；导航段「裁决同步下两页」改四张属主页 |

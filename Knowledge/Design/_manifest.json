@@ -63,9 +63,9 @@
       ],
       "has_child": true,
       "file": "动作表现集/动作表现集.md",
-      "revision_id": "407a00cbd892",
+      "revision_id": "799f09681609",
       "lines": 101,
-      "content_sha1": "407a00cbd892",
+      "content_sha1": "799f09681609",
       "feishu_revision_id": 3510
     },
     {
@@ -80,9 +80,9 @@
       ],
       "has_child": false,
       "file": "动作表现集/多人合作动作补充.md",
-      "revision_id": "2b7e946967c9",
+      "revision_id": "56b3b512ab1c",
       "lines": 81,
-      "content_sha1": "2b7e946967c9",
+      "content_sha1": "56b3b512ab1c",
       "feishu_revision_id": 45
     },
     {
@@ -96,9 +96,9 @@
       ],
       "has_child": true,
       "file": "GDD 系统分册/GDD 系统分册.md",
-      "revision_id": "d62f51323c58",
+      "revision_id": "04f3c0911ee8",
       "lines": 164,
-      "content_sha1": "d62f51323c58",
+      "content_sha1": "04f3c0911ee8",
       "feishu_revision_id": 176
     },
     {
@@ -113,9 +113,9 @@
       ],
       "has_child": true,
       "file": "GDD 系统分册/钓鱼系统/钓鱼系统.md",
-      "revision_id": "3a22bffa5e5f",
+      "revision_id": "18fbc3381bc8",
       "lines": 198,
-      "content_sha1": "3a22bffa5e5f",
+      "content_sha1": "18fbc3381bc8",
       "feishu_revision_id": 388
     },
     {
@@ -131,9 +131,9 @@
       ],
       "has_child": false,
       "file": "GDD 系统分册/钓鱼系统/钓鱼规则.md",
-      "revision_id": "f1e130691dce",
+      "revision_id": "209f6045c335",
       "lines": 395,
-      "content_sha1": "f1e130691dce",
+      "content_sha1": "209f6045c335",
       "feishu_revision_id": 333
     },
     {
@@ -149,9 +149,9 @@
       ],
       "has_child": false,
       "file": "GDD 系统分册/钓鱼系统/多人钓鱼附篇.md",
-      "revision_id": "26b4dcc969e2",
+      "revision_id": "5c6227220fd5",
       "lines": 139,
-      "content_sha1": "26b4dcc969e2",
+      "content_sha1": "5c6227220fd5",
       "feishu_revision_id": 82
     },
     {
@@ -183,9 +183,9 @@
       ],
       "has_child": true,
       "file": "GDD 系统分册/鱼/鱼.md",
-      "revision_id": "32c8851e65e7",
+      "revision_id": "724aebeb9532",
       "lines": 169,
-      "content_sha1": "32c8851e65e7",
+      "content_sha1": "724aebeb9532",
       "feishu_revision_id": 539
     },
     {
@@ -201,9 +201,9 @@
       ],
       "has_child": false,
       "file": "GDD 系统分册/鱼/鱼的行为.md",
-      "revision_id": "6f325d85d4c8",
+      "revision_id": "79658b65de0b",
       "lines": 106,
-      "content_sha1": "6f325d85d4c8",
+      "content_sha1": "79658b65de0b",
       "feishu_revision_id": 189
     },
     {
@@ -218,9 +218,9 @@
       ],
       "has_child": false,
       "file": "GDD 系统分册/营地.md",
-      "revision_id": "6e9d5024b237",
+      "revision_id": "50ecd53d588f",
       "lines": 181,
-      "content_sha1": "6e9d5024b237",
+      "content_sha1": "50ecd53d588f",
       "feishu_revision_id": 313
     },
     {
@@ -235,9 +235,9 @@
       ],
       "has_child": false,
       "file": "GDD 系统分册/商店.md",
-      "revision_id": "6a715f1cabc4",
+      "revision_id": "d983b0112421",
       "lines": 165,
-      "content_sha1": "6a715f1cabc4",
+      "content_sha1": "d983b0112421",
       "feishu_revision_id": 351
     },
     {
@@ -252,9 +252,9 @@
       ],
       "has_child": true,
       "file": "GDD 系统分册/猫咪与状态/猫咪与状态.md",
-      "revision_id": "e22ce5afef58",
+      "revision_id": "f6d62c1c80d8",
       "lines": 262,
-      "content_sha1": "e22ce5afef58",
+      "content_sha1": "f6d62c1c80d8",
       "feishu_revision_id": 208
     },
     {
@@ -358,9 +358,9 @@
       ],
       "has_child": false,
       "file": "GDD 系统分册/图鉴.md",
-      "revision_id": "65c7b270d466",
+      "revision_id": "4b4d196b74db",
       "lines": 242,
-      "content_sha1": "65c7b270d466",
+      "content_sha1": "4b4d196b74db",
       "feishu_revision_id": 132
     },
     {
@@ -375,9 +375,9 @@
       ],
       "has_child": false,
       "file": "GDD 系统分册/局与进程.md",
-      "revision_id": "de7f1235cbfd",
+      "revision_id": "e5b633e7b812",
       "lines": 200,
-      "content_sha1": "de7f1235cbfd",
+      "content_sha1": "e5b633e7b812",
       "feishu_revision_id": 170
     },
     {
@@ -409,9 +409,9 @@
       ],
       "has_child": false,
       "file": "GDD 系统分册/联机社交.md",
-      "revision_id": "b37c26c2ec48",
+      "revision_id": "b136a7b20a07",
       "lines": 309,
-      "content_sha1": "b37c26c2ec48",
+      "content_sha1": "b136a7b20a07",
       "feishu_revision_id": 254
     },
     {
@@ -442,9 +442,9 @@
       ],
       "has_child": false,
       "file": "设计修改记录.md",
-      "revision_id": "ffb6056fb5a7",
+      "revision_id": "79d12b2b726d",
       "lines": 305,
-      "content_sha1": "ffb6056fb5a7",
+      "content_sha1": "79d12b2b726d",
       "feishu_revision_id": 98
     },
     {
@@ -458,9 +458,9 @@
       ],
       "has_child": false,
       "file": "数值模拟与参数记录.md",
-      "revision_id": "4aea14d46997",
+      "revision_id": "5bc23265c4f7",
       "lines": 102,
-      "content_sha1": "4aea14d46997",
+      "content_sha1": "5bc23265c4f7",
       "feishu_revision_id": 167
     }
   ],
@@ -597,25 +597,6 @@
       "cols": 26,
       "content_sha1": "b3e7367fd3ec",
       "revision_id": "b3e7367fd3ec"
-    },
-    {
-      "node": "鱼表格",
-      "path": [
-        "GDD 系统分册",
-        "鱼",
-        "鱼表格"
-      ],
-      "node_token": "DKhnweGaEiPTJZkO8OScQOJenqg",
-      "obj_token": "CQlMsQon6hlo8ctpZRWcAPzOnRi",
-      "sheet_id": "bc9794",
-      "sheet_name": "旧版-已废弃-勿引（饥饿口径）",
-      "region": "A1:L48",
-      "revision": 872,
-      "file": "GDD 系统分册/鱼/鱼表格/旧版-已废弃-勿引（饥饿口径）.csv",
-      "rows": 48,
-      "cols": 12,
-      "content_sha1": "b782587b7e82",
-      "revision_id": "b782587b7e82"
     },
     {
       "node": "鱼表格",
