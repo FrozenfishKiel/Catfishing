@@ -3,6 +3,7 @@
 #include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"
 #include "Online/CatOnlineSubsystem.h"
+#include "Online/CatOnlineRoomReadiness.h"
 
 namespace CatFrontendRoomModelText
 {
@@ -11,6 +12,29 @@ namespace CatFrontendRoomModelText
 	{
 		switch (Error)
 		{
+		case ECatOnlineError::PasswordRequired: return FText::FromString(TEXT("此房间需要密码。"));
+		case ECatOnlineError::PasswordIncorrect: return FText::FromString(TEXT("密码不正确，请重新输入。"));
+		case ECatOnlineError::AdmissionUnavailable: return FText::FromString(TEXT("房主暂时无法接受加入，可能正在开始游戏，请稍后重试。"));
+		case ECatOnlineError::AdmissionRateLimited: return FText::FromString(TEXT("尝试过于频繁，请一分钟后重试。"));
+		case ECatOnlineError::AdmissionDenied: return FText::FromString(TEXT("房主拒绝了加入请求，请重新获取邀请。"));
+		case ECatOnlineError::InvalidInviteCode: return FText::FromString(TEXT("邀请码无效或房间已关闭。"));
+		case ECatOnlineError::InviteCodeCandidates: return FText::FromString(TEXT("找到多个候选房间，请选择房主；加入时会校验完整邀请码。"));
+		case ECatOnlineError::RoomSettingsInvalid: return FText::FromString(TEXT("名称和密码最多 32 字，人数须为 1–4，且不能少于已加入或正加入的人数。"));
+		case ECatOnlineError::RoomSettingsFailed: return FText::FromString(TEXT("房间设置保存失败，请重试。"));
+		case ECatOnlineError::FrontendListenFailed:
+			return FText::FromString(TEXT("无法启动房主监听服务，请确认 Steam 已登录后重试。"));
+		case ECatOnlineError::RoomMembersNotReady:
+			return FText::FromString(TEXT("等待其他队员准备后，房主即可开始。"));
+		case ECatOnlineError::RoomReadinessUnavailable:
+			return FText::FromString(TEXT("尚未确认准备状态，请等待 Steam 同步后重试。"));
+		case ECatOnlineError::InvalidJoinLink:
+			return FText::FromString(TEXT("请输入本游戏的 Steam 邀请链接或完整房间 ID。"));
+		case ECatOnlineError::JoinTargetUnavailable:
+			return FText::FromString(TEXT("无法取得房间信息。请确认房间仍开放，或让房主通过 Steam 邀请你。"));
+		case ECatOnlineError::JoinTargetTimedOut:
+			return FText::FromString(TEXT("等待 Steam 响应超时，请检查连接后重试。"));
+		case ECatOnlineError::SessionFull:
+			return FText::FromString(TEXT("房间已满，请等待朋友腾出空位。"));
 		case ECatOnlineError::None:
 			return FText::GetEmpty();
 		case ECatOnlineError::CommandAlreadyPending:
@@ -156,6 +180,15 @@ FCatOnlineResult UCatFrontendRoomModel::RefreshFriends()
 	return Result;
 }
 
+FCatOnlineResult UCatFrontendRoomModel::SetReady(bool bReady)
+{
+	FCatOnlineResult Result;
+	if (UCatOnlineSubsystem* Source = Online.Get()) { Result = Source->RequestSetRoomReady(bReady); }
+	else { Result.RequestId = FGuid::NewGuid(); Result.Error = ECatOnlineError::OnlineSubsystemUnavailable; }
+	CaptureResult(Result);
+	return Result;
+}
+
 // 邀请好友流程：先保留 opaque 句柄的所有权边界，再把请求交给 Online；无效句柄、非 Host 和平台拒绝都由 Online 返回结构化结果，不在 UI 层推断原因。
 FCatOnlineResult UCatFrontendRoomModel::InviteFriend(const FCatOnlineFriendHandle FriendHandle)
 {
@@ -192,12 +225,17 @@ FText UCatFrontendRoomModel::GetLastResultText() const
 // 开始权限查询流程：读取同一份 Online 快照，要求本地已确认 Host、没有任何活动操作且预载未开始；最终的 Save 已加载校验仍在 RequestStartHostedGame 内完成。
 bool UCatFrontendRoomModel::CanStartGame() const
 {
-	const FCatOnlineSnapshot Snapshot = GetSnapshot();
+	return CanStartSnapshot(GetSnapshot());
+}
+
+bool UCatFrontendRoomModel::CanStartSnapshot(const FCatOnlineSnapshot& Snapshot)
+{
 	return Snapshot.bIsHost
 		&& Snapshot.WorldState == ECatOnlineWorldState::Frontend
 		&& Snapshot.SessionState == ECatOnlineSessionState::Host
 		&& Snapshot.ActiveOperation == ECatOnlineOperation::None
-		&& !Snapshot.bIsGameplayLoadPending;
+		&& !Snapshot.bIsGameplayLoadPending
+		&& CatOnlineRoomReadiness::CanHostStart(Snapshot.RoomMembers, Snapshot.CurrentPlayers, Snapshot.MaxPlayers);
 }
 
 // Online 通知流程：先读取唯一快照，错误优先，其次为已接受邀请的有界等待和真实 Join 提交生成文本，其他状态清除失效文本；最后广播，Controller 再读取房间事实决定显示，不要求玩家再次确认邀请。
@@ -211,9 +249,17 @@ void UCatFrontendRoomModel::HandleOnlineChanged()
 		{
 			LastResultText = FText::FromString(TEXT("已接受邀请，正在等待 Steam 登录和主界面就绪。"));
 		}
+		else if (Snapshot.ActiveOperation == ECatOnlineOperation::ResolveJoin)
+		{
+			LastResultText = FText::FromString(TEXT("正在查询房间并等待 Steam 响应…"));
+		}
+		else if (Snapshot.bFriendsRefreshPending)
+		{
+			LastResultText = FText::FromString(TEXT("正在刷新好友房间…"));
+		}
 		else if (Snapshot.ActiveOperation == ECatOnlineOperation::Join)
 		{
-			LastResultText = FText::FromString(TEXT("正在加入受邀房间。"));
+			LastResultText = FText::FromString(TEXT("正在加入房间…"));
 		}
 	}
 	OnChanged.Broadcast();
@@ -237,4 +283,21 @@ void UCatFrontendRoomModel::CaptureResult(const FCatOnlineResult& Result)
 	}
 	LastResultText = CatFrontendRoomModelText::MakeErrorText(Result.Error);
 	OnChanged.Broadcast();
+}
+
+FCatOnlineResult UCatFrontendRoomModel::JoinFriend(FCatOnlineFriendHandle FriendHandle)
+{
+	FCatOnlineResult Result;
+	if (UCatOnlineSubsystem* Source = Online.Get()) { Result = Source->RequestJoinFriend(FriendHandle); }
+	else { Result.Error = ECatOnlineError::OnlineSubsystemUnavailable; }
+	CaptureResult(Result);
+	return Result;
+}
+FCatOnlineResult UCatFrontendRoomModel::JoinLink(const FString& Input)
+{
+	FCatOnlineResult Result;
+	if (UCatOnlineSubsystem* Source = Online.Get()) { Result = Source->RequestJoinLink(Input); }
+	else { Result.Error = ECatOnlineError::OnlineSubsystemUnavailable; }
+	CaptureResult(Result);
+	return Result;
 }

@@ -2,6 +2,9 @@
 
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
+#include "AbilitySystemComponent.h"
+#include "AbilitySystem/Attributes/CatEconomyAttributeSet.h"
+#include "Framework/Game/CatfishingGameState.h"
 #include "Camp/CatCampInventoryActor.h"
 #include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatInventoryItemDefinition.h"
@@ -10,6 +13,7 @@
 #include "ShopEconomy/CatShopEconomyService.h"
 #include "ShopEconomy/CatShopInventoryComponent.h"
 #include "ShopEconomy/CatShopKioskActor.h"
+#include "ShopEconomy/Trading/CatShopTradeController.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatShopInventoryDeliveryReplayTest,
 	"Catfishing.Unit.ShopEconomy.PurchaseImmediatelyStocksAndReplaysWithoutDuplicatePaymentOrItems",
@@ -17,12 +21,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatShopInventoryDeliveryReplayTest,
 
 // 购物车交付边界回归：
 // 1. 在独立 authority World 加载正式摊位蓝图和公共仓库，使用实际目录与公款配置。
-// 2. 验证缺失仓库拒绝且公款与账本不变，再验证定义批次提交拒绝能恢复库存。
+// 2. 验证交付回调拒绝拒绝且公款与账本不变，再验证定义批次提交拒绝能恢复库存。
 // 3. 使用落后的钱包快照购买，核对仍按服务器余额成交，通知时实物已入库、金额正确且已有唯一账本。
 // 4. 重放购买时核对统一回执仍被接受，再篡改同号载荷验证拒绝；两者均不重复扣钱、发货或广播。
 // 5. 在已有物品上复核回滚后的槽位、实例身份和堆叠数量；带回调的实例批次必须在执行回调前拒绝。
 // 6. 实际填满仓库格子与堆叠并确认无法再接收，再用新货架通过报价预检；核对购买因容量拒绝且货架、公款与账本不变。
-// 此用例只覆盖服务边界；Controller 距离校验、UI 操作和网络传输不在本用例内。
+// 此用例只覆盖服务边界；Controller 身份校验、UI 操作和网络传输不在本用例内。
 bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 {
 	FTestWorldWrapper WorldWrapper;
@@ -36,7 +40,8 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 	ACatShopKioskActor* Kiosk = World->SpawnActor<ACatShopKioskActor>(KioskClass);
 	ACatCampInventoryActor* Camp = World->SpawnActor<ACatCampInventoryActor>();
 	UCatShopEconomyService* Shop = World->GetSubsystem<UCatShopEconomyService>();
-	if (!TestTrue(TEXT("真实商店与公共库存可用"), Kiosk && Camp && Shop)) return false;
+	UCatShopTradeController* Trading = World->GetSubsystem<UCatShopTradeController>();
+	if (!TestTrue(TEXT("真实商店与公共库存可用"), Kiosk && Camp && Shop && Trading)) return false;
 	UCatShopInventoryComponent* Shelf = Kiosk->GetShopInventory();
 	UCatInventoryComponent* Inventory = Camp->GetInventoryComponent();
 	if (!TestTrue(TEXT("正式货架目录已装配"), Shelf && Shelf->IsRuntimeCatalogReady() && Inventory)) return false;
@@ -49,9 +54,9 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 	for (const FCatShopCatalogEntry& Entry : Entries)
 	{
 		FCatShopStockSnapshot Stock;
-		if (Entry.UnitPrice > 0 && Entry.UnitPrice <= WalletBefore.Balance
+		if (Entry.UnitPrice > 0 && Entry.UnitPrice <= WalletBefore.Balance / 2
 			&& Shelf->TryGetStockSnapshot(Entry.EntryId, Stock)
-			&& (Stock.bUnlimitedStock || Stock.RemainingStock > 0))
+			&& Stock.bUnlimitedStock)
 		{
 			Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(Entry.DefinitionId);
 			if (Definition)
@@ -66,18 +71,21 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 	FCatShopCartCommand Command;
 	Command.Context.RequestId = FGuid::NewGuid();
 	Command.Context.StableNetId = TEXT("InventoryDeliveryRegression");
-	Command.Context.ExpectedRevision = WalletBefore.Revision - 1;
 	Command.ShopInventoryId = Shelf->GetShopInventoryId();
 	Command.Lines.AddDefaulted_GetRef().EntryId = Selected.EntryId;
+	// 两人基于同一份旧公款快照先准备好请求，随后服务器顺序处理；第二笔不能因为第一笔改变版本而拒绝。
+	FCatShopCartCommand SecondCommand = Command;
+	SecondCommand.Context.RequestId = FGuid::NewGuid();
+	SecondCommand.Context.StableNetId = TEXT("SecondBuyer");
 	FCatInventoryReceiveBatch Batch;
 	FCatInventoryDefinitionEntry& DeliveryEntry = Batch.DefinitionEntries.AddDefaulted_GetRef();
 	DeliveryEntry.ItemDefinition = Definition;
 	DeliveryEntry.Count = Selected.PurchaseQuantity;
-	const FCatShopCartTransactionResult MissingInventory = Shop->PurchaseCatalogCart(Command, Shelf, nullptr);
-	TestFalse(TEXT("缺失仓库不成交"), MissingInventory.Command.bCommitted);
-	TestEqual(TEXT("缺失仓库不扣钱"), Shop->GetWalletSnapshot().Balance, WalletBefore.Balance);
-	TestEqual(TEXT("缺失仓库不写账本"), Shop->GetTransactionLedgerSnapshot().Num(), 0);
-	TestFalse(TEXT("拒绝请求重放不转为成交"), Shop->PurchaseCatalogCart(Command, Shelf, Inventory).Command.bCommitted);
+	const FCatShopCartTransactionResult MissingInventory = Shop->PurchaseCatalogCart(Command, Shelf, [](TFunctionRef<bool()> Pay) { return false; });
+	TestFalse(TEXT("交付回调拒绝不成交"), MissingInventory.Command.bCommitted);
+	TestEqual(TEXT("交付回调拒绝不扣钱"), Shop->GetWalletSnapshot().Balance, WalletBefore.Balance);
+	TestEqual(TEXT("交付回调拒绝不写账本"), Shop->GetTransactionLedgerSnapshot().Num(), 0);
+	TestFalse(TEXT("拒绝请求重放不转为成交"), Trading->RunCartOrder(Command, Shelf, Camp).CartTransaction.Command.bCommitted);
 	Command.Context.RequestId = FGuid::NewGuid();
 
 	bool bCommitCalled = false;
@@ -103,7 +111,7 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 				WalletBefore.Balance - Selected.UnitPrice);
 			TestEqual(TEXT("成交通知时账本已完成"), Shop->GetTransactionLedgerSnapshot().Num(), 1);
 		});
-	const FCatShopCartTransactionResult Purchase = Shop->PurchaseCatalogCart(Command, Shelf, Inventory);
+	const FCatShopCartTransactionResult Purchase = Trading->RunCartOrder(Command, Shelf, Camp).CartTransaction;
 	if (!TestTrue(TEXT("一次购买完成实物与账本"), Purchase.Command.bCommitted && Purchase.Transactions.Num() == 1))
 	{
 		Shop->OnPublicTransactionCommitted.Remove(Handle);
@@ -115,15 +123,14 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("公共库存收到目录规定数量"),
 		Inventory->CountVisibleInventoryQuantityByDefinitionId(Selected.DefinitionId),
 		QuantityBefore + Selected.PurchaseQuantity);
-	// 将同一请求的期望版本改成高于服务器当前版本后重放，仍须识别为原意图，不能因版本不同再次拒绝或扣款。
-	Command.Context.ExpectedRevision = Shop->GetWalletSnapshot().Revision + 1;
-	const FCatShopCartTransactionResult Replay = Shop->PurchaseCatalogCart(Command, Shelf, nullptr);
+	// 同号重放不进入交付回调，不能因收货方已变化再次扣款。
+	const FCatShopCartTransactionResult Replay = Shop->PurchaseCatalogCart(Command, Shelf, [](TFunctionRef<bool()> Pay) { return false; });
 	TestEqual(TEXT("购买重放不依赖当前仓库"), Replay.Command.Error,
 		ECatDomainCommandError::AlreadyResolved);
 	TestTrue(TEXT("成功重放保留统一回执的已接受事实"), CatIsAcceptedDomainCommandResult(Replay.Command));
 	FCatShopCartCommand ChangedCommand = Command;
 	ChangedCommand.Lines[0].CartCount += 1;
-	TestEqual(TEXT("同一请求不能更换数量"), Shop->PurchaseCatalogCart(ChangedCommand, Shelf, Inventory).Command.Error,
+	TestEqual(TEXT("同一请求不能更换数量"), Trading->RunCartOrder(ChangedCommand, Shelf, Camp).CartTransaction.Command.Error,
 		ECatDomainCommandError::InvalidPayload);
 	TestEqual(TEXT("重放不再次扣款"), Shop->GetWalletSnapshot().Balance,
 		WalletBefore.Balance - Selected.UnitPrice);
@@ -162,6 +169,8 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("拒绝实例批次不执行付款"), bCommitCalled);
 
 	// 使用独立仓库构造满仓状态；随后另建同蓝图货架，避免首次购买已耗尽限量商品而先触发售罄拒绝。
+	// 原仓库已完成身份与回滚检查；销毁后保持世界只有一个无角色仓库，符合正式单仓回退规则。
+	Camp->Destroy();
 	ACatCampInventoryActor* FullCamp = World->SpawnActor<ACatCampInventoryActor>();
 	if (!TestNotNull(TEXT("创建容量不足仓库"), FullCamp)) return false;
 	// 容量配置只扩充格子，不裁掉既有格子；填满实物和堆叠后再验证拒绝，避免把售罄或配置值误当满仓。
@@ -175,16 +184,15 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 	UCatShopInventoryComponent* FreshShelf = FreshKiosk->GetShopInventory();
 	FCatShopCartCommand FullCommand = Command;
 	FullCommand.Context.RequestId = FGuid::NewGuid();
-	FullCommand.Context.ExpectedRevision = Shop->GetWalletSnapshot().Revision;
 	FullCommand.ShopInventoryId = FreshShelf->GetShopInventoryId();
-	// 新请求绑定新货架与当前公款版本；报价断言先确认余额、价格和货架前提，失败即结束，不能当作容量验证通过。
+	// 新请求绑定新货架；报价断言先确认余额、价格和货架前提，失败即结束，不能当作容量验证通过。
 	FCatShopResolvedCart FullQuote;
 	ECatDomainCommandError QuoteError = ECatDomainCommandError::None;
 	if (!TestTrue(TEXT("满仓测试报价与货架库存前提成立"),
 		Shop->ResolveCatalogCartForAuthority(FullCommand, FreshShelf, FullQuote, QuoteError))) return false;
 	FCatShopStockSnapshot StockBefore;
 	FreshShelf->TryGetStockSnapshot(Selected.EntryId, StockBefore);
-	const FCatShopCartTransactionResult FullResult = Shop->PurchaseCatalogCart(FullCommand, FreshShelf, FullCamp->GetInventoryComponent());
+	const FCatShopCartTransactionResult FullResult = Trading->RunCartOrder(FullCommand, FreshShelf, FullCamp).CartTransaction;
 	TestEqual(TEXT("满仓拒绝成交"), FullResult.Command.Error, ECatDomainCommandError::CapacityExceeded);
 	FCatShopStockSnapshot StockAfter;
 	FreshShelf->TryGetStockSnapshot(Selected.EntryId, StockAfter);
@@ -192,6 +200,12 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("满仓不推进货架版本"), StockAfter.Revision, StockBefore.Revision);
 	TestEqual(TEXT("满仓不扣公款"), Shop->GetWalletSnapshot().Balance, WalletBefore.Balance - Selected.UnitPrice);
 	TestEqual(TEXT("满仓不新增账本"), Shop->GetTransactionLedgerSnapshot().Num(), 1);
+	// 第二位玩家在首笔付款前已形成请求，服务端按当前余额继续成交。
+	SecondCommand.ShopInventoryId = FreshShelf->GetShopInventoryId();
+	FullCamp->Destroy();
+	auto* SecondCamp = World->SpawnActor<ACatCampInventoryActor>();
+	TestTrue(TEXT("第二位买家不受旧钱包快照限制"), Trading->RunCartOrder(SecondCommand, FreshShelf, SecondCamp).Delivery.bCommitted);
+	TestEqual(TEXT("两笔独立订单只各扣一次"), Shop->GetWalletSnapshot().Balance, WalletBefore.Balance - 2 * Selected.UnitPrice);
 	return !HasAnyErrors();
 }
 

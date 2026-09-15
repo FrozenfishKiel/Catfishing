@@ -1,7 +1,7 @@
 """Create or validate the formal designer-facing fishing fight balance asset.
 
 Run from the Unreal Editor Python console with:
-    py "D:/develop/Catfishing/Scripts/create_fishing_fight_balance_asset.py"
+    py "Scripts/create_fishing_fight_balance_asset.py"   # 在工程根执行
 
 ``UCatFishingSettings`` only stores the soft reference to this asset. The values
 below initialize new assets only. Existing designer values are preserved and
@@ -24,8 +24,6 @@ VALUES = {
     "enable_runtime_definition": True,
     "strength_per_kilogram": 10.0,
     "force_per_strength_newtons": 1.0,
-    "cat_body_mass_kilograms": 5.0,
-    "helper_strength_multiplier": 0.5,
     "exhausted_reel_force_newtons": 200.0,
     "exhausted_cat_tow_acceleration_centimeters_per_second_squared": 300.0,
     "reel_speed_centimeters_per_second": 80.0,
@@ -40,7 +38,7 @@ VALUES = {
     "cat_rod_stamina_multiplier": 1.0,
     "cat_hold_stamina_multiplier": 1.0,
     "cat_load_stamina_multiplier": 1.0,
-    "slack_stamina_regen_per_second": 3.0,
+    "slack_stamina_regen_per_second": 0.0,
     "fish_exhaustion_threshold": 0.5,
     "display_tension_newtons": 50.0,
     "escape_slack_centimeters": 100.0,
@@ -112,7 +110,6 @@ def main():
         f"BalanceId={asset.get_editor_property('balance_definition_id')} "
         f"StrengthPerKg={asset.get_editor_property('strength_per_kilogram'):.3f} "
         f"ForcePerStrengthN={asset.get_editor_property('force_per_strength_newtons'):.3f} "
-        f"CatBodyMassKg={asset.get_editor_property('cat_body_mass_kilograms'):.3f} "
         "ControlMode=SingleOperatorPhysicalAssistance "
         f"ForceModelMigrated={migrated} "
         f"ExhaustedCatEscapeSpeedMultiplier={asset.get_editor_property('exhausted_cat_escape_speed_multiplier'):.3f} "

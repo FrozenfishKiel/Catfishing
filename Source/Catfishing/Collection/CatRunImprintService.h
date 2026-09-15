@@ -28,6 +28,28 @@ public:
 	/** 只读判断服务是否仍能为下一条已提交实物鱼建立 FishRecorded Grant；调用方在 Items 不可逆写入前检查。 */
 	bool CanRecordCommittedCapture() const;
 
+	/**
+	 * 咬钩成立时给这一竿的钓手写一份剪影 Grant（图鉴 §3.1.3:98、钓鱼规则 §5.6:285）。
+	 * 永不撤销：之后跑掉、断竿、放弃、试探期空竿、真咬超时，都不回滚这一层。
+	 * EncounterKey＝本次咬钩机会的稳定键，重放同一机会只生成一份 Grant。
+	 * 墓碑：2026-09-10 删掉的重试预算方案里的 RecordRetryExhaustedSilhouette 是它的前身，
+	 * 那条路只在「重试耗尽」才给剪影，与「上钩成立就揭」相反，随方案一起删除，名字进了禁用符号表
+	 * （Scripts/audit_fishing_failure_removal.py:25），不要复活。
+	 */
+	FGuid RecordFishEncounterSilhouette(FName FishDefinitionId, const FString& RecipientStableNetId,
+		FGuid EncounterKey);
+
+	/** 本人吃掉一条鱼后写知识层 Grant（图鉴 §3.1.4:124「谁吃谁记」）；按接收者+鱼种去重，重复吃不重复授予。 */
+	FGuid RecordFishKnowledge(FName FishDefinitionId, const FString& RecipientStableNetId);
+
+	/**
+	 * 这条鱼对该接收者是不是「首钓新鱼种」（图鉴 §3.1.8:149）。
+	 * 服务端图鉴事实有两个来源：本局已经发出的 FishRecorded Grant（CaptureGrantByRequest 的鱼种投影），
+	 * 与该玩家入局时经 PlayerState 公开的跨局图鉴摘要。两者任一命中即不是首次。
+	 * 调用方必须在 RecordCommittedCapture 之前问，本次捕获自己会立刻把该鱼种写进本局集合。
+	 */
+	bool IsFirstFishRecordForRecipient(const FString& RecipientStableNetId, FName FishDefinitionId) const;
+
 	/** 记录一份外部里程碑已裁决的装备解锁 Grant；本服务只负责不可变投递和 ACK，不决定解锁条件。 */
 	FGuid RecordCommittedUnlock(FName UnlockId, const FString& RecipientStableNetId);
 
@@ -81,6 +103,14 @@ private:
 	/** 在当前 World 查找精确 StableNetId 的项目 PlayerController；断线时返回空且保留投递记录。 */
 	AController* FindControllerByStableNetId(const FString& StableNetId) const;
 
+	/**
+	 * 把一条「某人第一次记录到某鱼种」的公开事实发布到 GameState。
+	 * 它只产生展示用广播：不写任何人的图鉴、不创建 Grant、不影响印记准入。
+	 * AnnouncementId 复用同一次的 FishRecorded GrantId，使重放与复制重发都只对应一条广播。
+	 */
+	void AnnounceFishSpeciesDiscovery(const FString& RecipientStableNetId, FName FishDefinitionId,
+		FGuid AnnouncementId) const;
+
 	/** 创建独立 GrantDeliveryRecord 并尝试投递；调用方必须先保证语义事实只提交一次。 */
 	FGuid EnqueueGrant(FCatProfileGrant Grant);
 
@@ -104,6 +134,15 @@ private:
 
 	/** CaptureRequestId 到 FishRecorded GrantId，保证捕获重放不重复增长图鉴。 */
 	TMap<FGuid, FGuid> CaptureGrantByRequest;
+
+	/** 「接收者|鱼种」到本局已发出的 FishRecorded GrantId；首钓判定读它，避免同一局内第二条同种鱼再抛一次印记。 */
+	TMap<FString, FGuid> FishRecordGrantByRecipientAndFish;
+
+	/** 「接收者|鱼种」到唯一知识层 GrantId；同一个人反复吃同一种鱼不重复生成待 ACK 的 Grant。 */
+	TMap<FString, FGuid> KnowledgeGrantByRecipientAndFish;
+
+	/** 「接收者|咬钩机会」到唯一剪影 GrantId；同一次咬钩重放不重复授予剪影。 */
+	TMap<FString, FGuid> SilhouetteGrantByRecipientAndEncounter;
 
 	/** Recipient+UnlockId 到唯一 Unlock GrantId；重试或重复里程碑不会制造多份待 ACK 解锁。 */
 	TMap<FString, FGuid> UnlockGrantByRecipientAndUnlockId;

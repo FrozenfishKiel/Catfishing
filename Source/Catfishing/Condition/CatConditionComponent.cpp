@@ -124,19 +124,36 @@ ECatWaterExposureUpdate UCatConditionComponent::UpdateWaterExposureFromAuthority
 		: ECatWaterExposureUpdate::Changed;
 }
 
-// 食用预检流程：只读核对 authority、正式鱼定义和成长入口；通过后上层才可以不可逆移除库存实物。
-ECatDomainCommandError UCatConditionComponent::ValidateFishConsumption(const UCatFishDefinition* FishDefinition) const
+// 疲惫档写入流程：服务器先检查状态系统开关与值变化，再更新表现档和版本并发布快照；无权限、未启用或同值时直接返回，不修改体力与倒地状态。
+void UCatConditionComponent::SetFatigueTierFromAuthority(const ECatFatigueTier NewTier)
+{
+	const AActor* Owner = GetOwner();
+	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
+	if (!Owner || !Owner->HasAuthority() || !Settings || !Settings->IsRuntimeReady()
+		|| Snapshot.FatigueTier == NewTier)
+	{
+		return;
+	}
+	Snapshot.FatigueTier = NewTier;
+	++Snapshot.Revision;
+	PublishSnapshot();
+	UE_LOG(LogCatCharacter, Log, TEXT("Event=character_fatigue_tier_changed Character=%s Tier=%s Revision=%lld"),
+		*Owner->GetName(), *UEnum::GetValueAsString(NewTier), Snapshot.Revision);
+}
+
+// 食用预检流程：只读核对 authority、正式鱼定义、实例实际重量（千克）和成长入口；通过后上层才可以不可逆移除库存实物。
+ECatDomainCommandError UCatConditionComponent::ValidateFishConsumption(const UCatFishDefinition* FishDefinition, const double WeightKilograms) const
 {
 	const ACatCharacter* Character = Cast<ACatCharacter>(GetOwner());
 	const UCatGrowthComponent* Growth = Character ? Character->GetGrowthComponent() : nullptr;
 	return GetOwner() && GetOwner()->HasAuthority() && FishDefinition && FishDefinition->IsRuntimeDefinitionReady()
-		&& Growth && Growth->ValidateFishGrowth(FishDefinition) == ECatDomainCommandError::None
+		&& Growth && Growth->ValidateFishGrowth(FishDefinition, WeightKilograms) == ECatDomainCommandError::None
 		? ECatDomainCommandError::None : ECatDomainCommandError::DependencyUnavailable;
 }
 
 // 进食流程：先按 RequestId 回放首次终态，再复用预检并提交成长；进食不会再写入中毒、倒地或其他身体数值。
 FCatDomainCommandResult UCatConditionComponent::ConsumeCommittedFish(const FGuid RequestId,
-	const UCatFishDefinition* FishDefinition)
+	const UCatFishDefinition* FishDefinition, const double WeightKilograms)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
@@ -149,13 +166,13 @@ FCatDomainCommandResult UCatConditionComponent::ConsumeCommittedFish(const FGuid
 	}
 	const ACatCharacter* Character = Cast<ACatCharacter>(GetOwner());
 	UCatGrowthComponent* Growth = Character ? Character->GetGrowthComponent() : nullptr;
-	if (!RequestId.IsValid() || ValidateFishConsumption(FishDefinition) != ECatDomainCommandError::None)
+	if (!RequestId.IsValid() || ValidateFishConsumption(FishDefinition, WeightKilograms) != ECatDomainCommandError::None)
 	{
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 	}
 	else
 	{
-		Result = Growth->ApplyCommittedFish(RequestId, FishDefinition);
+		Result = Growth->ApplyCommittedFish(RequestId, FishDefinition, WeightKilograms);
 		Result.RequestId = RequestId;
 		if (CatIsAcceptedDomainCommandResult(Result))
 		{

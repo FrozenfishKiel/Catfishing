@@ -7,6 +7,7 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StateTreeComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/BoxComponent.h"
 #include "Data/CatFishCatalogSettings.h"
 #include "Data/CatFishDefinition.h"
 #include "Fishing/Presentation/CatFishAnimInstance.h"
@@ -28,6 +29,13 @@ ACatFishEncounterActor::ACatFishEncounterActor()
 	// 根组件只承载权威 Transform；VisualRoot 只做力竭侧翻，FishMesh 由鱼种库表现定义直接配置。
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
+	// T15，钓鱼规则 §5.5：查询碰撞体给所有端同一个鱼中心；不向运动求解施加阻挡力。
+	FishingCollision = CreateDefaultSubobject<UBoxComponent>(TEXT("FishingCollision"));
+	FishingCollision->SetupAttachment(SceneRoot);
+	FishingCollision->SetBoxExtent(FVector(25.0));
+	FishingCollision->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	FishingCollision->SetCollisionResponseToAllChannels(ECR_Ignore);
+	FishingCollision->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 	VisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VisualRoot"));
 	VisualRoot->SetupAttachment(SceneRoot);
 	FishMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("FishMesh"));
@@ -149,6 +157,21 @@ FVector ACatFishEncounterActor::GetVisualWorldLocation() const
 		: VisualRoot ? VisualRoot->GetComponentLocation() : GetActorLocation();
 }
 
+// 鱼种解析流程：只从已复制的表现状态取稳定 ID 再问目录，服务器与客户端同源；身份未初始化时返回空。
+UCatFishDefinition* ACatFishEncounterActor::GetFishDefinition() const
+{
+	const UCatFishCatalogSettings* Catalog = GetDefault<UCatFishCatalogSettings>();
+	return Catalog && !PresentationState.FishDefinitionId.IsNone()
+		? Catalog->FindRuntimeDefinition(PresentationState.FishDefinitionId) : nullptr;
+}
+
+// 表现定义解析流程：沿鱼定义唯一的表现引用取资产；漂讯与水面三个逐鱼槽位由表现层从返回值上读。
+UCatFishPresentationDefinition* ACatFishEncounterActor::GetFishPresentationDefinition() const
+{
+	const UCatFishDefinition* Fish = GetFishDefinition();
+	return Fish ? Fish->LoadRuntimePresentationDefinition() : nullptr;
+}
+
 namespace CatFishEncounterPresentationPrivate
 {
 	static const TCHAR* NetModeValue(const ENetMode NetMode)
@@ -226,6 +249,12 @@ void ACatFishEncounterActor::ApplyVisualScale()
 	const double Scale = FMath::IsFinite(PresentationState.VisualScale) && PresentationState.VisualScale > 0.0
 		? PresentationState.VisualScale : 1.0;
 	FishMesh->SetRelativeScale3D(EncounterMeshBaseTransform.GetScale3D() * Scale);
+	if (FishingCollision && FishMesh->GetSkeletalMeshAsset())
+	{
+		const FBoxSphereBounds LocalBounds = FishMesh->CalcBounds(FishMesh->GetComponentTransform().GetRelativeTransform(GetActorTransform()));
+		FishingCollision->SetRelativeLocation(LocalBounds.Origin);
+		FishingCollision->SetBoxExtent(LocalBounds.BoxExtent.ComponentMax(FVector(2.0)));
+	}
 }
 
 void ACatFishEncounterActor::ApplyVisualPose()
@@ -438,4 +467,9 @@ void ACatFishEncounterActor::DispatchPresentationChanged(const FCatFishEncounter
 {
 	// 唯一对外通知口：转发给蓝图可实现事件，由表现层（动画/特效/UI）决定如何响应状态变化。
 	BP_OnFishPresentationChanged(Previous, Current);
+}
+
+FVector ACatFishEncounterActor::GetFishingCollisionCenter() const
+{
+	return FishingCollision->Bounds.Origin;
 }

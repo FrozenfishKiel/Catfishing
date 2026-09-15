@@ -71,7 +71,16 @@ Catfishing 是一个基于 Unreal Engine 5.8 的联机钓鱼与营地协作项�
 
 ### 基础环境
 
-- Unreal Engine：`D:\UE_5.8`
+- Unreal Engine：5.8（版本号见 `Catfishing.uproject` 的 `EngineAssociation`）。
+  **引擎装在哪台机器上都不一样，本仓库任何文档都不写死它的绝对路径**——下面的命令统一用
+  `$env:UE_ROOT` 指代引擎安装目录，每个新终端先设一次：
+
+  ```powershell
+  $env:UE_ROOT = '<你机器上 UE 5.8 的安装目录>'   # 该目录下应有 Engine\Build\BatchFiles\Build.bat
+  ```
+
+  别指望自动发现：注册表 `HKLM:\SOFTWARE\EpicGames\Unreal Engine` 只登记 Launcher 装的版本，
+  本机那里有 4.27／5.3～5.6 而**没有 5.8**。
 - 项目文件：`Catfishing.uproject`
 - 默认地图：`/Game/Catfishing/Maps/Frontend`
 - 当前基础地图：`Frontend`、`Lake`
@@ -81,42 +90,56 @@ Catfishing 是一个基于 Unreal Engine 5.8 的联机钓鱼与营地协作项�
 在项目根目录运行：
 
 ```powershell
-& 'D:\UE_5.8\Engine\Build\BatchFiles\Build.bat' CatfishingEditor Win64 Development -Project='D:\UnreaProjects\Catfishing\Catfishing.uproject' -WaitMutex -NoHotReload
+& "$env:UE_ROOT\Engine\Build\BatchFiles\Build.bat" CatfishingEditor Win64 Development -Project="$PWD\Catfishing.uproject" -WaitMutex -NoHotReload
 
-& 'D:\UE_5.8\Engine\Build\BatchFiles\Build.bat' Catfishing Win64 Development -Project='D:\UnreaProjects\Catfishing\Catfishing.uproject' -WaitMutex -NoHotReload
+& "$env:UE_ROOT\Engine\Build\BatchFiles\Build.bat" Catfishing Win64 Development -Project="$PWD\Catfishing.uproject" -WaitMutex -NoHotReload
 ```
 
 ### 自动化测试
 
-当前完整自动化批次是 64 条测试：63 条 `Catfishing.Unit.*` 和 1 条 `Catfishing.Slice.*`。
+当前批次是 88 条 `Catfishing.Unit.*`。**`Catfishing.Slice.*` 套件已不存在**（源码里已无该命名空间），
+下面的口径全部按 `Catfishing.Unit` 写。
+
+日常跑：
+
+```powershell
+& "$env:UE_ROOT\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" "$PWD\Catfishing.uproject" -ExecCmds="Automation RunTests Catfishing.Unit; Quit" -unattended -nopause -nosplash -NullRHI -log
+```
+
+结果在 `Saved/Logs/Catfishing.log`，数两个标记：
+
+```powershell
+(Select-String -Path 'Saved/Logs/Catfishing.log' -Pattern 'Result=\{Success\}' -AllMatches).Matches.Count
+(Select-String -Path 'Saved/Logs/Catfishing.log' -Pattern 'Result=\{Fail\}' -AllMatches).Matches.Count
+```
+
+**当前实际是 81 通过 / 7 失败，不是全绿。** 这 7 条红项：
+
+```text
+Catfishing.Unit.Fishing.BiteTiming.WorldFieldsDriveFormalStateTreeAndBobber
+Catfishing.Unit.Fishing.Effort.ActualWorkAndSupportPreservePricingIndependenceUnderFiniteReel
+Catfishing.Unit.Fishing.Effort.ExhaustionAndReleasedSlackRespectEffortBoundaries
+Catfishing.Unit.Fishing.Effort.LineLimitStopsRecoveryOnArrivalAndUsesFinalPaidLength
+Catfishing.Unit.Fishing.Runner.OperatorSamplesAndSingleASCSettlementRemainConservative
+Catfishing.Unit.Fishing.Runner.PrimaryOperatorStrengthAndCostsIgnorePhysicalHelpers
+Catfishing.Unit.Inventory.EquipmentItemPickupRejectsFullBagAndPreventsReentrantDoubleGrant
+```
+
+**改代码前先建基线**：`git stash -u` 回到对比点跑一遍，回来再跑一遍，比失败集的差集。
+不然分不清「你弄红的」和「本来就红的」。这 7 条的成因见
+`Docs/Development/2026-09-12-设计待办批量实现说明.md` 第七节。
+
+需要完整报告（`index.json`）时：
 
 ```powershell
 New-Item -ItemType Directory -Force -Path 'Saved/Automation/user-acceptance-01/Report' | Out-Null
 
-& 'D:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe' 'D:\UnreaProjects\Catfishing\Catfishing.uproject' -unattended -nop4 -nosplash -nullrhi -DDC-ForceMemoryCache '-ExecCmds=Automation RunTests Catfishing;Quit' '-TestExit=Automation Test Queue Empty' '-ReportExportPath=D:\UnreaProjects\Catfishing\Saved\Automation\user-acceptance-01\Report' '-abslog=D:\UnreaProjects\Catfishing\Saved\Automation\user-acceptance-01\Automation.log'
+& "$env:UE_ROOT\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" "$PWD\Catfishing.uproject" -unattended -nop4 -nosplash -nullrhi -DDC-ForceMemoryCache '-ExecCmds=Automation RunTests Catfishing.Unit;Quit' '-TestExit=Automation Test Queue Empty' "-ReportExportPath=$PWD\Saved\Automation\user-acceptance-01\Report" "-abslog=$PWD\Saved\Automation\user-acceptance-01\Automation.log"
 ```
-
-验收时读取：
 
 ```powershell
 $json = Get-Content -Raw 'Saved/Automation/user-acceptance-01/Report/index.json' | ConvertFrom-Json
-$json.succeeded
-$json.succeededWithWarnings
-$json.failed
-$json.notRun
-$json.inProcess
-$json.tests.Count
-```
-
-当前期望：
-
-```text
-succeeded = 64
-succeededWithWarnings = 0
-failed = 0
-notRun = 0
-inProcess = 0
-tests.Count = 64
+$json.succeeded; $json.failed; $json.notRun; $json.tests.Count
 ```
 
 ### 打开项目

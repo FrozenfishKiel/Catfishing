@@ -22,8 +22,7 @@ ACatFishTankActor* ACatCampHubActor::ResolveSharedFishTank() const
 
 namespace
 {
-	/** 营地玩家出生环的默认半径，单位厘米；它让初始 Pawn 离开营地中心和 PlayerStart 胶囊，同时仍处在常规营地交互半径内。 */
-	constexpr double CatCampPlayerEntryRingRadiusCentimeters = 300.0;
+	// 墓碑（2026-09-13）：出生环半径移至 CatCampSettings；地面探测余量与碰撞容差仍是工程常量。
 
 	/** 营地出生地面探测的上方余量，单位厘米；它允许营地实例按地面设施或 PlayerStart 中心两种编辑器高度摆放。 */
 	constexpr double CatCampPlayerEntryGroundProbeUpCentimeters = 1200.0;
@@ -127,7 +126,7 @@ bool ACatCampHubActor::TryResolvePlayerEntryTransform(const int32 PreferredEntry
 		const int32 CandidateIndex =
 			(PreferredEntryIndex + AttemptIndex) % CatGameplayPlayerLimits::MaxCampSpawnPlayers;
 		const FVector CandidateAnchorLocation =
-			GetActorLocation() + CandidateDirections[CandidateIndex] * CatCampPlayerEntryRingRadiusCentimeters;
+			GetActorLocation() + CandidateDirections[CandidateIndex] * GetDefault<UCatCampSettings>()->GetPlayerEntryRingRadiusCentimeters();
 		FVector CandidateLocation = FVector::ZeroVector;
 		if (!TryProjectCampEntryCandidateToGround(World, this, CandidateAnchorLocation, PawnHalfHeight,
 			CandidateLocation))
@@ -180,7 +179,8 @@ ACatCampInventoryActor* ACatCampHubActor::ResolvePublicInventoryForShopOrder() c
 		? PublicInventory : nullptr;
 }
 
-// 篝火回看流程：先由服务器 UniqueId 与 RequestId 重放首次终态，再验证固定营地范围、结算夜和封面事件配置。随后逐个确认 GameState 玩家仍有有效身份、Controller 和营地内 Character，提交全员 Candidate，并通过批量接口先建齐全部 Planned 记录、再尝试投递；任一前置或落盘失败都会缓存拒绝且不发网络表现。全部事实成立后才用 Reliable NetMulticast 把原 RequestId 送到相关客户端，并缓存首次成功；本流程不写 next-day ready、不等待客户端播放完成，也不保存补播状态。
+// 结算夜合影封面流程（原名「篝火回看流程」，回看仪式已由设计 v1.14 删除，见头文件墓碑注释）：
+// 先由服务器 UniqueId 与 RequestId 重放首次终态，再验证固定营地范围、结算夜和封面事件配置。随后逐个确认 GameState 玩家仍有有效身份、Controller 和营地内 Character，提交全员 Candidate，并通过批量接口先建齐全部 Planned 记录、再尝试投递；任一前置或落盘失败都会缓存拒绝且不发网络表现。全部事实成立后才用 Reliable NetMulticast 把原 RequestId 送到相关客户端，并缓存首次成功；本流程不写 next-day ready、不等待客户端播放完成，也不保存补播状态。
 FCatDomainCommandResult ACatCampHubActor::RequestCampfirePlayback(AController* RequestingController, const FGuid RequestId)
 {
 	FCatDomainCommandResult Result;
@@ -273,7 +273,7 @@ FCatDomainCommandResult ACatCampHubActor::RequestCampfirePlayback(AController* R
 	return Finish(Result);
 }
 
-// 篝火网络表现流程：NetMulticast 已由引擎把服务器确认的 RequestId 分发到该 Actor 的相关连接；每个收到调用的进程只广播一次既有本地委托，不写 ACK、ready、补播队列或持久状态。
+// 合影封面网络表现流程：NetMulticast 已由引擎把服务器确认的 RequestId 分发到该 Actor 的相关连接；每个收到调用的进程只广播一次既有本地委托，不写 ACK、ready、补播队列或持久状态。
 void ACatCampHubActor::MulticastCampfirePlaybackRequested_Implementation(const FGuid RequestId)
 {
 	OnCampfirePlaybackRequested.Broadcast(RequestId);

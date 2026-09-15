@@ -9,7 +9,11 @@ bool UCatEquipmentFragment_Rod::IsRuntimeReady() const
 		return !Transform.ContainsNaN() && Transform.GetRotation().IsNormalized()
 			&& !Transform.GetScale3D().IsNearlyZero();
 	};
-	return FMath::IsFinite(MaximumRodDurability)
+	// 竿强度只校验结构合法（有限、非负）：0 是"未配置"这一有意义的内容态，由强度检查在使用点 fail-closed，
+	// 与 UCatFishDefinition::ScoopTargetRadiusCentimeters 同一套口径；在这里硬性要求正值会让尚未补值的正式鱼竿整根不可用。
+	return FMath::IsFinite(FishingStrength)
+		&& FishingStrength >= 0.0
+		&& FMath::IsFinite(MaximumRodDurability)
 		&& MaximumRodDurability > 0.0
 		&& FMath::IsFinite(MaximumLineLengthCentimeters)
 		&& MaximumLineLengthCentimeters > 0.0

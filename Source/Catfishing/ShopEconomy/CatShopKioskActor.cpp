@@ -1,8 +1,9 @@
 #include "ShopEconomy/CatShopKioskActor.h"
+#include "ShopEconomy/CatShopEconomyService.h"
+#include "Framework/Game/CatfishingGameState.h"
 
 #include "Components/SceneComponent.h"
 #include "GameFramework/Controller.h"
-#include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "UI/Shop/CatShopInteractionComponent.h"
 #include "ShopEconomy/CatShopInventoryComponent.h"
@@ -20,18 +21,31 @@ ACatShopKioskActor::ACatShopKioskActor()
 	InteractionPrompt = NSLOCTEXT("Catfishing", "ShopKioskInteractionPrompt", "打开商店");
 }
 
+// 营业状态读取：服务器读取交易服务，客户端读取复制快照；世界或依赖尚未就绪时拒绝开店。
+bool ACatShopKioskActor::IsShopTradingOpen() const
+{
+	if (!GetWorld()) return false;
+	if (HasAuthority())
+	{
+		const auto* Shop = GetWorld()->GetSubsystem<UCatShopEconomyService>();
+		return Shop && Shop->AreCommandsOpen();
+	}
+	const auto* State = GetWorld()->GetGameState<ACatfishingGameState>();
+	return State && State->GetShopEconomySnapshot().bCommandsOpen;
+}
+
 bool ACatShopKioskActor::CanInteract_Implementation(AController* RequestingController) const
 {
 	// 交互 gate 流程：只允许本地玩家在页面未打开时进入 UI；营地和公共仓库留到服务端订单提交时检查。
 	const APlayerController* PlayerController = Cast<APlayerController>(RequestingController);
-	return bInteractionEnabled && PlayerController && PlayerController->IsLocalController()
+	return IsShopTradingOpen() && bInteractionEnabled && PlayerController && PlayerController->IsLocalController()
 		&& ShopInteraction && !ShopInteraction->IsShopOpen();
 }
 
 FText ACatShopKioskActor::GetInteractionPrompt_Implementation() const
 {
 	// 提示读取流程：复用交互开关和页面状态决定是否展示文案；不可交互时返回空文本防止提示残留。
-	return bInteractionEnabled && ShopInteraction && !ShopInteraction->IsShopOpen()
+	return IsShopTradingOpen() && bInteractionEnabled && ShopInteraction && !ShopInteraction->IsShopOpen()
 		? InteractionPrompt : FText::GetEmpty();
 }
 

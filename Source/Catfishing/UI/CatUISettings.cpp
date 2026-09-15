@@ -1,8 +1,10 @@
-﻿#include "UI/CatUISettings.h"
+#include "UI/CatUISettings.h"
 
 #include "EnhancedActionKeyMapping.h"
 #include "InputAction.h"
 #include "InputMappingContext.h"
+#include "UI/Collection/CatCollectionWidget.h"
+#include "UI/Collection/CatFishRevealWidget.h"
 #include "UI/HUD/CatHUDWidget.h"
 #include "UI/Run/CatAltarConfirmationWidget.h"
 #include "UI/Run/CatDayTransitionWidget.h"
@@ -15,7 +17,7 @@
 #include "UI/ItemTooltip/CatItemTooltipWidget.h"
 #include "UI/Save/CatLakeMainMenuWidget.h"
 
-// 构造流程：为翻天、物品提示、HUD、背包及格子、交互提示、前端和局内菜单写入正式 WBP 默认软路径，再设置既有 InputAction 与 InputContext 的输入资产路径。
+// 构造流程：为翻天、物品提示、HUD、背包及格子、交互提示、前端、局内菜单和图鉴写入正式 WBP 默认软路径，再设置既有 InputAction 与 InputContext 的输入资产路径。
 // 此处只保存可被项目配置覆盖的引用，不加载或创建控件；各加载入口在实际装配时解析资产。
 UCatUISettings::UCatUISettings()
 {
@@ -43,12 +45,18 @@ UCatUISettings::UCatUISettings()
 		FSoftClassPath(TEXT("/Game/UI/Interaction/WBP_CatInteractionPrompt.WBP_CatInteractionPrompt_C")));
 	LakeMainMenuWidgetClass = TSoftClassPtr<UCatLakeMainMenuWidget>(
 		FSoftClassPath(TEXT("/Game/UI/Save/WBP_CatLakeMainMenu.WBP_CatLakeMainMenu_C")));
+	CollectionWidgetClass = TSoftClassPtr<UCatCollectionWidget>(
+		FSoftClassPath(TEXT("/Game/UI/Collection/WBP_CatCollection.WBP_CatCollection_C")));
+	FishRevealWidgetClass = TSoftClassPtr<UCatFishRevealWidget>(
+		FSoftClassPath(TEXT("/Game/UI/Collection/WBP_CatFishReveal.WBP_CatFishReveal_C")));
 	MainMenuToggleAction = TSoftObjectPtr<UInputAction>(
 		FSoftObjectPath(TEXT("/Game/Input/InputAction/IA_LakeMenu.IA_LakeMenu")));
 	InventoryToggleAction = TSoftObjectPtr<UInputAction>(
 		FSoftObjectPath(TEXT("/Game/Input/InputAction/IA_Inventory.IA_Inventory")));
 	InteractionConfirmAction = TSoftObjectPtr<UInputAction>(
 		FSoftObjectPath(TEXT("/Game/Input/InputAction/IA_Interact.IA_Interact")));
+	CollectionToggleAction = TSoftObjectPtr<UInputAction>(
+		FSoftObjectPath(TEXT("/Game/Input/InputAction/IA_Collection.IA_Collection")));
 	GameplayInputMappingContext = TSoftObjectPtr<UInputMappingContext>(
 		FSoftObjectPath(TEXT("/Game/Input/InputContext/IMC_InputContext.IMC_InputContext")));
 }
@@ -162,6 +170,29 @@ TSubclassOf<UCatLakeMainMenuWidget> UCatUISettings::LoadLakeMainMenuWidgetClass(
 	return LoadedClass;
 }
 
+// 图鉴 WBP 类加载流程：同步解析配置软类并验证继承图鉴基类；失败返回空，让图鉴入口 fail-closed，不创建原生白盒替身。
+TSubclassOf<UCatCollectionWidget> UCatUISettings::LoadCollectionWidgetClass() const
+{
+	UClass* LoadedClass = CollectionWidgetClass.LoadSynchronous();
+	if (!LoadedClass || !LoadedClass->IsChildOf(UCatCollectionWidget::StaticClass()))
+	{
+		return nullptr;
+	}
+	return LoadedClass;
+}
+
+// 首解锁特写 WBP 类加载流程：同步解析配置软类并验证继承特写基类；失败返回空。
+// 这一层缺席只意味着这次不弹特写，图鉴记录仍然已经写进 Profile——所以这里绝不能把它做成阻断写入的闸门。
+TSubclassOf<UCatFishRevealWidget> UCatUISettings::LoadFishRevealWidgetClass() const
+{
+	UClass* LoadedClass = FishRevealWidgetClass.LoadSynchronous();
+	if (!LoadedClass || !LoadedClass->IsChildOf(UCatFishRevealWidget::StaticClass()))
+	{
+		return nullptr;
+	}
+	return LoadedClass;
+}
+
 // 主菜单 Action 加载流程：同步解析配置软引用；失败返回空，让菜单控制器记录降级且不硬写 Escape。
 UInputAction* UCatUISettings::LoadMainMenuToggleAction() const
 {
@@ -178,6 +209,12 @@ UInputAction* UCatUISettings::LoadInventoryToggleAction() const
 UInputAction* UCatUISettings::LoadInteractionConfirmAction() const
 {
 	return InteractionConfirmAction.LoadSynchronous();
+}
+
+// 图鉴 Action 加载流程：同步解析配置软引用；失败返回空，让图鉴页面控制器记录降级并只保留 HUD 与局内菜单按钮入口。
+UInputAction* UCatUISettings::LoadCollectionToggleAction() const
+{
+	return CollectionToggleAction.LoadSynchronous();
 }
 
 // Gameplay IMC 加载流程：同步解析项目既有 InputContext；返回空表示正式输入资产缺失，调用方不得补建第二套 Context。
@@ -270,4 +307,33 @@ TSubclassOf<UCatInventorySlotWidget> UCatUISettings::LoadInventoryQuickbarSlotWi
 {
 	UClass* LoadedClass = InventoryQuickbarSlotWidgetClass.LoadSynchronous();
 	return LoadedClass && LoadedClass->IsChildOf(UCatInventorySlotWidget::StaticClass()) ? LoadedClass : nullptr;
+}
+
+// 图鉴键名解析流程：
+// 1. 先加载配置的图鉴 Action 和项目唯一 Mapping Context，缺任一资产都返回 None。
+// 2. 如果该 Action 已被局内主菜单或背包占用，图鉴快捷键提示返回 None，避免把同一个键显示成两个入口。
+// 3. 再遍历 IMC 默认映射，找到该 Action 的第一条有效按键。
+// 4. 结果只用于 UIOnly 焦点下关闭图鉴页，不参与运行时重新 MapKey。
+FName UCatUISettings::ResolveCollectionToggleKeyName() const
+{
+	const UInputAction* Action = LoadCollectionToggleAction();
+	const UInputAction* MainMenuAction = LoadMainMenuToggleAction();
+	const UInputAction* InventoryAction = LoadInventoryToggleAction();
+	const UInputMappingContext* MappingContext = LoadGameplayInputMappingContext();
+	if (!Action || !MappingContext)
+	{
+		return NAME_None;
+	}
+	if ((MainMenuAction && Action == MainMenuAction) || (InventoryAction && Action == InventoryAction))
+	{
+		return NAME_None;
+	}
+	for (const FEnhancedActionKeyMapping& Mapping : MappingContext->GetMappings())
+	{
+		if (Mapping.Action == Action && Mapping.Key.IsValid())
+		{
+			return Mapping.Key.GetFName();
+		}
+	}
+	return NAME_None;
 }

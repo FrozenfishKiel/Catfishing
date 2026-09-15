@@ -29,7 +29,12 @@ public:
 	/** 宿主离开时按精确组件解除登记，包含正在销毁的组件；恢复中非预期注销会封锁提交，已有终态不会自动改挂到其他容器。 */
 	void UnregisterContainer(UCatContainerReplicationComponent* ReplicationComponent);
 
-	/** 复制指定容器已提交的公开事实供上层读取；不存在时整体失败。 */
+	/**
+	 * 复制指定容器已提交的公开事实供上层读取；不存在时整体失败。
+	 * 开成 BlueprintCallable 只是为了让服务器侧表现与验收蓝图能读到这份事实；它没有写口，
+	 * 而且本服务只在 authority World 创建，客户端调用只会拿到 false。
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|FishContainers")
 	bool TryGetContainerSnapshot(FGuid ContainerId, FCatContainerSnapshot& OutSnapshot) const;
 
 	/** 返回容器的服务器种类与真实 Actor 宿主；供空间权限校验使用，授权身份仍从鱼实例或调用方上下文读取。 */
@@ -41,11 +46,7 @@ public:
 	/** 恢复世界鱼容器；内部先校验宿主、容量、定义和实例唯一性，再创建动态宿主并提交鱼数组，失败时关闭本 World 写口。 */
 	bool RestorePersistedWorldFishContainers(const TArray<FCatPersistentContainerSnapshot>& SavedContainers);
 
-	/** 嘴叼世界鱼对具体鱼护入箱时的唯一提交入口；恢复期间拒绝新提交，同 RequestId/会话重放只返回首次 Committed DTO。 */
-	FCatCaptureCommitResult CommitCapture(const FCatCaptureCommitCommand& Command);
 
-	/** 不处于恢复窗口时原子移动一条鱼；UI/RPC 只能提交鱼实例与槽位。 */
-	FCatDomainCommandResult TransferOwnedFish(const FCatFishTransferCommand& Command);
 
 	/** Controller 在服务器上发起直接吃鱼时调用；本服务会用服务器身份重读可触达的鱼护或共享鱼缸，并在容器移除成功或终态重放成功后才把食用效果交给目标 Character。 */
 	FCatFishConsumeResult ConsumeReachableFish(AController* RequestingController,
@@ -96,12 +97,6 @@ private:
 
 	/** 恢复当前正在创建或销毁的唯一宿主；注册与注销只接受这条生命周期配对，其他宿主的重入会封锁恢复。 */
 	TWeakObjectPtr<AActor> ExpectedRestoreHost;
-	/** 捕获命令的首次完整终态缓存。 */
-	TMap<FString, FCatCaptureCommitResult> CaptureTerminalCache;
-	/** FishingSessionId 到唯一捕获提交事实；即使换身份或 RequestId，也不能为同一会话创建第二条鱼。 */
-	TMap<FGuid, FCatCaptureCommittedResult> CaptureByFishingSession;
-	/** 转移命令的首次完整终态缓存。 */
-	TMap<FString, FCatDomainCommandResult> TransferTerminalCache;
 	/** 直接吃鱼命令的首次完整终态缓存。 */
 	TMap<FString, FCatFishConsumeResult> ConsumeTerminalCache;
 	/** 直接吃鱼终态的请求载荷签名；防止同身份同容器同 RequestId 改鱼实例后重放已记录终态。 */

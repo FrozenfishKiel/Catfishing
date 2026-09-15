@@ -12,12 +12,12 @@ public class Catfishing : ModuleRules
 		{
 			"Core", "CoreUObject", "Engine", "DeveloperSettings", "UMG", "AudioMixer",
 			"GameplayAbilities", "GameplayTags", "NetCore", "OnlineSubsystem", "StateTreeModule",
-			"GameplayStateTreeModule", "ProceduralMeshComponent"
+			"GameplayStateTreeModule", "ProceduralMeshComponent", "OnlineSubsystemUtils"
 		});
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
 			"InputCore", "ApplicationCore", "GameplayTasks", "EnhancedInput",
-			"Slate", "SlateCore", "OnlineSubsystemUtils", "PhysicsCore", "Chaos"
+			"Slate", "SlateCore", "Sockets", "PhysicsCore", "Chaos"
 		});
 		// Steamworks.Build.cs 只导出 SDK 版本与路径，不定义功能宏；按 UE 5.8 Steam 插件的平台支持范围装配宏和依赖，Win64 ARM64 被插件明确排除。
 		bool bWithSteamworks = (Target.Platform == UnrealTargetPlatform.Win64 && Target.Architecture == UnrealArch.X64)

@@ -1,5 +1,5 @@
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
-#include "AbilitySystem/Physics/CatPhysicalEffortComponent.h"
+#include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
 
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Interaction/Grab/CatLightPropComponent.h"
@@ -12,6 +12,8 @@
 #include "Components/CapsuleComponent.h"
 #include "Interaction/CatModelContactComponent.h"
 #include "Engine/World.h"
+#include "GameFramework/Controller.h"
+#include "GameFramework/PlayerState.h"
 #include "Net/UnrealNetwork.h"
 #include "PhysicsEngine/PhysicsConstraintComponent.h"
 
@@ -97,6 +99,7 @@ void UCatPhysicsGrabComponent::ServerSetGrabInput_Implementation(const bool bLef
 
 void UCatPhysicsGrabComponent::ApplyGrabInput(const bool bLeft, const bool bHeld)
 {
+	if (bHeld && UCatGE_FishingScoopCooldown::IsOperationBlocked(GetOwner())) return;
 	FCatPhysicsGripState& State = bLeft ? LeftGrip : RightGrip;
 	if (!bHeld)
 	{
@@ -304,13 +307,8 @@ void UCatPhysicsGrabComponent::UpdateHand(const bool bLeft, const FVector& Aim)
 
 void UCatPhysicsGrabComponent::TryLatch(const bool bLeft, const FHitResult& Hit)
 {
-	if (const auto* Effort = GetOwner()->FindComponentByClass<UCatPhysicalEffortComponent>())
-		if (!Effort->CanGripFromAuthority())
-		{
-			bLatchedUntilRelease[bLeft ? 0 : 1] = true;
-			LogGrip(bLeft, TEXT("physics_grip_rejected"), TEXT("PhysicalEffortUnavailable"));
-			return;
-		}
+	// 墓碑（2026-09-14）：删除 CanGripFromAuthority 的力竭门；
+	// Knowledge/Design/设计修改记录.md 2026-09-13 裁决⑥。零体力仍可抓，力量预算另由余额裁决。
 	UPrimitiveComponent* Target = Hit.GetComponent();
 	if (!IsReachSurface(Target, Hit.BoneName, bLeft)) return;
 	const UCatPhysicalBodyComponent* PhysicalBody = GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>();
@@ -333,6 +331,7 @@ void UCatPhysicsGrabComponent::TryLatch(const bool bLeft, const FHitResult& Hit)
 	RefreshContact(bLeft, true);
 	++State.Revision;
 	bLatchedUntilRelease[Index] = true;
+	RecordGripContribution(State.TargetActor, true);
 	LogGrip(bLeft, TEXT("physics_grip_created"), UsesCharacterMovement() ? TEXT("BidirectionalTraction") : TEXT("Constrained"));
 	if (auto* LightProp = UCatLightPropComponent::FindFor(Target)) LightProp->RefreshGripsFromAuthority(TEXT("GripCreated"));
 	OnGripChanged.Broadcast(this,bLeft,Previous,State);
@@ -359,6 +358,8 @@ void UCatPhysicsGrabComponent::ReleaseHand(const bool bLeft, const FName Reason,
 	if (Previous.bExplicitHold) bLatchedUntilRelease[Index] = false;
 	if (!bChanged) return;
 	++State.Revision;
+	// 松手只把「此刻还抓着」落下去，时间戳留着：这一竿里摸过就是摸过，中途换手不该把人从合影里删掉。
+	RecordGripContribution(Previous.TargetActor, false);
 	// Keep the final GripId in the release snapshot so both ends can correlate its lifetime.
 	LogGrip(bLeft, TEXT("physics_grip_released"), Reason);
 	State.TargetActor = nullptr;
@@ -591,7 +592,9 @@ void UCatPhysicsGrabComponent::ApplyTraction(bool bLeft)
 	const FVector Point = GetGripWorldLocation(bLeft);
 	const FVector Desired = GetShoulderWorldLocation(bLeft) + Physical->GetViewIntent().RotateVector(State.HeldAimLocalOffset);
 	const FVector TargetVelocity = Receiver ? Receiver->GetVelocity() : Target->GetPhysicsLinearVelocityAtPoint(Point);
-	// Force on target; the holder receives the equal and opposite force. No fishing membership or stamina sum.
+	// Force on target; the holder receives the equal and opposite force. Each cat pulls at its own full
+	// strength and pays its own stamina, so this math still reads no fishing membership and sums no stamina.
+	// Who touched the rod is recorded elsewhere (GripContributions) purely as the credit list's source.
 	FVector Force = ((Desired - Point) * 650.0 + (Physical->GetVelocity() - TargetVelocity) * 24.0).GetClampedToMaxSize(10000.0);
     const bool bCharacterPair = Physical->UsesCharacterMovement() && Receiver && Receiver->UsesCharacterMovement();
     const double JumpWeight = bCharacterPair ? FMath::Max(Physical->GetJumpTractionWeight(),Receiver->GetJumpTractionWeight()) : 0;
@@ -655,6 +658,52 @@ void UCatPhysicsGrabComponent::RefreshKinematicHands()
 		}
 		Hands[bLeft?0:1]->SetWorldLocation(Point, false, nullptr, ETeleportType::TeleportPhysics);
 	}
+}
+
+// 贡献记录流程：只有权威侧写，目标无效直接跳过。
+// 抓住时刷新时间戳并置「还抓着」；松手时时间戳原样保留——这一竿里摸过一次就够进演出贡献名单，中途换手不该把人删掉。
+// 「还抓着」按两只手的当前状态重算，而不是直接置假：一只手松开时另一只手可能还握在同一个目标上，
+// 调用方进来时该手的 bGripped 已经落下，所以这里读到的就是剩余握持的真实结果。
+// 本组件不知道搏斗什么时候开始或结束，所以记录跟着 World 生命周期走，筛选窗口由调用方给。
+void UCatPhysicsGrabComponent::RecordGripContribution(const AActor* Target, const bool bGripAcquired)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !IsValid(Target) || !GetWorld()) return;
+	FCatGripContribution& Contribution = GripContributions.FindOrAdd(TWeakObjectPtr<const AActor>(Target));
+	if (bGripAcquired) Contribution.LastGripServerTimeSeconds = GetWorld()->GetTimeSeconds();
+	Contribution.bHolding = bGripAcquired
+		|| (LeftGrip.bGripped && LeftGrip.TargetActor.Get() == Target)
+		|| (RightGrip.bGripped && RightGrip.TargetActor.Get() == Target);
+}
+
+// 单体查询流程：此刻仍抓着就算摸过；否则比较最近一次抓住的服务器时刻是否落在调用方给的窗口内。
+// 窗口起点无效（非有限）时返回 false，让调用方 fail-closed，而不是把整局的抓握都算成这一竿的贡献。
+bool UCatPhysicsGrabComponent::HasGrippedTargetSince(const AActor* Target, const double SinceServerTimeSeconds) const
+{
+	const FCatGripContribution* Contribution = IsValid(Target)
+		? GripContributions.Find(TWeakObjectPtr<const AActor>(Target)) : nullptr;
+	return Contribution && FMath::IsFinite(SinceServerTimeSeconds)
+		&& (Contribution->bHolding || Contribution->LastGripServerTimeSeconds >= SinceServerTimeSeconds);
+}
+
+// 名单收集流程：遍历本世界玩家 Controller，取其当前 Pawn 上的抓握组件逐个问「这一竿摸过没有」。
+// 只认对 Target 的直接抓握，身份用 PlayerState 的 UniqueId；输出排序去重，保证同一场搏斗两次收集得到同一份名单。
+// 没有 Pawn、没有抓握组件或身份无效的玩家自然落选，不猜、不补默认值。
+void UCatPhysicsGrabComponent::CollectGripContributorStableNetIds(const UWorld* World, const AActor* Target,
+	const double SinceServerTimeSeconds, TArray<FString>& OutStableNetIds)
+{
+	OutStableNetIds.Reset();
+	if (!World || !IsValid(Target) || !FMath::IsFinite(SinceServerTimeSeconds)) return;
+	for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+	{
+		const AController* Controller = It->Get();
+		const APawn* Pawn = Controller ? Controller->GetPawn() : nullptr;
+		const UCatPhysicsGrabComponent* Grab = Pawn ? Pawn->FindComponentByClass<UCatPhysicsGrabComponent>() : nullptr;
+		const APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
+		if (!Grab || !Grab->HasGrippedTargetSince(Target, SinceServerTimeSeconds)
+			|| !PlayerState || !PlayerState->GetUniqueId().IsValid()) continue;
+		OutStableNetIds.AddUnique(PlayerState->GetUniqueId()->ToString());
+	}
+	OutStableNetIds.Sort();
 }
 
 FVector UCatPhysicsGrabComponent::GetTractionErrorForDiagnostics(bool bLeft) const

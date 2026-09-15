@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "Framework/Core/CatDomainCommandTypes.h"
@@ -106,6 +106,16 @@ public:
 	static FCatDomainCommandResult ReleaseItemToWorldFromAuthority(ACatCharacter* ControlledCharacter,
 		FGuid RequestId, AActor* SourceInventoryHost, int32 SourceSlotIndex, FGuid ItemInstanceId,
 		int32 Quantity, ECatInventoryWorldAction Action);
+
+	/**
+	 * 声明：翻天时把地上没人捡的东西一次清掉——装备道具落地物与地上未拾取的鱼，返回销毁数量。
+	 * 依据：道具册 §4「物品当天不灭失、跨天不保留（翻天时一并消失）」（2026-09-05 由「次日清晨回收到营地」改）。
+	 * 实现：只在服务器跑，逐类遍历世界 Actor，只销毁仍在等人捡的那些。
+	 * 边界（这条最要紧）：**已被拾取的载体不清**。落地物被捡走后并不销毁，而是隐藏下来继续替背包里那件
+	 *       物品保管世界 Actor 引用；鱼进了鱼护或鱼缸也是同一套隐藏保管。把它们一起清掉等于把玩家背包里的
+	 *       物品和鱼护里的鱼也一并删掉。嘴里叼着的鱼同理不清。
+	 */
+	static int32 PurgeUnclaimedWorldDropsFromAuthority(UWorld* World);
 
 	/** 收集目标 Actor 上的库存组件并按统一收货优先级排序；Actor 级入口用它显式选择目标库存。 */
 	static void AppendInventoryComponentsFromActor(const AActor* TargetActor,

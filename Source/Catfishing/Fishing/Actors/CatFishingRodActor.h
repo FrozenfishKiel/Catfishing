@@ -96,6 +96,7 @@ class CATFISHING_API ACatFishingRodActor : public AActor, public ICatInteractabl
 	friend class FCatFishingPhysicalCouplingTest;
 	friend class FCatFishingCMCStabilityTest;
 	friend class FCatFishingFormalPhysicalRunnerTest;
+	friend class FCatFishingR3HoldTest;
 	friend struct FCatLightPropNetworkTestAccess;
 	friend class FCatFishingRodEffortSnapshotLifecycleTest;
 	friend class FCatFishingOwnedRodLifecycleTest;

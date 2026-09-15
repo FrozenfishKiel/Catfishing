@@ -4,7 +4,7 @@
 #include "AbilitySystem/Attributes/CatAttributeSet.h"
 #include "CatSurvivalAttributeSet.generated.h"
 
-/** Character-owned ASC 的唯一局内数值属性集；只复制当前仍为玩法真相的 FishingStrength、FightStamina 和其上限。 */
+/** Character-owned ASC 的唯一搏斗属性集；复制力量、绿段体力及上限、黄色储备，消费和恢复共用同一事实源。 */
 UCLASS()
 class CATFISHING_API UCatSurvivalAttributeSet : public UCatAttributeSet
 {
@@ -28,15 +28,24 @@ public:
 	FGameplayAttributeData FishingStrength;
 	ATTRIBUTE_ACCESSORS_BASIC(UCatSurvivalAttributeSet, FishingStrength)
 
-	/** FightStamina 代表一次搏斗内的短周期体力；它不是疲惫演出，也不进入跨局 Profile。 */
+	/** FightStamina 仅代表绿色体力（点）；总可用体力另加 YellowFightStamina，不进入跨局 Profile。 */
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_FightStamina, Category = "Catfishing|Fishing")
 	FGameplayAttributeData FightStamina;
 	ATTRIBUTE_ACCESSORS_BASIC(UCatSurvivalAttributeSet, FightStamina)
 
-	/** MaxFightStamina 代表当前猫本次搏斗允许恢复到的体力上限；角色播种写入，ASC、会话模拟和 HUD 只读取这份真相。 */
+	/** MaxFightStamina 代表绿色体力的恢复上限（点）；总容量另加当前黄段，不把黄色纳入可恢复上限。 */
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_MaxFightStamina, Category = "Catfishing|Fishing")
 	FGameplayAttributeData MaxFightStamina;
 	ATTRIBUTE_ACCESSORS_BASIC(UCatSurvivalAttributeSet, MaxFightStamina)
+
+	/**
+	 * YellowFightStamina 代表加在体力条末端的黄色护盾段（数值成长页 §4）：
+	 * 搏斗消耗先扣绿色段、扣完才动它；不自然回复、不吃任何回复效果，用掉即无；可叠加且无上限；过夜清空。
+	 * 它跟局也跟天走，不进 Profile。
+	 */
+	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_YellowFightStamina, Category = "Catfishing|Survival")
+	FGameplayAttributeData YellowFightStamina;
+	ATTRIBUTE_ACCESSORS_BASIC(UCatSurvivalAttributeSet, YellowFightStamina)
 
 protected:
 	/** FishingStrength 到达客户端时交给 GAS 标准预测收敛；不在此计算协作加成。 */
@@ -50,6 +59,10 @@ protected:
 	/** MaxFightStamina 到达客户端时交给 GAS 标准预测收敛；HUD 与会话投影读取复制后的属性值。 */
 	UFUNCTION()
 	void OnRep_MaxFightStamina(const FGameplayAttributeData& OldMaxFightStamina);
+
+	/** 黄色体力到达客户端时交给 GAS 标准预测收敛；体力条的黄段渲染归钓鱼册，客户端不自行增减它。 */
+	UFUNCTION()
+	void OnRep_YellowFightStamina(const FGameplayAttributeData& OldYellowFightStamina);
 
 private:
 	/** 仅用于客户端复制诊断限频；不参与体力、恢复或复制裁决。 */

@@ -12,8 +12,12 @@ class CATFISHING_API UCatProfileSaveGame : public USaveGame
 	GENERATED_BODY()
 
 public:
-	/** 代码当前理解的唯一档案结构版本；任何不匹配档案都保持不可写，避免未知结构覆盖玩家数据。 */
-	static constexpr int32 CurrentSchemaVersion = 1;
+	/**
+	 * 代码当前理解的唯一档案结构版本；任何不匹配档案都保持不可写，避免未知结构覆盖玩家数据。
+	 * v2：FCatFishCollectionRecord 加了三个字段级解锁位与知识层，v1 档的 State 无法反推这三位，按空档重建
+	 * （账本六问③「旧档版本不符按空档重建」，设计修改记录 2026-09-09）。重建是覆盖写同一槽位，不删文件。
+	 */
+	static constexpr int32 CurrentSchemaVersion = 2;
 
 	/** 当前档案结构版本；加载方只接受与代码一致的版本，未知版本保持不可写。 */
 	UPROPERTY(SaveGame)

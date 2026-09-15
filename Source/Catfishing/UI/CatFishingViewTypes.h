@@ -27,9 +27,12 @@ struct CATFISHING_API FCatFishingViewState
 
 	/** 真咬钩窗口的服务器截止时间；HUD 只把它显示成提竿倒计时，不据此提交或拒绝提竿命令。 */
 	UPROPERTY(BlueprintReadOnly) double WindowEndsServerTime = 0.0;
+	UPROPERTY(BlueprintReadOnly) double PerfectWindowEndsServerTime = 0.0;
 
 	/** 当前鱼种定义 ID；会话快照提供它，UI 用来显示鱼种文本，图鉴记录仍由 Profile/Collection 的正式链路负责。 */
 	UPROPERTY(BlueprintReadOnly) FName FishDefinitionId = NAME_None;
+	UPROPERTY(BlueprintReadOnly) double CancelHoldStartedServerTime = 0.0;
+	UPROPERTY(BlueprintReadOnly) double CancelHoldEndsServerTime = 0.0;
 
 	/** 鱼侧搏斗体力的展示比例；数值来自 FishingSession 的运行态归一化结果，UI 不反推鱼真实体力或搏斗公式。 */
 	UPROPERTY(BlueprintReadOnly) double NormalizedFishStamina = 0.0;

@@ -11,9 +11,12 @@ enum class ECatFishingPhase : uint8
 {
 	/** 会话对象已建立但 StateTree 尚未进入试探期。 */
 	Created = 0,
-	/** 鱼只给试探信号；此阶段提竿不能直接形成捕获。 */
+	/**
+	 * 试探期：鱼种已抽定、按真鱼体型的鱼影已在水里，浮漂只给轻点信号（钓鱼规则 §3.4:141 演出时序）。
+	 * 此阶段提竿必空竿、不损饵，剪影层已经揭开。停留时长按逐鱼可选覆盖，否则按参数页区间。
+	 */
 	Probe = 1,
-	/** 真咬响应窗口；此时只存在浮漂信号，鱼种与鱼 Actor 要等合法左键到达服务器后才创建。 */
+	/** 真咬响应窗口：浮漂猛沉，鱼种与鱼 Actor 在上一阶段就已经存在，这里只等提竿。 */
 	TrueBiteWindow = 2,
 	/** Hooked 后唯一允许多人协作的搏斗阶段。 */
 	HookedFight = 3,
@@ -42,8 +45,12 @@ enum class ECatFishingOutcome : uint8
 	CatInWater, Cancelled, Invalidated,
 	/** 会话已把鱼安全释放为独立岸上拾取物；鱼尚未归属任何玩家。 */
 	Landed,
-	/** 旧蓝图/表现资产的枚举值兼容；现行搏斗不再生成强度过载断线。保持枚举序号。 */
-	LineBroken UMETA(Hidden),
+	/**
+	 * 竿强度瞬断：竿强度不超过「总力量 F_total 与鱼力 F_fish 中较小者」时当场断竿，张力由两端较小者决定。
+	 * 瞬时判定，只在搏斗开始时和合力变动时检查，检查序 ①竿强瞬断 →②碾压 →③常规搏斗（钓鱼规则 §4.2）。
+	 * 与 RodBroken（累计耐久耗尽）是两个出口：瞬断看竿强度这个静态阈值，不看剩余耐久。保持枚举序号。
+	 */
+	LineBroken,
 	/** 玩家主动切断本场鱼线止损；鱼与已消耗鱼饵丢失，不追加或退还鱼竿磨损。 */
 	LineCut
 };
@@ -139,10 +146,24 @@ struct FCatFishingSessionSnapshot
 	/** 真咬窗口的服务器截止时间；未配置窗口时保持零。 */
 	UPROPERTY(BlueprintReadOnly)
 	double WindowEndsServerTime = 0.0;
+	/** 完美预表现和服务器判定共用的截止时间（基础 1 秒 + 成长）。 */
+	UPROPERTY(BlueprintReadOnly)
+	double PerfectWindowEndsServerTime = 0.0;
+	/** 权威放弃保持区间；0 表示未保持，单位服务器世界秒。 */
+	UPROPERTY(BlueprintReadOnly) double CancelHoldStartedServerTime = 0.0;
+	UPROPERTY(BlueprintReadOnly) double CancelHoldEndsServerTime = 0.0;
 
 	/** 当前钓手的公开 PlayerState 身份；StableNetId 不复制。 */
 	UPROPERTY(BlueprintReadOnly)
 	TObjectPtr<APlayerState> FisherPlayerState = nullptr;
+
+	/**
+	 * 当前挂着的换人请求由谁发起（多人钓鱼附篇 §2.4）；空表示没有人在等接手。
+	 * 请求无时限挂起、没有超时出口：本竿结束、主控换人或会话终止时自然消失。
+	 * 挂着期间这一竿没有任何特殊状态——体力照扣、归零照走持竿者落水，它只是一块「谁来接一下」的牌子。
+	 */
+	UPROPERTY(BlueprintReadOnly)
+	TObjectPtr<APlayerState> HandoffRequestedByPlayerState = nullptr;
 
 	/** 表现 Actor 的类型化引用；Task 6 不负责生成或初始化它们。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -182,10 +203,10 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	double CombinedFishingStrength = 0.0;
 
-	/** 当前服务器认定的合法参与者 FightStamina 合计；与人数和力量一起描述当下协作可达性。 */
+	/** 旧反射字段保留为当前主控绿＋黄余额（点）；由服务器投影，不是共享池（09-13 裁决②）。 */
 	UPROPERTY(BlueprintReadOnly)
 	double CombinedFightStamina = 0.0;
-	/** 当前成员各自体力上限之和；只读展示，不是可转移的公共余额。 */
+	/** 当前主控绿段恢复上限＋剩余黄段（点）；只读总容量，黄色不可自然恢复。 */
 	UPROPERTY(BlueprintReadOnly)
 	double CombinedFightStaminaMaximum = 0.0;
 
@@ -201,7 +222,7 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	int32 ActiveHelperCount = 0;
 
-	/** 当前鱼短周期体力剩余；常规搏斗由固定步 Runner 消耗，兼容巨鱼交换由 StateTree Task 消耗。 */
+	/** 当前鱼短周期体力剩余；体力结算统一由服务器固定步 Runner 提交。 */
 	UPROPERTY(BlueprintReadOnly)
 	double FishFightStaminaRemaining = 0.0;
 
@@ -236,6 +257,14 @@ struct FCatFishingSessionSnapshot
 	/** 性格曲线处理后的归一化鱼线受力，范围 [0,1]。 */
 	UPROPERTY(BlueprintReadOnly)
 	float NormalizedLineLoad = 0.0f;
+
+	/**
+	 * 本竿鱼漂的咬钩信号稳定度，范围 [0,1]；真咬成立那一刻由服务器写入，终局时清零。
+	 * 它是鱼漂差异在运行期的落点：表现层按它决定咬钩提示有多明确（漂沉得干不干脆、提示有多强）。
+	 * 稳定度达到全场阈值的那一款（铃铛漂）另有一次不受距离衰减的全场广播，走 GameState 的信号入口。
+	 */
+	UPROPERTY(BlueprintReadOnly)
+	float BiteSignalStability = 0.0f;
 
 	/** 服务器确认的强对抗状态；客户端只消费，不自行按 Transform 猜测。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -321,6 +350,30 @@ struct FCatScoopCommand
 	FGuid RequestedScoopItemInstanceId;
 };
 
+/**
+ * 抢抄被拒的具体原因（钓鱼规则 §5.5:273）。
+ * 前四项是几何类，玩家侧统一提示「没够着」；后两项是姿态/站位类，各自有自己的提示。
+ * 拆开的理由：此前六种拒绝全部收敛成 PolicyUndecided，玩家只看到挥空、排查只能翻服务器日志。
+ */
+UENUM(BlueprintType)
+enum class ECatScoopRejectReason : uint8
+{
+	/** 没有被拒绝，或拒绝原因不属于可抄几何（阶段错、版本冲突、依赖缺失等）。 */
+	None,
+	/** 朝向射线没碰到鱼身上的可捞圆：没对准或超出抄网射程。 */
+	OutOfReach,
+	/** 抄手与鱼之间有遮挡。 */
+	LineOfSightBlocked,
+	/** 抄手脚下坡度超过上限（现值 45 度）。 */
+	GroundTooSteep,
+	/** 抄手与鱼的高差超过上限（现值 2.5 米）。 */
+	VerticalDeltaTooLarge,
+	/** 嘴里已经叼着鱼。 */
+	MouthOccupied,
+	/** 抄手没站在岸上。 */
+	NotOnShore
+};
+
 /** 抄网事务终态；成功表示鱼已成为抄手嘴上的世界鱼，尚未写入任何容器。 */
 USTRUCT(BlueprintType)
 struct FCatScoopResult
@@ -330,4 +383,8 @@ struct FCatScoopResult
 	/** 公共命令终态；Revision 对应 FishingSession。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatDomainCommandResult Command;
+
+	/** 被拒的具体原因；Command.Error 仍是 PolicyUndecided，这里只回答「哪一条没满足」。 */
+	UPROPERTY(BlueprintReadOnly)
+	ECatScoopRejectReason RejectReason = ECatScoopRejectReason::None;
 };

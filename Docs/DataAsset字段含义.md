@@ -131,14 +131,17 @@
 | 身份 | FishDefinitionId | 唯一 ID,图鉴/日志/实物鱼都引用它 |
 | 表现 | PresentationDefinition | **唯一表现入口**，直接引用本鱼 `FishPresentation_*`；水中 Encounter、落地 Pickup 和嘴叼状态都沿这条引用解析，不得按 FishDefinitionId 再建 Mesh/ABP 映射表 |
 | 体型 | BodyClass | Standard=单人可搏 / Giant=可多人协作；抄网成功后世界鱼由首个合法抄手叼走；不能 Unknown |
-| 出没 | RegionIds / TimeOfDay / Weather | 可出现的水域 ID/时段(夜晚永不进选择器)/天气;**空数组=未配置=不出现** |
+| 出没 | RegionIds / TimeOfDay / Weather | 可出现的水域 ID/时段/天气；水域为空拒绝；时段、天气各自过滤开启后空数组拒绝并 Warning。夜晚在时段枚举里没有对应值、解析为 Unknown，时段过滤开启时必被拒。D-31 开启节点未裁，本轮保持原开关 False，不将缺配解释成全时段/全天气 |
 | 稀有 | RarityTierId / SpawnWeight | 稀有度轴 ID / 选择正权重(稀有度由数据表达,代码无硬编码档位) |
 | 体重 | Minimum/MaximumWeightKilograms | 服务器在区间内抽取真实重量;min≤max |
 | 搏斗 | FishStrength | 二进制资产读取字段；运行时忽略，重存资产后可逐步清空 |
 | 搏斗 | FishFightStamina | **鱼搏斗体力**(短周期,与稀有度独立);>0 |
 | 搏斗 | MinimumFightParticipants | 需要的协作人数;单人局过滤 >1 的定义 |
 | 抄网 | **ScoopTargetRadiusCentimeters** | **这条鱼的可捞圆圈半径 cm**,圆心随鱼移动;抄手向正前方发射长度=抄网 ScoopReach 的水平线段,与圆相交即够得着。语义="这条鱼有多好捞"——小鱼小圈、巨鱼大圈以降低多人抢抄难度。**必须 >0,为 0 时服务器一律拒绝抢抄** |
-| 性格 | BitePersonalityId / FightPersonalityId | 引用下面两类模板的 ID |
+| 性格 | BitePersonalityId / FightPersonalityId | Bite ID 仅保留旧资产反射兼容；Fight ID 仍接现有搏斗模板，未审鱼行为页本轮不切换 |
+| 咬钩 | ProbeDurationSeconds / TrueBiteWindowSeconds | 两个独立逐鱼秒数。试探 0 时按种子随机 2～4 秒；普通响应正式值 8～15 秒，0 时临时沿用全局 3 秒并 Warning，不代表 D-10 完成。完美基础 1 秒另加成长，与二者不混用 |
+| 食用限时效果 | bEatingTimedEffectConfigured / EatingTimedEffect / EatingTimedEffectDurationSeconds | False 表示正式绑定未迁移并 Warning；True 且空 GE 表示属主确认无效果。有 GE 时用基础秒数乘成长时长倍率，同鱼刷新、异鱼并存，不作用于祝福 |
+| 投掷 | ThrowEffect.Kind / EffectRadiusCentimeters / DurationSeconds / ReactionMontage | 轻抛后的第一次权威命中接惊鱼反应或限时驱散区域；厘米、秒及正式反应 Montage 缺配时拒绝该效果，不填占位数 |
 | 偏好 | ChumPreference (三轴) | 与窝点三轴点积→经饱和曲线→选择权重放大(封顶 MaximumChumModifier) |
 | 偏好 | BaitWeightMultipliers | 特定鱼饵 ID→权重倍率;普通饵不用列 |
 | 食用 | EatingExperience | 吃鱼后的成长经验/体验入口；当前只保留既有成长，不配置 FoodSafety、Toxic/Safe 或增毒量 |
@@ -162,7 +165,9 @@
 
 鱼种没有固定“低级/中级”战斗标签。服务器为每个候选鱼种按本次机会种子和稳定鱼 ID 独立抽取个体重量，令 `FishStrength=WeightKilograms×StrengthPerKilogram`；其中换算系数来自当前正式搏斗平衡资产。该重量和力量一旦选中便冻结，选择、搏斗和 HUD 共同读取这份冻结结果。令力量比 `S=FishStrength/玩家合计力量`、体力比 `T=FishFightStamina/玩家合计搏斗体力`，目录按 `max(S, 2ST/(S+T))` 计算当前上下文里的连续挑战度：力量比是危险下限，力量/体力调和均值只在两项都足够时抬高挑战度，避免力量极低但体力很高的鱼被错误归入势均力敌带。`≤ ComfortChallengeMaximumRatio` 为轻松带，之后到 `MatchedChallengeMaximumRatio` 为势均力敌带，再到 `MaximumChallengeRatio` 为高风险带；超过安全上限才不进入池。系统先按三条 `*ChallengeBandWeight` 在当前有候选的难度带之间抽取，再用 `SpawnWeight × 窝料倍率 × 鱼饵倍率 × 连续挑战倍率` 在带内选鱼。某个目标带没有鱼时会在其余有候选的带之间重新归一化；只有生态条件、协作人数或安全上限后确实没有鱼才会空钩。
 
-## 4. 咬钩性格：`UCatBitePersonalityDefinition`（DA_Bite_*）
+## 4. 旧咬钩资产兼容：`UCatBitePersonalityDefinition`（DA_Bite_*）
+
+2026-09-14 T10 迁移墓碑：下表只说明旧资产序列化字段，不再作为生产窗口配置入口。Session 读 §3 的逐鱼试探/普通响应字段，完美窗读基础 1 秒与成长。旧反射类型、ID 和资产数组保留，待张佳终版数据及编辑器引用迁移后再清理；不凭源码零引用删除二进制资产。接收脚本见 [prepare_fish_runtime_migration.py](../Scripts/prepare_fish_runtime_migration.py)，默认只产出审阅 JSON，不保存 Content。基础池只接受已批准专表的稳定鱼 ID 与正权重；空名册或非法映射拒绝并 Warning，不退化成全鱼池。
 
 | 字段 | 含义 |
 |---|---|

@@ -18,7 +18,13 @@ public:
 	/** authority 在角色被占有后调用，按 InventorySettings 写入玩家背包容量并建立空槽位。 */
 	void InitializePlayerInventorySlotCapacityFromAuthority();
 
+	/**
+	 * 背包是唯一受「随身携带总量」约束的库存（道具册：普通饵 8 份、窝料 5 份）。
+	 * 营地公库、鱼护、鱼缸和商店货架都不受它管——那几条限制各自另有容量口径。
+	 */
+	virtual bool EnforcesCarryLimits() const override { return true; }
+
 private:
-	/** 读取项目正式个人背包容量；配置缺失时返回零，调用方据此避免沿用蓝图遗留的 24 格默认值。 */
+	/** 读取项目基础格数与角色成长容量之和；缺失项按零处理，初始化和成长扩容据此替代蓝图遗留容量。 */
 	int32 GetConfiguredPlayerSlotCapacity() const;
 };

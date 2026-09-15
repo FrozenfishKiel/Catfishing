@@ -15,6 +15,23 @@ class UWorld;
 class UCatAudioOutputRequest;
 
 /**
+ * 色觉模式档位（主界面.md:91 的「色觉模式」）。
+ * 它是一条玩家偏好，不是渲染实现：具体怎么改色由 WBP 与后处理材质消费，本类只负责持久化和读出来。
+ */
+UENUM(BlueprintType)
+enum class ECatColorBlindMode : uint8
+{
+	/** 不做色觉补偿。 */
+	None,
+	/** 红色盲/红色弱。 */
+	Protanopia,
+	/** 绿色盲/绿色弱。 */
+	Deuteranopia,
+	/** 蓝色盲/蓝色弱。 */
+	Tritanopia
+};
+
+/**
  * 恢复默认时使用的干净设置快照；它描述项目第一次启动时应回到的值，不读取本机 GameUserSettings.ini，也不代表当前运行时已经应用这些值。
  */
 struct CATFISHING_API FCatGameUserSettingsDefaultSnapshot
@@ -66,6 +83,30 @@ struct CATFISHING_API FCatGameUserSettingsDefaultSnapshot
 
 	/** 默认输出设备偏好；空值表示跟随平台系统默认设备，不把某次枚举到的设备 ID 固定保存。 */
 	FString AudioOutputDeviceId;
+
+	/** 默认文字大小倍率；辅助功能页的「文字大小」。 */
+	float TextSizeScale = 1.0f;
+
+	/** 默认高对比度界面开关。 */
+	bool bHighContrastUI = false;
+
+	/** 默认色觉模式。 */
+	ECatColorBlindMode ColorBlindMode = ECatColorBlindMode::None;
+
+	/** 默认「减少镜头晃动」开关。 */
+	bool bReduceCameraShake = false;
+
+	/** 默认「减少闪光效果」开关。 */
+	bool bReduceFlashingEffects = false;
+
+	/** 默认鼠标灵敏度（控制页，参考稿标的是 0~100 的刻度，这里存归一化倍率）。 */
+	float MouseSensitivity = 1.0f;
+
+	/** 默认镜头灵敏度。 */
+	float CameraSensitivity = 1.0f;
+
+	/** 默认是否反转 Y 轴。 */
+	bool bInvertYAxis = false;
 };
 
 /**
@@ -185,6 +226,46 @@ public:
 
 	/** 记录已在 Mixer 活动设备信息中确认的目标 ID；仅 Model 的最终确认回调调用，随后由 SaveSettings 写入本机配置。 */
 	void SetAudioOutputDeviceId(const FString& NewAudioOutputDeviceId);
+
+	/**
+	 * 保存辅助功能五项（界面缩放是第六项，它有自己的 ApplyUIScale，因为只有它能直接交给 Slate 生效）。
+	 *
+	 * 这五项没有引擎 API 可以「应用」——文字大小、高对比度、色觉模式改的是 WBP 的字体与调色板，
+	 * 减少镜头晃动与减少闪光改的是表现层要不要播那段演出。所以本函数只做一件老实事：把玩家的选择存下来，
+	 * 由各消费方自己读。它绝不假装已经生效，也绝不因为「还没人消费」就不让玩家保存。
+	 */
+	bool ApplyAccessibilityPreferences(float NewTextSizeScale, bool bNewHighContrastUI,
+		ECatColorBlindMode NewColorBlindMode, bool bNewReduceCameraShake, bool bNewReduceFlashingEffects);
+
+	/**
+	 * 保存控制三项（第四项「按键设置」是键位重绑定，需要 Enhanced Input 的 UserSettings 资产，尚未接入）。
+	 * 灵敏度与反转 Y 的实际消费方是本地 PlayerController 的视角输入，本类只持久化并提供读取口。
+	 */
+	bool ApplyControlPreferences(float NewMouseSensitivity, float NewCameraSensitivity, bool bNewInvertYAxis);
+
+	/** 返回已持久化的文字大小倍率；WBP 用它换算字号，范围夹在可读区间内。 */
+	float GetTextSizeScale() const;
+
+	/** 返回已持久化的高对比度界面开关。 */
+	bool IsHighContrastUIEnabled() const;
+
+	/** 返回已持久化的色觉模式。 */
+	ECatColorBlindMode GetColorBlindMode() const;
+
+	/** 返回已持久化的「减少镜头晃动」开关；镜头表现读它决定要不要播晃动。 */
+	bool IsReduceCameraShakeEnabled() const;
+
+	/** 返回已持久化的「减少闪光效果」开关；闪光类表现读它决定要不要播。 */
+	bool IsReduceFlashingEffectsEnabled() const;
+
+	/** 返回已持久化的鼠标灵敏度倍率；1.0 表示不缩放。 */
+	float GetMouseSensitivity() const;
+
+	/** 返回已持久化的镜头灵敏度倍率；1.0 表示不缩放。 */
+	float GetCameraSensitivity() const;
+
+	/** 返回已持久化的 Y 轴反转开关；true 时视角俯仰输入取反。 */
+	bool IsInvertYAxisEnabled() const;
 
 private:
 	/**
@@ -319,6 +400,38 @@ private:
 	/** 已在 Mixer 活动设备信息中确认的输出设备 ID；页面最终确认后写入，空值表示不覆盖平台默认输出设备。 */
 	UPROPERTY(Config)
 	FString AudioOutputDeviceId;
+
+	/** 已保存的文字大小倍率；消费方是 WBP 的字号换算，本类不改 Slate 全局字体。 */
+	UPROPERTY(Config)
+	float TextSizeScale = 1.0f;
+
+	/** 已保存的高对比度界面开关；消费方是 WBP 的配色，本类不切换材质或后处理。 */
+	UPROPERTY(Config)
+	bool bHighContrastUI = false;
+
+	/** 已保存的色觉模式；消费方是 WBP 调色与后处理材质参数。 */
+	UPROPERTY(Config)
+	ECatColorBlindMode ColorBlindMode = ECatColorBlindMode::None;
+
+	/** 已保存的「减少镜头晃动」开关；消费方是镜头表现组件。 */
+	UPROPERTY(Config)
+	bool bReduceCameraShake = false;
+
+	/** 已保存的「减少闪光效果」开关；消费方是闪光类表现。 */
+	UPROPERTY(Config)
+	bool bReduceFlashingEffects = false;
+
+	/** 已保存的鼠标灵敏度倍率；消费方是本地 PlayerController 的视角输入。 */
+	UPROPERTY(Config)
+	float MouseSensitivity = 1.0f;
+
+	/** 已保存的镜头灵敏度倍率；消费方同上。 */
+	UPROPERTY(Config)
+	float CameraSensitivity = 1.0f;
+
+	/** 已保存的 Y 轴反转开关；消费方同上。 */
+	UPROPERTY(Config)
+	bool bInvertYAxis = false;
 
 	/** 尚未完成的世界输出设备恢复请求；世界恢复写入，用户选择、World 清理或完成回调释放，期间以强引用保持请求身份。 */
 	UPROPERTY(Transient)

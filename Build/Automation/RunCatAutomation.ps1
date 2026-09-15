@@ -1,15 +1,21 @@
 param(
   [Parameter(Mandatory=$true)][string]$Filter,
-  [Parameter(Mandatory=$true)][string]$RunName
+  [Parameter(Mandatory=$true)][string]$RunName,
+  # 引擎装在哪台机器上都不一样；默认读 $env:UE_ROOT，协作仓库不写死绝对路径。
+  [string]$EngineRoot = $env:UE_ROOT
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$root = 'D:\develop\Catfishing'
+if (-not $EngineRoot) {
+    throw '请先设置 $env:UE_ROOT 指向本机 UE 5.8 安装目录，或用 -EngineRoot 传入；这是协作仓库，脚本里不写死绝对路径。'
+}
+# 工程根按脚本自身位置推导（本文件在 <工程根>/Build/Automation/ 下）。
+$root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $run = Join-Path $root "Saved\Automation\$RunName"
 $report = Join-Path $run 'Report'
 if (Test-Path $run) { throw "Automation run already exists: $run" }
 New-Item -ItemType Directory -Path $report -Force | Out-Null
-& 'D:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe' "$root\Catfishing.uproject" `
+& (Join-Path $EngineRoot 'Engine\Binaries\Win64\UnrealEditor-Cmd.exe') "$root\Catfishing.uproject" `
   -unattended -nop4 -nosplash -nullrhi -DDC-ForceMemoryCache `
   "-ExecCmds=Automation RunTests $Filter;Quit" `
   '-TestExit=Automation Test Queue Empty' `

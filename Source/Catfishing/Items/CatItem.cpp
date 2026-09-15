@@ -9,6 +9,7 @@
 #include "Logging/CatLog.h"
 #include "Inventory/CatInventoryItemInstance.h"
 #include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatFishInventoryItemInstance.h"
 
 // 构造流程：创建目标扫描与落地物理根，阻挡场景但忽略 Pawn；网格只负责表现，避免两份刚体争夺运动。
 ACatItem::ACatItem()
@@ -100,6 +101,21 @@ bool ACatItem::Interact_Implementation(AController* RequestingController, const 
 		return true;
 	}
 	FCatInventoryReceiveBatch PickupBatch = bHasInventoryPayload ? StaticPickupInventory : GetPickupInventory();
+	// 通用拾取批次不能把鱼伪装成普通道具直送背包；世界鱼必须通过自己的嘴部入口。
+	const bool bContainsFish = PickupBatch.DefinitionEntries.ContainsByPredicate([](const FCatInventoryDefinitionEntry& Entry)
+	{
+		return Cast<UCatFishDefinition>(Entry.ItemDefinition) != nullptr;
+	}) || PickupBatch.InstanceEntries.ContainsByPredicate([](const FCatInventoryInstanceEntry& Entry)
+	{
+		return Entry.ItemInstance && (Cast<UCatFishInventoryItemInstance>(Entry.ItemInstance)
+			|| Cast<UCatFishDefinition>(Entry.ItemInstance->GetItemDefinition()));
+	});
+	if (bContainsFish)
+	{
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=item_pickup_rejected Item=%s RequestId=%s Reason=FishRequiresMouth World=%s NetMode=%d Authority=1 LocalRole=%d"),
+			*GetName(), *RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), GetLocalRole());
+		return false;
+	}
 	// 单种定义载荷先生成现有模型的一份实例，让原 Actor 引用随正式收货进入正确的格子。
 	if (PickupBatch.DefinitionEntries.Num() == 1 && PickupBatch.InstanceEntries.IsEmpty())
 	{

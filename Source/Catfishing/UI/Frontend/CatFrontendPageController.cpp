@@ -91,11 +91,35 @@ void UCatFrontendPageController::RequestStartGameFlow()
 	if (UCatFrontendSaveModel* Save = SaveModel.Get()) { Save->RefreshSlotSummaries(); }
 }
 
-// 加入队伍流程：产品尚未定义搜索或加入规则，因此只保存可读反馈；不调用 RoomModel，避免制造离线或本地替身房间。
+// 加入页只服务空闲前台；已有房间或存档操作不能被另一次加入抢占。
 void UCatFrontendPageController::RequestJoinParty()
 {
-	SetLocalResultText(FText::FromString(TEXT("加入队伍功能尚未开放。")));
-	if (UCatFrontendRootWidget* Root = RootWidget.Get()) { Root->ShowMenu(); }
+	if (bWaitingForSaveLoad || bWaitingForRoomCreation || (SaveModel.IsValid() && SaveModel->IsBusy())) { return; }
+	if (UCatFrontendRoomModel* Room = RoomModel.Get())
+	{
+		const FCatOnlineSnapshot Snapshot = Room->GetSnapshot();
+		if (Snapshot.SessionState != ECatOnlineSessionState::NoSession || Snapshot.ActiveOperation != ECatOnlineOperation::None || Snapshot.bIsAcceptedInvitePending)
+		{ HandleRoomModelChanged(); return; }
+		if (bStartGameFlowActive && !ReleaseUnjoinedSave()) { return; }
+		bStartGameFlowActive = false;
+		SelectedSlotId = NAME_None;
+		SetLocalResultText(FText::GetEmpty());
+		if (UCatFrontendRootWidget* Root = RootWidget.Get()) { Root->ShowJoin(); }
+		Room->RefreshFriends();
+		Room->RefreshPublicRooms();
+	}
+}
+
+void UCatFrontendPageController::RequestJoinFriend(FCatOnlineFriendHandle FriendHandle)
+{
+	SetLocalResultText(FText::GetEmpty());
+	if (UCatFrontendRoomModel* Room = RoomModel.Get()) { Room->JoinFriend(FriendHandle); }
+}
+
+void UCatFrontendPageController::RequestJoinLink(const FString& Input)
+{
+	SetLocalResultText(FText::GetEmpty());
+	if (UCatFrontendRoomModel* Room = RoomModel.Get()) { Room->JoinLink(Input); }
 }
 
 // 设置打开流程：清除上一业务面的局部提示并显示正式设置页；各 Model 的真实结果不改写，草稿仍由 SettingsModel 保有。
@@ -152,6 +176,8 @@ void UCatFrontendPageController::RequestSelectSaveSlot(const FName SlotId)
 	}
 	SelectedSlotId = SlotId;
 	PendingDeleteSlotId = NAME_None;
+	UE_LOG(LogCatUI, Log, TEXT("Event=frontend_save_selected World=%s NetMode=%d SlotId=%s"),
+		*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1, *SlotId.ToString());
 	SetLocalResultText(FText::GetEmpty());
 	if (UCatFrontendRootWidget* Root = RootWidget.Get()) { Root->ShowSaveList(); }
 }
@@ -189,6 +215,15 @@ void UCatFrontendPageController::RequestLoadSelectedSaveSlot()
 		SetLocalResultText(FText::FromString(TEXT("请先选择可读取的存档。")), Save);
 		return;
 	}
+	if (!Save->CanContinueSlot(SelectedSlotId))
+	{
+		SetLocalResultText(Save->IsSlotCompleted(SelectedSlotId)
+			? FText::FromString(TEXT("这一局已完结，请新建存档开始新一局。"))
+			: FText::FromString(TEXT("所选存档当前不可读取。")), Save);
+		UE_LOG(LogCatUI, Warning, TEXT("Event=frontend_save_continue_rejected SlotId=%s Completed=%d Result=KeepSaveList"),
+			*SelectedSlotId.ToString(), Save->IsSlotCompleted(SelectedSlotId));
+		return;
+	}
 	if (UCatFrontendRoomModel* Room = RoomModel.Get())
 	{
 		const FCatOnlineSnapshot Snapshot = Room->GetSnapshot();
@@ -224,6 +259,8 @@ void UCatFrontendPageController::RequestDeleteSelectedSaveSlot()
 		return;
 	}
 	PendingDeleteSlotId = SelectedSlotId;
+	UE_LOG(LogCatUI, Log, TEXT("Event=frontend_save_delete_prompt World=%s NetMode=%d SlotId=%s"),
+		*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1, *PendingDeleteSlotId.ToString());
 	if (UCatFrontendRootWidget* Root = RootWidget.Get()) { Root->ShowSaveList(); }
 }
 
@@ -261,6 +298,8 @@ void UCatFrontendPageController::RequestCancel()
 	}
 	if (!PendingDeleteSlotId.IsNone())
 	{
+		UE_LOG(LogCatUI, Log, TEXT("Event=frontend_save_delete_cancelled World=%s NetMode=%d SlotId=%s"),
+			*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1, *PendingDeleteSlotId.ToString());
 		PendingDeleteSlotId = NAME_None;
 		if (UCatFrontendRootWidget* Root = RootWidget.Get()) { Root->ShowSaveList(); }
 		return;
@@ -350,6 +389,18 @@ void UCatFrontendPageController::RequestStartRoomGame()
 	UE_LOG(LogCatUI, Log, TEXT("Event=frontend_room_start_requested RequestId=%s"), *Result.RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 }
 
+void UCatFrontendPageController::RequestToggleRoomReady()
+{
+	UCatFrontendRoomModel* Room = RoomModel.Get();
+	if (!Room) { return; }
+	const FCatOnlineSnapshot Snapshot = Room->GetSnapshot();
+	const FCatOnlineRoomMember* Local = Snapshot.RoomMembers.FindByPredicate([](const auto& M) { return M.bIsLocalPlayer; });
+	if (!Local || Local->bIsLobbyOwner) { return; }
+	const FCatOnlineResult Result = Room->SetReady(!Local->bIsReady);
+	SetLocalResultText(Result.bAccepted ? FText::GetEmpty() : Room->GetLastResultText(), Room);
+	HandleRoomModelChanged();
+}
+
 // 设置应用流程：SettingsModel 负责真实字段提交；失败以设置来源显示结果，成功清局部提示后回菜单，不把应用结果带到存档或房间。
 void UCatFrontendPageController::RequestApplyFrontendSettings()
 {
@@ -399,6 +450,9 @@ void UCatFrontendPageController::RequestSelectAudioSettings() { if (UCatFrontend
 
 // 控制分类流程：取得有效 SettingsModel 后选择当前受限分类；只由 Model 通知刷新，不生成尚未接线的配置。
 void UCatFrontendPageController::RequestSelectControlsSettings() { if (UCatFrontendSettingsModel* Settings = SettingsModel.Get()) { Settings->SelectControls(); } }
+
+// 辅助功能分类流程：取得有效 SettingsModel 后切换分类；页签本身是正式入口，具体项的可用性由 Model 各自回答。
+void UCatFrontendPageController::RequestSelectAccessibilitySettings() { if (UCatFrontendSettingsModel* Settings = SettingsModel.Get()) { Settings->SelectAccessibility(); } }
 
 // 槽位读取流程：返回当前已验证选择；无有效选择时返回 None 的责任由 SaveModel 变化处理承担。
 FName UCatFrontendPageController::GetSelectedSlotId() const { return SelectedSlotId; }
@@ -508,6 +562,9 @@ void UCatFrontendPageController::HandleRoomModelChanged()
 			}
 		}
 	}
+	if (Snapshot.bPasswordRequested && Snapshot.WorldState == ECatOnlineWorldState::Frontend
+		&& Snapshot.SessionState == ECatOnlineSessionState::NoSession)
+	{ Root->ShowJoin(); }
 	const bool bHasFrontendRoom = Snapshot.WorldState == ECatOnlineWorldState::Frontend
 		&& ((Snapshot.SessionState == ECatOnlineSessionState::Host && Snapshot.SessionRole == ECatOnlineSessionRole::Host)
 			|| (Snapshot.SessionState == ECatOnlineSessionState::Client && Snapshot.SessionRole == ECatOnlineSessionRole::Client));

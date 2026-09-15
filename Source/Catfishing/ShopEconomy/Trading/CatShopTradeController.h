@@ -61,6 +61,15 @@ public:
 		ACatFishGuardActor* Guard, const TArray<FGuid>& FishInstanceIds, FGuid RequestId);
 
 private:
+	friend class FCatShopCartAtomicTest;
+	friend class FCatShopInventoryDeliveryReplayTest;
+#if WITH_DEV_AUTOMATION_TESTS
+	int32 FailDeliveryStepForTest = INDEX_NONE;
+#endif
+	/** 静默准备全部交付后扣款；任一失败同步恢复收货方，服务恢复货架；终态重放不补货。 */
+	FCatShopOrderResult RunCartOrder(const FCatShopCartCommand& Command,
+		UCatShopInventoryComponent* ShopInventory, ACatCampInventoryActor* DeliveryInventory);
+
 	/** 售鱼命令终态缓存；跨库存扣除和公款入账的重放必须返回首次结果，不能再读已被扣除的鱼槽。 */
 	TMap<FString, FCatShopOrderResult> FishSaleTerminalCache;
 

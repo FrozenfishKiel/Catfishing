@@ -5,6 +5,7 @@
 #include "Fishing/CatFishingTypes.h"
 #include "Framework/Core/CatProfileContracts.h"
 #include "Framework/Core/CatRunContracts.h"
+#include "Growth/CatGrowthTypes.h"
 #include "GameFramework/PlayerController.h"
 #include "GameplayTagContainer.h"
 #include "Inventory/CatInventoryStatics.h"
@@ -146,7 +147,9 @@ public:
 	UFUNCTION(Client, Reliable)
 	void ClientReceiveCampCommandResult(const FCatDomainCommandResult& Result);
 
-	/** 在两个正式库存宿主之间移动、合并或交换格子；服务器重读 Actor 和槽位后统一裁决背包整理与营地拖放。 */
+	/** 在两个正式库存宿主之间移动、合并或交换格子；服务器重读 Actor 和槽位后统一裁决背包整理、营地拖放与拿鱼。
+	 *  这条就是「拿鱼」机制本身，不是绕过谁的旁路（2026-09-11 裁决②）：机制层只做客观的拿，不问动机也不问归属，
+	 *  规则是够得着、鱼护在地面、一嘴一条，三条分别由库存触达规则、鱼护落地状态与猫嘴单占用执行。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Inventory")
 	void ServerMoveInventoryItemBetweenHosts(FGuid RequestId, AActor* SourceInventoryHost,
 		int32 SourceSlotIndex, AActor* TargetInventoryHost, int32 TargetSlotIndex);
@@ -189,6 +192,10 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerDropCarriedItem();
 
+	/** 从当前这组三选一里选中一项；OfferSerial 用来拒绝过期面板，服务器只认自己发出的那一组。 */
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Growth")
+	void ServerChooseGrowthOption(FGuid RequestId, ECatGrowthOptionId OptionId, int32 OfferSerial);
+
 	/** 手动发布普通钓鱼或倒地求助；普通信号不会升级为全局任务。 */
 	UFUNCTION(Server, Reliable)
 	void ServerRequestManualHelp(FGuid RequestId, ECatHelpSignalKind Kind);
@@ -200,6 +207,16 @@ public:
 	/** 在本人附近放置或移动唯一防骚扰牌子；Social 用显式范围配置保护普通恶作剧。 */
 	UFUNCTION(Server, Reliable)
 	void ServerPlaceProtectionSign(FGuid RequestId, FVector SignLocation);
+
+	/**
+	 * 房主把某人踢出本局（联机社交 §3.1.1、§4 软性：一切社交僵局的兜底，被踢者跟人走的资产无损）。
+	 *
+	 * 房主资格、目标有效性与清理全部由 authority 的 UCatRoomOwnerService 裁决，本 RPC 只做网络适配；
+	 * 结果沿用公共领域回执通道（ClientReceiveCampCommandResult）回送给发起者。
+	 * UI 入口（房间页那颗按钮）不在这里：C++ 侧只保证「谁能按、按下去发生什么」。
+	 */
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Room")
+	void ServerKickPlayer(APlayerState* TargetPlayerState, FGuid RequestId);
 
 	/** Online Client 在 DestroySession 前通知服务器这是主动离局；GameMode 不把它误判为连接故障。 */
 	UFUNCTION(Server, Reliable)

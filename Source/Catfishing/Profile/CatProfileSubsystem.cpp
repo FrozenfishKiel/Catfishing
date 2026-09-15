@@ -8,7 +8,7 @@
 #include "Profile/CatProfileSaveGame.h"
 #include "Profile/CatProfileSettings.h"
 
-// 初始化流程：先验证显式设置和 LocalPlayer 索引，再加载既有档案或创建空档案；最后逐个重放 Pending，任何落盘失败都关闭本次会话的 ACK 能力。
+// 初始化流程：先验证显式设置和 LocalPlayer 索引，再加载既有档案；读不出或版本不符按空档重建（覆盖写同一槽位，不调用任何删档接口），最后逐个重放 Pending，任何落盘失败都关闭本次会话的 ACK 能力、留给下局开局重试。
 void UCatProfileSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
@@ -22,19 +22,22 @@ void UCatProfileSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	if (UGameplayStatics::DoesSaveGameExist(ResolvedSlotName, ResolvedUserIndex))
 	{
 		CurrentProfile = Cast<UCatProfileSaveGame>(UGameplayStatics::LoadGameFromSlot(ResolvedSlotName, ResolvedUserIndex));
-	}
-	else
-	{
-		CurrentProfile = Cast<UCatProfileSaveGame>(UGameplayStatics::CreateSaveGameObject(UCatProfileSaveGame::StaticClass()));
-		if (CurrentProfile && !SaveCurrentProfile())
+		const int32 FoundSchemaVersion = CurrentProfile ? CurrentProfile->SchemaVersion : INDEX_NONE;
+		if (FoundSchemaVersion != UCatProfileSaveGame::CurrentSchemaVersion)
 		{
+			UE_LOG(LogCatProfile, Warning, TEXT("Event=profile_rebuilt_as_empty Slot=%s FoundSchemaVersion=%d ExpectedSchemaVersion=%d"),
+				*ResolvedSlotName, FoundSchemaVersion, UCatProfileSaveGame::CurrentSchemaVersion);
 			CurrentProfile = nullptr;
 		}
 	}
-	if (!CurrentProfile || CurrentProfile->SchemaVersion != UCatProfileSaveGame::CurrentSchemaVersion)
+	if (!CurrentProfile)
 	{
-		CurrentProfile = nullptr;
-		return;
+		CurrentProfile = Cast<UCatProfileSaveGame>(UGameplayStatics::CreateSaveGameObject(UCatProfileSaveGame::StaticClass()));
+		if (!CurrentProfile || !SaveCurrentProfile())
+		{
+			CurrentProfile = nullptr;
+			return;
+		}
 	}
 	bPersistenceReady = true;
 	TArray<FGuid> PendingGrantIds;
@@ -181,6 +184,18 @@ bool UCatProfileSubsystem::GetFishCollectionSnapshot(TArray<FCatFishCollectionRe
 	return true;
 }
 
+// 相册索引读取流程：只复制本人 durable 相册索引（ImprintId/RunAlbumId/封面位/隐藏位）；不复制图片字节或路径，也不提供别人的相册。
+bool UCatProfileSubsystem::GetLocalImprintSnapshot(TArray<FCatLocalImprintRecord>& OutRecords) const
+{
+	OutRecords.Reset();
+	if (!bPersistenceReady || !CurrentProfile)
+	{
+		return false;
+	}
+	OutRecords = CurrentProfile->Imprints;
+	return true;
+}
+
 // 印记隐藏流程：定位本人本地索引并只改 bHidden；保存失败恢复变更前值，不发送服务器 RPC，也不删除图片或其他玩家记录。
 FCatDomainCommandResult UCatProfileSubsystem::SetImprintHidden(const FGuid RequestId, const FGuid ImprintId,
 	const bool bHidden)
@@ -222,6 +237,7 @@ ECatDomainCommandError UCatProfileSubsystem::ValidateGrant(const FCatProfileGran
 		return !Grant.FishDefinitionId.IsNone() && FMath::IsFinite(Grant.WeightKilograms) && Grant.WeightKilograms > 0.0
 			? ECatDomainCommandError::None : ECatDomainCommandError::InvalidPayload;
 	case ECatProfileGrantKind::FishSilhouette:
+	case ECatProfileGrantKind::FishKnowledge:
 		return !Grant.FishDefinitionId.IsNone() ? ECatDomainCommandError::None : ECatDomainCommandError::InvalidPayload;
 	case ECatProfileGrantKind::Imprint:
 		return Grant.ImprintId.IsValid() && Grant.RunAlbumId.IsValid()
@@ -233,14 +249,16 @@ ECatDomainCommandError UCatProfileSubsystem::ValidateGrant(const FCatProfileGran
 	}
 }
 
-// 内容合并流程：按 Grant 类型只推进对应 SSOT；鱼图鉴单向升级并保留首次条件，印记按 ID 去重，封面只接受明确 cover 标记，解锁只追加一次。
-bool UCatProfileSubsystem::MergeGrantIntoProfile(const FCatProfileGrant& Grant)
+// 内容合并流程：按 Grant 类型只推进对应 SSOT；鱼图鉴按字段级解锁位单向升级并保留首次条件，印记按 ID 去重，封面只接受明确 cover 标记，解锁只追加一次。
+bool UCatProfileSubsystem::MergeGrantIntoProfile(const FCatProfileGrant& Grant, bool& bOutFirstRecordedUnlock)
 {
+	bOutFirstRecordedUnlock = false;
 	if (!CurrentProfile)
 	{
 		return false;
 	}
-	if (Grant.Kind == ECatProfileGrantKind::FishRecorded || Grant.Kind == ECatProfileGrantKind::FishSilhouette)
+	if (Grant.Kind == ECatProfileGrantKind::FishRecorded || Grant.Kind == ECatProfileGrantKind::FishSilhouette
+		|| Grant.Kind == ECatProfileGrantKind::FishKnowledge)
 	{
 		FCatFishCollectionRecord* Record = CurrentProfile->FishCollection.FindByPredicate([&Grant](const FCatFishCollectionRecord& Existing)
 		{
@@ -252,20 +270,36 @@ bool UCatProfileSubsystem::MergeGrantIntoProfile(const FCatProfileGrant& Grant)
 			NewRecord.FishDefinitionId = Grant.FishDefinitionId;
 			Record = &NewRecord;
 		}
-		++Record->EncounterCount;
 		if (Grant.Kind == ECatProfileGrantKind::FishRecorded)
 		{
-			if (Record->State != ECatFishCollectionState::Recorded)
+			++Record->EncounterCount;
+			// 「首次解锁新鱼种」就是收集层这一位第一次翻成 true 的那一刻，不是「第一次钓到鱼」，
+			// 也不是整页层级从 Silhouette 跳到 Recorded——吃过没钓到的鱼页层级还停在剪影，但收集层照样是首次。
+			bOutFirstRecordedUnlock = !Record->bRecordedUnlocked;
+			if (!Record->bRecordedUnlocked)
 			{
+				// 首次条件只在第一次收集时冻结；此后破纪录只刷新最佳重量，不覆盖首次条件（图鉴 §3.1.4:126）。
 				Record->FirstCaptureCondition = Grant.CaptureCondition;
 			}
-			Record->State = ECatFishCollectionState::Recorded;
+			// 上钩即揭剪影，成功收鱼必然也碰到过这条鱼；补上剪影位，防止直接从 Unknown 跳到 Recorded 时线索层是空的。
+			Record->bSilhouetteUnlocked = true;
+			Record->bRecordedUnlocked = true;
 			Record->BestWeightKilograms = FMath::Max(Record->BestWeightKilograms, Grant.WeightKilograms);
 		}
-		else if (Record->State == ECatFishCollectionState::Unknown)
+		else if (Grant.Kind == ECatProfileGrantKind::FishSilhouette)
 		{
-			Record->State = ECatFishCollectionState::Silhouette;
+			++Record->EncounterCount;
+			Record->bSilhouetteUnlocked = true;
 		}
+		else
+		{
+			// 知识层不经过「交手」，吃掉别人钓的鱼也算；因此不递增 EncounterCount，也不要求先有收集层。
+			Record->bKnowledgeUnlocked = true;
+		}
+		// 整页层级是三个解锁位的单调投影，不是第四份事实；只吃过没钓到仍停在剪影层。
+		Record->State = Record->bRecordedUnlocked
+			? (Record->bKnowledgeUnlocked ? ECatFishCollectionState::Knowledge : ECatFishCollectionState::Recorded)
+			: (Record->bSilhouetteUnlocked ? ECatFishCollectionState::Silhouette : ECatFishCollectionState::Unknown);
 	}
 	else if (Grant.Kind == ECatProfileGrantKind::Imprint)
 	{
@@ -311,7 +345,10 @@ FCatProfileApplyResult UCatProfileSubsystem::CompletePendingGrant(const FGuid Gr
 		return Result;
 	}
 	const ECatProfileGrantKind CompletedKind = Entry->Grant.Kind;
-	if (!MergeGrantIntoProfile(Entry->Grant))
+	const FName CompletedFishDefinitionId = Entry->Grant.FishDefinitionId;
+	const double CompletedWeightKilograms = Entry->Grant.WeightKilograms;
+	bool bFirstRecordedUnlock = false;
+	if (!MergeGrantIntoProfile(Entry->Grant, bFirstRecordedUnlock))
 	{
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Result;
@@ -329,9 +366,15 @@ FCatProfileApplyResult UCatProfileSubsystem::CompletePendingGrant(const FGuid Gr
 	Result.Error = ECatDomainCommandError::None;
 	UE_LOG(LogCatProfile, Log, TEXT("Event=profile_grant_durable GrantId=%s Kind=%s AckAllowed=true"),
 		*GrantId.ToString(EGuidFormats::DigitsWithHyphens), *UEnum::GetValueAsString(Entry->Grant.Kind));
-	if (CompletedKind == ECatProfileGrantKind::FishRecorded || CompletedKind == ECatProfileGrantKind::FishSilhouette)
+	if (CompletedKind == ECatProfileGrantKind::FishRecorded || CompletedKind == ECatProfileGrantKind::FishSilhouette
+		|| CompletedKind == ECatProfileGrantKind::FishKnowledge)
 	{
 		OnFishCollectionChanged.Broadcast();
+	}
+	// 首解锁特写只在档案确实写上之后才弹：上面那次 SaveCurrentProfile 失败会提前 return，不会走到这里。
+	if (bFirstRecordedUnlock && !CompletedFishDefinitionId.IsNone())
+	{
+		OnFishSpeciesFirstRecorded.Broadcast(CompletedFishDefinitionId, CompletedWeightKilograms);
 	}
 	return Result;
 }

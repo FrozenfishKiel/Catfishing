@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Data/CatFishDefinition.h"
 #include "Inventory/CatInventoryItemInstance.h"
 #include "CatFishInventoryItemInstance.generated.h"
 
@@ -41,11 +42,24 @@ public:
 	/** 读取来源钓鱼会话；图鉴归档、保存和调试用它串联这条实物鱼的来源。 */
 	FGuid GetSourceFishingSessionId() const;
 
-	/** 读取捕获者稳定身份；服务器售鱼、偷取或后续权限链可以用它，不复制给客户端。 */
+	/** 读取捕获者稳定身份；服务器售鱼与图鉴登记可以用它，不复制给客户端；拿鱼不读它，机制层不问归属。 */
 	const FString& GetFishOwnerStableNetId() const;
 
 	/** 读取冻结真实重量，单位千克；商店估价和 UI 展示必须从同一实例取得。 */
+	UFUNCTION(BlueprintPure, Category = "Catfishing|Fish")
 	double GetFishWeightKilograms() const;
+
+	/**
+	 * 这条鱼投出去会不会产生对猫的后果（咸鱼击退炸毛、臭臭鱼驱散并短时屏蔽靠近）。
+	 * 它只回答「这条鱼的投掷效果数据齐不齐」，不回答「现在能不能投」——投掷动作本身、距离与命中判定
+	 * 归投掷规则那一侧（道具／联机册），本函数是鱼实例上的数据入口。
+	 */
+	UFUNCTION(BlueprintPure, Category = "Catfishing|Fish")
+	bool HasThrowEffect() const;
+
+	/** 读取这条鱼的投掷效果数据；鱼定义缺失或未配置时返回 Kind=None 的空效果，不返回伪造值。 */
+	UFUNCTION(BlueprintPure, Category = "Catfishing|Fish")
+	FCatFishThrowEffect GetThrowEffect() const;
 
 	/** 鱼 Use 裁决负责确认一格一条鱼且鱼专属字段完整；身体效果在 UseFromInventorySlotFromAuthority 中提交。 */
 	virtual ECatDomainCommandError Use(const FCatInventoryEntry& Item, int32 Quantity) const override;

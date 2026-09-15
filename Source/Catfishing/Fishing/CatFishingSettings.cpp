@@ -1,14 +1,75 @@
 #include "Fishing/CatFishingSettings.h"
 
+#include "Data/CatFishDefinition.h"
 #include "Data/CatFishPersonalityDefinition.h"
 #include "Fishing/Config/CatFishingFightBalanceDefinition.h"
+#include "Fishing/Simulation/CatFishBehaviorProfile.h"
 #include "Fishing/Simulation/CatFishingBiteTimingModel.h"
+#include "Logging/CatLog.h"
 
-// 运行 gate 流程：要求产品显式开启总开关、提供 StateTree 软引用、有限正响应窗/终态复制窗与近岸验证；任一为 Unset 都阻止会话创建。
+namespace
+{
+	void WarnInvalidFishingTuningOnce(const FName Property)
+	{
+		static TSet<FName> WarnedProperties;
+		if (!WarnedProperties.Contains(Property))
+		{
+			WarnedProperties.Add(Property);
+			UE_LOG(LogCatFishing, Warning,
+				TEXT("Event=fishing_tuning_invalid Property=%s Source=CatFishingSettings Result=LegacyDefault"),
+				*Property.ToString());
+		}
+	}
+	double ResolveFishingTuning(const FName Property, const double Value, const double Minimum, const double Fallback)
+	{
+		if (FMath::IsFinite(Value) && Value >= Minimum) return Value;
+		WarnInvalidFishingTuningOnce(Property);
+		return Fallback;
+	}
+}
+
+double UCatFishingSettings::GetExhaustedFishRevivalSeconds() const
+{
+	return ResolveFishingTuning(TEXT("ExhaustedFishRevivalSeconds"), ExhaustedFishRevivalSeconds, UE_SMALL_NUMBER, 30.0);
+}
+double UCatFishingSettings::GetCatchCompletionRodWearPoints() const
+{
+	return ResolveFishingTuning(TEXT("CatchCompletionRodWearPoints"), CatchCompletionRodWearPoints, 0.0, 1.0);
+}
+double UCatFishingSettings::GetOverpowerFlingDistanceCentimeters() const
+{
+	return ResolveFishingTuning(TEXT("OverpowerFlingDistanceCentimeters"), OverpowerFlingDistanceCentimeters, 0.0, 250.0);
+}
+double UCatFishingSettings::GetOverpowerStrengthRatio() const
+{
+	return ResolveFishingTuning(TEXT("OverpowerStrengthRatio"), OverpowerStrengthRatio, 1.0, 2.0);
+}
+int32 UCatFishingSettings::GetMaximumDeployedRodsPerPlayer() const
+{
+	if (MaximumDeployedRodsPerPlayer > 0) return MaximumDeployedRodsPerPlayer;
+	WarnInvalidFishingTuningOnce(TEXT("MaximumDeployedRodsPerPlayer"));
+	return 2;
+}
+const TArray<double>& UCatFishingSettings::GetOverpowerLandingDistanceFractions() const
+{
+	bool bValid = OverpowerLandingDistanceFractions.Num() >= 2
+		&& OverpowerLandingDistanceFractions[0] == 1.0 && OverpowerLandingDistanceFractions.Last() == 0.0;
+	double Previous = 1.0;
+	for (const double Fraction : OverpowerLandingDistanceFractions)
+	{
+		bValid &= FMath::IsFinite(Fraction) && Fraction >= 0.0 && Fraction <= Previous;
+		Previous = Fraction;
+	}
+	if (bValid) return OverpowerLandingDistanceFractions;
+	WarnInvalidFishingTuningOnce(TEXT("OverpowerLandingDistanceFractions"));
+	static const TArray<double> LegacyDefaults = {1.0, 2.0 / 3.0, 1.0 / 3.0, 0.0};
+	return LegacyDefaults;
+}
+
+// 运行 gate 流程：要求产品显式开启总开关、提供 StateTree 软引用、有限正终态复制窗（普通响应窗由已选鱼定义解析）与近岸验证；任一为 Unset 都阻止会话创建。
 bool UCatFishingSettings::IsRuntimeReady() const
 {
 	return bEnableFishingRuntime && !FishingSessionStateTree.IsNull() && !FishBehaviorStateTree.IsNull()
-		&& FMath::IsFinite(TrueBiteWindowSeconds) && TrueBiteWindowSeconds > 0.0
 		&& LoadFightBalanceDefinition()
 		&& FMath::IsFinite(HeldRodMaximumAngularSpeedDegreesPerSecond)
 		&& HeldRodMaximumAngularSpeedDegreesPerSecond > 0.0
@@ -27,20 +88,15 @@ const UCatFishingFightBalanceDefinition* UCatFishingSettings::LoadFightBalanceDe
 	return Definition && Definition->IsRuntimeDefinitionReady() ? Definition : nullptr;
 }
 
-const UCatBitePersonalityDefinition* UCatFishingSettings::FindBitePersonality(const FName PersonalityId) const
+// 墓碑（T10）：FindBitePersonality 已无生产消费者；Bite_* 资产与反射类型留待编辑器迁移。
+
+// 逐鱼行为参数解析流程：先取这条鱼的测试期模板（可能为空），再交给 Resolver 用鱼表四列逐列覆盖。
+// 这里不做任何数值判断，只保证「鱼表优先、模板兜底」这条口径只有一个实现。
+bool UCatFishingSettings::TryResolveFishBehavior(const UCatFishDefinition& FishDefinition,
+	FCatFishResolvedBehavior& OutBehavior) const
 {
-	if (PersonalityId.IsNone()) return nullptr;
-	const UCatBitePersonalityDefinition* Match = nullptr;
-	for (const TSoftObjectPtr<UCatBitePersonalityDefinition>& Entry : BitePersonalities)
-	{
-		const UCatBitePersonalityDefinition* Candidate = Entry.LoadSynchronous();
-		if (Candidate && Candidate->BitePersonalityId == PersonalityId && Candidate->IsRuntimeDefinitionReady())
-		{
-			if (Match) return nullptr;
-			Match = Candidate;
-		}
-	}
-	return Match;
+	const UCatFightPersonalityDefinition* TestingTemplate = FindFightPersonality(FishDefinition.FightPersonalityId);
+	return FCatFishBehaviorProfileResolver::Resolve(FishDefinition, TestingTemplate, OutBehavior);
 }
 
 const UCatFightPersonalityDefinition* UCatFishingSettings::FindFightPersonality(const FName PersonalityId) const

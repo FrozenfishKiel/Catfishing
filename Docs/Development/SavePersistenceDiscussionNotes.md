@@ -1,4 +1,4 @@
-﻿# Save / Persistence 需求核对笔记
+# Save / Persistence 需求核对笔记
 
 更新时间：2026-09-11
 
@@ -8,7 +8,7 @@
 
 - 当前项目实现：`Source/Catfishing/Save/CatRunSaveGame.h/.cpp`、`Source/Catfishing/Save/CatSaveSubsystem.h/.cpp`、`Source/Catfishing/Online/CatOnlineSubsystem.h/.cpp`、`Source/Catfishing/Framework/Game/CatfishingGameModeBase.cpp`。
 - 本轮原始验证：`Saved/Logs/SaveLyraFinalTests.log`、`.codex/state/save-lyra-baseline/editor-build.log`、`.codex/state/save-lyra-baseline/game-build.log`；用例入口 `Source/CatfishingEditor/Save/Tests/CatSaveRoundTripTests.cpp`。
-- 参考实现：`D:/UnreaProjects/LyraStarterGame/Source/LyraGame/Settings/LyraSettingsShared.h/.cpp`。
+- 参考实现：`<参考工程 LyraStarterGame 根>/Source/LyraGame/Settings/LyraSettingsShared.h/.cpp`。
 - 需求来源：下文“飞书策划来源”所列的只读版本。
 
 范围：本文记录第九模块 `Save / Persistence` 的策划来源、当前聊天补充决策和仍需确认的问题。本文不记录测试、验收或完成结论；项目长期进度入口待人工另定。
@@ -42,7 +42,7 @@
 - 局内保存菜单由 LocalPlayer UI 或同等独立入口打开，不由 HUD 负责创建、承载或转发。
 - 旧的“1 自动档 + 3 手动档”和“读取后删除并重建自动档”聊天决策已废弃：当前实现按 GUID `SlotId` 管理单文件槽目录，`ActiveSlotId` 的检查点保存直接覆盖同一活动槽，读取不会删除或重建其他槽。
 - 2026-09-09 代码口径收敛：Run 存档中的玩家状态只保存一个房主本机玩家快照，冷启动后直接恢复反序列化得到的这份快照。
-- 2026-09-10 代码口径收敛：当前磁盘 schema 是 v6。仅旧 `USaveGame` 格式的 v5 会在内存中升级到 v6；未知版本或引擎 `SavedDataVersion` 不匹配会被拒绝，不会以新局覆盖原文件。
+- 2026-09-15：当前磁盘 schema 是 v7。已知 v5/v6 在内存迁移；已发布 v6 的单仓和分仓两种形状按 `bHasInventoryCheckpoint` 区分，旧单仓默认公款零不能当成已存事实。未知版本或引擎版本不匹配仍拒绝，不以新局覆盖原文件。
 
 ## 保存内容边界
 
@@ -71,8 +71,8 @@
 ## 本轮接入事实
 
 - 首批可恢复的房主玩家状态是 `FCatSavedPlayerRunState`：房主本机 Character 的权威 `FTransform`、随身库存和装备选择。`RestorePlayerAfterSpawn` 只让本机 Controller 消费该快照；远端玩家仍按营地出生。
-- 世界侧首批持久化消费者是唯一营地公共仓库和 `UCatFishContainerService` 的关卡稳定键鱼容器。`BuildActiveRunSaveGame` 导出营地已提交库存和 `WorldFishContainers`；`RestoreWorldAfterHostsReady` 先恢复营地，再恢复世界鱼容器。营地恢复后鱼容器失败时只尝试回滚营地，并拒绝继续进入玩法。
-- v5 到 v6 不是磁盘就地改写：`UCatRunSaveGame::HandlePostLoad` 只对 `SavedDataVersion == 0 && FormatVersion == 5` 的已加载对象把内存字段升到 v6；下次成功保存才会以 v6 写出。其他版本保留原值，随后由 `ValidateLoadedRunSaveGame` 拒绝。
+- 当前 `BuildActiveRunSaveGame` 导出 `WorldInventories`、鱼缸档位与公款；旧单仓和 `WorldFishContainers` 仅由已确认的 v5/v6 兼容读取路径消费。`RestoreWorldAfterHostsReady` 在正式宿主就绪后恢复对应形状，下一次成功采样统一写 v7 分仓断点。鱼缸磁盘容量只检查结构，当前配置为恢复目标，缺配按 Actor 容量回退；实际鱼数超限时明确拒绝并保留原文件。
+- v5/v6 到 v7 不原地改写磁盘：`HandlePostLoad` 接受引擎版本 0 的 v5，以及引擎版本 0/6 的 v6，保留原载荷与形状标记；v6 引擎版本同步升为7，通过后续版本校验。旧背包鱼在 `RestoreInventorySlotsFromAuthority` 跳过对应槽并记录鱼定义、实例身份、槽位，正常入库仍拒绝鱼；其余物品和位置继续恢复。下次成功保存才写 v7，旧 build 因版本不同拒绝新档。
 - 目录扫描和正式读槽先用 `HasRunSaveFileHeader` 确认现代 UE `GVAS` 文件标记，拒绝缺失或无效文件头，避免引擎把垃圾字节当作无标记旧格式类名解析。这里只做文件头检查，不是对任意损坏载荷的完整校验器。
 - `LoadOrCreate` 系列 API 在读不到或反序列化失败时可能给出默认对象，因此扫描与正式读取都要求 `WasLoaded()` 为真。`HandleRunLoaded` 对 `WasLoaded()==false` 或载荷校验失败立即撤销旅行许可，坏档不能被当成新档进入世界。
 - 写盘“已受理”不等于成功：`UCatRunSaveGame::HandlePostSave` 把引擎真实 `bSuccess` 交给 `UCatSaveSubsystem::HandleRunSaved`，后者只在对象、LocalPlayer、槽名和载荷校验均匹配后广播 `OnSaveCompleted(RequestId, true)`。
@@ -96,7 +96,7 @@
 | 背包与营地库存 | `FCatSavedRunInventorySlot`、`WriteSavedInventorySlots`、`PrepareInventoryEntriesFromSave` | 保留格位、数量、GUID、耐久；加入鱼重量千克、会话与捕获者身份 | 共同载荷校验，实例由正式定义创建再交给 Inventory | 先校验整批，再提交领域库存 | 鱼饵 3 个、空格、断竿、2.75kg 背包鱼、1.25kg 营地鱼；重复 GUID 拒绝 | 实际磁盘往返恢复通过；重复身份不会启动覆盖 |
 | 装备与世界鱼容器 | Equipment 导出恢复；FishContainerService 的持久键快照 | 保留已有消费者和装备选择；统一背包、营地、世界鱼实例唯一性 | 沿用原领域入口，不新增第二份运行状态 | 营地 → 世界鱼容器；背包 → 装备选择 | 16 项回归含正式三端库存 WBP 交互、装备与商店；世界鱼服务运行调用 | 已有回归通过；非空世界鱼护/鱼缸跨图内容本轮未实测，原恢复路径保留 |
 | Online / UI / 自动保存 | `BeginHostLeaveSave` 等待 `OnSaveCompleted(RequestId,true)`；前端槽列表与菜单 | 公共接口与自动保存间隔不变；底层完成事件改接原生 SaveGame 回执 | 保留 RequestId/epoch 和 busy 协议 | 保存成功 → teardown → 返回前端 → Release | busy 时 Release 拒绝已实测；前端/Online 编译及调用链核对 | 契约保留；打包 Steam 双端房主退出成功/失败流程本轮未复测 |
-| 旧档、文件与工程资产 | v5 FormatVersion 字段；Save 配置、现有 WBP；开发说明 | v5 可读且读取不改文件；新写入 v6；无配置和二进制资产迁移 | 保留兼容字段，去掉旧固定索引与重复校验；无效头/错误类拒绝 | 读取迁移只在内存；后续主动保存才写新版本 | 旧 DTO 文件迁移前后逐字节比较；无效头与错误类读取 | 兼容与拒绝检查通过；Editor 和 Game Development 构建通过；未重新 Cook/打包 |
+| 旧档、文件与工程资产 | v5 FormatVersion 字段；Save 配置、现有 WBP；开发说明 | 当时 v5 可读且读取不改文件、新写入 v6；09-15 已升级 v7，见上文迁移规则；不改二进制资产 | 保留兼容字段，去掉旧固定索引与重复校验；无效头/错误类拒绝 | 读取迁移只在内存；后续主动保存才写新版本 | 旧 DTO 文件迁移前后逐字节比较；无效头与错误类读取 | 兼容与拒绝检查通过；Editor 和 Game Development 构建通过；未重新 Cook/打包 |
 
 本轮删减审查保留了必要的三处边界：SaveGame 对象承接引擎生命周期；一次性完成委托衔接 Online 的真实落盘回执；文件头检查阻止已复现的引擎旧格式回退断言。库存载荷只保留一套预检，旧 FormatVersion 和装备磁盘 DTO 因 v5 消费者继续保留。没有新增配置、业务进度清单或并行存档实现。
 

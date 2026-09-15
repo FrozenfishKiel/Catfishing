@@ -105,7 +105,7 @@ Rod 的 canonical 中心锚与当前左右站位参考组件都位于 `SceneRoot
 | 日志与消费者 | `CatRodBendComponent::LogVisualEvent`；显示消费者为正式竿 Mesh 与鱼线，现有 HUD 继续读取旧显示标量 | 新增默认落盘事件；同场 SessionId 在 Hook 销毁后继续保留；受载每两秒限频 | `LogCatFishing` Display/Warning；无新增 WBP、Montage 或动画资产 | 按加载→绑定→受载→卸力关联日志 | 只记录观察事实；无 Tick 无条件刷屏 | `NetworkRender.log` 包含 NetMode 2/3 双端事件；正式 Win64 包无 `-log` 双端落盘尚未运行 |
 | Cook、构建与交付 | 正式 BP 硬引用新增副本，沿用现有 Cook 入口；新增 `Tests/CatRodBendTests.cpp` 与 Editor 网络/截图用例 | 不新增 Cook 列表；源码契约、运行行为、正式场景交付分层 | 修正本指南旧 BP 路径、蓝图 Tick 与 canonical 说明；无并行旧弯曲实现需删除 | 资产保存后构建、回归、联网、截图核验 | 编译/受控画面不等于正式场景或打包验收 | Editor/Game Development 构建成功；Fishing 132 clean＋3 警告、1 既有失败、0 notRun；网络/截图 2/2 通过；Cook/打包、正式地图手持观感、Steam 双机未运行，继续挂在 Fishing 模块 |
 
-分层结论：`contract` 通过本轮构建和新增公式/资产契约检查，完整回归保留上述既有失败；`runtime_behavior` 通过正式 BP 受控 World 与实际 Listen/Client 复制、松线和 Hook 销毁测试；`presentation_delivery` 只有受控离屏画面已检查，正式地图、真人手持/插地体验及打包双端尚未验收，不能据此关闭 Fishing 模块。实际日志路径为 `D:/develop/Catfishing/Saved/Automation/RodBend/FishingTests.log`、`NetworkRender.log`；尚无本轮打包房主/客户端日志。
+分层结论：`contract` 通过本轮构建和新增公式/资产契约检查，完整回归保留上述既有失败；`runtime_behavior` 通过正式 BP 受控 World 与实际 Listen/Client 复制、松线和 Hook 销毁测试；`presentation_delivery` 只有受控离屏画面已检查，正式地图、真人手持/插地体验及打包双端尚未验收，不能据此关闭 Fishing 模块。实际日志路径为 `Saved/Automation/RodBend/FishingTests.log`、`NetworkRender.log`；尚无本轮打包房主/客户端日志。
 
 ### 3.4 复制状态
 

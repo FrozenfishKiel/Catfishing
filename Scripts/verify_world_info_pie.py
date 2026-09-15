@@ -161,7 +161,7 @@ def tick(delta):
                 unreal.log('WORLD_INFO_PROBE TANK World={} View={}'.format(world.get_name(), found))
                 check(found and found['visible'] and found['detail'] == 1, 'focused tank shows full formal WBP')
             unreal.SystemLibrary.execute_console_command(server, 'Shot SHOWUI filename=WorldInfo_TankFull.png -nosuffix', host)
-            # 已有调试入口仅生成实物鱼；后续使用真实嘴叼、鱼护入库与客户端拖放 RPC，不直接改写库存或摘要字段。
+            # 已有调试入口仅生成实物鱼；后续使用真实嘴叼、鱼护入库与客户端 Carry/Store RPC，不直接改写库存或摘要字段。
             pawn = remote_server.get_controlled_pawn()
             pawn.set_actor_location(tank.get_actor_location() + unreal.Vector(-180, -100, 80), False, True)
             guard = next(iter(unreal.GameplayStatics.get_all_actors_of_class(server, unreal.CatFishGuardActor)))
@@ -178,8 +178,12 @@ def tick(delta):
             client_guard = next(a for a in unreal.GameplayStatics.get_all_actors_of_class(client, unreal.CatFishGuardActor) if a.get_name() == state['guard_name'])
             entries = client_guard.get_fish_inventory_component().get_inventory_entries()
             source_slot = next(i for i, entry in enumerate(entries) if entry.instance)
-            unreal.SystemLibrary.execute_console_command(client, 'cat.WorldInfo.Probe.Move {} {} {} 0'.format(client_guard.get_name(), source_slot, client_tank.get_name()), remote)
-            state.update(stage=4, at=now, source_slot=source_slot)
+            unreal.SystemLibrary.execute_console_command(client, 'cat.WorldInfo.Probe.Fish Carry {} {}'.format(client_guard.get_name(), source_slot), remote)
+            # 墓碑（T24，联机社交:220）：旧探针直接转鱼，现在等嘴部复制后再入缸。
+            state.update(stage=3.5, at=now, source_slot=source_slot)
+        elif stage == 3.5 and now - state['at'] > 1.0:
+            unreal.SystemLibrary.execute_console_command(client, 'cat.WorldInfo.Probe.Fish Store {}'.format(client_tank.get_name()), remote)
+            state.update(stage=4, at=now)
         elif stage == 4 and now - state['at'] > 1.0:
             for world in [server, client]:
                 found = find_view(world, '共享鱼缸')
@@ -187,7 +191,11 @@ def tick(delta):
                 check(found['rows'].get('FishCountCapacity') == '1 / 20', 'tank count and real capacity agree')
                 check(found['rows'].get('OfferingShortfall') == '9 点', 'tank shortfall uses current target')
             client_guard = next(a for a in unreal.GameplayStatics.get_all_actors_of_class(client, unreal.CatFishGuardActor) if a.get_name() == state['guard_name'])
-            unreal.SystemLibrary.execute_console_command(client, 'cat.WorldInfo.Probe.Move {} 0 {} {}'.format(client_tank.get_name(), client_guard.get_name(), state['source_slot']), remote)
+            unreal.SystemLibrary.execute_console_command(client, 'cat.WorldInfo.Probe.Fish Carry {} 0'.format(client_tank.get_name()), remote)
+            state.update(stage=4.5, at=now)
+        elif stage == 4.5 and now - state['at'] > 1.0:
+            client_guard = next(a for a in unreal.GameplayStatics.get_all_actors_of_class(client, unreal.CatFishGuardActor) if a.get_name() == state['guard_name'])
+            unreal.SystemLibrary.execute_console_command(client, 'cat.WorldInfo.Probe.Fish Store {}'.format(client_guard.get_name()), remote)
             state.update(stage=5, at=now)
         elif stage == 5 and now - state['at'] > 1.0:
             for world in [server, client]:

@@ -17,6 +17,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishSelectionBasePoolFallbackTest,
+	"Catfishing.Unit.Data.FishSelection.EmptyCandidateSetFallsBackToBasePool",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishSelectionPostFilterNormalizationTest,
 	"Catfishing.Unit.Data.FishSelection.FiltersBeforeNormalizingRemainingCandidates",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
@@ -24,6 +29,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFormalFishSelectionWeightStrengthTest,
 	"Catfishing.Unit.Data.FishSelection.FormalCatalogFreezesWeightDerivedStrength",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatPerfectHookReductionRarityTierTest,
+	"Catfishing.Unit.Data.FishSelection.PerfectHookReductionFollowsRarityTier",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 namespace CatFishSelectionPolicyTestsPrivate
@@ -61,13 +71,14 @@ namespace CatFishSelectionPolicyTestsPrivate
 		Definition->TimeOfDay = {ECatEnvironmentTimeOfDay::Morning};
 		Definition->Weather = {ECatEnvironmentWeather::Clear};
 		Definition->SpawnWeight = SpawnWeight;
+		Definition->FishStrengthPerKilogram = 10.0; // 力量系数K 逐鱼配；力量 = 重量 x K。
 		Definition->MinimumWeightKilograms = 1.0;
 		Definition->MaximumWeightKilograms = 1.0;
 		Definition->MinimumFightParticipants = 1;
-		Definition->FishFightStamina = 5.0;
+		Definition->FishFightStaminaPerKilogram = 5.0;
 		Definition->BitePersonalityId = TEXT("TestBite");
 		Definition->FightPersonalityId = TEXT("TestFight");
-		Definition->EatingExperience = 1.0;
+		Definition->EatingExperiencePerKilogram = 1.0;
 		return Definition;
 	}
 }
@@ -100,6 +111,81 @@ bool FCatFishSelectionOptionalEligibilityGateTest::RunTest(const FString& Parame
 		FCatFishEligibilityPolicy::PassesActivePlayerCount(*Definition, 1));
 	TestTrue(TEXT("participant gate accepts the configured minimum"),
 		FCatFishEligibilityPolicy::PassesActivePlayerCount(*Definition, 2));
+	// 墓碑（T23，鱼册逐鱼条件接口及批7 C组 fail-closed 要求）：删除空数组即不限的旧断言。
+	AddExpectedMessage(TEXT("Event=fish_eligibility_unconfigured"), ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains, 2);
+	Definition->TimeOfDay.Empty();
+	Definition->Weather.Empty();
+	TestFalse(TEXT("enabled time gate rejects an unauthored axis"),
+		FCatFishEligibilityPolicy::PassesTimeOfDay(*Definition, ECatEnvironmentTimeOfDay::Dusk, true));
+	TestFalse(TEXT("enabled weather gate rejects an unauthored axis"),
+		FCatFishEligibilityPolicy::PassesWeather(*Definition, ECatEnvironmentWeather::Rain, true));
+	return !HasAnyErrors();
+}
+
+bool FCatFishSelectionBasePoolFallbackTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	UCatFishCatalogSettings* Settings = NewObject<UCatFishCatalogSettings>(GetTransientPackage());
+	UCurveFloat* SaturationCurve = NewObject<UCurveFloat>(GetTransientPackage());
+	UCatFishPresentationDefinition* Presentation =
+		CatFishSelectionPolicyTestsPrivate::MakePresentationDefinition();
+	UCatFishDefinition* PoolFish = CatFishSelectionPolicyTestsPrivate::MakeFishDefinition(
+		TEXT("PoolFish"), 1.0, Presentation);
+	if (!TestNotNull(TEXT("creates transient catalog settings"), Settings)
+		|| !TestNotNull(TEXT("creates transient saturation curve"), SaturationCurve)
+		|| !TestNotNull(TEXT("creates transient presentation"), Presentation)
+		|| !TestNotNull(TEXT("creates transient base pool fish"), PoolFish))
+	{
+		return false;
+	}
+	SaturationCurve->FloatCurve.AddKey(0.0f, 1.0f);
+	SaturationCurve->FloatCurve.AddKey(1.0f, 3.0f);
+	Settings->Definitions = {PoolFish};
+	Settings->ChumSaturationCurve = SaturationCurve;
+	Settings->ChumAffinityHalfSaturation = 10.0;
+	Settings->MaximumChumModifier = 3.0;
+	Settings->MaximumChallengeRatio = 1.35;
+
+	FCatFishSelectionContext Context;
+	Context.WaterRegion.RegionId = TEXT("TestLake");
+	Context.WaterRegion.GeometryRevision = 1;
+	Context.ChumSample.bSucceeded = true;
+	Context.ChumSample.WaterRegion = Context.WaterRegion;
+	Context.TimeOfDay = ECatEnvironmentTimeOfDay::Morning;
+	Context.Weather = ECatEnvironmentWeather::Clear;
+	Context.ActivePlayerCount = 1;
+	// 队伍战力远低于这条鱼：挑战度超过 MaximumChallengeRatio，普通候选池会被筛空。
+	// 墓碑（2026-09-14，鱼册 §3.1.2／设计修改记录④）：零窝料现在直接走基础池。
+	// 本夹具继续验证「非空窝的候选筛空」入口，提供中性窝料，保留全部原断言。
+	Context.ChumSample.EffectiveChumVector.Fishy = 1.0;
+	// 基础池刻意不读挑战度，所以它仍然能把这条鱼抽出来——这正是「空窝不空钩」要保住的那条路。
+	Context.CombinedFishingStrength = 1.0;
+	Context.CombinedFightStamina = 1.0;
+	Context.RandomSeed = 20260912;
+
+	// 名册没填时保持未选中，但必须留下可查的原因，而不是静默空钩。
+	// 墓碑（2026-09-14，设计修改记录④）：正式 ini 已有四条基础池，不能再假设新建配置对象继承空名册。
+	// 仅显式准备本段的未配置夹具，保留未选中与随后填入名册可选中的原断言。
+	Settings->BasePool.Reset();
+	AddExpectedMessage(TEXT("Event=fish_selection_base_pool_unavailable"), ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains, 1);
+	const FCatFishSelectionResult WithoutRoster = Settings->SelectRuntimeDefinition(Context);
+	TestFalse(TEXT("an unauthored base pool still cannot invent a fish"), WithoutRoster.bSelected);
+	TestTrue(TEXT("the unselected result still reports that the base pool path was taken"),
+		WithoutRoster.bFromBasePool);
+
+	// 名册填上之后，「候选为空」必须落基础池而不是空钩（2026-09-08 李前臻裁）。
+	FCatFishBasePoolEntry& Entry = Settings->BasePool.AddDefaulted_GetRef();
+	Entry.FishDefinitionId = TEXT("PoolFish");
+	Entry.Probability = 1.0;
+	const FCatFishSelectionResult FromPool = Settings->SelectRuntimeDefinition(Context);
+	TestTrue(TEXT("an empty candidate set falls back to the base pool"), FromPool.bSelected);
+	TestTrue(TEXT("the fallback marks itself as base pool sourced"), FromPool.bFromBasePool);
+	TestEqual(TEXT("the fallback picks the only roster member"),
+		FromPool.FishDefinitionId, FName(TEXT("PoolFish")));
+	TestEqual(TEXT("the fallback still derives strength from weight times the fish's own coefficient"),
+		FromPool.BaseFishStrength, FromPool.WeightKilograms * PoolFish->FishStrengthPerKilogram, 1e-6);
 	return !HasAnyErrors();
 }
 
@@ -132,14 +218,7 @@ bool FCatFishSelectionPostFilterNormalizationTest::RunTest(const FString& Parame
 	Settings->ChumSaturationCurve = SaturationCurve;
 	Settings->ChumAffinityHalfSaturation = 10.0;
 	Settings->MaximumChumModifier = 3.0;
-	Settings->ComfortChallengeMaximumRatio = 0.65;
-	Settings->MatchedChallengeMaximumRatio = 1.05;
 	Settings->MaximumChallengeRatio = 1.35;
-	Settings->TargetChallengeRatio = 0.9;
-	Settings->ComfortChallengeBandWeight = 1.0;
-	Settings->MatchedChallengeBandWeight = 0.0;
-	Settings->RiskyChallengeBandWeight = 0.0;
-	Settings->MinimumChallengeWeightMultiplier = 0.25;
 	Settings->bEnableTimeOfDayEligibilityFilter = false;
 	Settings->bEnableWeatherEligibilityFilter = false;
 
@@ -153,23 +232,55 @@ bool FCatFishSelectionPostFilterNormalizationTest::RunTest(const FString& Parame
 	Context.ActivePlayerCount = 1;
 	Context.CombinedFishingStrength = 10.0;
 	Context.CombinedFightStamina = 10.0;
-	Context.StrengthPerKilogram = 10.0;
 	Context.RandomSeed = 20260901;
+	// 跨原轻松/高风险带，仍必须用原始权重 1:3 一起归一化，不能先选带或乘挑战倍率。
+	// 墓碑（2026-09-14，鱼册 §3.1.2／设计修改记录④）：空窝用基础池，归一化夹具改为非空窝。
+	// 两条测试鱼的偏好三轴均为0，故中性窝料不会改变原有1:3权重、挑战门或任何期望值。
+	Context.ChumSample.EffectiveChumVector.Fishy = 1.0;
+	Settings->BasePool.Reset(); // 本用例的无可用候选分支明确使用空名册，不继承正式四条资产。
+	LightFish->FishStrengthPerKilogram = 5.0;
+	HeavyFish->FishStrengthPerKilogram = 12.0;
 
 	const FCatFishSelectionResult BypassedResult = Settings->SelectRuntimeDefinition(Context);
 	TestTrue(TEXT("disabled time and weather filters leave valid candidates selectable"),
 		BypassedResult.bSelected);
 	TestEqual(TEXT("both fish remain after challenge and participant filters"),
 		BypassedResult.EligibleCandidateCount, 2);
-	TestEqual(TEXT("both fish remain in the selected challenge band"),
-		BypassedResult.SelectedBandCandidateCount, 2);
+	TestEqual(TEXT("both fish participate in final weight normalization"),
+		BypassedResult.PositiveWeightCandidateCount, 2);
 	const double ExpectedProbability = BypassedResult.FishDefinitionId == TEXT("HeavyFish") ? 0.75 : 0.25;
 	TestEqual(TEXT("reported probability is normalized only across remaining candidates"),
 		BypassedResult.SelectedNormalizedProbability, ExpectedProbability, UE_DOUBLE_SMALL_NUMBER);
 	TestEqual(TEXT("selected individual weight is frozen once"),
 		BypassedResult.WeightKilograms, 1.0, UE_DOUBLE_SMALL_NUMBER);
-	TestEqual(TEXT("fish strength is sampled weight times shared coefficient"),
-		BypassedResult.BaseFishStrength, 10.0, UE_DOUBLE_SMALL_NUMBER);
+	TestEqual(TEXT("fish strength is sampled weight times that fish's own strength coefficient"),
+		BypassedResult.BaseFishStrength, BypassedResult.FishDefinitionId == TEXT("HeavyFish") ? 12.0 : 5.0,
+		UE_DOUBLE_SMALL_NUMBER);
+	TestEqual(TEXT("challenge no longer scales raw ecological weights"), BypassedResult.SelectedFinalWeight,
+		BypassedResult.FishDefinitionId == TEXT("HeavyFish") ? 3.0 : 1.0, UE_DOUBLE_SMALL_NUMBER);
+	Settings->MaximumChallengeRatio = 1.2;
+	TestEqual(TEXT("hard safety ceiling equality stays eligible"), Settings->SelectRuntimeDefinition(Context).EligibleCandidateCount, 2);
+	Settings->MaximumChallengeRatio = 1.19;
+	const auto BelowCeiling = Settings->SelectRuntimeDefinition(Context);
+	TestEqual(TEXT("hard safety ceiling still removes the excessive individual"), BelowCeiling.FishDefinitionId, FName(TEXT("LightFish")));
+	TestEqual(TEXT("normalization excludes unsafe fish"), BelowCeiling.SelectedNormalizedProbability, 1.0, UE_DOUBLE_SMALL_NUMBER);
+	Settings->MaximumChallengeRatio = 1.35;
+
+	// 本夹具全局K为0：逐鱼与迁移兜底均缺配时退出候选，不能带着0力量进池。
+	AddExpectedMessage(TEXT("Event=fish_selection_strength_coefficient_unset"), ELogVerbosity::Warning);
+	// 候选被筛空之后会落基础池；本用例没配名册，所以兜底也拿不出鱼，这条是预期日志不是失败。
+	// 次数取 -1（出现与否都不判定）：下面两次选鱼各会走一次兜底，用例关心的是选不出鱼，不是报了几次。
+	AddExpectedMessage(TEXT("Event=fish_selection_base_pool_unavailable"), ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains, -1);
+	LightFish->FishStrengthPerKilogram = 0.0;
+	HeavyFish->FishStrengthPerKilogram = 0.0;
+	const FCatFishSelectionResult UnsetCoefficientResult = Settings->SelectRuntimeDefinition(Context);
+	TestFalse(TEXT("fish without an authored strength coefficient cannot be selected"),
+		UnsetCoefficientResult.bSelected);
+	TestEqual(TEXT("unset strength coefficient removes the candidate before normalization"),
+		UnsetCoefficientResult.EligibleCandidateCount, 0);
+	LightFish->FishStrengthPerKilogram = 10.0;
+	HeavyFish->FishStrengthPerKilogram = 10.0;
 
 	Settings->bEnableTimeOfDayEligibilityFilter = true;
 	const FCatFishSelectionResult EnabledResult = Settings->SelectRuntimeDefinition(Context);
@@ -195,8 +306,35 @@ bool FCatFormalFishSelectionWeightStrengthTest::RunTest(const FString& Parameter
 	Context.ActivePlayerCount = 1;
 	Context.CombinedFishingStrength = 50.0;
 	Context.CombinedFightStamina = 60.0;
-	Context.StrengthPerKilogram = 10.0;
 	Context.RandomSeed = 20260903;
+	// 本用例专测逐鱼 K；资产尚未迁移时，既有全局兜底由 FormalEmptyChumSelectsAllFourBasePoolFish 实测。
+	// 墓碑（2026-09-14）：不能再把「逐鱼 K 未填」描述成整个生产选鱼链 fail-closed。
+	bool bAnyStrengthCoefficientAuthored = false;
+	for (const TSoftObjectPtr<UCatFishDefinition>& Entry : Settings->Definitions)
+	{
+		const UCatFishDefinition* Candidate = Entry.LoadSynchronous();
+		if (Candidate != nullptr && Candidate->FishStrengthPerKilogram > 0.0)
+		{
+			bAnyStrengthCoefficientAuthored = true;
+			break;
+		}
+	}
+	if (!bAnyStrengthCoefficientAuthored)
+	{
+		AddWarning(TEXT("正式鱼表资产尚未填入逐鱼「力量系数K」；生产链已有全局迁移兜底，"
+			"本用例待资产补值后校验逐鱼K，当前兜底另有正式空窝测试覆盖。"));
+		return !HasAnyErrors();
+	}
+	// 正式目录里可能只有一部分鱼补了 K，未补的那些会各自记一条内容缺口警告，不是用例失败。
+	AddExpectedMessage(TEXT("Event=fish_selection_strength_coefficient_unset"), ELogVerbosity::Warning);
+	// Fish_*.uasset 的体力列还是 2026-09-08 之前的定额，取系数时会按重量中点折算并各报一次；
+	// 报几条取决于目录里有多少条鱼，故取 -1 不判定次数。资产按终版鱼表重生成、ini 开关改成 False 之后，
+	// 这条期待连同过渡逻辑一起删。
+	AddExpectedMessage(TEXT("Event=fish_fight_stamina_legacy_flat_value_converted"), ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains, -1);
+	// 正式目录若被条件门筛空会落基础池；基础池也无可用鱼时才报。出现与否都不判定。
+	AddExpectedMessage(TEXT("Event=fish_selection_base_pool_unavailable"), ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains, -1);
 	const FCatFishSelectionResult First = Settings->SelectRuntimeDefinition(Context);
 	const FCatFishSelectionResult Replay = Settings->SelectRuntimeDefinition(Context);
 	if (!TestTrue(TEXT("formal River catalog still selects an eligible individual"), First.bSelected)
@@ -212,8 +350,105 @@ bool FCatFormalFishSelectionWeightStrengthTest::RunTest(const FString& Parameter
 	TestTrue(TEXT("selected weight stays inside its formal definition"), Definition
 		&& First.WeightKilograms >= Definition->MinimumWeightKilograms
 		&& First.WeightKilograms <= Definition->MaximumWeightKilograms);
-	TestEqual(TEXT("formal runtime strength comes from that exact individual weight"),
-		First.BaseFishStrength, First.WeightKilograms * Context.StrengthPerKilogram, 1e-6);
+	TestEqual(TEXT("formal runtime strength comes from that exact individual weight and the fish's own coefficient"),
+		First.BaseFishStrength,
+		Definition != nullptr ? First.WeightKilograms * Definition->FishStrengthPerKilogram : 0.0, 1e-6);
+	return !HasAnyErrors();
+}
+
+bool FCatPerfectHookReductionRarityTierTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	UCatFishCatalogSettings* Settings = NewObject<UCatFishCatalogSettings>(GetTransientPackage());
+	UCatFishDefinition* CommonFish = NewObject<UCatFishDefinition>(GetTransientPackage());
+	UCatFishDefinition* TopTierFish = NewObject<UCatFishDefinition>(GetTransientPackage());
+	if (!TestNotNull(TEXT("creates transient catalog settings"), Settings)
+		|| !TestNotNull(TEXT("creates transient common fish"), CommonFish)
+		|| !TestNotNull(TEXT("creates transient top tier fish"), TopTierFish))
+	{
+		return false;
+	}
+	CommonFish->RarityTierId = TEXT("TestCommonTier");
+	TopTierFish->RarityTierId = TEXT("TestTopTier");
+	Settings->RarePerfectHookRarityTierIds = {TEXT("TestTopTier")};
+	Settings->CommonPerfectFishStrengthMultiplier = 0.8;
+	Settings->CommonPerfectFishStaminaMultiplier = 0.85;
+	Settings->RarePerfectFishStrengthMultiplier = 0.85;
+	Settings->RarePerfectFishStaminaMultiplier = 0.9;
+	Settings->PerfectInitialLineLengthMultiplier = 0.5;
+
+	const FCatPerfectHookReduction CommonReduction = Settings->ResolvePerfectHookReduction(*CommonFish);
+	TestEqual(TEXT("非最高档按普通鱼取力量系数"),
+		CommonReduction.FishStrengthMultiplier, 0.8, UE_DOUBLE_SMALL_NUMBER);
+	TestEqual(TEXT("非最高档按普通鱼取体力系数"),
+		CommonReduction.FishStaminaMultiplier, 0.85, UE_DOUBLE_SMALL_NUMBER);
+	const FCatPerfectHookReduction TopTierReduction = Settings->ResolvePerfectHookReduction(*TopTierFish);
+	TestEqual(TEXT("清单内的档按稀有鱼取力量系数"),
+		TopTierReduction.FishStrengthMultiplier, 0.85, UE_DOUBLE_SMALL_NUMBER);
+	TestEqual(TEXT("清单内的档按稀有鱼取体力系数"),
+		TopTierReduction.FishStaminaMultiplier, 0.9, UE_DOUBLE_SMALL_NUMBER);
+	TestEqual(TEXT("完美线长系数不按稀有度分档"),
+		TopTierReduction.InitialLineLengthMultiplier, 0.5, UE_DOUBLE_SMALL_NUMBER);
+
+	// 未配置、越界与负值都退回 1.0：完美只会不削减，绝不放大鱼，也不把本场值清零。
+	Settings->CommonPerfectFishStrengthMultiplier = 0.0;
+	Settings->RarePerfectFishStaminaMultiplier = 1.5;
+	Settings->PerfectInitialLineLengthMultiplier = -1.0;
+	TestEqual(TEXT("未配置的普通档系数退回 1.0"),
+		Settings->ResolvePerfectHookReduction(*CommonFish).FishStrengthMultiplier, 1.0, UE_DOUBLE_SMALL_NUMBER);
+	const FCatPerfectHookReduction SanitizedTopTier = Settings->ResolvePerfectHookReduction(*TopTierFish);
+	TestEqual(TEXT("越界的稀有档系数退回 1.0"),
+		SanitizedTopTier.FishStaminaMultiplier, 1.0, UE_DOUBLE_SMALL_NUMBER);
+	TestEqual(TEXT("负的线长系数退回 1.0"),
+		SanitizedTopTier.InitialLineLengthMultiplier, 1.0, UE_DOUBLE_SMALL_NUMBER);
+
+	// 稀有档清单为空时全部按普通鱼取，与设计「其余档按普通鱼」一致。
+	Settings->RarePerfectHookRarityTierIds.Reset();
+	Settings->CommonPerfectFishStrengthMultiplier = 0.8;
+	TestEqual(TEXT("稀有档清单为空时最高档也按普通鱼取"),
+		Settings->ResolvePerfectHookReduction(*TopTierFish).FishStrengthMultiplier, 0.8, UE_DOUBLE_SMALL_NUMBER);
+	// 2026-09-14 裁决⑤：读正式资产和正式配置，避免用测试 ID 自证配置已接通。
+	const auto* FormalSettings = GetDefault<UCatFishCatalogSettings>();
+	for (const TCHAR* Name : {TEXT("ForestLongtail"),TEXT("SilvermoonTrout"),TEXT("Blackfish"),TEXT("Pike"),TEXT("LakeGiantShadow")})
+	{
+		const FString Path = FString::Printf(TEXT("/Game/Catfishing/Data/Fish/Fish_%s.Fish_%s"),Name,Name);
+		const auto* Fish = LoadObject<UCatFishDefinition>(nullptr,*Path);
+		if (!TestNotNull(*Path,Fish)) return false;
+		const bool bTop = FString(Name)!=TEXT("LakeGiantShadow");
+		if (bTop) TestEqual(TEXT("四条珍稀的实际 ID 是 Rare"),Fish->RarityTierId,FName(TEXT("Rare")));
+		const auto Reduction = FormalSettings->ResolvePerfectHookReduction(*Fish);
+		TestEqual(*FString::Printf(TEXT("%s 正式完美力量系数"),Name),Reduction.FishStrengthMultiplier,bTop ? 0.85 : 0.8,1e-8);
+		TestEqual(*FString::Printf(TEXT("%s 正式完美体力系数"),Name),Reduction.FishStaminaMultiplier,bTop ? 0.9 : 0.85,1e-8);
+	}
+	return !HasAnyErrors();
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishBasePoolInvalidMappingTest,
+	"Catfishing.Unit.Data.FishSelection.BasePoolRejectsAmbiguousOrInvalidMapping",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FCatFishBasePoolInvalidMappingTest::RunTest(const FString&)
+{
+	auto* Settings = NewObject<UCatFishCatalogSettings>();
+	auto* Fish = CatFishSelectionPolicyTestsPrivate::MakeFishDefinition(TEXT("TestFish"), 1.0,
+		CatFishSelectionPolicyTestsPrivate::MakePresentationDefinition());
+	Settings->Definitions = {Fish};
+	FCatFishSelectionContext Context;
+	Context.WaterRegion.RegionId = TEXT("TestLake");
+	Context.ActivePlayerCount = 1;
+	FCatFishBasePoolEntry Entry;
+	Entry.FishDefinitionId = Fish->FishDefinitionId;
+	Entry.Probability = 1.0;
+	Settings->BasePool = {Entry, Entry};
+	AddExpectedMessage(TEXT("Event=fish_selection_base_pool_invalid"), ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains, 3);
+	TestFalse(TEXT("重复 ID 不能暗中叠概率"), Settings->SelectFromBasePool(Context, TEXT("Test")).bSelected);
+	Settings->BasePool.SetNum(1);
+	Settings->BasePool[0].Probability = -1.0;
+	TestFalse(TEXT("非法权重拒绝整份映射"), Settings->SelectFromBasePool(Context, TEXT("Test")).bSelected);
+	Settings->BasePool[0].Probability = 1.0;
+	Settings->BasePool[0].FishDefinitionId = TEXT("NotInCatalog");
+	TestFalse(TEXT("未知成员拒绝，不回全鱼池"), Settings->SelectFromBasePool(Context, TEXT("Test")).bSelected);
 	return !HasAnyErrors();
 }
 

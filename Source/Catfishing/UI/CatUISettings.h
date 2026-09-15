@@ -4,6 +4,8 @@
 #include "Engine/DeveloperSettings.h"
 #include "CatUISettings.generated.h"
 
+class UCatCollectionWidget;
+class UCatFishRevealWidget;
 class UCatHUDWidget;
 class UCatAltarConfirmationWidget;
 class UCatDayTransitionWidget;
@@ -67,6 +69,15 @@ public:
 	/** 读取局内 ESC 主菜单类；缺失时 LocalPlayer 不创建空白菜单，也不把保存入口塞回 HUD。 */
 	TSubclassOf<UCatLakeMainMenuWidget> LoadLakeMainMenuWidgetClass() const;
 
+	/** 读取个人图鉴页 WBP 类；缺失时只关闭图鉴入口并记录，不创建原生白盒替身，也不影响 Profile 图鉴记录。 */
+	TSubclassOf<UCatCollectionWidget> LoadCollectionWidgetClass() const;
+
+	/**
+	 * 读取首次解锁鱼种的特写浮层 WBP 类；缺失时只关闭这一次特写并记录一次诊断，
+	 * 既不创建原生白盒替身，也不影响图鉴记录本身——记录早在 Profile 落盘时就写好了。
+	 */
+	TSubclassOf<UCatFishRevealWidget> LoadFishRevealWidgetClass() const;
+
 	/** 返回配置的局内主菜单 Input Action；它应由项目既有 InputContext 映射到 Escape 或等价菜单键。 */
 	UInputAction* LoadMainMenuToggleAction() const;
 
@@ -75,6 +86,9 @@ public:
 
 	/** 返回配置的交互确认 Input Action；它仍位于项目既有 InputContext 中。 */
 	UInputAction* LoadInteractionConfirmAction() const;
+
+	/** 返回配置的图鉴开关 Input Action；它应由项目既有 InputContext 映射到 M 键，运行时代码只绑定 Action。 */
+	UInputAction* LoadCollectionToggleAction() const;
 
 	/** 返回项目唯一 Gameplay Mapping Context；UI 只解析资产接线，不安装第二套 Context。 */
 	UInputMappingContext* LoadGameplayInputMappingContext() const;
@@ -90,6 +104,9 @@ public:
 
 	/** 从正式 IMC 中解析交互确认 Action 的第一个按键名；解析失败时返回 None。 */
 	FName ResolveInteractionConfirmKeyName() const;
+
+	/** 从正式 IMC 中解析图鉴开关 Action 的第一个按键名；解析失败时返回 None。 */
+	FName ResolveCollectionToggleKeyName() const;
 
 	/** 局内玩家 UI 的装配开关；默认开启后仍要求各模块 WBP 有效，关闭只用于测试或诊断禁用玩家可见 UI。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake")
@@ -143,6 +160,17 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Save")
 	TSoftClassPtr<UCatLakeMainMenuWidget> LakeMainMenuWidgetClass;
 
+	/** 个人图鉴页 WBP 类；默认指向正式资产，页面只读 Profile durable 快照，不承载局内图鉴板与印记相册。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Lake|Collection")
+	TSoftClassPtr<UCatCollectionWidget> CollectionWidgetClass;
+
+	/**
+	 * 首次解锁鱼种的特写浮层 WBP 类；默认指向正式资产路径，资产尚未创建时保持空并由调用方 fail-closed。
+	 * 它只是一次性揭示层，不承载图鉴页——图鉴页是 CollectionWidgetClass。
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Lake|Collection")
+	TSoftClassPtr<UCatFishRevealWidget> FishRevealWidgetClass;
+
 	/** 局内主菜单的正式 Enhanced Input Action 资产；项目应把它维护在既有 InputContext 内，运行时代码只绑定 Action。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Input")
 	TSoftObjectPtr<UInputAction> MainMenuToggleAction;
@@ -154,6 +182,10 @@ public:
 	/** 交互确认的正式 Enhanced Input Action 资产；它由 PlayerController 通过 Native Input Tag 唯一绑定，UI 只用它解析提示键名。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Input")
 	TSoftObjectPtr<UInputAction> InteractionConfirmAction;
+
+	/** 图鉴开关的正式 Enhanced Input Action 资产；项目应把它维护在既有 InputContext 内并映射到 M 键，运行时代码只绑定 Action。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Lake|Input")
+	TSoftObjectPtr<UInputAction> CollectionToggleAction;
 
 	/** 背包开关所在的项目唯一 Mapping Context；它只用于资产接线和键名解析，不由 UI PageController 重复安装。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Input")

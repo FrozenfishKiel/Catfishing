@@ -68,7 +68,7 @@ namespace CatRodReplacementTests
 		}
 
 		// 制造一根已部署的断 T1：先把当前 T1 放到世界，再通过 Fishing 使用记录提交磨损，最后同步世界鱼竿 broken 表现。
-		bool BreakDeployedRod(FAutomationTestBase& Test)
+		bool BreakDeployedRod(FAutomationTestBase& Test, const bool bRetire = false)
 		{
 			const FCatEquipmentLoadoutSnapshot Loadout = Equipment->GetSnapshot();
 			if (!Test.TestTrue(TEXT("部署原 T1 实例"), Equipment->Use(
@@ -85,12 +85,13 @@ namespace CatRodReplacementTests
 			const FGuid SessionId = FGuid::NewGuid();
 			if (!Test.TestTrue(TEXT("绑定原鱼竿钓鱼会话"), Equipment->BeginFishingUse(SessionId,
 				OldItemId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId, Loadout.RodDefinitionId,
-				Loadout.BaitDefinitionId, Loadout.FloatDefinitionId, Equipment->GetSnapshot().Revision).bBaitFrozen)) return false;
+				Loadout.BaitDefinitionId, Loadout.FloatDefinitionId, Equipment->GetSnapshot().Revision).bUseAccepted)) return false;
 			if (!Test.TestTrue(TEXT("提交鱼饵"), Equipment->CommitFishingBaitDeferred(SessionId).bApplied)) return false;
 			if (!Test.TestTrue(TEXT("耗尽 T1 实例耐久"), Equipment->ApplyFishingRodWear(
 				SessionId, 1, Loadout.RodDurability + 1).bRodBroken)) return false;
 			if (!Test.TestTrue(TEXT("同步世界断竿事实"), OldRod->SetBrokenFromAuthority(true,
 				OldRod->GetPresentationState().RodActorRevision))) return false;
+			if (bRetire && !Test.TestTrue(TEXT("正式断竿退役移除实物"), Equipment->RetireBrokenFishingRodFromAuthority(SessionId))) return false;
 			return Test.TestTrue(TEXT("结束原会话"), Equipment->ReleaseFishingUse(SessionId).bApplied);
 		}
 
@@ -160,8 +161,13 @@ bool FCatBrokenRodReplacementTest::RunTest(const FString& Parameters)
 			}
 			if (!Fixture.Pack(*this)) return false;
 			if (!bBuyBeforePack && !Fixture.ReceiveT2(*this, bDrag)) return false;
+			// 墓碑（T35，商店 §3.1.2）：旧断言要求断竿后自动选 T2，违反不自动替换。
+			// 已提前入包的备用竿不能由收杆动作选中；玩家明确 Use 后仍核验实例、耐久与正式放竿。
+			if (bBuyBeforePack) TestTrue(TEXT("收杆不自动选择包中备用竿"), Fixture.Equipment->GetSnapshot().RodItemInstanceId != Fixture.NewItemId);
+			const FCatInventoryItemUseResult Use = Fixture.Equipment->Use(FGuid::NewGuid(), Fixture.Equipment->GetSnapshot().Revision, Fixture.NewItemId);
+			TestTrue(TEXT("玩家主动使用新竿"), Use.bCommitted);
 			const FCatEquipmentLoadoutSnapshot Loadout = Fixture.Equipment->GetSnapshot();
-			TestEqual(TEXT("自动切到不同型号 T2"), Loadout.RodDefinitionId, FName(TEXT("ShopRodT2")));
+			TestEqual(TEXT("主动使用后选中 T2"), Loadout.RodDefinitionId, FName(TEXT("ShopRodT2")));
 			TestEqual(TEXT("选中公共仓库交付的同一实例"), Loadout.RodItemInstanceId, Fixture.NewItemId);
 			const UCatEquipmentDefinition* T2 = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(TEXT("ShopRodT2"));
 			if (!TestNotNull(TEXT("T2 正式资产可用于运行"), T2)) return false;
@@ -176,7 +182,6 @@ bool FCatBrokenRodReplacementTest::RunTest(const FString& Parameters)
 				? Cast<UCatEquipmentInventoryItemInstance>(BrokenEntry->Instance) : nullptr;
 			if (!TestTrue(TEXT("原竿实例仍保留为破损库存事实"), BrokenRod != nullptr)) return false;
 			TestTrue(TEXT("原竿仍保持零耐久和破损"), BrokenRod->IsRodBroken() && BrokenRod->GetRodDurability() == 0);
-			const FCatInventoryItemUseResult Use = Fixture.Equipment->Use(FGuid::NewGuid(), Loadout.Revision, Loadout.RodItemInstanceId);
 			TestTrue(TEXT("按当前选择通过实际放竿库存裁决"), Use.bCommitted);
 			const UCatEquipmentInventoryItemInstance* UsedRod = Use.Item.StackCount > 0
 				? Cast<UCatEquipmentInventoryItemInstance>(Use.Item.Instance) : nullptr;
@@ -200,6 +205,25 @@ bool FCatHealthyRodSelectionPreservedTest::RunTest(const FString& Parameters)
 	if (!Fixture.Initialize(*this) || !Fixture.ReceiveT2(*this, true)) return false;
 	TestEqual(TEXT("购买 T2 不抢占仍健康的 T1"), Fixture.Equipment->GetSnapshot().RodItemInstanceId, Fixture.OldItemId);
 	TestEqual(TEXT("健康选择的型号不变"), Fixture.Equipment->GetSnapshot().RodDefinitionId, FName(TEXT("StarterRodT1")));
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatBrokenRodNoAutomaticReplacementTest,
+	"Catfishing.Unit.Equipment.RodReplacement.RetiredRodLeavesSpareUnselectedUntilExplicitUse",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatBrokenRodNoAutomaticReplacementTest::RunTest(const FString&)
+{
+	CatRodReplacementTests::FFixture Fixture;
+	if (!Fixture.Initialize(*this) || !Fixture.ReceiveT2(*this, true) || !Fixture.BreakDeployedRod(*this, true)) return false;
+	auto* Inventory = Fixture.Character->GetInventoryComponent();
+	TestFalse(TEXT("broken rod really leaves held storage"), Inventory->FindHeldInventoryEntryFromAuthority(Fixture.OldItemId) != nullptr);
+	TestEqual(TEXT("broken rod does not return to visible storage"), Inventory->FindInventorySlotIndexFromInstanceId(Fixture.OldItemId), INDEX_NONE);
+	TestFalse(TEXT("spare rod is not automatically selected"), Fixture.Equipment->GetSnapshot().RodItemInstanceId.IsValid());
+	TestTrue(TEXT("spare remains a real inventory item"), Inventory->FindInventorySlotIndexFromInstanceId(Fixture.NewItemId) != INDEX_NONE);
+	const auto Use = Fixture.Equipment->Use(FGuid::NewGuid(), Fixture.Equipment->GetSnapshot().Revision, Fixture.NewItemId);
+	TestTrue(TEXT("player can explicitly choose spare"), Use.bCommitted && Use.Error == ECatDomainCommandError::None);
+	TestEqual(TEXT("explicit choice selects the exact spare"), Fixture.Equipment->GetSnapshot().RodItemInstanceId, Fixture.NewItemId);
 	return !HasAnyErrors();
 }
 

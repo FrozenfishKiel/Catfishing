@@ -1,4 +1,4 @@
-﻿#include "CatInventoryContextMenuAuthoringLibrary.h"
+#include "CatInventoryContextMenuAuthoringLibrary.h"
 
 #include "AssetToolsModule.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -18,6 +18,7 @@
 #include "UObject/SavePackage.h"
 #include "UI/Inventory/CatInventoryContextMenuWidget.h"
 #include "WidgetBlueprint.h"
+#include "WidgetBlueprintEditorUtils.h"
 
 namespace CatInventoryContextMenuAuthoring
 {
@@ -138,11 +139,17 @@ bool UCatInventoryContextMenuAuthoringLibrary::MigrateInventoryActionWidgets()
 	{
 		UWidgetBlueprint* WidgetBlueprint = LoadObject<UWidgetBlueprint>(nullptr, WidgetPath);
 		if (!WidgetBlueprint || !WidgetBlueprint->WidgetTree) { bSucceeded = false; continue; }
+		TSet<UWidget*> ObsoleteWidgets;
 		for (const FName WidgetName : ObsoleteWidgetNames)
 		{
-			// Designer 控件删除必须同步移除变量 GUID，否则后续载入编译仍认为旧控件存在。
-			WidgetBlueprint->WidgetVariableNameToGuidMap.Remove(WidgetName);
-			if (UWidget* ObsoleteWidget = WidgetBlueprint->WidgetTree->FindWidget(WidgetName)) { WidgetBlueprint->WidgetTree->RemoveWidget(ObsoleteWidget); }
+			if (UWidget* ObsoleteWidget = WidgetBlueprint->WidgetTree->FindWidget(WidgetName)) ObsoleteWidgets.Add(ObsoleteWidget);
+		}
+		// 与快捷栏迁移相同，正式删除入口同时清理变量、父子关系和 WidgetTree 所有权。
+		// 只移除节点再删 GUID 会留下仍被编译器枚举的孤立控件，导致缺 GUID 的 ensure。
+		if (!ObsoleteWidgets.IsEmpty())
+		{
+			FWidgetBlueprintEditorUtils::DeleteWidgets(WidgetBlueprint, ObsoleteWidgets,
+				FWidgetBlueprintEditorUtils::EDeleteWidgetWarningType::DeleteSilently);
 		}
 		if (HasObsoleteActionGraphNodes(WidgetBlueprint)) { bSucceeded = false; continue; }
 		FKismetEditorUtilities::CompileBlueprint(WidgetBlueprint);

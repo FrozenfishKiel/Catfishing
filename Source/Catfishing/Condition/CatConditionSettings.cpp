@@ -10,3 +10,9 @@ bool UCatConditionSettings::HasWaterExposureThresholds() const
 		&& DangerousWaterExitDepthCentimeters < DangerousWaterDepthCentimeters
 		&& FMath::IsFinite(DangerousWaterConfirmationSeconds) && DangerousWaterConfirmationSeconds >= 0.0;
 }
+
+// 配置查询只返回显式开关，不恢复已经删除的治疗和食用效果条件。
+bool UCatConditionSettings::IsRuntimeReady() const
+{
+	return bEnableConditionRuntime;
+}

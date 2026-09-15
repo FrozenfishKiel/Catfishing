@@ -95,6 +95,7 @@ void UCatFrontendSettingsModel::SelectGame()
 	bGraphicsSelected = false;
 	bAudioSelected = false;
 	bControlsSelected = false;
+	bAccessibilitySelected = false;
 	PublishChanged(LOCTEXT("GameCategorySelected", "已选择游戏设置。"));
 }
 
@@ -105,6 +106,7 @@ void UCatFrontendSettingsModel::SelectGraphics()
 	bGraphicsSelected = true;
 	bAudioSelected = false;
 	bControlsSelected = false;
+	bAccessibilitySelected = false;
 	PublishChanged(LOCTEXT("GraphicsCategorySelected", "已选择画面设置。"));
 }
 
@@ -115,17 +117,30 @@ void UCatFrontendSettingsModel::SelectAudio()
 	bGraphicsSelected = false;
 	bAudioSelected = true;
 	bControlsSelected = false;
+	bAccessibilitySelected = false;
 	PublishChanged(LOCTEXT("AudioCategorySelected", "已选择声音设置。"));
 }
 
-// 控制分类选择流程：将四个互斥标志切到控制项，再发布刷新；当前不为控制创建假映射或本地按键表。
+// 控制分类选择流程：将五个互斥标志切到控制项，再发布刷新；按键重绑定仍不造假映射或本地按键表。
 void UCatFrontendSettingsModel::SelectControls()
 {
 	bGameSelected = false;
 	bGraphicsSelected = false;
 	bAudioSelected = false;
 	bControlsSelected = true;
+	bAccessibilitySelected = false;
 	PublishChanged(LOCTEXT("ControlsCategorySelected", "已选择控制设置。"));
+}
+
+// 辅助功能分类选择流程：将五个互斥标志切到辅助功能项，再发布刷新；草稿本身保持不变。
+void UCatFrontendSettingsModel::SelectAccessibility()
+{
+	bGameSelected = false;
+	bGraphicsSelected = false;
+	bAudioSelected = false;
+	bControlsSelected = false;
+	bAccessibilitySelected = true;
+	PublishChanged(LOCTEXT("AccessibilityCategorySelected", "已选择辅助功能设置。"));
 }
 
 // 游戏分类读取流程：返回当前互斥选择位，不读取或修改任何引擎设置。
@@ -150,6 +165,110 @@ bool UCatFrontendSettingsModel::IsAudioSelected() const
 bool UCatFrontendSettingsModel::IsControlsSelected() const
 {
 	return bControlsSelected;
+}
+
+// 辅助功能分类读取流程：返回当前互斥选择位，不读取或修改任何引擎设置。
+bool UCatFrontendSettingsModel::IsAccessibilitySelected() const
+{
+	return bAccessibilitySelected;
+}
+
+// 按键重绑定可用性读取流程：固定返回 false。
+// 键位本体在 IMC 资产里，重绑定要 Enhanced Input 的 UserSettings 资产与一张可持久化的键位表，工程都还没有。
+// 这里宁可明说不可用，也不给一个「点了没反应」的入口——那比没有入口更难排查。
+bool UCatFrontendSettingsModel::IsKeyBindingSettingAvailable() const
+{
+	return false;
+}
+
+// 辅助功能与控制项草稿读写流程：只记录页面草稿并发布刷新；真正写进正式设置宿主延后到 Apply。
+// 夹取范围与 UCatGameUserSettings 里的一致，避免两处各夹一套导致 HasPendingChanges 永远为真。
+float UCatFrontendSettingsModel::GetDraftTextSizeScale() const
+{
+	return DraftTextSizeScale;
+}
+
+void UCatFrontendSettingsModel::SetDraftTextSizeScale(const float NewTextSizeScale)
+{
+	DraftTextSizeScale = FMath::Clamp(FMath::IsFinite(NewTextSizeScale) ? NewTextSizeScale : 1.0f, 0.75f, 2.0f);
+	PublishChanged(LOCTEXT("TextSizeDraftUpdated", "已记录文字大小，等待应用。"));
+}
+
+bool UCatFrontendSettingsModel::GetDraftHighContrastUI() const
+{
+	return bDraftHighContrastUI;
+}
+
+void UCatFrontendSettingsModel::SetDraftHighContrastUI(const bool bNewHighContrastUI)
+{
+	bDraftHighContrastUI = bNewHighContrastUI;
+	PublishChanged(LOCTEXT("HighContrastDraftUpdated", "已记录高对比度界面，等待应用。"));
+}
+
+ECatColorBlindMode UCatFrontendSettingsModel::GetDraftColorBlindMode() const
+{
+	return static_cast<ECatColorBlindMode>(DraftColorBlindMode);
+}
+
+void UCatFrontendSettingsModel::SetDraftColorBlindMode(const ECatColorBlindMode NewColorBlindMode)
+{
+	DraftColorBlindMode = static_cast<uint8>(NewColorBlindMode);
+	PublishChanged(LOCTEXT("ColorBlindDraftUpdated", "已记录色觉模式，等待应用。"));
+}
+
+bool UCatFrontendSettingsModel::GetDraftReduceCameraShake() const
+{
+	return bDraftReduceCameraShake;
+}
+
+void UCatFrontendSettingsModel::SetDraftReduceCameraShake(const bool bNewReduceCameraShake)
+{
+	bDraftReduceCameraShake = bNewReduceCameraShake;
+	PublishChanged(LOCTEXT("ReduceShakeDraftUpdated", "已记录减少镜头晃动，等待应用。"));
+}
+
+bool UCatFrontendSettingsModel::GetDraftReduceFlashingEffects() const
+{
+	return bDraftReduceFlashingEffects;
+}
+
+void UCatFrontendSettingsModel::SetDraftReduceFlashingEffects(const bool bNewReduceFlashingEffects)
+{
+	bDraftReduceFlashingEffects = bNewReduceFlashingEffects;
+	PublishChanged(LOCTEXT("ReduceFlashDraftUpdated", "已记录减少闪光效果，等待应用。"));
+}
+
+float UCatFrontendSettingsModel::GetDraftMouseSensitivity() const
+{
+	return DraftMouseSensitivity;
+}
+
+void UCatFrontendSettingsModel::SetDraftMouseSensitivity(const float NewMouseSensitivity)
+{
+	DraftMouseSensitivity = FMath::Clamp(FMath::IsFinite(NewMouseSensitivity) ? NewMouseSensitivity : 1.0f, 0.1f, 3.0f);
+	PublishChanged(LOCTEXT("MouseSensitivityDraftUpdated", "已记录鼠标灵敏度，等待应用。"));
+}
+
+float UCatFrontendSettingsModel::GetDraftCameraSensitivity() const
+{
+	return DraftCameraSensitivity;
+}
+
+void UCatFrontendSettingsModel::SetDraftCameraSensitivity(const float NewCameraSensitivity)
+{
+	DraftCameraSensitivity = FMath::Clamp(FMath::IsFinite(NewCameraSensitivity) ? NewCameraSensitivity : 1.0f, 0.1f, 3.0f);
+	PublishChanged(LOCTEXT("CameraSensitivityDraftUpdated", "已记录镜头灵敏度，等待应用。"));
+}
+
+bool UCatFrontendSettingsModel::GetDraftInvertYAxis() const
+{
+	return bDraftInvertYAxis;
+}
+
+void UCatFrontendSettingsModel::SetDraftInvertYAxis(const bool bNewInvertYAxis)
+{
+	bDraftInvertYAxis = bNewInvertYAxis;
+	PublishChanged(LOCTEXT("InvertYDraftUpdated", "已记录反转 Y 轴，等待应用。"));
 }
 
 // 语言草稿读取流程：返回本地未应用值；调用方不得通过返回引用修改草稿或直接调用国际化系统。
@@ -617,6 +736,11 @@ bool UCatFrontendSettingsModel::Apply()
 		&& UserSettings->ApplyVoiceChat(GetLocalPlayerWorld(), static_cast<uint8>(BoundLocalPlayer->GetControllerId()),
 			bDraftVoiceChatEnabled));
 	const bool bBackgroundMuteApplied = UserSettings->ApplyMuteAudioWhenUnfocused(bDraftMuteAudioWhenUnfocused);
+	// 辅助功能五项与控制三项都是纯偏好：没有引擎 API 可以「应用」，保存本身就是生效。
+	// 所以它们不参与上面那一串 bXxxApplied 的成败判定——它们不会失败，也不该拖累别的项的结果文案。
+	UserSettings->ApplyAccessibilityPreferences(DraftTextSizeScale, bDraftHighContrastUI,
+		static_cast<ECatColorBlindMode>(DraftColorBlindMode), bDraftReduceCameraShake, bDraftReduceFlashingEffects);
+	UserSettings->ApplyControlPreferences(DraftMouseSensitivity, DraftCameraSensitivity, bDraftInvertYAxis);
 	const bool bAudioApplied = !bAudioWasRequested || UserSettings->ApplyAudioVolumes(GetLocalPlayerWorld(), DraftMasterVolume,
 		DraftMusicVolume, DraftSFXVolume, DraftAmbienceVolume, DraftVoiceVolume);
 	const FString RequestedAudioOutputDeviceId = DraftAudioOutputDeviceId;
@@ -712,6 +836,14 @@ void UCatFrontendSettingsModel::RestoreDefaults()
 	DraftSFXVolume = Defaults.SFXVolume;
 	DraftAmbienceVolume = Defaults.AmbienceVolume;
 	DraftVoiceVolume = Defaults.VoiceVolume;
+	DraftTextSizeScale = Defaults.TextSizeScale;
+	bDraftHighContrastUI = Defaults.bHighContrastUI;
+	DraftColorBlindMode = static_cast<uint8>(Defaults.ColorBlindMode);
+	bDraftReduceCameraShake = Defaults.bReduceCameraShake;
+	bDraftReduceFlashingEffects = Defaults.bReduceFlashingEffects;
+	DraftMouseSensitivity = Defaults.MouseSensitivity;
+	DraftCameraSensitivity = Defaults.CameraSensitivity;
+	bDraftInvertYAxis = Defaults.bInvertYAxis;
 	DraftAudioOutputDeviceId = ActiveAudioOutputRequest && !ActiveAudioOutputRequest->GetRequestedDeviceId().IsEmpty()
 		? ActiveAudioOutputRequest->GetRequestedDeviceId()
 		: (!SystemDefaultAudioOutputDeviceId.IsEmpty() ? SystemDefaultAudioOutputDeviceId : Defaults.AudioOutputDeviceId);
@@ -741,6 +873,14 @@ bool UCatFrontendSettingsModel::HasPendingChanges() const
 		|| (IsVibrationSettingAvailable() && bDraftVibrationEnabled != UserSettings->IsVibrationEnabled())
 		|| (IsVoiceChatSettingAvailable() && bDraftVoiceChatEnabled != UserSettings->IsVoiceChatEnabled())
 		|| bDraftMuteAudioWhenUnfocused != UserSettings->IsMuteAudioWhenUnfocused()
+		|| !FMath::IsNearlyEqual(DraftTextSizeScale, UserSettings->GetTextSizeScale())
+		|| bDraftHighContrastUI != UserSettings->IsHighContrastUIEnabled()
+		|| DraftColorBlindMode != static_cast<uint8>(UserSettings->GetColorBlindMode())
+		|| bDraftReduceCameraShake != UserSettings->IsReduceCameraShakeEnabled()
+		|| bDraftReduceFlashingEffects != UserSettings->IsReduceFlashingEffectsEnabled()
+		|| !FMath::IsNearlyEqual(DraftMouseSensitivity, UserSettings->GetMouseSensitivity())
+		|| !FMath::IsNearlyEqual(DraftCameraSensitivity, UserSettings->GetCameraSensitivity())
+		|| bDraftInvertYAxis != UserSettings->IsInvertYAxisEnabled()
 		|| !DoesDraftAudioOutputMatchSavedPreference())
 	{
 		return true;
@@ -787,6 +927,14 @@ void UCatFrontendSettingsModel::ReloadDraftFromSettings()
 	DraftAmbienceVolume = UserSettings->GetAmbienceVolume();
 	DraftVoiceVolume = UserSettings->GetVoiceVolume();
 	bDraftMuteAudioWhenUnfocused = UserSettings->IsMuteAudioWhenUnfocused();
+	DraftTextSizeScale = UserSettings->GetTextSizeScale();
+	bDraftHighContrastUI = UserSettings->IsHighContrastUIEnabled();
+	DraftColorBlindMode = static_cast<uint8>(UserSettings->GetColorBlindMode());
+	bDraftReduceCameraShake = UserSettings->IsReduceCameraShakeEnabled();
+	bDraftReduceFlashingEffects = UserSettings->IsReduceFlashingEffectsEnabled();
+	DraftMouseSensitivity = UserSettings->GetMouseSensitivity();
+	DraftCameraSensitivity = UserSettings->GetCameraSensitivity();
+	bDraftInvertYAxis = UserSettings->IsInvertYAxisEnabled();
 	DraftAudioOutputDeviceId = ActiveAudioOutputRequest && !ActiveAudioOutputRequest->GetRequestedDeviceId().IsEmpty()
 		? ActiveAudioOutputRequest->GetRequestedDeviceId() : UserSettings->GetAudioOutputDeviceId();
 }

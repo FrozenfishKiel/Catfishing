@@ -41,7 +41,7 @@
 
 - 差异基线：`.codex/state/items-inventory-baseline/{Source,Config,Knowledge,Docs}`；本报告不把完整 `git diff` 或 `items-inventory-changes.json` 当作范围权威。
 - 当前源码：`Source/Catfishing/Inventory/`、`Equipment/`、`Data/`、`Fishing/`、`Save/`、`UI/Inventory/`、`Items/`。
-- 参照源码：`D:/UnreaProjects/AegisOdyssey/Source/AegisOdyssey/Inventory/AOInventoryComponent.h:27`、`AOInventoryItemInstance.cpp:43`、`AOInventoryItemDefinition.h:50`、`Items/AOItem.cpp:48-69`、`Items/AOEquipmentItem.cpp:25-39`、`Equipment/AOEquipmentInstance.cpp:144`。
+- 参照源码：`<参考工程 AegisOdyssey 根>/Source/AegisOdyssey/Inventory/AOInventoryComponent.h:27`、`AOInventoryItemInstance.cpp:43`、`AOInventoryItemDefinition.h:50`、`Items/AOItem.cpp:48-69`、`Items/AOEquipmentItem.cpp:25-39`、`Equipment/AOEquipmentInstance.cpp:144`。
 - 最终证据复核：`.codex/state/items-inventory-baseline/final-editor-build.log:116`、`final-game-build.log:115`、`final-comment-scan.log:1`、`fragment-final-check.log:1646,1650`、`final-inventory-equipment-tests.log:2569-2571,2610`、`pickup-final-retest.log:1989-1996,2006`、`anchor-retest.log:2084,2100,2108,2111`；原 `integrated-tests.log:2159,2183,2195` 只作为 anchor 旧失败证据。
 
 ## 3. 改动总览
@@ -499,6 +499,16 @@ Source/Catfishing/Inventory/Tests/CatInventoryInstanceTests.cpp 新增 Entry/Ins
 3. **静态能力与运行状态**：Definition `FindFragment<T>`（CP-03）-> `CanServe*`（CP-04）-> 五片段 ready（CP-05）；会话内变化写 CP-06/CP-07 的实例，而非定义或槽。
 
 ## 8. 建议阅读顺序
+
+### 2026-09-15 合并复核导航
+
+以下导航依据当前源码符号补充，未运行测试；上文 CP 卡片与历史日志仍只说明旧改造，不是当前合并的验证证据。
+
+1. 物品可显示的操作先读 `Source/Catfishing/Inventory/CatInventoryItemDefinition.h:129` 的 `InventoryActions`，再读 `CatInventoryItemInstance.h:45` 的 `CanExecuteInventoryAction` 与 `ExecuteInventoryActionFromAuthority`；定义负责有序声明，实例负责条件与权威行为。
+2. 右键入口读 `Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.cpp:149` → `UI/Inventory/CatInventoryPageController.cpp` 的 `OpenInventoryContextMenu` / `SubmitInventoryContextAction` → `Framework/Game/CatfishingPlayerController.cpp` 的 `ServerExecuteInventoryAction_Implementation` → `Inventory/CatInventoryComponent.cpp` 的 `ExecuteItemActionFromAuthority`。核对宿主、槽位、实例 GUID、操作、数量与 RequestId 在该链中保持对应；不要按旧 `RequestUseItem` 或固定按钮导航寻找现行入口。
+3. 菜单关闭与 Tooltip 恢复先读同一 PageController 的清理逻辑，再检查正式菜单与格子 WBP；重点检查右键换格、数量改变、物品移走、关闭页面后不会展示旧实例。鱼护搬运的自动化入口另见技术方案的 `FormalTwoEndpointGuardCarryPlaceDrop`，原身份与嘴部附件应同时核对。
+
+以下列表保留历史 CP 阅读顺序；对接口差异以上述现行符号为准。
 
 1. CP-01/CP-02：先确认 Entry、复制、幂等和 held 所有权。
 2. CP-09：确认 v5 磁盘边界没有改格式。

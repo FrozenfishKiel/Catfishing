@@ -46,6 +46,7 @@ struct FCatFishingInputEdge
 	UPROPERTY() FVector CastViewDirection = FVector::ZeroVector;
 	/** 右键按下时的输入累计量；不携带任何客户端权威竿角。 */
 	UPROPERTY() FCatFishingRodAimSample RodAimSample;
+	UPROPERTY() TObjectPtr<AActor> FishingTarget = nullptr;
 };
 
 UCLASS(ClassGroup=(Catfishing), meta=(BlueprintSpawnableComponent))
@@ -104,6 +105,12 @@ public:
 	bool TryGetHeldFightInputStateFromAuthority(bool& OutPrimaryHeld, bool& OutSlackHeld,
 		int64& OutInputSequence) const;
 	FCatFishingInputEdge SubmitRodInteract();
+	/**
+	 * 换人握手输入（多人钓鱼附篇 §2.4）。同一个键在两种身份下含义不同，服务器按当时身份分派：
+	 * 主钓手按＝发起或取消换人请求；岸上替补按＝接手最近一根挂着请求的竿（要过体力门槛）。
+	 * 键位随装备栏重构另定，现按 E 设计；本入口不关心是哪个键，只负责把意图发出去。
+	 */
+	FCatFishingInputEdge SubmitFishingHandoff();
 	FCatFishingInputEdge SubmitPrimaryPressed();
 	FCatFishingInputEdge SubmitPrimaryReleased();
 	FCatFishingInputEdge SubmitSlackPressed();
@@ -115,13 +122,11 @@ public:
 	FCatFishingInputEdge SubmitChumPressed();
 	FCatFishingInputEdge SubmitChumReleased();
 	FCatFishingInputEdge SubmitCancel();
+	FCatFishingInputEdge SubmitCancelReleased();
 	/** 显式切线入口；现有取消键也会在可切线阶段由服务器改派到同一命令。 */
 	FCatFishingInputEdge SubmitCutLine();
 	FCatFishingInputEdge SubmitScoop();
 	FCatFishingInputEdge SubmitChum();
-	void ForwardLegacyAssist(FGuid FishingSessionId, FGuid RequestId, int64 ExpectedRevision);
-	/** 旧蓝图抢抄入口的兼容转发；成功后同样直接变成嘴叼世界鱼，不接受客户端容器目标。 */
-	void ForwardLegacyScoop(FGuid FishingSessionId, FCatScoopCommand Command);
 
 	UPROPERTY(BlueprintAssignable)
 	FCatFishingCommandResultReceived OnResultReceived;
@@ -243,6 +248,9 @@ private:
 
 	/** 每个 PlayerController 独立的抄网权威冷却；目标鱼/Session 切换不会绕过。 */
 	FCatFishingCooldownGate ScoopCooldownGate;
+	bool bResolvingCatch = false;
+	TSet<FGuid> PendingScoopRequests;
+	TMap<FGuid, FCatFishingCommandResult> ScoopResults;
 
 public:
 	/** 调试可视化只读：当前 Q 蓄力起始世界时间；<0 表示未蓄力。仅在权威端有效。 */

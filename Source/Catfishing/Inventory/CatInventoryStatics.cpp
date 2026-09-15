@@ -1,16 +1,23 @@
-﻿#include "Inventory/CatInventoryStatics.h"
+#include "Inventory/CatInventoryStatics.h"
 
 #include "Camp/CatCampSettings.h"
 #include "Character/CatCharacter.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
+#include "Environment/CatWaterQuerySubsystem.h"
+#include "Environment/CatWaterTypes.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Inventory/CatInventoryAccessRules.h"
 #include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatInventoryItemInstance.h"
+#include "Inventory/CatFishInventoryItemInstance.h"
+#include "Condition/CatConditionComponent.h"
 #include "Inventory/CatInventorySettings.h"
 #include "Interaction/CatInteractable.h"
+#include "Items/CatItem.h"
+#include "Items/Fish/CatFishPickupActor.h"
 #include "Logging/CatLog.h"
 
 // 落点求解流程：只用物理根的局部包围盒检查占用，不把准星交互球算作实体；放置依次搜索正前方与左右各30度内的地面。
@@ -45,6 +52,8 @@ bool UCatInventoryStatics::FindWorldReleaseTransform(ACatCharacter* Character, A
 		FHitResult Hit;
 		if (World->SweepSingleByChannel(Hit, Eye, Center, Rotation, ECC_WorldDynamic, Shape, Query)
 			|| World->OverlapBlockingTestByChannel(Center, Rotation, ECC_WorldDynamic, Shape, Query)) return false;
+		if (const UCatWaterQuerySubsystem* Water = World->GetSubsystem<UCatWaterQuerySubsystem>();
+			Water && Water->DoesWorldDropSweepTouchWater(Center, Center, Extent.Size())) return false;
 		OutTransform = FTransform(Rotation, Center - Rotation.RotateVector(CenterOffset), Scale);
 		return true;
 	}
@@ -81,7 +90,8 @@ bool UCatInventoryStatics::FindWorldReleaseTransform(ACatCharacter* Character, A
 					break;
 				}
 			}
-			if (bSupported)
+			const UCatWaterQuerySubsystem* Water = World->GetSubsystem<UCatWaterQuerySubsystem>();
+			if (bSupported && (!Water || !Water->DoesWorldDropSweepTouchWater(Center, Center, Extent.Size())))
 			{
 				OutTransform = FTransform(Rotation, Center - Rotation.RotateVector(CenterOffset), Scale);
 				return true;
@@ -118,7 +128,9 @@ namespace
 		FCatInventoryHostEndpoint& OutEndpoint)
 	{
 		OutEndpoint = FCatInventoryHostEndpoint();
-		if (World == nullptr || ControlledCharacter == nullptr || SubmittedHost == nullptr
+		if (World == nullptr || !IsValid(ControlledCharacter) || !IsValid(SubmittedHost)
+			|| SubmittedHost->IsActorBeingDestroyed()
+			|| (SubmittedHost != ControlledCharacter && Cast<ACatCharacter>(SubmittedHost))
 			|| SubmittedHost->GetWorld() != World)
 		{
 			return false;
@@ -165,6 +177,50 @@ void UCatInventoryStatics::CollectInventoryComponentsFromActor(const AActor* Tar
 	{
 		return Left.GetUnifiedInventoryIntakePriority() > Right.GetUnifiedInventoryIntakePriority();
 	});
+}
+
+// 翻天清理流程：
+// 1. 只在服务器跑；先收齐要销毁的对象再统一 Destroy，避免在 TActorIterator 迭代期间改动世界 Actor 列表。
+// 2. 落地物只清「还在等人捡」的那些（ACatItem::IsAwaitingPickup）——被捡走的载体是隐藏保管态，清了等于删背包。
+// 3. 地上的鱼只清 Available 且没被隐藏的那些；嘴里叼着的是 Carried，进了鱼护/鱼缸的是隐藏保管态，两者都不清。
+int32 UCatInventoryStatics::PurgeUnclaimedWorldDropsFromAuthority(UWorld* World)
+{
+	if (World == nullptr || World->GetNetMode() == NM_Client)
+	{
+		return 0;
+	}
+	TArray<AActor*> PendingDestroy;
+	for (TActorIterator<ACatItem> It(World); It; ++It)
+	{
+		ACatItem* WorldItem = *It;
+		if (IsValid(WorldItem) && WorldItem->HasAuthority() && WorldItem->IsAwaitingPickup())
+		{
+			PendingDestroy.Add(WorldItem);
+		}
+	}
+	for (TActorIterator<ACatFishPickupActor> It(World); It; ++It)
+	{
+		ACatFishPickupActor* WorldFish = *It;
+		if (IsValid(WorldFish) && WorldFish->HasAuthority() && !WorldFish->IsHidden()
+			&& WorldFish->GetPresentationState().State == ECatFishPickupState::Available)
+		{
+			PendingDestroy.Add(WorldFish);
+		}
+	}
+	int32 DestroyedCount = 0;
+	for (AActor* Doomed : PendingDestroy)
+	{
+		if (IsValid(Doomed) && Doomed->Destroy())
+		{
+			++DestroyedCount;
+			UE_LOG(LogCatfishing, Log, TEXT("Event=world_drop_purged Actor=%s World=%s NetMode=%d Authority=1 LocalRole=%d"),
+				*GetNameSafe(Doomed), *GetNameSafe(World), World->GetNetMode(), Doomed->GetLocalRole());
+		}
+	}
+	UE_LOG(LogCatfishing, Log,
+		TEXT("Event=world_drops_purged_for_day_transition World=%s NetMode=%d Authority=1 Candidates=%d Destroyed=%d"),
+		*GetNameSafe(World), World->GetNetMode(), PendingDestroy.Num(), DestroyedCount);
+	return DestroyedCount;
 }
 
 // 外部收集流程：向调用方追加当前 Actor 拥有的正式库存组件，不清空调用方已有列表。
@@ -246,6 +302,24 @@ FCatDomainCommandResult UCatInventoryStatics::MoveItemBetweenInventoryHostsFromA
 		}
 		else
 		{
+			const auto InvalidFishEndpoint = [&](const FCatInventoryHostEndpoint& Endpoint)
+			{
+				const FCatInventoryEntry* Entry = Endpoint.Inventory->GetInventoryEntryAtSlot(Endpoint.SlotIndex);
+				return Entry && Entry->Instance
+					&& (Cast<UCatFishInventoryItemInstance>(Entry->Instance) || Cast<UCatFishDefinition>(Entry->Instance->GetItemDefinition()))
+					&& CatInventoryAccessRules::ResolveReachableFishContainer(Endpoint.Host, ControlledCharacter) != Endpoint.Inventory;
+			};
+			if (!ControlledCharacter->HasAuthority() || !ControlledCharacter->GetConditionComponent()
+				|| (ControlledCharacter->GetConditionComponent()->GetSnapshot().bDowned
+					&& (SourceInventoryHost != ControlledCharacter || TargetInventoryHost != ControlledCharacter))
+				|| InvalidFishEndpoint(SourceEndpoint) || InvalidFishEndpoint(TargetEndpoint))
+			{
+				Result.Error = ECatDomainCommandError::PermissionDenied;
+				UE_LOG(LogCatfishing, Warning, TEXT("Event=inventory_host_move_rejected RequestId=%s Player=%s Source=%s Target=%s Reason=InvalidFishHostOrCharacter World=%s NetMode=%d Authority=%d LocalRole=%d"),
+					*RequestId.ToString(), *GetNameSafe(ControlledCharacter), *GetNameSafe(SourceInventoryHost), *GetNameSafe(TargetInventoryHost),
+					*GetNameSafe(World), ControlledCharacter->GetNetMode(), ControlledCharacter->HasAuthority(), ControlledCharacter->GetLocalRole());
+				return Result;
+			}
 			const FString PayloadContext = FString::Printf(
 				TEXT("SourceHost=%s|TargetHost=%s"),
 				*GetPathNameSafe(SourceEndpoint.Host),

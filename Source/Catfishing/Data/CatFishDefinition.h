@@ -21,6 +21,66 @@ enum class ECatFishBodyClass : uint8
 	Giant
 };
 
+/** 鱼的食性；决定这条鱼往外冲的基础倾向（鱼表格「食性」列，2026-09-09 晚裁定逐鱼配、不再走性格模板）。 */
+UENUM(BlueprintType)
+enum class ECatFishDiet : uint8
+{
+	/** 鱼表尚未填该列；行为链退回测试期性格模板，不自行猜档。 */
+	Unset,
+	/** 食肉。 */
+	Carnivore,
+	/** 杂食。 */
+	Omnivore,
+	/** 素食。 */
+	Herbivore
+};
+
+/** 投掷一条鱼命中后产生的效果族；具体规则归道具／联机册，鱼册只承载逐鱼取哪一族与量。 */
+UENUM(BlueprintType)
+enum class ECatFishThrowEffectKind : uint8
+{
+	/** 这条鱼没有投掷效果（绝大多数鱼）；投掷仍可作为普通落地物品，但不产生任何对猫的后果。 */
+	None,
+	/** 命中者被击退一个趔趄并炸毛（咸鱼）。 */
+	KnockbackStartle,
+	/** 命中点附近产生驱散区，短时间内别的猫无法靠近（臭臭鱼）。 */
+	RepelAura
+};
+
+/**
+ * 一条鱼的投掷效果数据。
+ * 只描述「哪一族效果、多大范围、持续多久」，不描述怎么飞、谁能扔、命中怎么判——那三件归投掷规则本身。
+ * 任一数值为 0 表示该项未裁：消费方必须 fail-closed，不得自行取默认值。
+ */
+USTRUCT(BlueprintType)
+struct FCatFishThrowEffect
+{
+	GENERATED_BODY()
+	/** 正式猫反应动画（惊吓/捂鼻），不从鱼动画或任意现有 Montage 猜选；缺配时投掷效果拒绝并告警。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Throw")
+	TSoftObjectPtr<class UAnimMontage> ReactionMontage;
+
+	/** 效果族；None 表示这条鱼投出去只是掉在地上。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Throw")
+	ECatFishThrowEffectKind Kind = ECatFishThrowEffectKind::None;
+
+	/** 命中点起算的作用半径（厘米）；0 表示未裁。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Throw", meta = (ClampMin = "0.0", Units = "cm"))
+	double EffectRadiusCentimeters = 0.0;
+
+	/** 效果持续秒数（驱散区存在多久、炸毛表现持续多久）；0 表示未裁。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Throw", meta = (ClampMin = "0.0", Units = "s"))
+	double DurationSeconds = 0.0;
+
+	/** 数据是否完整到可以执行：None 永远算完整（什么也不做），其余两族要求半径与时长都已裁。 */
+	bool IsRuntimeEffectReady() const
+	{
+		return Kind == ECatFishThrowEffectKind::None
+			|| (FMath::IsFinite(EffectRadiusCentimeters) && EffectRadiusCentimeters > 0.0
+				&& FMath::IsFinite(DurationSeconds) && DurationSeconds > 0.0);
+	}
+};
+
 /** 鱼种运行定义的最小 SSOT 接缝；同时也是鱼物品静态定义，实物鱼进入鱼护、鱼缸和商店时不再走第二套容器物品表。 */
 UCLASS(BlueprintType)
 class CATFISHING_API UCatFishDefinition : public UCatInventoryItemDefinition
@@ -28,12 +88,49 @@ class CATFISHING_API UCatFishDefinition : public UCatInventoryItemDefinition
 	GENERATED_BODY()
 
 public:
+	/** 鱼表「试探期」，秒；0 先取鱼目录档位默认，仍缺配才随机兜底；非法值拒绝。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Bite", meta=(ClampMin="0", Units="s"))
+	double ProbeDurationSeconds = 0.0;
+
+	/** 鱼种普通响应窗，秒；0 先取鱼目录档位默认，仍缺配才带 Warning 使用旧全局值。与试探/完美窗独立。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Bite", meta=(ClampMin="0", Units="s"))
+	double TrueBiteWindowSeconds = 0.0;
+
 	/** 构造鱼定义资产；库存侧的展示、ID 和实例类型都从鱼表字段覆盖读取。 */
 	UCatFishDefinition(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 
 	/** 检查该资产是否足以进入运行时捕获与容器事务；任一必需字段 Unset 都返回 false。 */
 	bool IsRuntimeDefinitionReady() const;
 	double FindBaitMultiplierOrNeutral(FName BaitDefinitionId) const;
+
+	/** 判断该鱼是否具备有限且为正的食用成长系数；进食链在扣鱼前查询，实际重量与运行定义仍由后续预检验证。 */
+	UFUNCTION(BlueprintPure, Category = "Catfishing|Fish")
+	bool IsEdible() const;
+
+	/**
+	 * 吃掉本条鱼给多少局内成长经验 ＝ 经验系数 × 实际重量（钓鱼/猫册同一口径）。
+	 * 不可食用、系数未裁或重量非法一律返回 0，调用方按「这条鱼吃不出经验」处理，不要自己补默认值。
+	 */
+	UFUNCTION(BlueprintPure, Category = "Catfishing|Fish")
+	double ResolveEatingExperiencePoints(double ActualWeightKilograms) const;
+
+	/** 鱼表重量区间的中点；过渡期换算与体重相关的占位口径都用它，别在调用方各算一遍。 */
+	UFUNCTION(BlueprintPure, Category = "Catfishing|Fish")
+	double GetWeightMidpointKilograms() const;
+
+	/**
+	 * 取本鱼的体力系数（体力点/千克）。
+	 *
+	 * 过渡期换算：Fish_*.uasset 上的值还是 2026-09-08 之前的「每鱼种一份定额体力」。
+	 * 定额直接当系数用会按重量中点整体偏一个倍率（湖心巨影会放大 27 倍，小鱼则反过来缩水）。
+	 * UCatFishCatalogSettings::bFishAssetsStillHoldLegacyFlatFightStamina 为 true 时，
+	 * 本函数按裁决给的占位口径「原定额 ÷ 重量中点」折算并记一条 Warning，让没迁数据的工程仍能试玩。
+	 * 资产按终版鱼表重生成之后，把那个开关改成 False 即可整条关掉这段过渡逻辑。
+	 */
+	double ResolveFightStaminaPerKilogram() const;
+
+	/** 本场鱼体力初值 ＝ 体力系数 × 实际重量；系数走上面的过渡换算，重量由本次抽取冻结。 */
+	double ResolveInitialFightStamina(double ActualWeightKilograms) const;
 	/** 解析本鱼直接引用且合同完整的表现定义；不会扫描目录或按 ID 查询第二张表。 */
 	UCatFishPresentationDefinition* LoadRuntimePresentationDefinition() const;
 
@@ -94,7 +191,12 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Imprint")
 	FName CaptureImprintEventId = NAME_None;
 
-	/** 稀有度轴的稳定内容 ID；它只控制出现/收集权重，与 BodyClass 协作轴完全独立。 */
+	/**
+	 * 稀有度轴的内容 ID，与 BodyClass 协作轴独立。资产仍为 Common/Uncommon/Rare/Event 旧口径，
+	 * 尚未迁移到鱼表的普通／少见／稀有／珍稀四档，不能按字面翻译。
+	 * 它是价值判断，不进抽鱼概率（分布由 SpawnWeight、窝料轴与鱼饵偏好表达，鱼册 §2）；
+	 * 鱼目录用它解析完美提竿削减分档及两项窗口的配置默认值。
+	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Distribution")
 	FName RarityTierId = NAME_None;
 
@@ -135,17 +237,69 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing", meta = (ClampMin = "1", ClampMax = "8"))
 	int32 MinimumFightParticipants = 0;
 
-	/** 搏斗中的鱼短周期体力；与日常属性/稀有度独立，0 表示未裁。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing", meta = (ClampMin = "0.0"))
-	double FishFightStamina = 0.0;
+	/**
+	 * 力量系数 K：鱼表格「力量系数K」列，本条鱼的实例力量 ＝ 实际重量 × K（钓鱼规则 §4.1「鱼力量 F_fish」行）。
+	 * 逐鱼配，不走全局常数（2026-09-09 八问④撤回工程自补的全局 StrengthPerKilogram）；湖心巨影 K＝5，与竿强 210 配对。
+	 * 0 表示尚未迁移：选鱼链回退旧平衡资产 StrengthPerKilogram 并告警，不能因该列没填而跳光候选。
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing", meta = (ClampMin = "0.0", DisplayName = "力量系数K"))
+	double FishStrengthPerKilogram = 0.0;
 
-	/** 试探/真咬节奏的稳定内容模板 ID；Fishing StateTree 消费模板而不改变三阶段规则。 */
+	/**
+	 * 体力系数：本场鱼体力初值 ＝ 该系数 × 实际重量（鱼表格「体力系数」列，2026-09-08 李前臻代拍，
+	 * 设计修改记录.md:275；原「每鱼种一份定额体力」作废）。单位是「体力点/千克」，不是体力点本身。
+	 * 0 表示未裁：选鱼链 fail-closed 跳过该候选。
+	 * 过渡期注意：Fish_*.uasset 上仍可能是旧定额，取值一律走 ResolveFightStaminaPerKilogram()，不要直读本字段。
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing", meta = (ClampMin = "0.0", DisplayName = "体力系数"))
+	double FishFightStaminaPerKilogram = 0.0;
+
+	/** T10：只保留旧鱼资产的 Bite 模板身份反射；试探与普通响应读本鱼秒数字段，完美基础 1 秒。 */
+
+
+
+
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Personality")
 	FName BitePersonalityId = NAME_None;
 
-	/** 搏斗冲刺/体力节奏的稳定内容模板 ID；不包含 C++ 转移拓扑。 */
+	/**
+	 * 搏斗节奏的测试期模板 ID；不包含 C++ 转移拓扑。
+	 * 2026-09-09 晚裁「四套性格模板是测试用，正式口径逐鱼配（鱼表格食性、发力段长、休息段长、游速系数四列）」，
+	 * 台账 D-16「不恢复旧模型」被同批推翻。下面 Behavior 分组的四列就是正式来源，本模板只在某列未填时兜底。
+	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Personality")
 	FName FightPersonalityId = NAME_None;
+
+	/**
+	 * 食性（鱼表格「食性」列）：决定这条鱼往外冲的基础倾向。
+	 * Unset ＝ 该列未填，行为链退回 FightPersonalityId 指向的测试模板，不在代码里猜档位。
+	 * 档位对应的向外概率由 UCatFishCatalogSettings 的 DietOutwardSegmentProbability 三个配置位给，
+	 * 三个数尚未进裁决账本（「鱼的行为」页页头写明「实现不读本页」），未配置时同样退回模板。
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Behavior", meta = (DisplayName = "食性"))
+	ECatFishDiet Diet = ECatFishDiet::Unset;
+
+	/**
+	 * 发力段长区间（秒，鱼表格「发力段长」列，快照 3~6）。X＝下限、Y＝上限。
+	 * X <= 0 或 Y < X 表示未填，段长退回测试模板的 OutwardDurationRangeSeconds。
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Behavior", meta = (DisplayName = "发力段长"))
+	FVector2D OutwardSegmentDurationRangeSeconds = FVector2D::ZeroVector;
+
+	/**
+	 * 休息段长区间（秒，鱼表格「休息段长」列，快照 2~5）。X＝下限、Y＝上限。
+	 * X <= 0 或 Y < X 表示未填，段长退回测试模板的 EaseOffDurationRangeSeconds。
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Behavior", meta = (DisplayName = "休息段长"))
+	FVector2D RestSegmentDurationRangeSeconds = FVector2D::ZeroVector;
+
+	/**
+	 * 游速系数（鱼表格「游速系数」列）：本鱼满力游速 ＝ 测试模板的满力游速 × 本系数。
+	 * 2026-09-10 李前臻定「按鱼种取值，不按体重档」，原「小 0.8／中 1.0／大 1.2／巨影 1.5」的体重档口径作废。
+	 * 0 表示该列未填，游速退回模板原值（等价于系数 1）。
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Behavior", meta = (ClampMin = "0.0", DisplayName = "游速系数"))
+	double SwimSpeedCoefficient = 0.0;
 
 	/** 该鱼偏好的特殊鱼饵定义 ID；普通饵无限且不要求出现在数组中。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Preference")
@@ -154,9 +308,17 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Preference")
 	TArray<FCatBaitWeightMultiplier> BaitWeightMultipliers;
 
-	/** 直接食用后授予的局内成长经验；值来自当前鱼表体重档，0 表示吃鱼成长收益未裁。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use", meta = (ClampMin = "0.0"))
-	double EatingExperience = 0.0;
+	/** 每千克鱼肉提供的成长经验；服务器按实例实际重量计算，零表示该鱼不提供食用成长。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use", meta = (ClampMin = "0.0", DisplayName = "经验系数"))
+	double EatingExperiencePerKilogram = 0.0;
+
+	/**
+	 * 投掷这条鱼命中后的效果（鱼表格「吃鱼效果」列里写成投掷规格的那两条：咸鱼击退炸毛、臭臭鱼驱散并短时屏蔽靠近）。
+	 * 逐鱼数据在鱼表、由鱼册承载；投掷动作本身、命中判定与后果施加归道具／联机册，本字段只是数据侧接缝。
+	 * 默认 Kind=None＝这条鱼投出去只是掉在地上，不是「未裁」——绝大多数鱼本来就没有投掷效果。
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use")
+	FCatFishThrowEffect ThrowEffect;
 
 	/** 该鱼是否允许在共享鱼缸展示；Camp 只消费该用途，不推导观赏价值。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use")
@@ -165,4 +327,15 @@ public:
 	/** 数据人员对单条正式鱼表记录的显式启用 gate；默认关闭，避免占位 DataAsset 产生成功事务。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Prototype")
 	bool bEnableRuntimeDefinition = false;
+
+private:
+	friend struct FCatFishBehaviorProfileResolver;
+	/**
+	 * 本条鱼的旧定额体力折算是否已经报过一次。
+	 * 选鱼链每评估一次候选就会取一次系数，不去重会把日志刷满；它只服务日志，不参与任何数值，
+	 * 因此不是 UPROPERTY、不复制、不存档。
+	 */
+	mutable bool bLoggedLegacyFightStaminaConversion = false;
+	/** 只用于迁移诊断去重，不序列化、不复制，也不参与行为决策。 */
+	mutable bool bLoggedBehaviorTemplateFallback = false;
 };

@@ -2,7 +2,8 @@
 
 Python 控制台调用：
     import runpy
-    runpy.run_path(r"D:/UnreaProjects/Catfishing-verify-01/Scripts/create_world_info_widgets.py", run_name="__main__")
+    # 路径相对工程根；在编辑器 Python 控制台里按工程根解析。
+    runpy.run_path(r"Scripts/create_world_info_widgets.py", run_name="__main__")
 
 仅创建缺失的行和面板资产；已有资产只读核验，不覆盖人工布局，不保存地图或其他脏资产。
 依赖 /Game/UI/Shop/F_CatShopChinese。摘要信息区容纳两行，详情容纳八行；标题与状态另占两行。

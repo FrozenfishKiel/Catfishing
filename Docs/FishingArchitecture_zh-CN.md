@@ -1,8 +1,83 @@
 # 钓鱼核心架构（技术文档）
 
+## 2026-09-15：逐鱼试探、响应窗与独立完美窗
+
+本次从 `upstream/feature/design-backlog-batch1` 的 `a7018c95` 采用已裁窗口数据，在本地钓鱼链实现，没有合并上游分支。数据来源为该提交 `Config/DefaultGame.ini` 的两组 BiteTiming 配置，已与最新 `79549456` 逐字核对。没有改鱼种稳定 ID、商店、存档、房间 UI、基础池概率或搏斗公式。
+
+- 16 个运行时 `FishDefinitionId` 对应试探/响应秒数：RiverPatternFish、Loach 为 **1.5/9**；LittleSilverFish、LittleColorFish、StinkyFish 为 **2/11**；LakeGiantShadow、PetalFish、WindbellFish、SaltedFish、EstuaryBass、PufferFish、ElectricEel 为 **2.5/13**；ForestLongtailFish、SilvermoonTrout、Blackfish、Pike 为 **3/15**。资产字段为 0 时逐字段回退到逐鱼配置，再到档位默认；Common=1.75/10、Uncommon=2.5/13、Rare=3/15、Event=2.5/13。不能按表格 fish_id 或资产文件名替换这些运行时 ID。
+- 全部均未配置时，试探按服务器种子从 2～4 秒取值，响应保留旧 3 秒兜底，均输出 Warning。非法非零值不回退；响应显式配置须在 8～15 秒内。正式 16 鱼不走旧兜底。
+- 保留现有窝料等待分布与 1.5 秒提前预警；等待结束进入 Probe，按当刻水域、鱼情、窝料和原抛竿者当前饵种冻结选鱼，生成实际体重比例的 Encounter。Probe 继续轻点逐鱼秒数后才猛沉。**现有 20/14/6 秒均值与 40 秒上限计到 Probe 开始；到真咬另加逐鱼试探期**，不能再把旧均值当完整真咬时间。换饵不重置等待计时器，选鱼后不重抽。
+- 真咬前不扣饵；真咬时先冻结当前鱼 Actor 与猫的距离 D₀，再消费原抛竿者当时选中的 1 份饵，并按原规则检查 D₀≤Lmax。真咬超时终止，不退款、不重新调度。Probe 入夜销毁鱼影并回 Waiting；已成立真咬不被入夜中断。发布通知前建立完整计时事实，通知内入夜/取消不会复活计时器。
+- 基础完美窗固定 **1 秒**，用独立的 `PerfectWindowEndsServerTime` 复制给 HUD；服务器和提示使用同一个截止时间。完美窗后、响应窗内仍可普通提竿。过期请求即使先于计时器回调也会被拒绝。**成长加成尚未接入**：本地 Growth 只有经验/待选次数，未合并上游成长选项系统。
+- Bite 模板只继续承担本地力量、体力与初始线长倍率。旧三个时间字段退出运行就绪校验和窗口计算，保留为 Deprecated 序列化载荷。尚未迁移 4 份正式 Bite 资产及 `/Game/Data/Fish/DA_Bite_Test01` 的旧载荷；删除条件为编辑器仅迁移这些载荷并复验倍率/引用。正式 `/Game/Data/StateTrees/ST_FishingSession` 仍序列化引用 `FCatFishingOpenTrueBiteWindowTask`，保留类型身份并改显示名为 Begin Probe，内部调用 `BeginProbeFromStateTree`。旧非反射函数 `OpenTrueBiteWindowFromStateTree` 已移除。
+
+影响盘点基线：主工作区 `091187c2`，正在进行的房间 UI、Online、两份 ini 等未提交改动另行保留；在 `Saved/Integration/FishingWindows-20260915` 隔离实现。旧库存拾取断言失败已在前轮基线复现；未因本轮顺带修复外围系统。下表是本轮技术审查材料，业务状态只维护于需求对齐差距清单。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 正式配置 | `Source/Catfishing/Data/CatFishDefinition.h`、`CatFishCatalogSettings::ResolveBiteTiming`；Session 查询目录 | 旧全局窗口→逐鱼秒数，0 为缺值 | 新资产可选字段及 Game ini 的两组配置；不改变库存就绪或 ID | 字段→配置解析→Session | 全部 16 资产、字段独立优先级、非法非零值 | 配置与上游逐字一致，正式资产加载/窗口值测试通过；资产无需批量重存 |
+| 等待、Probe、鱼影 | `Fishing/CatFishingSession::ScheduleWaitingProbeFromStateTree/BeginProbeFromStateTree`；正式 ST Probe 任务 | Probe 立即真咬→停留逐鱼秒数；提竿选鱼→Probe 选鱼 | 新 ProbeStayTimer；冻结鱼情与体重，提前发布 Encounter；等待计算保持，计时边界已注明 | 选鱼→验证配置→设定计时→发布快照与鱼影 | 生产 StateTree、0/1/5 份窝料、实际时长、同一 Encounter | 正式运行回归覆盖 Probe、响应和未启动 Runner；鱼影视觉效果仍待有渲染验收 |
+| 饵种与数量 | `Equipment/CatEquipmentComponent::GetCurrentFishingBaitDefinitionId/CommitFishingBaitDeferred`→原库存 | 选鱼读抛竿饵→读原来源当前饵；数量仍只真咬扣 | 新只读查询，保留唯一数量写口及托管原来源 | 等待采样/Probe 选鱼只读→真咬扣费 | 真咬前退出、换饵/缺饵、重入、托管 | 数量与装备回归，未改商店或保存事务 |
+| D₀与搏斗 | Session `OpenTrueBiteWindowFromAuthority`→`TryEnterHookedFightFromAuthority` | 真咬冻结点由当刻钩点改为已存在鱼的位置；其余规则保留 | 真咬前采样，扣饵后判断 Lmax；有效提竿才开 Runner | Probe→D₀→扣饵→距离门→响应→搏斗 | Lmax 等于/超限、响应期移动、普通提竿输入 | 边界与真实鼠标→Runner 回归；体力和倍率不变 |
+| 完美窗/回执/UI | `Fishing/CatFishingTypes.h` 快照→`UI/CatFishingViewTypes`→`HUD/CatHUDModel/CatHUDWidget` | 模板时间→基础 1 秒独立截止；响应继续有效 | 新截止字段与“完美时机”提示，原倒计时控件复用 | 先写两截止→发布 Phase→客户端投影 | 后半段普通提竿、过期计时器竞态、快照投影 | 代码与运行回归已覆盖；无新 WBP 布局；成长加成和打包双端表现未验 |
+| 清理与夜间 | Session `RefreshBiteAvailabilityFromAuthority/FinalizeSession/EndPlay`；GameMode→Service 逐会话刷新 | 原未提前生成鱼；现在 Probe 也必须撤销鱼影与计时 | 入夜清试探 Actor/选鱼事实并发 WindowExpired；真咬/终态沿用单一入口 | 先撤销→Waiting；次日重新采样 | 通知回调内入夜、提前提竿、超时、取消 | 增补真实回调重入测试；终态新增 ProbeStay 清理 |
+| 旧入口/资产生成 | `CatFishPersonalityDefinition`；4 正式 Bite +1 测试 Bite；`CatFishingStateTreeNodes`；现有 Scripts | 模板时间仍留资产，但不得再生效 | 移除时间消费者，Deprecated 载荷暂留；保留正式 ST 引用的任务反射类型 | 代码先切换；载荷后续编辑器迁移 | 1997 包扫描无读取失败/LFS 指针；无额外 BP 时间节点命中 | `AssetAndDataAudit.json`；本轮无资产迁移写入，倍率消费者仍在 Session/Debug |
+| 配置/Cook/日志/测试文档 | `Config/DefaultGame.ini`、现有 Cook 入口、`LogCatFishing`、`Fishing/Tests`、输入链测试、本文件 | 新配置须运行可读、故障须能追踪 | 仅加钓鱼 ini；窗口解析/Probe/客户端回执日志；修正旧阶段说明 | 配置→Editor/Game 构建→自动化→人工表现 | contract/runtime_behavior/presentation_delivery 分开 | 最终验证结果见下；Cook 与双端打包日志本轮未运行 |
+
+验证结果：**contract**：`FinalEditorBuild.log` 与 `FinalGameBuild.log` 均 Succeeded；1997 包引用审查无错误、两组窗口配置与上游一致。**runtime_behavior**：`FinalReport/index.json` 共 83 项，73 Success、9 SuccessWithWarnings、1 Fail；唯一失败为前轮已复现的 `Catfishing.Unit.Inventory.EquipmentItemPickupRejectsFullBagAndPreventsReentrantDoubleGrant`（“成功拾取销毁世界物”）。本轮普通提竿、BiteTiming 两项、通知内入夜与过期请求、GroupListenThreeClients 均通过；后者通过不等于其历史间歇失败已修复。**presentation_delivery**：有渲染鱼影/HUD、Cook、新 Development 打包双端日志未运行，不关闭模块。与主分支公开房间提交 `4fe00eeb` 的组合验证：`IntegratedEditorBuild.log` / `IntegratedGameBuild.log` 均通过，`IntegratedReport/index.json` 的 BiteTiming 两项、OwnerRodHold 普通提竿与 GroupListenThreeClients 共 4/4 通过；组合验证未运行渲染交付。证据根目录 `Saved/Integration/FishingWindows-20260915/Saved/WindowValidation/`；不把编译、NullRHI 或 Automation 当成正式画面交付。日志筛选 `LogCatFishing` 与 `fishing_probe_started`、`fishing_probe_cancelled`、`fishing_windows_resolved`、`fishing_window_received`、`fishing_bite_timing_rejected`，以 SessionId 对应。打包验收须另核房主/客户端 `<打包根目录>/Catfishing/Saved/Logs`，本轮没有新的该类证据。
+
+## 2026-09-14：真咬扣饵、距离冻结与超时收口（历史验证记录）
+
+本节为现行规则，替代下文 09-11 检查点中的抛竿预扣、快速抖动退款边界、成功返饵和满包退款。来源为仓库设计快照 `Knowledge/Design/GDD 系统分册/钓鱼系统/钓鱼规则.md` §3.3、§4.1、§4.5（上游参照 `d986285d`）；按 Debug 当前库存、StateTree 和物理链适配，未整分支合并。
+
+- `BeginFishingUse` 只验证当前饵/漂并绑定竿实例，`bUseAccepted` 表示获得使用权，数量仍在原库存。`CommitFishingBaitDeferred` 只在真咬入口消费原抛竿者**当时选中实例**的 1 份饵；原子库存写入后先关闭记录，再广播。等待期换饵不重设计时器。
+- 试探或预警时收竿不损饵；真咬后任何终局都不返饵。`ReleaseFishingUse` 只解锁。捕获收口只读 `IsFishingBaitCommitted`，不在捕获时补扣。真咬超时为 `HookWindowExpired` 终局，不再循环免费咬钩。
+- `OpenTrueBiteWindowFromAuthority` 在库存通知前冻结鱼猫距 D₀（厘米），以当刻钩点作为咬钩点；当前鱼 Actor 已在 Probe 开始生成（09-15 接入）。先扣饵，再检查 D₀≤竿资产的 Lmax；超限直接 `Escaped`，保留浮漂库存。响应窗移动不重算 D₀，完美系数沿用现有性格配置。入场仍经过现有竿尖高度、水面投影和真实几何校正，确保实际鱼位置满足线长约束。
+- 离场托管只转移原竿实例和会话记录，不搬普通背包、也不制造退款。记录弱引用原扣饵来源；来源仍有效时读其当前选择，来源已销毁则明确拒绝并让会话终止。已真咬的扣费终态随记录迁移，后续磨损仍写原竿。
+- 09-14 检查点未包含的逐鱼窗口与提前选鱼已于 09-15 衔接，现行规则见顶部。窝点抽扣、成长选项、基础池及搏斗新公式仍未随本轮迁移。
+
+修改前基线：Debug `c31107a0`，已跟踪工作区干净；根目录未跟踪交接导出文档保持原样。先在隔离工作区完成体力快照校验并形成 `0323855` 检查点，再实施本组。初始新测试编译缺少 `CatInventoryItemInstance.h`，已补齐；该失败不是原项目基线失败。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 使用权、调用方和结果 | `FishingService::BeginCast` → `Equipment::BeginFishingUse`；`CatFishingUseResults.h` | 原 Begin 预扣1；现只验有饵并锁竿，单位仍为份 | 所有 C++ 调用方改读 `bUseAccepted`；删除 `bBaitFrozen` | 先接收方、再调用方与回执 | 重复Begin、缺饵、最后一份、借竿、通知中离场 | 已迁移所有调用方；BaitRestock、OwnedRodLifecycle 与 BorrowedRod 审计通过，资产扫描0引用 |
+| 真咬数量写入 | `Session::OpenTrueBiteWindowFromAuthority` → `CommitFishingBaitDeferred` → `Inventory::ConsumeItemAtSlotInternal` | 原冻结抛竿饵；现扣原抛竿者当前选择 | 单一写口，先写数量并置已提交，再通知；捕获仅只读核对 | 写入→记录→选择/版本→复制 | 换饵、缺饵、回调重入、真咬重放 | 已删除预警与捕获补扣；BaitConfirmation 3/3通过，覆盖正式选饵、缺饵、重入、取消与满包；正式StateTree预警不扣/真咬扣通过 |
+| 终局、托管和持久化 | `ReleaseFishingUse`；`PreserveFishingResourcesForEquipmentShutdown` → `MoveFishingResourcesToCustodian` | 原退款、待退记录和托管退款格；现无退款，饵留原背包 | 删除全部退款字段、重试委托、离场待退扫描及专用扩容；保留原竿精确身份/磨损 | 迁移实例与记录→重绑Session→通知 | 满包释放、背包导出、原宿主销毁与保留竿 | 退款链全部删除；OwnedRodLifecycle 的离场导出/原宿主销毁/托管无补饵通过；借竿磨损与满包释放通过 |
+| D₀与入场计算 | `OpenTrueBiteWindowFromAuthority` → `ResolveHookSelectionFromAuthority` → `TryEnterHookedFightFromAuthority` | 原提竿时量竿尖距离；现真咬量鱼猫距 | 私有 `TrueBiteDistanceCentimeters=-1`；不复制不持久化；超限在完美折减前拒绝 | 冻结时点→扣饵→超限判断→窗口→物理投影 | 等于/大于Lmax、响应窗移动、完美与几何 | BiteTimingWorld 的D₀冻结、等于/大于Lmax、浮漂保留通过；OwnerRodHold真实输入→提竿→Runner通过 |
+| 超时、网络和表现消费者 | `HandleTrueBiteWindowExpired/FinalizeSession` → Session/Hook既有快照；`/Game/Data/StateTrees/ST_FishingSession` | 原WindowExpired回Waiting；现真咬超时直接终局 | 保留未真咬夜间竞态使用的WindowExpired→Waiting；真咬超时清全部计时器并停树 | 清理→原回执/复制→原HUD/漂终局 | 正式树、真实输入/Runner、WBP加载与联机回归 | 正式StateTree真咬超时终局、计时器清理及WBP绑定通过；GroupListenThreeClients在既有助手抓握断言失败，未证明本轮多人全链完成；真人画面和新包双端日志未验证 |
+| 资产、脚本、默认值、文档和旧代码 | `Content/Plugins`二进制包、现有钓鱼指南、唯一差距清单 | 旧结果字段可能有蓝图消费者；旧文字描述退款和循环 | 检查全部包后删旧字段；更新当前说明，历史验收注明只对应旧检查点 | 引用检查→清理→加载/回归；无资产生成或Cook改动 | `BaitAssetReferences.json`、diff/编译；保留正式资产值 | 1,996包扫描0引用/0错误，未发现LFS指针；旧字段及退款链均删除，无暂留兼容入口 |
+
+验证目录：`Saved/Integration/FishingBiteTiming-20260914/Saved/BiteValidation/`。`VerifiedEditorBuild.log`、补齐测试前提后的 `BaitFixtureBuild.log` 及 `VerifiedGameBuild.log` 编译成功；`VerifiedReport/index.json` 82项中79通过、3失败，修正缺饵夹具（避免库存正常自动选中备用饵）后 `BaitConfirmation/index.json` 3/3通过。按测试路径取最新结果的 `CombinedEvidence.json` 合计82项、80通过、2失败。换饵测试同时补齐了正式背包使用入口及资产定义要求的解锁资格，未修改生产权限闸门。
+
+剩余两项：① `EquipmentItemPickupRejectsFullBagAndPreventsReentrantDoubleGrant` 的“成功拾取销毁世界物”断言，在修改前已构建版本 `c1d732f` 同样复现（`PickupBaseline/index.json`）；该版本与本轮基线的 Inventory 源码无差异，实际入账一次的断言通过，世界物销毁状态断言未通过。② `GroupListenThreeClients` 的 `parking retains the independent helper body grip on both endpoints` 断言，与本文件旧清理节/差距清单已有抓握失败记录一致；本轮未修复或关闭该问题。
+
+contract：Editor/Game编译、引用清理、单次账单和库存不重扣等通过。runtime_behavior：测试世界中的正式StateTree、真实库存、借竿/离场、真咬超时/距离、真实持竿输入与Runner通过；多人组测试仍有上述缺口。presentation_delivery：现有正式WBP/Hook状态消费者通过相关测试，但NullRHI不证明真人画面；未Cook、未运行新Development包房主/客户端。实际本轮日志为验证目录内 `VerifiedTests.log`、`BaitConfirmation.log`，无 `-log` 参数也已落盘，它们是编辑器验证日志，不能冒充打包日志。本组不据此关闭 Fishing/Equipment/Delivery 模块。默认落盘事件：`fishing_use_bound`、`fishing_current_bait_committed`、`fishing_bait_commit_rejected`、`fishing_true_bite_distance`、`fishing_use_released`；沿用终局事件及 SessionId、World、NetMode、Authority、LocalRole 关联。运行层与表现交付层分别验收。
+
+
+## 2026-09-14：删除无消费者的旧入口与 StateTree 节点
+
+当前生产链继续使用 CommandComponent → FishingService → Session → 固定步 FightRunner；助手通过物理抓握传力。旧协作拒绝链、重复抄网转发、旧交换节点与旧咬钩兼容节点已删除。下文历史检查点中“保留旧协作/交换反射入口”的记录仅描述当时状态，以本节为准。
+
+修改前工作区已有 Frontend/Online 源码、前端生成脚本和 Room WBP 等并行改动，本轮不纳入提交。源码检查确认两个 ForwardLegacy 函数没有调用且不是 UFUNCTION；SubmitFightAssist 仅由废弃转发和专属测试调用。新构建与 Automation 基线未运行；资产删除基线为真实编辑器只读审计 1,997 个项目/插件包、3 棵 StateTree，旧符号 0 引用、0 错误。证据：`Saved/Automation/FishingLegacyCleanup/AssetAudit-Before.json`。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 平衡资产生成、默认值与保存 | `Scripts/create_fishing_fight_balance_asset.py::VALUES/main` → `UCatFishingFightBalanceDefinition`；正式包 `/Game/Catfishing/Data/Fishing/DA_FishingFightBalance_Default` | 删除原生类型已不存在的 `cat_body_mass_kilograms/helper_strength_multiplier` 访问；现有策划值、新建合法默认值、版本迁移与就绪门不变 | 删除旧键和成功日志中的旧质量字段；质量仍由实际物理身体提供 | 核对原生字段后修脚本，再验证新建与已有资产 | UE 实际创建/保存、二次运行保留调参、非法资产拒绝；不触碰正式资产调参 | 已删除；UE 实测新建/保存、二次运行保留 93cm/s、非法配置拒绝通过；正式资产 25 项参数未变，临时测试资产已删除；`GeneratorAudit.json`、`GeneratorAudit.log`，提交 `c55d759` |
+| 协作入口与状态权威 | `CommandComponent::ForwardLegacyAssist` → `Service::SubmitFightAssist` → `Session::SubmitFightAssist`；仅 `CatFishingServiceTests` 另有调用 | 旧链恒拒绝、不注册成员；生产主控、物理抓握、费用、复制、回执和生命周期保持原样 | 整条非反射链删除，删除只测试旧协议的断言 | 无消费者核查先于删除；保留实际抓握协作回归 | Editor/Game 构建、Service 与物理协作定向 Automation | 已删除；隔离 Editor/Game 构建通过；Service 7 项、主控 ASC 结算与物理连接回归通过；三客户端抓握失败在清理前基线同样复现，作为既有问题保留 |
+| 抄网生产消费者 | `CommandComponent::ForwardLegacyScoop` 无调用；`SubmitScoop` → 现有服务器命令 → `Service::RequestScoop` → `Session::RequestScoop` | 删除重复冷却/回执实现；实际抄网几何、嘴叼世界鱼交接、物品事务不变 | 删除旧转发声明和定义 | 现行命令已接入，无生产入口切换 | 定向抄网/命令回归；未知会话抄网断言保留 | 已删除；未知会话抄网拒绝/RequestId 断言通过；生产 RequestScoop 路径未改，无新增抄网表现验收 |
+| StateTree 反射节点及参数 | `CatFishingStateTreeNodes` 旧 Exchange/ResolveTrueBiteSelection 节点；`DefaultGame.ini` 的 FishingSessionStateTree/FishBehaviorStateTree 绑定正式树 | Exchange 已恒拒绝；旧咬钩节点重复 OpenTrueBiteWindow；不改真咬输入、阶段转换、选鱼/扣饵时序 | 删除两个旧 Task、Exchange InstanceData 与 Session 拒绝口；正式树、生成库继续使用现行节点 | `Scripts/audit_fishing_legacy_nodes.py` 全包扫描及加载拓扑先通过，再删除 | 新 DLL 重载全部树并重新审计；树包 SHA256 不变；真实正式树回归 | 删除前后均为 1,997 包/3 树/0 引用/0 错误；新进程确认旧反射类型不存在，三树 SHA256 不变；正式咬钩树和鱼行为树真实 World 回归通过 |
+| 旧参数、HUD/动画与资产风险 | `CatFishingFightBalanceDefinition.h`、`CatFishingTypes.h`、`Actors/CatFishingActorTypes.h/CatFishingRodActor.h` 的废弃反射字段；正式平衡包仍含旧字段名 | 不恢复旧模型；本轮节点审计不证明这些字段无 Blueprint/WBP 属性绑定；枚举值、复制字段布局、显示兼容和单位保持 | 暂留属性身份，修正 FishFightStaminaRemaining 仍称由巨鱼交换扣费的注释 | 完成字段级 Blueprint/WBP 图与属性绑定检查、正式 DataAsset 迁移并重载后才能删除 | 既往缺父类 `/Game/UI/WBP_CatLakeReach` 本轮未注册且无法加载，不能沿用旧日志宣称当前已完成全量字段审计；旧鱼测试包也未完成引用检查 | 未完成：旧参数/HUD 字段和 `/Game/Data/Fish` 三份旧测试资产继续保留，未删二进制 |
+| 日志、配置、Cook、持久化与退出 | 现行 `LogCatFishing` Runner/命令事件、`DefaultGame.ini` 软引用及 Session 终结清理；`Docs/FishingMVPOperationGuide_zh-CN.md` 节点表 | 无新增配置、Cook 包或状态写入；删除无人调用链专属旧拒绝事件，保留生产日志；无新字段单位/默认值变化 | 更新节点表、生产入口图和本节；不修改游戏资源扣费/退款/保存/退出入口 | 源码删除后复核文档与生产引用 | contract 与局部 runtime_behavior 分层；打包双端和正式 UI 表现不属于本次死代码删除证据 | 文档已更新；打包与 presentation_delivery 未运行，模块不关闭 |
+
+contract：`Saved/Automation/FishingLegacyCleanup-20260914/BuildEditorCommittedBase.log` 和 `BuildGameCommittedBase.log` 均 Succeeded，验证源码为 `0bf88537c2a626104bb95551a009428a93d1840b` 加本轮 10 份钓鱼源码修改，清单见 `CommittedBaselineManifest.json`。首次直接冻结并行工作区的构建遇到前端缺失声明/方法实现；同步声明时也造成一次 UHT 行号失配，失败日志均保留，未修改主工作区前端代码。后续改用已提交基线隔离验证，不宣称这等同于所有并行改动的整体验收。
+
+runtime_behavior：`Report-20260914-151559-774/index.json` 共 14 项，13 项通过（10 clean、3 warning）、1 项失败、0 notRun。通过项覆盖 Service 路由、首根正式竿、物资退出生命周期、未知会话抄网拒绝、真实正式咬钩/鱼行为树、物理连接与单主控 ASC 结算、SlackAim 命令衔接。`GroupListenThreeClients` 在放下竿后助手抓握保留断言失败，单独复跑 `Report-20260914-151935-826` 同样失败；清理前基线对照 `Report-20260914-152320-261` 同样在 `parking retains the independent helper body grip on both endpoints` 断言失败。基线源码/配置 600 文件已按提交核对（仅允许 CRLF 差异），见 `BaselineReplayManifest.json`；`BuildBaselineReplay.log` 编译成功。由此确认该失败先于本轮清理存在；未改动实际放竿或抓握玩法来迁就测试。对照完成后隔离源码与已验证清理 DLL 已恢复。新进程 `PostRemoval.log` 包含 `REMOVED_REFLECTED_TYPES_ABSENT`、`fishing_legacy_node_audit` 和 `FISHING_LEGACY_POST_REMOVAL_PASS`；删除后审计汇总另存 `Saved/Automation/FishingLegacyCleanup/AssetAudit-After.json`，三份树包哈希与删除前一致，正式平衡包 SHA256 与 Git LFS 对象一致。
+
+presentation_delivery：未运行 Cook、打包双端默认日志或正式 WBP/动画交付验收；不关闭 Fishing 模块。此处是本轮影响审查材料，模块进度仍仅在 `Docs/Development/需求对齐差距清单.md` 维护。
+
 ## 2026-09-11：共享鱼竿与按快速抖动划界的退饵
 
-当前规则：鱼竿是可共享的同一物品实例，没有部署者专属操作或收纳权限。R 放下当前竿，空手时拿起 250cm 内无人操作的竿；无目标时仍从自己的背包部署。X 有鱼线时先收线，无鱼线时收进按键者的背包。单竿同时只有一个显式主控，普通物理帮助不会自动接任。抛出立即扣实际抛竿者 1 份鱼饵；快速抖动 `BiteWarning` 开始前收线退还，上鱼成功（Caught/Landed）也退还；快速抖动开始后普通收线不退，即使漏过窗口重新回到 Waiting。退款始终给原扣饵者，接管不会新扣饵。下文历史检查点中的“仅本人竿”“仅主人 X”及“提竿才确认饵消耗”不再是当前规则。
+历史检查点（饵料规则已由顶部09-14节替代）：鱼竿是可共享的同一物品实例，没有部署者专属操作或收纳权限。R 放下当前竿，空手时拿起 250cm 内无人操作的竿；无目标时仍从自己的背包部署。X 有鱼线时先收线，无鱼线时收进按键者的背包。单竿同时只有一个显式主控，普通物理帮助不会自动接任。抛出立即扣实际抛竿者 1 份鱼饵；快速抖动 `BiteWarning` 开始前收线退还，上鱼成功（Caught/Landed）也退还；快速抖动开始后普通收线不退，即使漏过窗口重新回到 Waiting。退款始终给原扣饵者，接管不会新扣饵。下文历史检查点中的“仅本人竿”“仅主人 X”及“提竿才确认饵消耗”不再是当前规则。
 
 本轮发现：试玩日志 `打包/Windows/Catfishing/Saved/Logs/Catfishing.log` 的 17:38–17:39 多次 R 已到服务器，却因筛掉另一玩家的附近竿而转入 PlaceRod，得到 `NoUsableInventoryRod`。未发现按离开时长拒绝拾取的计时规则。开始时工作区已有 Character/Physics、PlayerController、GameMode、Online 与网络测试并行改动，保留并单独审查本轮差异。修改前 FirstRod 自动化基线 1 项通过；新构建/运行结果见本节交付记录。
 
@@ -35,7 +110,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | 入夜、祭坛、状态和退出 | `Framework/Game/CatfishingGameModeBase::CanGenerateNewFishingBites/FinishAltarDayTransition` → `FishingService::RefreshBiteAvailabilityFromAuthority` → `FishingSession`；`Camp/CatAltarActor`、GameState 的 DayTransition | 保留夜间操作与既有搏斗，夜间不新增咬钩；上游新增全员献祭及遮罩输入锁 | 合并退出取消与本地新咬钩字段；过场期间阻止新咬钩，过场收口发布环境后重新调度等待会话 | 阶段/环境发布 → 服务刷新 → 单一会话计时；不另建结算权威 | 真实 StateTree、浮漂、跨夜及过场恢复；沿用 `AltarTransitionFinished` 与咬钩诊断日志 | 2 处 GameMode 冲突已逐行解决；回归结果见下 |
 | 个人出力、体力和钓鱼测试 | `AbilitySystem/Physics/CatPhysicalEffortComponent` → `CharacterMovementComponent`、`Fishing/Simulation`；`Fishing/Tests` | 本地以意图位移结算，上游删除 30 个测试文件 | 生产公式完整保留；保留本地已更新的 BiteTimingWorld、CatWork、Effort、ForceIntegration、ParticipantStrength、RodEffort、Service 共 7 个测试；其余 23 个沿用上游删除 | 保留现有行为契约后执行剩余回归 | 个人出力、费用、合力、跨夜，不靠新期望替代行为验证 | 本地产生出力的源码目录无合并差异；测试删除不表示相关功能已删除或通过验收 |
-| 搬运、落地鱼、售鱼和 UI | 上游 `Inventory`、`FishContainers`、`Items/Fish`、`ShopEconomy`、`UI`，`FishingSession::RequestScoop/SpawnExhaustedFishPickupFromAuthority` | 采用原 Actor 搬运、GAS 售鱼和正式悬停提示；叼鱼护也占嘴，上岸侧躺由网格实现 | 使用上游实现、正式 BP/WBP/价格表；抄鱼接入单嘴约束，避免 Actor 与网格重复侧翻 | 正式实例/目录 → 世界载体 → 服务及 UI → 双端 | 原实例/Actor 身份、重复交易、体型、正式双端按钮与悬停 | 自动合并衔接；本轮结果见下，不将上游历史验证当作本轮验证 |
+| 搬运、落地鱼、售鱼和 UI | 上游 `Inventory`、`FishContainers`、`Items/Fish`、`ShopEconomy`、`UI`，`FishingSession::RequestScoop/SpawnExhaustedFishPickupFromAuthority` | 采用原 Actor 搬运、GAS 售鱼和正式悬停提示；当时鱼护也占嘴（2026-09-14 T25 已替代：鱼护只占背包一格，嘴部仅单鱼），上岸侧躺由网格实现 | 使用上游实现、正式 BP/WBP/价格表；抄鱼接入单嘴约束，避免 Actor 与网格重复侧翻 | 正式实例/目录 → 世界载体 → 服务及 UI → 双端 | 原实例/Actor 身份、重复交易、体型、正式双端按钮与悬停 | 自动合并衔接；本轮结果见下，不将上游历史验证当作本轮验证 |
 | 资产、配置、默认值与持久化 | `Content/Catfishing/Data/Fish/Fish_*`、`DefaultGame.ini` 的 InventorySettings/ShopEconomySettings/EnvironmentSettings/RunSettings；原存档消费者 | 16 份本地鱼资产二进制变化但 36 个可编辑字段均与基线一致；上游唯一字段变化为 WorldActorClass | 采用上游 CatFishPickupActor 配置，原本地二进制保留备份/stash；MorningEndFraction=0、DayLengthSeconds=99999 保留 | 三方实际 UObject 字段对照后选取资产；不运行资产重生成 | 16×3 份包实际加载、逐字段 JSON 比较；未对未知二进制内容作无差异承诺 | `fish-three-way.json`：16 鱼、每鱼 36 字段，本地字段差异 0；上游差异仅 world_actor_class；临时副本已清理 |
 | 构建、脚本、日志与文档 | 原 Editor/Game Target、Cook 目录、上游运行日志、本文；`Docs/Development/需求对齐差距清单.md` 仍为唯一业务进度入口 | 接入上游售鱼表 Cook 配置；保留本地环境及现有生成入口，不另建玩法状态或业务账本 | Editor/Game 构建与相关回归；证据放 Saved；存档格式、出力公式和资产生成脚本本轮不改 | 最终 diff/配置 → 构建 → 运行回归 → 提交 | 新 Cook、打包双机默认落盘和真人画面未运行 | 不改变模块级完成状态；验证记录见下 |
 
@@ -274,7 +349,7 @@
    └─ X   → 优先当前操作竿；空手只找 250cm 内本人无人占位竿；有会话=取消或切线 / 无会话=Leave 后 Pack
         ▼
 【服务层】UCatFishingService（World Subsystem，只在服务器存在）
-   PlaceRod/OperateRod/LeaveRod/PackRod/BeginCast/RequestScoop/SubmitFightAssist
+   PlaceRod/OperateRod/LeaveRod/PackRod/BeginCast/RequestScoop
    持有：按 RodActorId 登记的全场竿 Registry、每人最多两根部署额度、每根竿一个活跃会话、BeginCast 幂等缓存
         ▼
 【会话层】ACatFishingSession（一次钓鱼长流程的宿主 Actor）
@@ -426,7 +501,7 @@ Runner只冻结主控ASC、输入及身体运动样本，并在最终求解后�
 
 `runtime_behavior`：共享项目 `FinalReport/index.json` 共222项，221成功（215 clean、6 warning）、1失败、0未运行；唯一失败是基线已有初级竿150/500不一致，未修改资产或断言。新无Session/Falling/碰撞回归、12个BorrowedRod真实场景、四端GroupListenThreeClients及原松线/鱼行为联机回归均通过。首轮 `IntegratedReport` 的两处新夹具失败保留：普通移动需经MoveAutonomous初始化模拟输入倍率；新场需等待真实首个完整组求解后才能验证旧场销毁不会拆除它。修正实际入口与等待条件后保留原行为断言通过。6项warning涉及旧PIE临时World网络名称、测试取消/水深/无人接管及托管Actor销毁时World上下文，不能把它们计作clean。
 
-`presentation_delivery`：尚未完成正式地图真人四端、打包双端默认落盘或Cook验收。本轮未写正式BP/WBP/状态树资产；二进制隐藏图和兼容反射入口仍按上表的未确认边界保留。实际运行日志为 `D:/develop/Catfishing/Saved/Automation/PreFightFormation-20260908/FinalTests.log`，包含PIE房主/三个客户端World观察；同进程日志不能替代打包房主与客户端各自落盘。`LogCatFishing` 的 `fishing_group_movement_binding` 带 `Unloaded`、名单和成员世代；结合 `fishing_group_unloaded_solve_rejected`、`fishing_fight_runner_stopped`、`fishing_exhausted_constraint_rejected` 与现有Session/资源事件复核模式交接。只读复用模型不代表无载阶段新增体力收费，测试通过也不能替代正式派对手感验收。持续缺口仍只归入 `Docs/Development/需求对齐差距清单.md`。
+`presentation_delivery`：尚未完成正式地图真人四端、打包双端默认落盘或Cook验收。本轮未写正式BP/WBP/状态树资产；二进制隐藏图和兼容反射入口仍按上表的未确认边界保留。实际运行日志为 `Saved/Automation/PreFightFormation-20260908/FinalTests.log`，包含PIE房主/三个客户端World观察；同进程日志不能替代打包房主与客户端各自落盘。`LogCatFishing` 的 `fishing_group_movement_binding` 带 `Unloaded`、名单和成员世代；结合 `fishing_group_unloaded_solve_rejected`、`fishing_fight_runner_stopped`、`fishing_exhausted_constraint_rejected` 与现有Session/资源事件复核模式交接。只读复用模型不代表无载阶段新增体力收费，测试通过也不能替代正式派对手感验收。持续缺口仍只归入 `Docs/Development/需求对齐差距清单.md`。
 
 
 ### 2.1 水域（样条烘焙 → 只读缓存）
@@ -443,7 +518,7 @@ Runner只冻结主控ASC、输入及身体运动样本，并在最终求解后�
 
 - `UCatChumFieldSubsystem`（服务器）：投放建场（中心/半径/三轴腥香酵/时间衰减曲线）
 - 公开态复制：`GameState → UCatChumFieldReplicationComponent → FCatChumFieldPublicItem[]`
-- 咬钩加速：`ScheduleWaitingProbe` 在服务器冻结的落水点采样三轴总量 → `BiteRate ×= 1+(1-e^-Total)`；首次计时包含剩余飞行时间，避免鱼钩仍在空中就进入预警。
+- 咬钩加速：`ScheduleWaitingProbe` 在服务器冻结的落水点采样三轴总量，按 20/14/6 秒锚点校准截顶指数分布；首次计时包含剩余飞行时间。均值计到 Probe 开始，到真咬另加逐鱼试探秒数。
 - 选鱼偏好：三轴采样 · 鱼的 ChumPreference 点积 → 饱和曲线 → 权重放大（最多 ×3）
 - 上述三条是当前实现，不是新版目标；待改为水域面积/鱼量账本、平均分布、重叠区共享收敛曲线、守恒重分配与面积容量上限（见 `Docs/Architecture/项目技术方案.md` §7.1.1 和本文 §6）
 
@@ -452,13 +527,13 @@ Runner只冻结主控ASC、输入及身体运动样本，并在最终求解后�
 | 阶段 | 写入者 |
 |---|---|
 | Waiting | StateTree 节点 `ScheduleWaitingProbe` **内部自己** EnterPhase，并按泊松抽咬钩延迟起计时器 |
-| Probe | StateTree 的 `EnterPhase` 节点（ProbeTriggered 事件转移后） |
-| TrueBiteWindow | StateTree 的 `OpenTrueBiteWindow` 节点打开通用响应窗；只让浮漂下沉，不选鱼、不生成 Actor、不扣饵 |
-| HookedFight | 真咬窗内收到左键后，`RequestHook` 冻结选鱼上下文、选鱼、生成 Actor、扣饵并启动搏斗 |
+| Probe | StateTree 的 EnterPhase 后调用 `BeginProbeFromStateTree`，冻结选鱼并生成 Encounter；ProbeStayTimer 停留逐鱼秒数 |
+| TrueBiteWindow | ProbeStayTimer → `OpenTrueBiteWindowFromAuthority`：冻结 D₀、扣一次当前饵、距离门，然后发布逐鱼响应与独立完美截止时间并让浮漂下沉 |
+| HookedFight | `RequestHook` 验证服务器截止时间，按同一快照判完美，复用 Probe 已选鱼启动 Runner；不再选鱼或扣饵 |
 | ExhaustedReel | 鱼体力归零或被猫端牵引越岸后发送 `FishExhausted` 事件；同一个 Runner 继续双端运动约束，但关闭鱼 AI 与猫端体力扣费 |
 | Resolved/Terminated | `FinalizeSession()` —— StateTree **禁止**进入终态，且它会停树 |
 
-浮漂正式表现由 `ACatFishingHookActor` 驱动，不依赖 `cat.Fishing.Debug`：Waiting 先保证至少 `MinimumBiteDelaySeconds`（当前 3 秒）的小幅慢浮，再叠加服务器随机安静等待；真咬前 `BiteWarningSeconds`（当前 1.5 秒）只把 Hook 的复制模式切为 `BiteWarning`，此时提前提竿仍是空钩；进入 `TrueBiteWindow` 时切为 `Sunk` 猛然下沉。若响应窗内没有左键，StateTree 走 `WindowExpired → Waiting`，保留鱼竿、鱼线和饵料预约并开始新一轮；每轮使用新的确定性服务器随机种子。`MaximumBiteDelaySeconds`（当前 40 秒）是每轮慢浮开始到下沉的总上限。网络只复制模式和服务器起始时间，各客户端本地计算连续位移，因此不会逐帧复制 Transform。
+浮漂正式表现由 `ACatFishingHookActor` 驱动，不依赖 debug 开关。Waiting 保留至少 3 秒慢浮、随机安静等待与 1.5 秒预警；进入 Probe 后继续轻点逐鱼 1.5～3 秒，随后真咬猛沉。前两阶段提竿为空钩、不扣饵；真咬消耗一次当前饵，响应超时直接 `HookWindowExpired` 终局。`WindowExpired → Waiting` 仅供尚未真咬的入夜撤销使用。等待 40 秒上限计到 Probe 开始，不包含逐鱼停留。网络复制阶段、模式、服务器时间与两个截止点，客户端只计算表现与倒计时。
 
 StateTree（`ST_FishingSession`）保持薄编排。其中 `FishExhausted` 是 `HookedFight → ExhaustedReelHold` 的显式事件边；`EarlyHook` / `Interrupted` 仍由 C++ 直接收敛终态并停树。
 

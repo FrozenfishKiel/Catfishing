@@ -153,16 +153,12 @@ Root
 | `Cat Fishing Schedule Waiting Probe` | Task | ✅ 用 |
 | `Cat Fishing Enter Phase` | Task（参数 `Phase`） | ✅ 用 |
 | `Cat Fishing Open True Bite Window` | Task | ✅ 用 |
-| `Cat Fishing Open True Bite Window (Legacy Node)` | Task | ❌ 仅用于加载旧资产 |
 | `Cat Fishing Start Fight Runner` | Task | ✅ 用 |
 | `Cat Fishing Wait For Fight Runner` | Task | ✅ 用 |
 | `Cat Fishing Wait` | Task | ✅ 用 |
 | `Cat Fishing Phase Is` | Condition（参数 `ExpectedPhase`） | 可选 |
-| `Cat Fishing Fight Exchange` | Task | ❌ 不用（见下） |
-| `Cat Fishing Commit Failure Budget` | Task | ❌ 不用 |
-| `Cat Fishing Resolve Retry Exhausted Escape` | Task | ❌ 不用 |
 
-> `Cat Fishing Fight Exchange` 在当前 Runner 驱动的搏斗模型下不能用 —— 保留反射身份仅供旧资产加载，执行始终返回 `FixedStepOwnsBilling`，不能形成第二套扣费入口。搏斗数值全在 `UCatFishingFightRunner` 里跑。
+> 搏斗数值统一由 `UCatFishingFightRunner` 固定步结算。2026-09-14 完成资产引用审计后，旧交换节点和旧咬钩兼容节点已删除；失败预算和重试耗尽节点也已在此前清理。新树使用上表现行节点。
 
 C++ 实际只发这 5 个事件（头文件里声明了 16 个，其余 11 个**没有任何发送点**，别在资产里等它们）：
 
@@ -216,7 +212,7 @@ Root
 
 4. **`ExhaustedReelHold` 状态不要再放 `Enter Phase`。** C++ 在搏斗 Runner 结束时已经 EnterPhase(ExhaustedReel) 过了，重复进入只会白白递增 Revision。旧资产中的叶子状态即使仍命名为 `NearShore` 也能兼容运行，但建议改名避免误解。
 
-5. **`WindowExpired` 必须接回 `Waiting`。** 漏按只关闭这一轮响应窗，不释放竿、线或饵料预约；Waiting 重入后会清空窗口并重新调度。`EarlyHook` / `Interrupted` 才由 C++ 直接终止并停树，不需要资产终态。
+5. **`WindowExpired` 接回 `Waiting` 仅服务未真咬的夜间竞态。** 已成立的真咬超时由 C++ 直接写 `HookWindowExpired` 终局、解锁竿并停树，不再发送该事件重试咬钩。`EarlyHook` / `Interrupted` 同样由 C++ 终止，不需要资产终态。鱼饵只在真咬扣当前选择1份，任何终局不返还。
 
 6. **`Cat Fishing Start Fight Runner` 是幂等的。** `RequestHook` 在发 `HookAccepted` 之前就已经启动了 Runner，这个节点检测到已在运行会直接返回 Succeeded，不会重复启动。
 

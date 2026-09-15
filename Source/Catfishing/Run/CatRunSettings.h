@@ -6,14 +6,21 @@
 
 class UStateTree;
 
-/** Run 每日供品目标缩放策略；Undecided 阻止 Run 启动，固定日程只表达当前已支持的明确规则，不推导未裁人数曲线。 */
+/** Run 每日供品目标缩放策略；Undecided 阻止 Run 启动，其余各档都必须显式选择，绝不静默换算。 */
 UENUM()
 enum class ECatRunScalingPolicy : uint8
 {
 	/** 单人/多人目标缩放尚未裁决，不能把固定测试目标冒充正式规则。 */
 	Undecided,
-	/** 明确使用配置中的每日供品目标日程；当前实现不支持人数曲线或静默缩放。 */
-	FixedDailyOfferingTarget
+	/** 日程里的数就是当天的绝对目标，与在场人数无关；它是人数曲线落地前的旧口径，保留给只跑单人的诊断与测试。 */
+	FixedDailyOfferingTarget,
+	/**
+	 * 日程里的数是「供奉点/人/天」，当天目标＝该值 × 清晨在场人数快照
+	 * （局与进程 §3.1.2:58「每天清晨按在场人数确定当日任务……当天内不变」；
+	 *  参数页「每日任务／世界进度」行逐字写「任务＝供奉点/人，每天清晨按在场人数缩放、当天不变」）。
+	 * 人数快照取不到时按 1 人兜底并记 Warning——目标算少了只是那天轻松，算不出来会让整条 RunFlow 停在 PolicyUndecided。
+	 */
+	PerMorningPlayerCountTarget
 };
 
 /** 供品鱼的重量积分档位；它只由本条鱼的实际重量决定，不读取鱼表中的静态贡献。 */
@@ -83,6 +90,16 @@ public:
 	/** 臭鱼供品 ID 是配置层对鱼定义的污染标记；夜晚结算只用它计算增益折扣，不改变鱼本身或捕获记录。 */
 	bool IsStinkyOfferingFish(FName FishDefinitionId) const;
 
+	/**
+	 * 把日程里的基础目标按当前策略换算成这一天的绝对目标。
+	 * FixedDailyOfferingTarget 原样返回；PerMorningPlayerCountTarget 乘清晨人数快照。
+	 * MorningPlayerCount <= 0 表示这一天没取到快照，按 1 人算并由调用方记 Warning，绝不返回 0 让 RunFlow 停住。
+	 */
+	int32 ScaleDailyOfferingTargetForMorningPlayerCount(int32 BaseDailyOfferingTarget, int32 MorningPlayerCount) const;
+
+	/** 当前策略是否把日程里的数当作「每人份」；UI 与诊断用它解释同一个日程为什么在四人局里变成四倍。 */
+	bool IsPerPlayerDailyOfferingTarget() const;
+
 	/** 裁决 StateTree 是否可以选择成功结算分支；只有产品显式 Enabled 且世界进度达到 100，才返回 true。 */
 	bool CanEnterSuccessSettlementNight(int32 WorldProgress) const;
 
@@ -125,7 +142,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning|Offering")
 	TArray<FName> StinkyOfferingFishDefinitionIds;
 
-	/** 人数缩放策略；默认 Undecided，必须显式选择 FixedDailyOfferingTarget 才能使用配置日程。 */
+	/** 人数缩放策略；默认 Undecided，必须显式选择某一档才能使用配置日程，两档对同一份日程的读法不同。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning")
 	ECatRunScalingPolicy PlayerScalingPolicy = ECatRunScalingPolicy::Undecided;
 

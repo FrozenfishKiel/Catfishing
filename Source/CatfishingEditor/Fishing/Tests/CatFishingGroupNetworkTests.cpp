@@ -168,8 +168,8 @@ namespace CatFishingGroupNetwork
 						Cat->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 50.0f);
 						if (Index == 0)
 						{
-							if (!Test->TestTrue(TEXT("only the primary receives a fishing-session stamina baseline"),
-								Cat->GetCatAbilitySystemComponent()->InitializeFishingStaminaForSession())) return true;
+							if (!Test->TestTrue(TEXT("setup seeds only the primary body to full fight stamina"),
+								Cat->GetCatAbilitySystemComponent()->SeedFightStaminaToMaximumFromAuthority())) return true;
 						}
 						else
 						{
@@ -178,6 +178,9 @@ namespace CatFishingGroupNetwork
 							Cat->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), ExistingBalance);
 						}
 					}
+					PrimaryCat->GetCatAbilitySystemComponent()->ApplyYellowFightStaminaDelta(20.0f);
+					for (auto* Remote : RemoteControllers)
+						CastChecked<ACatCharacter>(Remote->GetPawn())->GetCatAbilitySystemComponent()->ApplyYellowFightStaminaDelta(20.0f);
 					PrimaryCat->GetPhysicalBodyComponent()->GetGrab()->SetGrabInput(true, true);
 					bBodiesPlaced = true;
 					SetupStarted = Now;
@@ -492,6 +495,11 @@ namespace CatFishingGroupNetwork
 					const double ServerStamina = CastChecked<ACatCharacter>(RemoteControllers[Index]->GetPawn())->GetCatAbilitySystemComponent()->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
 					const double ClientStamina = CastChecked<ACatCharacter>(LocalClients[Index]->GetPawn())->GetCatAbilitySystemComponent()->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
 					if (FMath::Abs(ServerStamina-ClientStamina)>0.5) return false;
+					const float ServerYellow = CastChecked<ACatCharacter>(RemoteControllers[Index]->GetPawn())->GetCatAbilitySystemComponent()->GetYellowFightStamina();
+					const float ClientYellow = CastChecked<ACatCharacter>(LocalClients[Index]->GetPawn())->GetCatAbilitySystemComponent()->GetYellowFightStamina();
+					if (FMath::Abs(ServerYellow-ClientYellow)>0.01f) return false;
+					if (!Test->TestTrue(TEXT("each client receives its own yellow reserve"), ServerYellow == 20.0f)) return true;
+					Test->AddInfo(FString::Printf(TEXT("Event=yellow_stamina_network_observed Helper=%d ServerYellow=%.6f ClientYellow=%.6f SessionId=%s"),Index,ServerYellow,ClientYellow,*SessionId.ToString()));
 					if (!Test->TestTrue(TEXT("each client observes its own helper effort payment"),ServerStamina<PreCastStamina[Index+1])) return true;
 					Test->AddInfo(FString::Printf(TEXT("Event=physical_effort_network_observed Helper=%d ServerStamina=%.6f ClientStamina=%.6f SessionId=%s"),Index,ServerStamina,ClientStamina,*SessionId.ToString()));
 				}

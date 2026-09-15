@@ -71,6 +71,7 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	friend class UCatShopEconomyService;
 	/** 按库存归属同步交互碰撞；服务器立即裁决携带和隐藏，客户端物理及附件统一留到 PostRepNotifies 应用。 */
 	UFUNCTION()
 	void OnRep_InventoryOwner();
@@ -116,7 +117,7 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|FishContainers", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatFishOnlyInventoryComponent> FishInventory;
 
-	/** 鱼护默认槽位容量；BeginPlay 在服务器写入正式库存组件，运行时不会走鱼容器设置表。 */
+	/** 旧资产容量兼容字段；服务器 BeginPlay 改读 FishContainerSettings.FishGuardCapacity，保留此字段供未迁移资产核查。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Catfishing|FishContainers", meta = (AllowPrivateAccess = "true", ClampMin = "0"))
 	int32 FishInventorySlotCapacity = 8;
 

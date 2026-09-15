@@ -87,18 +87,21 @@ bool FCatFishingCatWorkPacingTest::RunTest(const FString& Parameters)
 	Constraint.CarrierVelocityCentimetersPerSecond = FVector(-40.0, 0.0, 0.0);
 	Constraint.CatRodPositiveWorkRadians = 0.16;
 	const auto Heavy = Step(Settings, Current, Constraint);
+	// 腿部附加按秒计费、只看操作方向：这里是后退（离水）一档，身体实际走了多远不进这笔账。
 	FCatFightOperatorMovementCostInput Movement;
 	Movement.MoveIntentWorld = -FVector::ForwardVector;
-	Movement.ActualDisplacementCentimeters = Constraint.CarrierVelocityCentimetersPerSecond * Settings.FixedStepSeconds;
-	Movement.MaximumMoveSpeedCentimetersPerSecond = 40.0;
+	Movement.InputForwardWorld = FVector::ForwardVector;
 	Movement.FixedStepSeconds = Settings.FixedStepSeconds;
 	Movement.ActiveStrength = Settings.PrimaryOperatorCatStrength;
 	FCatFightOperatorMovementCostResult PersonalMovement;
-	if (!TestTrue(TEXT("真实身体位移独立计算个人账"), FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(Movement, PersonalMovement))) return false;
+	if (!TestTrue(TEXT("腿部移动独立计算个人账"), FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(Movement, PersonalMovement))) return false;
 	const double HeavyRate = (PersonalMovement.StaminaDrain + Heavy.GetRodActionStaminaDrain()) / Settings.FixedStepSeconds;
-	TestTrue(TEXT("完成身体移动意图后只支付真实竿操作账"), Heavy.bSucceeded && FMath::IsFinite(HeavyRate) && HeavyRate > 0.0);
-	TestTrue(TEXT("完成意图的身体不耗体，收线与转杆仍各支付实际做功"),
-		PersonalMovement.StaminaDrain == 0.0 && Heavy.CatReelStaminaDrain > 0.0 && Heavy.CatRodWorkStaminaDrain > 0.0);
+	TestTrue(TEXT("腿部附加与竿操作账各自成立"), Heavy.bSucceeded && FMath::IsFinite(HeavyRate) && HeavyRate > 0.0);
+	TestTrue(TEXT("腿部附加只按后退档收，收线与转杆仍各支付实际做功"),
+		PersonalMovement.bBackward
+		&& FMath::IsNearlyEqual(PersonalMovement.StaminaDrain,
+			Movement.BackwardStaminaPerSecond * Movement.FixedStepSeconds * Movement.MovementStaminaMultiplier, 1e-9)
+		&& Heavy.CatReelStaminaDrain > 0.0 && Heavy.CatRodWorkStaminaDrain > 0.0);
 
 	Settings.CatRodStaminaCostPerStrengthRadian *= 20.0;
 	Settings.CatStaminaCostPerStrengthCentimeter *= 10.0;
@@ -131,7 +134,15 @@ bool FCatFishingCatWorkPacingTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("无负载微调保留少量费用"), Light.bSucceeded && LightRate >= 0.2 && LightRate <= 0.5);
 	Current.CatStamina = 30.0;
 	Current.CatAction = ECatFightCatAction::Slack;
-	const auto Recovery = Step(Settings, Current, Constraint);
+	// 2026-09-13：放线回体要有「成长项给了速率」这个前置才可能发生——设计把**基础**放线回体定为 0
+	//（钓鱼规则 §4.4:213；设计修改记录保留基础 0），9bfb4d5 把模拟器默认从 1.5 改成 0，
+	// 此后这条「该回体」的断言就永远不成立了。这里显式造带正速率的成长场景；
+	// **不给共享 MakeConfig() 全局加回体**，那会悄悄改掉本文件其他用例的前提。
+	FCatFightSimulationConfig RecoveringSettings = Settings;
+	RecoveringSettings.SlackStaminaRegenPerSecond = 2.75;
+	const auto RecoveryBase = Step(Settings, Current, Constraint);
+	TestEqual(TEXT("基础放线不回体：速率 0 时恢复为零"), RecoveryBase.CatStaminaDrain, 0.0);
+	const auto Recovery = Step(RecoveringSettings, Current, Constraint);
 	TestTrue(TEXT("右键仍恢复体力且双方无正向费用"), Recovery.bSucceeded && Recovery.CatStaminaDrain < 0.0
 		&& Recovery.GetRodActionStaminaDrain() == 0.0 && Recovery.FishStaminaDrain == 0.0);
 	AddInfo(FString::Printf(TEXT("Event=fishing_cat_work_reference_rates Source=ControlledSnapshot LightPerSecond=%.3f BlockedPerSecond=%.3f HeavyPerSecond=%.3f StaminaPool=60"),

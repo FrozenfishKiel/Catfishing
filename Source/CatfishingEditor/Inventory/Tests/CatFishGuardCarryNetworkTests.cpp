@@ -1,4 +1,4 @@
-﻿#if WITH_DEV_AUTOMATION_TESTS
+#if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationEditorCommon.h"
@@ -438,7 +438,7 @@ namespace CatFishGuardCarryNetwork
 				|| !Character->GetCharacterMovement()->IsMovingOnGround() || !Character->GetInventoryComponent()
 				|| Character->GetInventoryComponent()->GetInventorySlotCount() <= 0) return false;
 			if (!Test->TestTrue(TEXT("stage=0 unmodified formal character has empty mouth and configured socket"),
-				!ACatFishPickupActor::FindCarriedFish(Character) && !ACatFishGuardActor::FindCarriedGuard(Character)
+				!ACatFishPickupActor::FindCarriedFish(Character) && Character->GetMouthCarriedActor() == nullptr
 				&& Character->GetMesh()->DoesSocketExist(GetDefault<UCatFishPickupSettings>()->MouthCarrySocketName))) return true;
 			UClass* GuardClass = LoadClass<ACatFishGuardActor>(nullptr, TEXT("/Game/Blueprint/Actors/BP_CatGuard.BP_CatGuard_C"));
 			UCatFishDefinition* Definition = LoadObject<UCatFishDefinition>(nullptr,
@@ -830,7 +830,7 @@ namespace CatFishGuardCarryNetwork
 
 		/** 同时观察原两端对象：先核对原库存、精确 GUID/重量/数量，再读归属、刚体、嘴部附件与背包。
 		 * InventoryOwner 仅通过反射只读核对，不为测试新增生产 getter；服务器内鱼还须保持原 UObject。
-		 * 携带核对正式 socket 与可见性，落地核对空嘴和背包扣格；两端都须保留拾取前尺寸，最后比较位置、旋转和缩放。
+		 * 携带核对原鱼护的嘴部附着与唯一占用，落地核对空嘴和背包扣格；两端都须保留拾取前尺寸，最后比较位置、旋转和缩放。
 		 * 任一复制事实未到位返回 false 并写明端与等待项，让上层继续等待或带阶段超时报错。 */
 		bool BothSidesMatch(const bool bCarried, const bool bDrop)
 		{
@@ -864,20 +864,19 @@ namespace CatFishGuardCarryNetwork
 				const UPrimitiveComponent* Body = Cast<UPrimitiveComponent>(Guard->GetRootComponent());
 				if (!OwnerProperty || OwnerProperty->GetObjectPropertyValue_InContainer(Guard) != (bCarried ? Character : nullptr)
 					|| Guard->GetOwner() != (bCarried ? Character : nullptr) || Guard->IsGrounded() == bCarried
-					|| Guard->IsHidden() || Guard->GetActorEnableCollision() == bCarried || !Body || Body->IsSimulatingPhysics() != bDrop) return false;
+					|| Guard->IsHidden() != bCarried || Guard->GetActorEnableCollision() == bCarried || !Body || Body->IsSimulatingPhysics() != bDrop) return false;
 				WaitingFor = FString::Printf(TEXT("peer=%d mouth attachment/socket and backpack agree with carried=%d"), Peer, bCarried);
 				const UCatInventoryComponent* Backpack = Character->GetInventoryComponent();
 				if (!Backpack || ACatFishPickupActor::FindCarriedFish(Character)
-					|| Character->GetMouthCarriedActor() != (bCarried ? static_cast<AActor*>(Guard) : nullptr)) return false;
+					|| Character->GetMouthCarriedActor() != nullptr) return false;
 				// 初始背包必须没有其他鱼护，首次客户端按正式定义查槽位才唯一对应本用例生成的载体。
 				if (!GuardId.IsValid() && !bCarried && Backpack->CountVisibleInventoryQuantityByDefinitionId(TEXT("FishGuard")) != 0) return false;
 				if (bCarried)
 				{
-					if (ACatFishGuardActor::FindCarriedGuard(Character) != Guard || Guard->GetAttachParentActor() != Character
-						|| Guard->GetRootComponent()->GetAttachParent() != Character->GetMesh()
-						|| Guard->GetRootComponent()->GetAttachSocketName() != GetDefault<UCatFishPickupSettings>()->MouthCarrySocketName) return false;
+					// 墓碑（T25，道具:64）：携带鱼护改为库存隐藏保管；继续核对原Actor、双方归属、内鱼GUID和重量。
+					if (Character->GetMouthCarriedActor() || Guard->GetAttachParentActor() || !Guard->IsHidden()) return false;
 				}
-				else if (Guard->GetAttachParentActor() || ACatFishGuardActor::FindCarriedGuard(Character)
+				else if (Guard->GetAttachParentActor() || Character->GetMouthCarriedActor()
 					|| (GuardId.IsValid() && Backpack->FindInventorySlotIndexFromInstanceId(GuardId) != INDEX_NONE)) return false;
 			}
 			WaitingFor = TEXT("both original guards converge in position, rotation and scale");

@@ -22,5 +22,11 @@ enum class ECatFishBehaviorCondition : uint8
 	DurationExpired,
 	SustainedBlocked,
 	LowStamina,
-	NeedsRecovery
+	NeedsRecovery,
+	/**
+	 * 段末抽到的「下一段向外」。概率来自鱼表「食性」列换算出的 P_base，
+	 * 在 BeginBehavior 冻结一次，整段内不变（段内不换向）。
+	 * 食性未填或档位概率未裁时该条件恒为 false，资产上挂它的转移边永不触发，树的现有拓扑不受影响。
+	 */
+	OutwardSegmentRoll
 };

@@ -15,7 +15,7 @@ DECLARE_MULTICAST_DELEGATE(FCatFrontendSaveModelChanged);
  * 主界面存档列表的只读适配 Model；它把 LocalPlayer 生命周期限定到 GameInstance 的正式 Save 子系统。
  * SaveList 和 SaveSlotRow 通过它读取真实槽摘要、忙碌和结果，任何新建、读取或删除仍只提交给 Save 子系统。
  */
-UCLASS()
+UCLASS(BlueprintType)
 class CATFISHING_API UCatFrontendSaveModel : public UObject
 {
 	GENERATED_BODY()
@@ -50,6 +50,18 @@ public:
 
 	/** 返回 Save 子系统最近一次成功读写的真实槽摘要；调用方只读，不能把数组作为第二份列表状态改写。 */
 	const TArray<FCatSaveSlotSummary>& GetSlotSummaries() const;
+
+	/** 根据当前真实槽摘要读取完成态；不按 DayIndex 或文本猜终局。 */
+	UFUNCTION(BlueprintPure, Category="Catfishing|Save")
+	bool IsSlotCompleted(FName SlotId) const;
+	/** 当前槽是否允许提供继续；忙碌与房间操作还需由页面控制器一起检查。 */
+	UFUNCTION(BlueprintPure, Category="Catfishing|Save")
+	bool CanContinueSlot(FName SlotId) const;
+	UFUNCTION(BlueprintPure, Category="Catfishing|Save")
+	FText GetSlotStatusText(FName SlotId) const;
+	/** 行 Widget 和页面 Model 共用同一个只读策略，旧档 bRunCompleted=false 仍可继续。 */
+	UFUNCTION(BlueprintPure, Category="Catfishing|Save")
+	static bool CanContinueSummary(const FCatSaveSlotSummary& Summary);
 
 	/** 返回是否已有成功读取、尚待世界恢复的正式旅行许可；Controller 只在它与当前选择匹配时进入创建房间。 */
 	bool HasLoadedRunForTravel() const;

@@ -63,7 +63,7 @@ bool UCatAltarWorldInfoComponent::BuildInfo_Implementation(APlayerController* Vi
 		: Confirmation && Confirmation->State == ECatAltarConfirmationState::Cancelled && bThisAltarConfirmation
 			&& !Confirmation->CancelReason.IsEmpty() ? Confirmation->CancelReason
 		: Run->Phase.Phase == ECatRunPhase::DayActive ? NSLOCTEXT("CatWorldInfo", "AltarDaytime", "仅夜晚可献祭")
-		: Run->Phase.Phase == ECatRunPhase::NormalNight && Run->Phase.bOfferingOpen ? NSLOCTEXT("CatWorldInfo", "AltarWaiting", "夜晚 · 等待全员确认")
+		: Run->Phase.Phase == ECatRunPhase::NormalNight && Run->Phase.bOfferingOpen ? NSLOCTEXT("CatWorldInfo", "AltarWaiting", "夜晚 · 人到齐就能发起献祭")
 		: NSLOCTEXT("CatWorldInfo", "AltarClosed", "献祭已关闭");
 	// 行只包含可显示数据，键名供自定义 WBP 识别稳定概念；不把排列或字体塞入业务提供者。
 	auto AddRow = [&OutData](FName Id, const FText& Label, const FText& Value, float Progress = -1.0f)

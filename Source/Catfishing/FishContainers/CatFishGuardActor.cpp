@@ -16,6 +16,7 @@
 #include "Inventory/CatFishGuardInventoryItemInstance.h"
 #include "Inventory/CatInventoryItemDefinition.h"
 #include "FishContainers/CatFishPickupSettings.h"
+#include "FishContainers/CatFishContainerSettings.h"
 #include "Net/UnrealNetwork.h"
 #include "Logging/CatLog.h"
 #include "UI/CatLocalPlayerUISubsystem.h"
@@ -265,7 +266,11 @@ void ACatFishGuardActor::BeginPlay()
 	}
 	if (FishInventory != nullptr)
 	{
-		FishInventory->SetInventorySlotCountFromAuthority(FishInventorySlotCapacity);
+		const int32 Capacity = GetDefault<UCatFishContainerSettings>()->FishGuardCapacity;
+		UE_CLOG(FishInventorySlotCapacity != Capacity, LogCatFishContainers, Warning,
+			TEXT("Event=fish_guard_legacy_capacity_ignored Guard=%s Legacy=%d Capacity=%d World=%s NetMode=%d Authority=1 LocalRole=%d"),
+			*GetName(), FishInventorySlotCapacity, Capacity, *GetNameSafe(GetWorld()), GetNetMode(), GetLocalRole());
+		FishInventory->SetInventorySlotCountFromAuthority(Capacity);
 	}
 }
 
@@ -334,7 +339,8 @@ bool ACatFishGuardActor::IsAuthorityRequestSpatiallyValid(const AController* Req
 	const APawn* Pawn = RequestingController ? RequestingController->GetPawn() : nullptr;
 	const UCatInteractionSettings* Settings = GetDefault<UCatInteractionSettings>();
 	UWorld* World = GetWorld();
-	if (!HasAuthority() || !Pawn || !Settings || !World
+	if (!HasAuthority() || !Pawn || !Settings || !World || Pawn->GetWorld() != World
+		|| RequestingController->GetWorld() != World
 		|| FVector::Dist(Pawn->GetPawnViewLocation(), GetActorLocation()) > GetInteractionRadius_Implementation())
 	{
 		return false;

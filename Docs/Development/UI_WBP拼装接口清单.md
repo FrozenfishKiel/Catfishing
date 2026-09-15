@@ -59,13 +59,49 @@ HUD、背包、背包格子、交互提示和局内 ESC 菜单的默认路径来
 
 ## Frontend：`WBP_CatFrontendRoot`
 
-正式 Frontend Root 目标路径是 `/Game/UI/Frontend/WBP_CatFrontendRoot`，父类是 `UCatFrontendRootWidget`。整套 Frontend 共九个资产：一个 Root、四个业务子 WBP、一个全局 Loading WBP 和三个动态列表行资产。Root 是 `UCatLocalPlayerUISubsystem` 的主界面创建目标；Loading WBP 由同一个 LocalPlayer UI 作为最高层遮罩创建，不嵌入 Root。
+### 首页视觉接入（2026-09-14）
+
+正式样式入口为 `Scripts/style_frontend_menu.py`；`Scripts/generate_frontend_widgets.py` 在作者器重建 Root 后调用它。脚本只保存首页、Root 和湖畔背景贴图，执行前拒绝覆盖这三个包的未保存更改，在 `Saved/Automation/FrontendMenu/Backups` 按 SHA256 保存原包。普通业务子页仍由原作者器保留人工布局；直接调用 C++ 作者器只保证基础装配，重建 Root 后须执行完整脚本入口恢复表现。
+
+背景原稿与完整 imagegen 提示词见 `ArtSource/UI/Frontend/README.md`。正式包 `/Game/UI/Texture/Frontend/T_UI_Frontend_LakeNight` 由 Root 的 `StaticBackgroundImage` 硬引用，位于独立的 `FrontendBackgroundScale`（ScaleToFill，靠右裁剪保留猫和篝火）；页面仍通过 `FrontendPageScale`（ScaleToFit，1280×720 最小设计画布）保持文字与控件比例。风景覆盖整个窗口，不在 4:3 上下补灰边或黑边。
+
+`FrontendVisualShade` 是全屏常驻的轻度压暗层；新增 `FrontendExitScrim` 是全屏退出遮罩，由 `UCatFrontendRootWidget::ShowMenu` 读取 Controller 已有退出确认事实控制，切页时撤下。首页里的原 `ExitConfirmationOverlay`、`ExitConfirmationPanel`、确认/取消按钮及焦点路径保留；旧 `ExitConfirmationScrim` 控件保留以维持原层级，但笔刷透明，不再重复局部压暗。本轮曾创建的首页内背景图及 ScaleBox 已移除，Root 是唯一背景引用入口。
+
+`NorthStarTitleText` 沿用原 Designer 名称，显示“秘境同行”；`MenuSubtitleText` 继续接收 `RefreshFlowFeedback` 的真实错误和默认提示，不是可删的装饰文本。首页短按钮文案禁用自动换行，四态样式序列化在原按钮上。新日志 `LogCatUI / Event=frontend_page_shown` 只在切到不同页面时记录 World、NetMode、View、Page、Asset，供 Development 落盘追踪，重复刷新不刷屏。
+
+首页接入交付首页视觉、退出确认表现及必要 Root 适配。随后存档、加入、房间和设置页统一沿用同一背景与配色；这些局部交付不关闭 Frontend / Online 模块。设置页通过调整行高和下拉框内部留白修正闭合控件的文字裁切，展开选项列表尚未完成本轮人工交互验证。
+
+`Scripts/style_frontend_pages.py` 负责加入、设置和好友行的通用样式；房间页面与成员席位已由 `Scripts/style_frontend_room.py` 接管，完整生成入口随后调用该脚本。保留原控件名、类型和请求绑定，统一文字、按钮、输入框、滑条和滚动条。设置行至少 64 设计像素，下拉框采用 17 号原中文字体与紧凑内边距；字段含义、数值单位、选项、busy、草稿/应用/取消、权限和不支持说明均保持原规则。通用样式备份位于 `Saved/Automation/FrontendPagesStyle/Backups`，房间样式备份位于 `Saved/Automation/RoomStage/Backups`。
+
+房间 `CharacterPreviewImage` 的 `/Game/UI/Frontend/M_UI_RoomCharacterPreview` 使用 UI 域 AlphaComposite 材质：`CharacterTexture.RGB` 为最终颜色，`1-CharacterMaskTexture.A` 为透明度。两个参数均由席位的本地 `ACatFrontendCharacterPreview` 提供 640×768 实时纹理，不可把单张 SceneColorHDR 的旧接法接回颜色输入。原生捕获使用局部灰色环境补光及持久化抗锯齿配置，CuteCat 原材质和 idle 不变。准备刷新复用 Actor，空位、离房和页面退出释放捕获。清晰度修复及分层证据见《主界面重构设计笔记》2026-09-14 对应节。
+
+2026-09-14 房间弹窗：`style_frontend_room.py` 调用 `style_frontend_room_dialogs.py::style`，在原 Room WBP 中生成左侧房间摘要、居中邀请弹窗和右侧设置弹窗。`OpenRoomInviteButton` / `OpenRoomSettingsButton` 绑定 Root 同名请求；`RoomDialogLayer` 控制模态遮罩，关闭按钮、背景点击和 Escape 优先关闭弹窗，切页清空密码草稿。好友搜索、滚动列表、刷新和行邀请仍消费原 RoomModel/好友句柄，未增加平台请求入口。
+
+2026-09-15 营地流程呈现：同一房间生成入口调用 `style_frontend_room_scene.py` 排列左侧存档卡、成员席位、底部操作和加入提示，不再生成旧“围炉等你”说明面板。`RoomBackgroundSource` 硬引用 CampNight，Root 的 `RefreshRoomScene/ResetRoomScene` 切换全屏背景；房主存档摘要来自 SaveModel 当前槽，客户端未同步摘要时明确显示“房主的存档”。`RoomJoinedToast` 仅对同一 Lobby 中新出现的非本地成员显示 3.5 秒，最后 0.5 秒淡出；成员行仅在 GUID 变化时执行 0.45 秒淡入，准备刷新复用捕获。展示缓存不承担 Online 状态。
+
+邀请弹窗设计尺寸为 500×640，名称和状态占据可伸缩区域；头像为通用图形，不是 Steam 头像。`RoomInviteRecentTabButton` 禁用，最近玩家未接入。`CopyRoomLinkButton` 复制真实 `Snapshot.JoinLobbyUri`；`RoomNoticeDialog` 由 `ShowRoomNotice` 统一呈现邀请已发送、ID/链接复制及解散确认。邀请成功提示只在原请求后观察到同一好友 `bHasInvited` 从 false 变 true 且无错误时出现，不表示对方已经加入。`ConfirmRoomNoticeButton` 通常关闭提示；只有房主发起解散确认时才继续原 `RequestLeaveRoom`。`DismissRoomButton` 非房主隐藏，未添加第二套退出入口。
+
+所有房间按钮使用四字段对称 `unreal.Margin(left,top,right,bottom)`、内容槽水平/垂直居中；Python 的 `Margin(14,8)` 不具有 C++ 的水平/垂直简写含义。复制和设置图标使用 UMG 图形，避免字体缺字。好友行“已发送”与离线状态不可再次点击。房间聊天、大厅图鉴、最近玩家和房间语音仍为明确未开放的表现；不生成模拟玩家或聊天内容。Root 的 `RenderRoomSnapshot` 是只读表现入口，生产调用仍来自 RoomModel；`CanStartSnapshot` 与 `CanStartGame` 共用原准备规则，服务端裁决未变。
+
+`RoomInviteCodeText` / `CopyInviteCodeButton` / `RequestCopyRoomInviteCode` 保留现有绑定名，但本轮显示和复制的值明确改为 **Snapshot.LobbyId（完整平台房间 ID 字符串）**，不再是 JoinLobbyUri，也不是免密邀请码。加入页原解析器继续接受完整 ID 和 URI，局内邀请链接入口不变。六位邀请码和准入由 Online 后续实现，不得截断 Lobby ID 伪装短码。
+
+设置控件为 `RoomNameInput`、`RoomCapacityInput`（人数整数 1–4）、`RoomAccessInput`（Public/FriendsOnly/InviteOnly 的三个显示选项）、`RoomPasswordInput`（遮罩、关闭即清空）及 `RoomClearPasswordCheckBox`。打开时读取快照现值，非房主只读。**SaveRoomSettingsButton 当前禁用，保存、密码校验和邀请免密尚未接通**；输入不写 Online、Session 元数据或存档。后续必须接权威保存请求与成功/拒绝回执，并按 Online 的容量范围及准入策略替换选项和提示；不能仅启用按钮便宣称完成。设置草稿目前不跨关闭保存，也不能回读原密码。正式设置仍待接口与双端验收。
+
+存档样式入口 `Scripts/style_frontend_save.py` 修改原 `WBP_CatFrontendSaveList`、`WBP_CatSaveSlotRow` 和 Root，执行前拒绝目标包的未保存修改，并按 SHA256 备份到 `Saved/Automation/FrontendSaveStyle/Backups`。完整生成脚本在首页样式后执行它。两个样式脚本通过 `CompileStyledFrontendWidget` 补齐新增控件 GUID 后编译，保留已有 GUID 和绑定。
+
+存档卡片继续由 `RebuildSaveRows` 使用真实 SaveModel 摘要创建；`ConfigureRow` 读取 Controller 的稳定 SlotId 选择事实，设置原 `SaveSlotRowRootBackground` 高亮和“已选择”标签，不复制选择状态。`SaveEmptyText` 根据真实摘要数量和 busy 显示。新建名称、时间、保存格式及异步请求路径保持原义。
+
+原 `DeleteConfirmationText` 和 `ConfirmDeleteSaveButton` 移到 `SaveDeleteOverlay` 内的居中面板，新增 `CancelDeleteSaveButton` 绑定同一 `RequestCancel` 并成对解绑。`ShowSaveList` 根据已有 `PendingDeleteSlotId` 控制确认层、背景禁用和取消按钮焦点；取消后回到返回按钮。Root 的 `FrontendSaveDeleteScrim` 单独覆盖整个视口，切页时撤下；原行内确认摆法已经替换。选择、显示删除确认和取消分别记录 `frontend_save_selected`、`frontend_save_delete_prompt`、`frontend_save_delete_cancelled`，仍由正式 Save 子系统记录磁盘请求和结果。
+
+正式 Frontend Root 目标路径是 `/Game/UI/Frontend/WBP_CatFrontendRoot`，父类是 `UCatFrontendRootWidget`。当前前端包含 Root、五个业务子 WBP、全局 Loading 和动态列表行资产。Root 是 `UCatLocalPlayerUISubsystem` 的主界面创建目标；Loading WBP 由同一个 LocalPlayer UI 作为最高层遮罩创建，不嵌入 Root。
 
 | 资产 | 父类 / 装配位置 | 用途 |
 | --- | --- | --- |
-| `/Game/UI/Frontend/WBP_CatFrontendRoot` | `UCatFrontendRootWidget` | 唯一 Frontend 根视图，持有背景层、页面切换器和四个业务子 WBP |
-| `/Game/UI/Frontend/WBP_CatFrontendMenu` | `UUserWidget`，装到 `MenuPage` | 首页、退出确认，以及当前只保留按钮的“加入队伍” |
-| `/Game/UI/Frontend/WBP_CatFrontendSaveList` | `UUserWidget`，装到 `SaveListPage` | Minecraft 风格单页存档列表 |
+| `/Game/UI/Frontend/WBP_CatFrontendRoot` | `UCatFrontendRootWidget` | 唯一 Frontend 根视图，持有背景层、页面切换器和五个业务子 WBP |
+| `/Game/UI/Frontend/WBP_CatFrontendMenu` | `UUserWidget`，装到 `MenuPage` | 首页、退出确认，以及进入加入队伍页的按钮 |
+| `/Game/UI/Frontend/WBP_CatFrontendJoin` | `UUserWidget`，装到 `JoinPage` | 好友房间及邀请链接加入入口 |
+| `/Game/UI/Frontend/WBP_CatJoinFriendRow` | `UCatFrontendJoinFriendRowWidget`，加入页动态行 | 展示真实好友房间并提交加入请求 |
+| `/Game/UI/Frontend/WBP_CatFrontendSaveList` | `UUserWidget`，装到 `SaveListPage` | 湖畔风格单页存档列表、名称输入和删除确认 |
 | `/Game/UI/Frontend/WBP_CatFrontendRoom` | `UUserWidget`，装到 `RoomPage` | Steam 好友、邀请、当前房间和房主开始游戏 |
 | `/Game/UI/Frontend/WBP_CatFrontendSettings` | `UUserWidget`，装到 `FrontendSettingsPage` | 游戏、画面、声音、控制四类设置 |
 | `/Game/UI/Frontend/WBP_CatFrontendLoading` | `UUserWidget`，全局遮罩内容 | 进入游戏时用真实 gate 合成总进度；退出到主菜单时只显示真实等待状态，不要求条形进度 |
@@ -75,11 +111,11 @@ HUD、背包、背包格子、交互提示和局内 ESC 菜单的默认路径来
 
 ### Root 必需装配
 
-`FrontendPageSwitcher`、`MenuPage`、`SaveListPage`、`RoomPage` 和 `FrontendSettingsPage` 是 Root 的必需控件。`StaticBackgroundImage` 和 `DynamicBackgroundContainer` 是两个可选背景资产位；静态图和动态材质、媒体或场景子 WBP 都由资产侧承载，Controller 和 Model 不感知背景形态。
+`FrontendPageSwitcher`、`MenuPage`、`SaveListPage`、`RoomPage`、`JoinPage` 和 `FrontendSettingsPage` 是 Root 的必需控件。`StaticBackgroundImage` 和 `DynamicBackgroundContainer` 是两个可选背景资产位；静态图和动态材质、媒体或场景子 WBP 都由资产侧承载，Controller 和 Model 不感知背景形态。
 
-四个页面按业务通信边界拆分，业务状态集中在 Root、Model 和 PageController。Root 通过 `BP_RenderMenu()`、`BP_RenderSaveList()`、`BP_RenderRoom()` 和 `BP_RenderFrontendSettings()` 通知蓝图重绘；子 WBP 分别通过 Root 的 `GetSaveModel()`、`GetRoomModel()`、`GetSettingsModel()` 读取数据，并通过 `GetPageController()` 或 Root 的 `Request...` 函数提交玩家意图。全局 Loading WBP 不读取这些 Model，也不向 Root 提交意图。
+五个页面按业务通信边界拆分，业务状态集中在 Root、Model 和 PageController。Root 通过 `BP_RenderMenu()`、`BP_RenderSaveList()`、`BP_RenderRoom()` 和 `BP_RenderFrontendSettings()` 通知蓝图重绘；子 WBP 分别通过 Root 的 `GetSaveModel()`、`GetRoomModel()`、`GetSettingsModel()` 读取数据，并通过 `GetPageController()` 或 Root 的 `Request...` 函数提交玩家意图。全局 Loading WBP 不读取这些 Model，也不向 Root 提交意图。
 
-Root 会在四个子 WBP 的 WidgetTree 内按名称解析以下关键控件：菜单页的 `StartGameButton`、`JoinPartyButton`、`FrontendSettingsButton`、`ExitGameButton`、`ConfirmExitButton`、`CancelExitButton`；设置页的 `GameSettingsCategoryButton`、`GraphicsSettingsCategoryButton`、`AudioSettingsCategoryButton`、`ControlsSettingsCategoryButton`；以及各业务页的 `SaveResultTextBlock`、`RoomResultTextBlock`、`FrontendSettingsResultTextBlock`。全局 Loading WBP 由 `UCatLocalPlayerUISubsystem` 写入 `LoadingProgressTextBlock`、`LoadingProgressBar` 和等待原因文本；进入游戏用 Start、地图包、旅行、World、BeginPlay 和本地 UI 的真实 gate 合成总进度，退出到主菜单会折叠进度条。
+Root 会在五个子 WBP 的 WidgetTree 内按名称解析以下关键控件：菜单页的 `StartGameButton`、`JoinPartyButton`、`FrontendSettingsButton`、`ExitGameButton`、`ConfirmExitButton`、`CancelExitButton`；设置页的 `GameSettingsCategoryButton`、`GraphicsSettingsCategoryButton`、`AudioSettingsCategoryButton`、`ControlsSettingsCategoryButton`；以及各业务页的 `SaveResultTextBlock`、`RoomResultTextBlock`、`FrontendSettingsResultTextBlock`。全局 Loading WBP 由 `UCatLocalPlayerUISubsystem` 写入 `LoadingProgressTextBlock`、`LoadingProgressBar` 和等待原因文本；进入游戏用 Start、地图包、旅行、World、BeginPlay 和本地 UI 的真实 gate 合成总进度，退出到主菜单会折叠进度条。
 
 ### 数据与流程边界
 
@@ -87,15 +123,15 @@ Root 会在四个子 WBP 的 WidgetTree 内按名称解析以下关键控件：�
 
 世界 Save 独立于 Profile：`UCatSaveSubsystem` 和 `UCatRunSaveGame` 负责世界槽、库存内容和角色位置；`UCatProfileSubsystem` 继续负责 Grant Journal、图鉴、解锁与装备选择，不能拿 Profile 拼主界面存档行。
 
-创建房间与开始游戏是两个阶段：Online 创建成功后应停留在 Frontend 房间页，只有房主显式点击“开始游戏”才提交异步预载和旅行。设置页固定为游戏、画面、声音、控制四类；控制分类当前只保留正式入口，不虚构控制字段。“加入队伍”同样只保留首页按钮，不接搜索、加入或本地替身房间。
+创建房间与开始游戏是两个阶段：Online 创建成功后应停留在 Frontend 房间页，只有房主显式点击“开始游戏”才提交异步预载和旅行。设置页固定为游戏、画面、声音、控制四类；控制分类当前只保留正式入口，不虚构控制字段。“加入队伍”通过 `RequestJoinParty` 打开正式 `JoinPage`，展示好友房间并提交邀请链接；不生成虚假的房间或成员。
 
 人工已允许麦克风选择和语音输入模式本轮暂不可用。设置页保留 `MicrophoneComboBox`、`VoiceInputModeComboBox` 两行并禁用，用 `MicrophoneUnavailableText`、`VoiceInputModeUnavailableText` 分别说明现有 Steam 语音未接通设备选择、输入模式切换；麦克风可提示在系统声音设置中调整默认输入设备。占位文本只供展示，不保存为偏好；其他设置范围不变。控件与禁用逻辑已在 Root 和资产生成器源码中落地，尚无正式 WBP 的运行证据。
 
 ### 当前实施边界
 
-当前源码事实：Root、PageController、三个 Model、LocalPlayer 全局 Loading 遮罩接线已落 `.h/.cpp`；`UCatSaveSubsystem` 已实现槽目录、异步创建/读写及删除入口，库存与角色位置恢复已接领域接口。Frontend Root 承载加载遮罩，局内菜单只提交退出主菜单请求。`CatUISettings` 软类指向 `/Game/UI/Frontend/WBP_CatFrontendRoot.WBP_CatFrontendRoot_C`，`Config/DefaultGame.ini` 已精确 Cook `/Game/UI/Frontend` 和 `/Game/Audio/Settings`。
+当前源码事实：Root、PageController、三个 Model、LocalPlayer 全局 Loading 遮罩接线已落 `.h/.cpp`；`UCatSaveSubsystem` 已实现槽目录、异步创建/读写及删除入口，库存与角色位置恢复已接领域接口。LocalPlayer UI 独立创建加载遮罩，旅行时可释放 Frontend Root；局内菜单只提交退出主菜单请求。`CatUISettings` 软类指向 `/Game/UI/Frontend/WBP_CatFrontendRoot.WBP_CatFrontendRoot_C`，`Config/DefaultGame.ini` 已精确 Cook `/Game/UI/Frontend` 和 `/Game/Audio/Settings`。
 
-`Source/CatfishingEditor/UI/CatFrontendWidgetAuthoringLibrary.h/.cpp` 与 `Scripts/create_frontend_assets.py` 已提供资产生成入口，目标为上述 9 个 WBP，以及 `/Game/Audio/Settings` 下的 1 个 SoundMix（`SMX_CatFrontendSettings`）和 5 个 SoundClass（`SC_CatMaster`、`SC_CatMusic`、`SC_CatSFX`、`SC_CatAmbience`、`SC_CatVoice`），共 6 个音频资产。2026-09-08 已通过现有资产脚本重建 `WBP_CatFrontendLoading`、`WBP_CatFrontendRoot` 和 `WBP_CatLakeMainMenu`，局部 LoadingPage 与局内等待面板已从资产树移出。
+`Source/CatfishingEditor/UI/CatFrontendWidgetAuthoringLibrary.h/.cpp` 与 `Scripts/generate_frontend_widgets.py` 提供当前前端 WBP 生成及样式入口。作者库另提供 `/Game/Audio/Settings` 下 1 个 SoundMix（`SMX_CatFrontendSettings`）和 5 个 SoundClass（`SC_CatMaster`、`SC_CatMusic`、`SC_CatSFX`、`SC_CatAmbience`、`SC_CatVoice`）的创建方法。2026-09-08 已重建 `WBP_CatFrontendLoading`、`WBP_CatFrontendRoot` 和 `WBP_CatLakeMainMenu`，局部 LoadingPage 与局内等待面板已从资产树移出。
 
 当前源码与资产合同已有 Editor Development 构建和资产脚本成功证据；完整 Steam 双端、打包 Development 日志、真实存档创建到房主开始游戏再到地图加载百分比推进的端到端表现仍未完成，不能声明正式主界面模块关闭。
 
@@ -229,6 +265,10 @@ Root 会在四个子 WBP 的 WidgetTree 内按名称解析以下关键控件：�
 重新拼 `WBP_CatLakeMainMenu` 时，先保证父类正确，再保证上面这些控件名和类型能被合同校验找到。控件可以换位置、换样式、换容器层级；不要改名后只在蓝图事件图里自己接逻辑，因为那会绕开 Controller、Save 子系统和 SettingsModel。
 
 当前代码已经有编辑器生成和校验入口：`UCatFrontendWidgetAuthoringLibrary::CreateMissingLakeMainMenuWidgetBlueprint()` 会在 `/Game/UI/Save` 下重建 `WBP_CatLakeMainMenu` 并核验父类与控件名。手工重拼后可以参考 `ValidateLakeMainMenuWidgetContract()` 的控件清单做复查。
+
+2026-09-14 组队页补充：原生作者器提供基础菜单骨架，重建后须运行 `Scripts/style_lake_party.py` 补回组队页、派对样式及行类引用；完整 `Scripts/generate_frontend_widgets.py` 已串联该脚本。`LakePartyPanel` 属于原有 `LakeMainMenuPageSwitcher`，按钮为 `PartyButton`、`PartyBackButton`、`PartyRefreshButton`、`PartyCopyLinkButton`；好友与成员列表分别使用 `PartyFriendsScrollBox`、`PartyMembersScrollBox`。`PartySearchTextBox` 仅过滤展示。Controller 创建同类 `CatFrontendRoomModel`，订阅同一个 GameInstance Online 来源，不复制 Session 状态。`PauseRequestButton` 按用户要求只提示暂未开放，不调用暂停。
+
+房间席位由 `Scripts/style_frontend_room.py` 维护，旧通用页面样式脚本不再改写 Room/PlayerSlot。`WBP_CatRoomPlayerSlot` 的 `PlayerNameText`、`PlayerRoleText`、`PlayerSlotStateText` 保留；新增 `CharacterPreviewImage`、`ReadyMark`、`EmptySeatMark`。预览类、idle 动画和 UI 材质由 WBP 默认值硬引用；按用户最终要求复制 `BP_CuteCatCharacter` 的模型材质到本地展示 Actor，正面循环播放 `SK_CuteCat_Anim_Armature_idle_A_0`，不生成游戏 Character。`ReadyRoomButton` 经 Root→Controller→RoomModel→Online 发布当前成员的准备状态，未准备时隐藏勾选。Steam `CAT_PLAYER_READY` 表示个人准备，`CAT_GAME_READY` 仍只表示玩法地图可以连接；禁止混用。
 
 ## HUD：`WBP_CatHUD`
 
@@ -425,7 +465,7 @@ Root 会在四个子 WBP 的 WidgetTree 内按名称解析以下关键控件：�
 
 默认淡入和淡出时间都是 `0.2` 秒。`ShowAt()` 用进入事件的鼠标屏幕绝对坐标完成首次定位，`NativeTick()` 在可见期间持续读取鼠标位置，转换到玩家屏幕几何后写入 `RootBorder` 的 RenderTranslation；淡出期间也继续跟随，收起后停止。位置更新不会重复发起显示，换格时透明度仍从当前值接续。
 
-迁移入口是 `Scripts/migrate_item_tooltip.py`。脚本从 `D:\UnreaProjects\AegisOdyssey\Content` 复制旧 WBP 和最小依赖闭包，目标资产是 `/Game/UI/Inventory/WBP_CatItemTooltip`；它会调用 `UCatItemTooltipAuthoringLibrary::InstallLegacyParentRedirect()` 临时解析 Aegis 旧父类，再调用 `FinalizeMigratedTooltipWidget()` 固定父类、清理旧 MVVM 绑定并补齐 `InstanceDetailsText`。脚本拒绝覆盖已有目标资产或不同内容的同路径依赖。
+迁移入口是 `Scripts/migrate_item_tooltip.py`。脚本从 `<参考工程 AegisOdyssey 根>/Content` 复制旧 WBP 和最小依赖闭包，目标资产是 `/Game/UI/Inventory/WBP_CatItemTooltip`；它会调用 `UCatItemTooltipAuthoringLibrary::InstallLegacyParentRedirect()` 临时解析 Aegis 旧父类，再调用 `FinalizeMigratedTooltipWidget()` 固定父类、清理旧 MVVM 绑定并补齐 `InstanceDetailsText`。脚本拒绝覆盖已有目标资产或不同内容的同路径依赖。
 
 ### 接手核对
 

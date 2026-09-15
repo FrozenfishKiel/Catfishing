@@ -1,7 +1,13 @@
 #include "UI/Save/CatLakeMainMenuWidget.h"
 
 #include "Blueprint/WidgetTree.h"
+#include "GameFramework/PlayerState.h"
 #include "Components/Button.h"
+#include "Components/EditableTextBox.h"
+#include "Components/ScrollBox.h"
+#include "HAL/PlatformApplicationMisc.h"
+#include "UI/Frontend/CatFrontendRoomModel.h"
+#include "UI/Frontend/CatFrontendRootWidget.h"
 #include "Components/CheckBox.h"
 #include "Components/ComboBoxString.h"
 #include "Components/PanelWidget.h"
@@ -68,12 +74,17 @@ void UCatLakeMainMenuWidget::RenderMenu(const FCatLakeMainMenuViewState& ViewSta
 	{
 		ExitGameButton->SetIsEnabled(LastMenuViewState.bExitEnabled);
 	}
+	if (CollectionButton)
+	{
+		CollectionButton->SetIsEnabled(LastMenuViewState.bCollectionEnabled);
+	}
 	BP_RenderMenu(LastMenuViewState);
 }
 
 // 命令页显示流程：显式切回暂停菜单的纵向按钮列表并隐藏设置页；没有 Switcher 的资产改用根容器显隐，但不创建新控件。
 void UCatLakeMainMenuWidget::ShowCommandMenu()
 {
+	if (LakePartyPanel) { LakePartyPanel->SetVisibility(ESlateVisibility::Collapsed); }
 	if (LakeMainMenuPageSwitcher && LakeCommandPanel)
 	{
 		LakeMainMenuPageSwitcher->SetActiveWidget(LakeCommandPanel);
@@ -95,6 +106,7 @@ void UCatLakeMainMenuWidget::ShowCommandMenu()
 // 设置页显示流程：切到局内设置面板并刷新全部同名设置控件；焦点给分类按钮，保证键盘手柄导航有稳定起点。
 void UCatLakeMainMenuWidget::ShowSettingsPanel()
 {
+	if (LakePartyPanel) { LakePartyPanel->SetVisibility(ESlateVisibility::Collapsed); }
 	if (LakeMainMenuPageSwitcher && LakeSettingsPanel)
 	{
 		LakeMainMenuPageSwitcher->SetActiveWidget(LakeSettingsPanel);
@@ -141,6 +153,22 @@ void UCatLakeMainMenuWidget::RequestCloseMenu()
 void UCatLakeMainMenuWidget::RequestOpenSettings()
 {
 	SubmitMenuAction(ECatLakeMainMenuAction::OpenSettings);
+}
+
+// 图鉴请求流程：只广播图鉴意图；Controller 负责先关闭本菜单，再把意图交给 LocalPlayer UI 的图鉴页面控制器。
+void UCatLakeMainMenuWidget::RequestOpenCollection()
+{
+	SubmitMenuAction(ECatLakeMainMenuAction::OpenCollection);
+}
+
+// 踢人意图流程：只广播目标，不判断资格、不显示结果。
+// 资格在服务器（房主服务），结果沿公共领域回执回来；Widget 这一侧多做一层判断只会和服务器打架。
+void UCatLakeMainMenuWidget::RequestKickPlayer(APlayerState* TargetPlayerState)
+{
+	if (TargetPlayerState)
+	{
+		OnKickRequested.Broadcast(TargetPlayerState);
+	}
 }
 
 // 保存请求流程：只广播保存意图；Save 子系统负责判断 Host、活动槽、busy 和磁盘结果。
@@ -241,7 +269,8 @@ FReply UCatLakeMainMenuWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometr
 		{
 			return FReply::Handled();
 		}
-		IsShowingSettingsPanel() ? RequestCancelSettings() : RequestCloseMenu();
+		if (IsShowingPartyPanel()) { RequestCloseParty(); }
+		else { IsShowingSettingsPanel() ? RequestCancelSettings() : RequestCloseMenu(); }
 		return FReply::Handled();
 	}
 	return Super::NativeOnPreviewKeyDown(InGeometry, InKeyEvent);
@@ -261,7 +290,8 @@ FReply UCatLakeMainMenuWidget::NativeOnKeyDown(const FGeometry& InGeometry, cons
 		{
 			return FReply::Handled();
 		}
-		IsShowingSettingsPanel() ? RequestCancelSettings() : RequestCloseMenu();
+		if (IsShowingPartyPanel()) { RequestCloseParty(); }
+		else { IsShowingSettingsPanel() ? RequestCancelSettings() : RequestCloseMenu(); }
 		return FReply::Handled();
 	}
 	return Super::NativeOnKeyDown(InGeometry, InKeyEvent);
@@ -270,6 +300,12 @@ FReply UCatLakeMainMenuWidget::NativeOnKeyDown(const FGeometry& InGeometry, cons
 // Designer 按钮绑定流程：每个按钮先移除本对象失效绑定再新增，覆盖 Construct 重入和 WBP 热重建。
 void UCatLakeMainMenuWidget::BindDesignerButtons()
 {
+	if (PartyButton) { PartyButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestOpenParty); }
+	if (PartyBackButton) { PartyBackButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestCloseParty); }
+	if (PartyRefreshButton) { PartyRefreshButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestRefreshParty); }
+	if (PartyCopyLinkButton) { PartyCopyLinkButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestCopyPartyLink); }
+	if (PauseRequestButton) { PauseRequestButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestPausePlaceholder); }
+	if (PartySearchTextBox) { PartySearchTextBox->OnTextChanged.AddUniqueDynamic(this, &ThisClass::HandlePartySearchChanged); }
 	if (SettingsButton)
 	{
 		SettingsButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestOpenSettings);
@@ -295,11 +331,22 @@ void UCatLakeMainMenuWidget::BindDesignerButtons()
 		CloseButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestCloseMenu);
 		CloseButton->OnClicked.AddDynamic(this, &ThisClass::RequestCloseMenu);
 	}
+	if (CollectionButton)
+	{
+		CollectionButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestOpenCollection);
+		CollectionButton->OnClicked.AddDynamic(this, &ThisClass::RequestOpenCollection);
+	}
 }
 
 // Designer 按钮解绑流程：只解除本类添加的动态委托，蓝图自己绑定的动画或声音反馈不被清掉。
 void UCatLakeMainMenuWidget::UnbindDesignerButtons()
 {
+	if (PartyButton) { PartyButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestOpenParty); }
+	if (PartyBackButton) { PartyBackButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestCloseParty); }
+	if (PartyRefreshButton) { PartyRefreshButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestRefreshParty); }
+	if (PartyCopyLinkButton) { PartyCopyLinkButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestCopyPartyLink); }
+	if (PauseRequestButton) { PauseRequestButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestPausePlaceholder); }
+	if (PartySearchTextBox) { PartySearchTextBox->OnTextChanged.RemoveDynamic(this, &ThisClass::HandlePartySearchChanged); }
 	if (SettingsButton)
 	{
 		SettingsButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestOpenSettings);
@@ -319,6 +366,10 @@ void UCatLakeMainMenuWidget::UnbindDesignerButtons()
 	if (CloseButton)
 	{
 		CloseButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestCloseMenu);
+	}
+	if (CollectionButton)
+	{
+		CollectionButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestOpenCollection);
 	}
 }
 
@@ -772,6 +823,94 @@ void UCatLakeMainMenuWidget::HandleVoiceVolumeChanged(float Value)
 	if (!bRefreshingSettingsControls)
 	{
 		if (UCatFrontendSettingsModel* Model = SettingsModel.Get()) { Model->SetDraftVoiceVolume(Value); }
+	}
+}
+
+void UCatLakeMainMenuWidget::InitializePartyModel(UCatFrontendRoomModel* Model)
+{
+	ResetPartyModel();
+	PartyModel = Model;
+	if (Model) { PartyModelChangedHandle = Model->OnChanged.AddUObject(this, &ThisClass::RefreshPartyPanel); }
+}
+
+void UCatLakeMainMenuWidget::ResetPartyModel()
+{
+	if (auto* Model = PartyModel.Get(); Model && PartyModelChangedHandle.IsValid()) { Model->OnChanged.Remove(PartyModelChangedHandle); }
+	PartyModelChangedHandle.Reset();
+	PartyModel.Reset();
+	if (PartyFriendsScrollBox) { PartyFriendsScrollBox->ClearChildren(); }
+	if (PartyMembersScrollBox) { PartyMembersScrollBox->ClearChildren(); }
+}
+
+bool UCatLakeMainMenuWidget::IsShowingPartyPanel() const
+{
+	return LakeMainMenuPageSwitcher && LakePartyPanel && LakeMainMenuPageSwitcher->GetActiveWidget() == LakePartyPanel;
+}
+
+void UCatLakeMainMenuWidget::ShowPartyPanel()
+{
+	if (!LakeMainMenuPageSwitcher || !LakePartyPanel) { return; }
+	LakePartyPanel->SetVisibility(ESlateVisibility::Visible);
+	LakeMainMenuPageSwitcher->SetActiveWidget(LakePartyPanel);
+	RefreshPartyPanel();
+	if (PartyBackButton && GetOwningPlayer()) { PartyBackButton->SetUserFocus(GetOwningPlayer()); }
+}
+
+void UCatLakeMainMenuWidget::RequestOpenParty() { SubmitMenuAction(ECatLakeMainMenuAction::OpenParty); }
+void UCatLakeMainMenuWidget::RequestCloseParty() { SubmitMenuAction(ECatLakeMainMenuAction::CloseParty); }
+void UCatLakeMainMenuWidget::RequestRefreshParty() { SubmitMenuAction(ECatLakeMainMenuAction::RefreshParty); }
+void UCatLakeMainMenuWidget::RequestPausePlaceholder() { SubmitMenuAction(ECatLakeMainMenuAction::PausePlaceholder); }
+void UCatLakeMainMenuWidget::HandlePartySearchChanged(const FText& Text) { RefreshPartyPanel(); }
+void UCatLakeMainMenuWidget::ForwardPartyInvite(FCatOnlineFriendHandle Handle) { OnPartyInviteRequested.Broadcast(Handle); }
+
+void UCatLakeMainMenuWidget::RequestCopyPartyLink()
+{
+	const FString Link = PartyModel.IsValid() ? PartyModel->GetSnapshot().JoinLobbyUri : FString();
+	if (Link.IsEmpty()) { return; }
+	FPlatformApplicationMisc::ClipboardCopy(*Link);
+	if (PartyStatusText) { PartyStatusText->SetText(FText::FromString(TEXT("邀请链接已复制"))); }
+}
+
+void UCatLakeMainMenuWidget::RefreshPartyPanel()
+{
+	if (!IsInViewport() || !IsShowingPartyPanel()) { return; }
+	const auto* Model = PartyModel.Get();
+	const FCatOnlineSnapshot Snapshot = Model ? Model->GetSnapshot() : FCatOnlineSnapshot();
+	const bool bCanInvite = Snapshot.bIsHost && Snapshot.ActiveOperation == ECatOnlineOperation::None;
+	if (PartyCountText) { PartyCountText->SetText(FText::FromString(Snapshot.MaxPlayers > 0
+		? FString::Printf(TEXT("当前队伍 %d / %d"), Snapshot.CurrentPlayers, Snapshot.MaxPlayers) : TEXT("正在确认队伍信息"))); }
+	if (PartyAccessText) { PartyAccessText->SetText(FText::FromString(Snapshot.SessionAccess == ECatSessionAccessPolicy::FriendsOnly ? TEXT("加入权限：仅好友")
+		: Snapshot.SessionAccess == ECatSessionAccessPolicy::InviteOnly ? TEXT("加入权限：仅邀请") : Snapshot.SessionAccess == ECatSessionAccessPolicy::Public ? TEXT("加入权限：公开") : TEXT("加入权限：待确认"))); }
+	if (PartyCopyLinkButton) { PartyCopyLinkButton->SetIsEnabled(!Snapshot.JoinLobbyUri.IsEmpty()); }
+	if (PartyStatusText) { PartyStatusText->SetText(Model ? Model->GetLastResultText() : FText::FromString(TEXT("组队服务暂不可用"))); }
+	if (PartyFriendsScrollBox)
+	{
+		PartyFriendsScrollBox->ClearChildren();
+		const FString Filter = PartySearchTextBox ? PartySearchTextBox->GetText().ToString().TrimStartAndEnd() : FString();
+		if (PartyFriendRowClass) for (const auto& Friend : Snapshot.Friends)
+		{
+			if (!Filter.IsEmpty() && !Friend.DisplayName.Contains(Filter)) { continue; }
+			if (auto* Row = CreateWidget<UCatFrontendRoomFriendRowWidget>(this, PartyFriendRowClass))
+			{
+				Row->ConfigureRow(nullptr, Friend);
+				Row->SetIsEnabled(bCanInvite);
+				Row->OnInviteRequested.AddUObject(this, &ThisClass::ForwardPartyInvite);
+				PartyFriendsScrollBox->AddChild(Row);
+			}
+		}
+	}
+	if (PartyMembersScrollBox)
+	{
+		PartyMembersScrollBox->ClearChildren();
+		if (PartyMemberRowClass) for (int32 Index = 0; Index < FMath::Max(Snapshot.MaxPlayers, Snapshot.RoomMembers.Num()); ++Index)
+		{
+			if (auto* Row = CreateWidget<UCatFrontendRoomPlayerSlotWidget>(this, PartyMemberRowClass))
+			{
+				if (Snapshot.RoomMembers.IsValidIndex(Index)) { Row->ConfigureRow(Snapshot.RoomMembers[Index]); }
+				else { Row->ConfigureEmptySlot(); }
+				PartyMembersScrollBox->AddChild(Row);
+			}
+		}
 	}
 }
 

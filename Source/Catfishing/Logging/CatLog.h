@@ -17,7 +17,7 @@ DECLARE_LOG_CATEGORY_EXTERN(LogCatEnvironment, Log, All);
 // Fishing 会话、StateTree 阶段、搏斗协作与首个合法抄网交接共享的日志分类，用于核对抄网交接只走当前规则。
 DECLARE_LOG_CATEGORY_EXTERN(LogCatFishing, Log, All);
 
-// 鱼容器、捕获、转移、供品结算与消费共享的日志分类，用于追踪每条实物鱼的唯一事务边界。
+// 鱼容器、捕获、转移（含拿鱼）、供品结算与消费共享的日志分类，用于追踪每条实物鱼的唯一事务边界。
 DECLARE_LOG_CATEGORY_EXTERN(LogCatFishContainers, Log, All);
 
 // Profile Grant、Journal、图鉴与印记投递共享的日志分类，用于区分服务器投递、客户端 durable 与 ACK 三个事实。

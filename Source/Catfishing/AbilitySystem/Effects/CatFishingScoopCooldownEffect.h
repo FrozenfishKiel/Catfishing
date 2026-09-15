@@ -12,4 +12,6 @@ class CATFISHING_API UCatGE_FishingScoopCooldown : public UGameplayEffect
 
 public:
 	UCatGE_FishingScoopCooldown();
+	static bool IsOperationBlocked(const AActor* Actor);
+	static void ApplyMissFromAuthority(AController* Controller);
 };

@@ -11,7 +11,10 @@ class ULocalPlayer;
 /** Collection Model 投影变化通知；View 收到后只重绘图鉴列表。 */
 DECLARE_MULTICAST_DELEGATE(FCatCollectionModelChanged);
 
-/** 图鉴/相册 Model；它只读 LocalPlayer Profile 的 durable 图鉴快照，不访问实物鱼容器。 */
+/**
+ * 图鉴/相册 Model；它以正式鱼目录为骨架、用 LocalPlayer Profile 的 durable 快照覆盖解锁位，不访问实物鱼容器。
+ * 唯一的写口是印记隐藏（印记册「本人可一键隐藏任意一张」），图鉴记录本身只读。
+ */
 UCLASS()
 class CATFISHING_API UCatCollectionModel : public UObject
 {
@@ -29,6 +32,12 @@ public:
 
 	/** 提供最近发布的图鉴投影副本；View 用它重绘，不通过返回值拿 Profile 写权。 */
 	const FCatCollectionViewState& GetViewState() const;
+
+	/**
+	 * 本人一键隐藏／取消隐藏相册里的任意一张印记；转交 Profile 的唯一 durable 写口，成功后重发投影。
+	 * 它只改本地这份索引：不发服务器 RPC、不删图片、不影响其他参与者手里的同一张。
+	 */
+	bool SetImprintHidden(FGuid ImprintId, bool bHidden);
 
 	/** 图鉴投影变化通知。 */
 	FCatCollectionModelChanged OnViewStateChanged;

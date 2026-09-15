@@ -1,6 +1,5 @@
 #include "Social/CatSocialService.h"
 
-#include "Camp/CatCampSettings.h"
 #include "Character/CatCharacter.h"
 #include "Framework/Game/CatfishingGameState.h"
 #include "Logging/CatLog.h"
@@ -24,7 +23,6 @@ bool UCatSocialService::ShouldCreateSubsystem(UObject* Outer) const
 void UCatSocialService::Deinitialize()
 {
 	CloseCommands();
-	LastMischiefTimeByPlayer.Reset();
 	LastManualHelpTimeByPlayer.Reset();
 	CommandTerminalCache.Reset();
 	ProtectionSignByPlayer.Reset();
@@ -37,7 +35,8 @@ void UCatSocialService::CloseCommands()
 	bCommandsOpen = false;
 }
 
-// 恶作剧权限流程：先按身份/操作/RequestId 重放，再忽略客户端位置并从双方权威 Pawn 验证状态、距离、冷却与目标保护牌；通过后才写允许终态。
+// 恶作剧权限流程：先按身份/操作/RequestId 重放，再忽略客户端位置并从双方权威 Pawn 验证状态、距离与目标保护牌；通过后才写允许终态。
+// 没有冷却这一步了（09-12）：设计不设系统级频率上限与时机限制，熟人自治。
 FCatDomainCommandResult UCatSocialService::RequestMischief(AController* InstigatorController,
 	AController* TargetController, const FGuid RequestId, const FVector InteractionLocation)
 {
@@ -79,13 +78,6 @@ FCatDomainCommandResult UCatSocialService::RequestMischief(AController* Instigat
 		Result.Error = ECatDomainCommandError::PolicyUndecided;
 		return Finish(Result);
 	}
-	const double Now = GetWorld()->GetTimeSeconds();
-	if (const double* LastTime = LastMischiefTimeByPlayer.Find(InstigatorId);
-		LastTime && Now - *LastTime < Settings->MischiefCooldownSeconds)
-	{
-		Result.Error = ECatDomainCommandError::InvalidPhase;
-		return Finish(Result);
-	}
 	for (TActorIterator<ACatProtectionSignActor> It(GetWorld()); It; ++It)
 	{
 		if (It->ProtectsMischiefAgainst(TargetPlayerState, TargetCharacter->GetActorLocation()))
@@ -94,13 +86,16 @@ FCatDomainCommandResult UCatSocialService::RequestMischief(AController* Instigat
 			return Finish(Result);
 		}
 	}
-	LastMischiefTimeByPlayer.Add(InstigatorId, Now);
 	Result.bCommitted = true;
 	Result.Error = ECatDomainCommandError::None;
 	return Finish(Result);
 }
 
-// 放牌流程：先按身份/操作/RequestId 重放，再验证 Pawn、显式范围和有限位置；首次提交复用每人唯一 Actor 并配置恶作剧保护。
+// 放牌流程：先按身份/操作/RequestId 重放，再验证 Pawn、显式范围和有限位置；首次提交复用每人唯一 Actor 并配置保护。
+// gate 换成了 IsProtectionSignReady()（09-12）：立牌不再挂在恶作剧那套 gate 上——旧写法里恶作剧任何一项缺配
+// 都会把立牌一起关死，而立牌正是恶作剧唯一的护栏。
+// 牌子只裁决恶作剧，**不挡拿鱼**（2026-09-12 裁决③）：08-16 那句「立牌＝完整免打扰」随「恶作剧权限开关」
+// 一并退役——代码一直就是这么做的，此前是文档说错了。所以拿鱼路径不读牌子，这不是待补的半成品，是结论。
 FCatDomainCommandResult UCatSocialService::PlaceProtectionSign(AController* RequestingController,
 	const FGuid RequestId, const FVector SignLocation)
 {
@@ -132,11 +127,8 @@ FCatDomainCommandResult UCatSocialService::PlaceProtectionSign(AController* Requ
 		Result.Error = ECatDomainCommandError::CommandsClosed;
 		return Finish(Result);
 	}
-	if (!Settings->IsMischiefReady() || !Pawn || !PlayerState
-		|| SignLocation.ContainsNaN() || !FMath::IsFinite(Settings->ProtectionSignRadiusCentimeters)
-		|| Settings->ProtectionSignRadiusCentimeters <= 0.0
-		|| !FMath::IsFinite(Settings->ProtectionSignPlacementRangeCentimeters)
-		|| Settings->ProtectionSignPlacementRangeCentimeters <= 0.0
+	if (!Settings->IsProtectionSignReady() || !Pawn || !PlayerState
+		|| SignLocation.ContainsNaN()
 		|| FVector::DistSquared(Pawn->GetActorLocation(), SignLocation)
 			> FMath::Square(Settings->ProtectionSignPlacementRangeCentimeters))
 	{

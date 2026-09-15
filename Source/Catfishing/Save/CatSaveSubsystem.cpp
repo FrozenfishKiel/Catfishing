@@ -1,9 +1,12 @@
 #include "Save/CatSaveSubsystem.h"
+#include "Collection/CatRunFishCollectionComponent.h"
+#include "Framework/Game/CatfishingGameState.h"
 
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 
 #include "Async/Async.h"
 #include "Camp/CatCampInventoryActor.h"
+#include "Camp/CatCampHubActor.h"
 #include "Character/CatCharacter.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Engine/GameInstance.h"
@@ -23,8 +26,15 @@
 #include "Inventory/CatFishInventoryItemInstance.h"
 #include "Inventory/CatInventorySettings.h"
 #include "FishContainers/CatFishContainerService.h"
+#include "FishContainers/CatFishTankActor.h"
+#include "FishContainers/CatFishGuardActor.h"
+#include "FishContainers/CatFishContainerSettings.h"
+#include "Inventory/CatFishOnlyInventoryComponent.h"
+#include "Inventory/CatFishGuardInventoryItemInstance.h"
+#include "ShopEconomy/CatShopEconomyService.h"
 #include "Kismet/GameplayStatics.h"
 #include "Logging/CatLog.h"
+#include "Run/CatRunSettings.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 
@@ -35,7 +45,7 @@ namespace
 	/** UE SaveGame 本地文件扩展名；扫描目录时只接受这一类正式槽文件。 */
 	constexpr const TCHAR* SaveGameFileExtension = TEXT(".sav");
 
-	// Windows 本地槽预检流程：只读取 UE 文件标记；本项目 v5/v6 都是现代 GVAS 格式，不接受引擎的无标记旧格式回退。
+	// Windows 本地槽预检流程：只读取 UE 文件标记；本项目 v5/v6/v7 都是现代 GVAS 格式，不接受引擎的无标记旧格式回退。
 	// UE 会把任意无效文件头当作旧版类名解析，可能触发 FName 长度断言；这里在 UObject 加载前拒绝这类文件。
 	bool HasRunSaveFileHeader(const FString& SlotName)
 	{
@@ -90,6 +100,8 @@ namespace
 		Summary.DailyOfferingTarget = SaveGame.DailyOfferingTarget;
 		Summary.WorldProgress = SaveGame.WorldProgress;
 		Summary.LastWorldProgressDelta = SaveGame.LastWorldProgressDelta;
+		Summary.bRunCompleted = SaveGame.bRunCompleted;
+		Summary.TankOfferingPoints = SaveGame.TankOfferingPoints;
 		return Summary;
 	}
 
@@ -151,7 +163,7 @@ namespace
 			if (!bOccupied)
 			{
 				if (!Slot.DefinitionId.IsNone() || Slot.ItemInstanceId.IsValid() || Slot.Quantity != 0
-					|| Slot.RodDurability != 0.0 || Slot.bRodBroken
+					|| Slot.RodDurability != 0.0 || Slot.bRodBroken || !Slot.FishGuardHostName.IsNone()
 					|| Slot.FishSessionId.IsValid() || Slot.FishWeightKilograms != 0.0 || !Slot.FishOwnerStableNetId.IsEmpty())
 				{
 					OutFailure = FText::FromString(TEXT("存档随身库存空格包含残留数据。"));
@@ -186,6 +198,9 @@ namespace
 			}
 			const TSubclassOf<UCatInventoryItemInstance> InstanceClass =
 				UCatInventoryItemDefinition::ResolveItemInstanceClass(InventoryDefinition);
+			if (!Slot.FishGuardHostName.IsNone() && (!InstanceClass
+				|| !InstanceClass->IsChildOf(UCatFishGuardInventoryItemInstance::StaticClass())))
+			{ OutFailure = FText::FromString(TEXT("非鱼护物品含有鱼护载体关联。")); return false; }
 			if (!InstanceClass)
 			{
 				OutFailure = FText::FromString(TEXT("存档物品定义没有可恢复的实例类型。"));
@@ -232,6 +247,8 @@ namespace
 				Saved.FishOwnerStableNetId = Fish->GetFishOwnerStableNetId();
 			}
 			Saved.DefinitionId = Entry.Instance->GetItemDefinitionId();
+			if (const auto* Guard = Cast<UCatFishGuardInventoryItemInstance>(Entry.Instance))
+				if (const auto* Host = Guard->GetWorldActor()) Saved.FishGuardHostName = Host->GetFName();
 			Saved.ItemInstanceId = Entry.Instance->GetItemInstanceId();
 			Saved.Quantity = Entry.StackCount;
 			if (const UCatEquipmentInventoryItemInstance* Equipment = Cast<UCatEquipmentInventoryItemInstance>(Entry.Instance))
@@ -290,6 +307,15 @@ namespace
 					OutFailure = FText::FromString(TEXT("库存鱼的身份、重量或捕获来源无效。"));
 					return false;
 				}
+			}
+			if (!Slot.FishGuardHostName.IsNone())
+			{
+				ACatFishGuardActor* Guard = nullptr;
+				for (TActorIterator<ACatFishGuardActor> It(Owner->GetWorld()); It; ++It)
+					if (It->GetFName() == Slot.FishGuardHostName) { Guard = *It; break; }
+				if (!Guard || !Guard->InitializeFromInventoryFromAuthority(Instance, Slot.Quantity))
+				{ OutFailure = FText::FromString(TEXT("存档鱼护载体关联无效。")); return false; }
+				Instance->SetRuntimeOwnerActor(Owner);
 			}
 			Entry.Instance = Instance;
 			Entry.StackCount = Slot.Quantity;
@@ -369,11 +395,21 @@ void UCatSaveSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 	LastResultText = FText::FromString(TEXT("存档目录尚未读取。"));
+	SaveQueueTicker = FTSTicker::GetCoreTicker().AddTicker(
+		FTickerDelegate::CreateUObject(this, &ThisClass::TickSaveQueue));
 }
 
 // 反初始化流程：异步委托以 UObject 弱绑定自动失效；这里先清所有强引用和旅行许可，使失效 World 回调即使晚到也不能恢复到下一次游戏实例。
 void UCatSaveSubsystem::Deinitialize()
 {
+	FTSTicker::RemoveTicker(SaveQueueTicker);
+	SaveQueueTicker.Reset();
+	QueuedSaveRequests.Reset();
+	QueuedSaveSlots.Reset();
+	QueuedSavePayloads.Reset();
+	RetrySavePayloads.Reset();
+	CompletedRunSlots.Reset();
+	PendingCompletionSlots.Reset();
 	bBusy = false;
 	bLoadedRunForTravel = false;
 	bWorldRestoreApplied = false;
@@ -400,7 +436,7 @@ void UCatSaveSubsystem::RefreshSlotSummaries()
 		MakeResult(false, FText::FromString(TEXT("本机玩家尚未就绪，不能读取存档目录。")));
 		return;
 	}
-	if (bBusy)
+	if (IsBusy())
 	{
 		return;
 	}
@@ -463,7 +499,9 @@ void UCatSaveSubsystem::RefreshSlotSummaries()
 					continue;
 				}
 				SeenSlotIds.Add(SlotId);
-				LoadedSummaries.Add(MakeSummary(*SaveGame));
+				FCatSaveSlotSummary Summary = MakeSummary(*SaveGame);
+				Summary.bRunCompleted |= Self->CompletedRunSlots.Contains(SlotId);
+				LoadedSummaries.Add(MoveTemp(Summary));
 			}
 			LoadedSummaries.Sort([](const FCatSaveSlotSummary& Left, const FCatSaveSlotSummary& Right)
 			{
@@ -496,7 +534,7 @@ FCatSaveResult UCatSaveSubsystem::RequestCreateSlot(const FString& DisplayName)
 {
 	const ULocalPlayer* LocalPlayer = GetGameInstance()->GetFirstGamePlayer();
 	const FString TrimmedDisplayName = DisplayName.TrimStartAndEnd();
-	if (!LocalPlayer || bBusy || !bSlotDirectoryLoaded || bWorldRestoreApplied || PendingRestoreSaveGame || TrimmedDisplayName.IsEmpty()
+	if (!LocalPlayer || IsBusy() || !bSlotDirectoryLoaded || bWorldRestoreApplied || PendingRestoreSaveGame || TrimmedDisplayName.IsEmpty()
 		|| TrimmedDisplayName.Len() > 64)
 	{
 		return MakeResult(false, FText::FromString(TEXT("存档目录未就绪、操作进行中或名称无效。")));
@@ -523,14 +561,29 @@ FCatSaveResult UCatSaveSubsystem::RequestCreateSlot(const FString& DisplayName)
 }
 
 // 读取槽流程：先拒绝 busy、未扫描目录、已进入世界或不在摘要中的 SlotId；通过后异步读取同名单文件 Run。
+// 已终局的槽在这里被拒绝：毕业或团灭之后那一局打完了，不再提供「继续」，玩家要开新局就新建一个槽（2026-09-11 拍）。
+// 拒绝只挡住「继续」这一条路；文件一个不动，仍留在目录里当战绩回看，也仍然只能由玩家自己在前端删。
 // 成功只建立待恢复快照和旅行许可，不从显示名或列表下标反推载荷；失败由回调写入结果文本并清理许可。
 FCatSaveResult UCatSaveSubsystem::RequestLoadSlot(const FName SlotId)
 {
 	const ULocalPlayer* LocalPlayer = GetGameInstance()->GetFirstGamePlayer();
-	if (!LocalPlayer || bBusy || !bSlotDirectoryLoaded || bWorldRestoreApplied || PendingRestoreSaveGame || !IsValidSlotId(SlotId)
-		|| !SlotSummaries.ContainsByPredicate([SlotId](const FCatSaveSlotSummary& Summary) { return Summary.SlotId == SlotId; }))
+	const FCatSaveSlotSummary* RequestedSummary = SlotSummaries.FindByPredicate(
+		[SlotId](const FCatSaveSlotSummary& Summary) { return Summary.SlotId == SlotId; });
+	if (!LocalPlayer || IsBusy() || !bSlotDirectoryLoaded || bWorldRestoreApplied || PendingRestoreSaveGame || !IsValidSlotId(SlotId)
+		|| !RequestedSummary)
 	{
 		return MakeResult(false, FText::FromString(TEXT("存档不存在、目录未就绪或正在执行其他操作。")));
+	}
+	if (RequestedSummary->bRunCompleted || CompletedRunSlots.Contains(SlotId))
+	{
+		UE_LOG(LogCatRun, Log, TEXT("Event=persistence_slot_read_rejected Slot=%s World=%s Reason=RunCompleted"),
+			*SlotId.ToString(), *GetNameSafe(GetWorld()));
+		return MakeResult(false, FText::FromString(TEXT("这一局已经结束，只能回看不能继续；请新建一个世界开新局。")));
+	}
+	if (RetrySavePayloads.Contains(SlotId))
+	{
+		EnqueueRunSave(SlotId, RetrySavePayloads.FindAndRemoveChecked(SlotId));
+		return MakeResult(false, FText::FromString(TEXT("正在重试该槽上次未成功的保存，请完成后再继续。")));
 	}
 	if (!HasRunSaveFileHeader(MakeRunSlotFileName(SlotId)))
 	{
@@ -560,7 +613,7 @@ FCatSaveResult UCatSaveSubsystem::RequestLoadSlot(const FName SlotId)
 FCatSaveResult UCatSaveSubsystem::RequestDeleteSlot(const FName SlotId)
 {
 	const ULocalPlayer* LocalPlayer = GetGameInstance()->GetFirstGamePlayer();
-	if (!LocalPlayer || bBusy || !bSlotDirectoryLoaded || SlotId == ActiveSlotId || !IsValidSlotId(SlotId)
+	if (!LocalPlayer || IsBusy() || !bSlotDirectoryLoaded || SlotId == ActiveSlotId || !IsValidSlotId(SlotId)
 		|| !SlotSummaries.ContainsByPredicate([SlotId](const FCatSaveSlotSummary& Summary) { return Summary.SlotId == SlotId; }))
 	{
 		return MakeResult(false, FText::FromString(TEXT("运行中的存档不能删除，或目标槽不存在。")));
@@ -573,6 +626,9 @@ FCatSaveResult UCatSaveSubsystem::RequestDeleteSlot(const FName SlotId)
 		*Result.RequestId.ToString(), *SlotId.ToString(), *SlotName, bDeleted);
 	if (bDeleted)
 	{
+		RetrySavePayloads.Remove(SlotId);
+		CompletedRunSlots.Remove(SlotId);
+		PendingCompletionSlots.Remove(SlotId);
 		SlotSummaries.RemoveAll([SlotId](const FCatSaveSlotSummary& Entry) { return Entry.SlotId == SlotId; });
 	}
 	FinishDiskRequest(Result.RequestId, bDeleted, bDeleted
@@ -581,62 +637,137 @@ FCatSaveResult UCatSaveSubsystem::RequestDeleteSlot(const FName SlotId)
 	return Result;
 }
 
-// 运行保存请求流程：
-// 1. 目录终态不明时先安排重读并拒绝本次保存，调用方需要在目录完成后重新发起请求。
-// 2. 目录、活动槽和摘要都就绪后，从 authority World 完整采集载荷；任何领域快照失败都只返回错误，不启动写盘。
-// 3. 游戏线程采样成功后先合并玩家基线，再交给 UE 异步覆盖该槽唯一文件，回调负责发布保存完成通知。
+// 墓碑（2026-09-14，T33）：busy 拒绝和仅在快照末尾采样终局已移除。
+// 《局与进程》Knowledge/Design/GDD 系统分册/局与进程.md:103：已完结槽不可续，写失败不影响本局、下局重试。
+// 快照仍同步完整校验；受理后串行写入，每个 RequestId 都收到完成回执，失败载荷跨 World 保留。
 FCatSaveResult UCatSaveSubsystem::RequestSaveActiveRun()
 {
-	if (!bBusy && !bSlotDirectoryLoaded)
-	{
-		RefreshSlotSummaries();
-		return MakeResult(false, bBusy ? FText::FromString(TEXT("正在重读存档目录，请完成后重试保存。")) : LastResultText);
-	}
-	if (bBusy || !bSlotDirectoryLoaded || ActiveSlotId.IsNone())
-	{
-		return MakeResult(false, FText::FromString(TEXT("没有可保存的活动世界槽，或已有存档操作正在进行。")));
-	}
-	const FCatSaveSlotSummary* Summary = SlotSummaries.FindByPredicate(
-		[this](const FCatSaveSlotSummary& Entry) { return Entry.SlotId == ActiveSlotId; });
-	if (!Summary)
-	{
-		return MakeResult(false, FText::FromString(TEXT("活动槽不在已提交目录中，请刷新存档目录。")));
-	}
+	if (!bSlotDirectoryLoaded || ActiveSlotId.IsNone() || !PendingRestoreSaveGame
+		|| !SlotSummaries.ContainsByPredicate([this](const FCatSaveSlotSummary& Summary) { return Summary.SlotId == ActiveSlotId; }))
+		return MakeResult(false, FText::FromString(TEXT("没有可保存的活动世界槽。")));
 	const ULocalPlayer* LocalPlayer = GetGameInstance()->GetFirstGamePlayer();
 	if (!LocalPlayer)
-	{
 		return MakeResult(false, FText::FromString(TEXT("本机玩家不可用，不能保存世界。")));
-	}
 	UCatRunSaveGame* SaveGame = CastChecked<UCatRunSaveGame>(
 		ULocalPlayerSaveGame::CreateNewSaveGameForLocalPlayer(UCatRunSaveGame::StaticClass(),
 			LocalPlayer, MakeRunSlotFileName(ActiveSlotId)));
 	FText Failure;
 	if (!BuildActiveRunSaveGame(*SaveGame, Failure))
 	{
+		if (PendingCompletionSlots.Contains(ActiveSlotId))
+		{
+			UE_LOG(LogCatRun, Warning, TEXT("Event=persistence_completion_snapshot_failed Slot=%s World=%s Reason=%s Result=QueueMarker"),
+				*ActiveSlotId.ToString(), *GetNameSafe(GetWorld()), *Failure.ToString());
+			return EnqueueRunSave(ActiveSlotId, nullptr);
+		}
 		return MakeResult(false, Failure);
 	}
-	// 游戏线程采样时更新内存快照；异步回调绝不把本轮之后的新采样覆盖回来，保证写盘途中发生的 Logout 捕获仍留给下一次保存。
 	PendingRestoreSaveGame->bHasPlayerSnapshot = SaveGame->bHasPlayerSnapshot;
 	PendingRestoreSaveGame->PlayerSnapshot = SaveGame->PlayerSnapshot;
-	ActiveAsyncRunSaveGame = SaveGame;
-	bBusy = true;
-	const FCatSaveResult Result = MakeResult(true, FText::FromString(TEXT("正在保存当前世界。")));
-	UE_LOG(LogCatRun, Log, TEXT("Event=persistence_slot_write_started RequestId=%s Slot=%s File=%s"),
-		*Result.RequestId.ToString(), *ActiveSlotId.ToString(), *MakeRunSlotFileName(ActiveSlotId));
-	SaveGame->OnSaveFinished.BindUObject(this, &ThisClass::HandleRunSaved, Result.RequestId);
-	if (!SaveGame->AsyncSaveGameToSlotForLocalPlayer())
-	{
-		FinishDiskRequest(Result.RequestId, false, FText::FromString(TEXT("本机存档写入未能启动。")));
-		return MakeResult(false, LastResultText);
-	}
+	PendingRestoreSaveGame->bRunCompleted = SaveGame->bRunCompleted;
+	return EnqueueRunSave(ActiveSlotId, SaveGame);
+}
+
+FCatSaveResult UCatSaveSubsystem::RequestCompleteActiveRun()
+{
+	const auto* Mode = GetWorld() ? GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
+	if (!Mode || !Mode->HasAuthority() || ActiveSlotId.IsNone() || !PendingRestoreSaveGame)
+		return MakeResult(false, FText::FromString(TEXT("没有可标记完成的房主活动槽。")));
+	const auto Reason = Mode->GetRunPublicState().EndReason;
+	if (Reason != ECatRunEndReason::Success && Reason != ECatRunEndReason::WorldProgressDepleted)
+		return MakeResult(false, FText::FromString(TEXT("当前局尚未终局。")));
+	// 先保留事实，任何快照失败、旧在途写入或 ReleaseActiveRun 都不能撤销它。
+	CompletedRunSlots.Add(ActiveSlotId);
+	PendingCompletionSlots.Add(ActiveSlotId);
+	PendingRestoreSaveGame->bRunCompleted = true;
+	for (auto& Summary : SlotSummaries)
+		if (Summary.SlotId == ActiveSlotId) Summary.bRunCompleted = true;
+	const FCatSaveResult Result = RequestSaveActiveRun();
+	if (!Result.bAccepted) RetrySavePayloads.FindOrAdd(ActiveSlotId);
+	UE_LOG(LogCatRun, Display, TEXT("Event=persistence_completion_requested RequestId=%s Slot=%s RunId=%s World=%s NetMode=%d Authority=1 LocalRole=%d Accepted=%d"),
+		*Result.RequestId.ToString(), *ActiveSlotId.ToString(), *Mode->GetRunPublicState().Phase.RunId.ToString(),
+		*GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), int32(Mode->GetLocalRole()), Result.bAccepted);
 	return Result;
 }
 
+FCatSaveResult UCatSaveSubsystem::EnqueueRunSave(const FName SlotId, UCatRunSaveGame* Payload)
+{
+	// 先建队列再广播受理；消费者重入时 CRUD/释放已可见队列占用。
+	const FGuid RequestId = FGuid::NewGuid();
+	QueuedSaveRequests.Add(RequestId);
+	QueuedSaveSlots.Add(RequestId, SlotId);
+	QueuedSavePayloads.Add(RequestId, Payload);
+	FCatSaveResult Result;
+	Result.bAccepted = true;
+	Result.RequestId = RequestId;
+	Result.Message = FText::FromString(TEXT("世界存档已排队。"));
+	LastResultText = Result.Message;
+	UE_LOG(LogCatRun, Log, TEXT("Event=persistence_slot_write_queued RequestId=%s Slot=%s World=%s MarkerOnly=%d QueueDepth=%d"),
+		*RequestId.ToString(), *SlotId.ToString(), *GetNameSafe(GetWorld()), Payload == nullptr, QueuedSaveRequests.Num());
+	OnChanged.Broadcast();
+	return Result;
+}
+
+bool UCatSaveSubsystem::TickSaveQueue(float DeltaSeconds)
+{
+	if (bBusy) return true;
+	if (QueuedSaveRequests.IsEmpty() && !RetrySavePayloads.IsEmpty()
+		&& FPlatformTime::Seconds() >= NextSaveRetrySeconds)
+	{
+		// 一轮失败最多每五秒重试一次；CoreTicker 随 GameInstance 跨旅行，终局关 Run 命令不关重试。
+		TArray<FName> RetrySlots;
+		RetrySavePayloads.GenerateKeyArray(RetrySlots);
+		for (const FName SlotId : RetrySlots)
+		{
+			if (RetrySavePayloads.Contains(SlotId))
+				EnqueueRunSave(SlotId, RetrySavePayloads.FindAndRemoveChecked(SlotId));
+		}
+	}
+	StartNextRunSave();
+	return true;
+}
+
+void UCatSaveSubsystem::StartNextRunSave()
+{
+	if (bBusy || QueuedSaveRequests.IsEmpty()) return;
+	ActiveQueuedSaveRequest = QueuedSaveRequests[0];
+	QueuedSaveRequests.RemoveAt(0);
+	ActiveQueuedSaveSlot = QueuedSaveSlots.FindAndRemoveChecked(ActiveQueuedSaveRequest);
+	ActiveAsyncRunSaveGame = QueuedSavePayloads.FindAndRemoveChecked(ActiveQueuedSaveRequest);
+	bBusy = true;
+	const ULocalPlayer* LocalPlayer = GetGameInstance()->GetFirstGamePlayer();
+	const bool bMarkerOnly = !ActiveAsyncRunSaveGame;
+	if (bMarkerOnly && LocalPlayer)
+	{
+		// 只有轮到本写请求才读取最后成功的文件；不重建或覆盖其他槽，也不写失败的部分世界快照。
+		ActiveAsyncRunSaveGame = Cast<UCatRunSaveGame>(ULocalPlayerSaveGame::LoadOrCreateSaveGameForLocalPlayer(
+			UCatRunSaveGame::StaticClass(), LocalPlayer, MakeRunSlotFileName(ActiveQueuedSaveSlot)));
+		if (ActiveAsyncRunSaveGame && !ActiveAsyncRunSaveGame->WasLoaded()) ActiveAsyncRunSaveGame = nullptr;
+	}
+	FText Failure;
+	if (!LocalPlayer || !ActiveAsyncRunSaveGame
+		|| !ValidateLoadedRunSaveGame(*ActiveAsyncRunSaveGame, ActiveQueuedSaveSlot, Failure))
+	{
+		if (bMarkerOnly) ActiveAsyncRunSaveGame = nullptr; // 修复文件后重试须重新读盘，不能永久复用坏载荷。
+		FinishDiskRequest(ActiveQueuedSaveRequest, false, Failure.IsEmpty()
+			? FText::FromString(TEXT("终局标记补写未能读取原槽，已保留重试。")) : Failure);
+		return;
+	}
+	ActiveAsyncRunSaveGame->bRunCompleted |= CompletedRunSlots.Contains(ActiveQueuedSaveSlot);
+	ActiveAsyncRunSaveGame->LastSavedAt = FDateTime::UtcNow();
+	ActiveAsyncRunSaveGame->OnSaveFinished.BindUObject(this, &ThisClass::HandleRunSaved, ActiveQueuedSaveRequest);
+	UE_LOG(LogCatRun, Log, TEXT("Event=persistence_slot_write_started RequestId=%s Slot=%s World=%s RunCompleted=%d"),
+		*ActiveQueuedSaveRequest.ToString(), *ActiveQueuedSaveSlot.ToString(), *GetNameSafe(GetWorld()), ActiveAsyncRunSaveGame->bRunCompleted);
+	const FGuid RequestId = ActiveQueuedSaveRequest;
+	if (!ActiveAsyncRunSaveGame->AsyncSaveGameToSlotForLocalPlayer() && ActiveQueuedSaveRequest == RequestId)
+		FinishDiskRequest(RequestId, false, FText::FromString(TEXT("本机存档写入未能启动，已保留重试。")));
+}
+
 // 终态释放流程：先拒绝仍有磁盘回调的请求；调用方确认房间或世界已离开后，清本局强引用、玩家快照、时长和旅行许可，目录保留供下一次选槽。
-// 这里既不采集也不保存，Host 必须先等自己的 OnSaveCompleted 成功，再完成离开，最后调用本入口。
+// 这里既不采集也不保存，Host 等待一次保存回执后即可离开；失败载荷和完成意图由独立重试集合保留。
 bool UCatSaveSubsystem::ReleaseActiveRun()
 {
-	if (bBusy)
+	if (IsBusy())
 	{
 		UE_LOG(LogCatRun, Warning, TEXT("Event=persistence_release_rejected Slot=%s Reason=Busy"), *ActiveSlotId.ToString());
 		return false;
@@ -666,7 +797,7 @@ bool UCatSaveSubsystem::HasLoadedRunForTravel() const
 // 忙碌读取流程：返回目录或世界异步读写的统一串行状态；前端据此禁止重复点击。
 bool UCatSaveSubsystem::IsBusy() const
 {
-	return bBusy;
+	return bBusy || !QueuedSaveRequests.IsEmpty();
 }
 
 // 结果读取流程：返回最近一次同步受理或异步完成的文本；不会把日志解析结果伪装成 UI 状态。
@@ -685,6 +816,150 @@ FName UCatSaveSubsystem::GetActiveSlotId() const
 // 1. 先确认 GameMode、营地与鱼容器服务都属于 authority World；新局只要求真实宿主可导出当前状态。
 // 2. 有世界载荷时先导出营地当前状态，再提交营地和世界鱼容器；鱼容器服务异常时只尝试还原营地并阻止进入玩法。
 // 3. 成功后保留玩家载荷等待 Pawn 生成时恢复，同时开始统计本 World 的实际玩法时长。
+namespace
+{
+	UCatInventoryComponent* GetSavedHostInventory(AActor* Host)
+	{
+		if (auto* Camp = Cast<ACatCampInventoryActor>(Host)) return Camp->GetInventoryComponent();
+		if (auto* Tank = Cast<ACatFishTankActor>(Host)) return Tank->GetFishInventoryComponent();
+		if (auto* Guard = Cast<ACatFishGuardActor>(Host)) return Guard->GetFishInventoryComponent();
+		return nullptr;
+	}
+
+	bool ValidateWorldInventory(const FCatSavedWorldInventory& Saved, FText& Failure)
+	{
+		UClass* Class = Saved.HostClass.LoadSynchronous();
+		const bool bTank = Class && Class->IsChildOf(ACatFishTankActor::StaticClass());
+		if (!Class || (!bTank && !Class->IsChildOf(ACatFishGuardActor::StaticClass())
+			&& !Class->IsChildOf(ACatCampInventoryActor::StaticClass())) || Saved.HostName.IsNone()
+			|| !Saved.HostTransform.IsValid() || Saved.HostTransform.GetScale3D().GetMin() <= 0.0
+			|| Saved.Capacity <= 0 || Saved.InventorySlots.Num() > Saved.Capacity
+			|| uint8(Saved.TeamStorageRole) > uint8(ECatTeamStorageRole::SupplyStore)
+			|| (bTank ? Saved.CapacityTier < 0
+				: Saved.CapacityTier != INDEX_NONE))
+		{
+			Failure = FText::FromString(TEXT("世界库存宿主、角色、容量或鱼缸档位无效。"));
+			return false;
+		}
+		return ValidateSavedInventorySlots(Saved.InventorySlots, Failure);
+	}
+}
+
+bool UCatSaveSubsystem::CaptureWorldInventories(UWorld& World,
+	TArray<FCatSavedWorldInventory>& OutInventories, FText& OutFailure) const
+{
+	OutInventories.Reset();
+	if (World.GetNetMode() == NM_Client) return false;
+	for (TActorIterator<AActor> It(&World); It; ++It)
+	{
+		AActor* Host = *It;
+		UCatInventoryComponent* Inventory = GetSavedHostInventory(Host);
+		if (!Inventory) continue;
+		FCatSavedWorldInventory Saved;
+		Saved.HostName = Host->GetFName();
+		Saved.HostClass = Host->GetClass();
+		Saved.HostTransform = Host->GetActorTransform();
+		Saved.bRuntimeCreated = !Host->IsNetStartupActor();
+		Saved.Capacity = Inventory->GetInventorySlotCount();
+		Saved.TeamStorageRole = Inventory->GetTeamStorageRole();
+		if (const auto* Tank = Cast<ACatFishTankActor>(Host)) Saved.CapacityTier = Tank->GetCapacityTier();
+		TArray<FCatInventoryEntry> Entries;
+		if (!Inventory->ExportInventorySlotsFromAuthority(Entries, Saved.Capacity, OutFailure)
+			|| !WriteSavedInventorySlots(Entries, Saved.InventorySlots, OutFailure)
+			|| !ValidateWorldInventory(Saved, OutFailure)) return false;
+		OutInventories.Add(MoveTemp(Saved));
+	}
+	UE_LOG(LogCatRun, Log, TEXT("Event=persistence_inventories_exported World=%s NetMode=%d Authority=1 Hosts=%d"),
+		*World.GetName(), World.GetNetMode(), OutInventories.Num());
+	return true;
+}
+
+bool UCatSaveSubsystem::RestoreWorldInventories(UWorld& World,
+	const TArray<FCatSavedWorldInventory>& Inventories, FText& OutFailure) const
+{
+	if (World.GetNetMode() == NM_Client) return false;
+	TSet<FName> Names;
+	TSet<FGuid> Ids;
+	for (const auto& Saved : Inventories)
+	{
+		if (Names.Contains(Saved.HostName) || !ValidateWorldInventory(Saved, OutFailure)) return false;
+		Names.Add(Saved.HostName);
+		if (const auto* TankDefaults = Cast<ACatFishTankActor>(Saved.HostClass.Get()->GetDefaultObject()))
+		{
+			// 目标取当前配置；容量只约束占用数，旧空槽与尾部位置不使有效存档失效。
+			const ACatFishTankActor* CapacityHost = TankDefaults;
+			for (TActorIterator<ACatFishTankActor> It(&World); It; ++It)
+				if (It->GetFName() == Saved.HostName) { CapacityHost = *It; break; }
+			const int32 TargetCapacity = CapacityHost->ResolveSlotCapacityForTier(Saved.CapacityTier);
+			const int32 Occupied = Saved.InventorySlots.FilterByPredicate([](const auto& Slot) { return Slot.Quantity > 0; }).Num();
+			if (TargetCapacity <= 0 || Occupied > TargetCapacity)
+			{
+				OutFailure = FText::FromString(TEXT("世界鱼容器的已保存鱼超过当前容量。"));
+				UE_LOG(LogCatRun, Warning, TEXT("Event=persistence_inventory_capacity_exceeded World=%s NetMode=%d Authority=1 Host=%s SavedCapacity=%d TargetCapacity=%d FishCount=%d Result=RestoreRejectedDiskPreserved"),
+					*World.GetName(), World.GetNetMode(), *Saved.HostName.ToString(), Saved.Capacity, TargetCapacity, Occupied);
+				return false;
+			}
+		}
+		for (const auto& Slot : Saved.InventorySlots)
+		{
+			if (!Slot.ItemInstanceId.IsValid()) continue;
+			if (Ids.Contains(Slot.ItemInstanceId)) return false;
+			Ids.Add(Slot.ItemInstanceId);
+		}
+	}
+	// 全部磁盘数据先预检；分两遍准备宿主与库存，鱼护关联不依赖遍历顺序。
+	TMap<FName, AActor*> Hosts;
+	for (const auto& Saved : Inventories)
+	{
+		AActor* Host = nullptr;
+		for (TActorIterator<AActor> It(&World); It; ++It)
+			if (It->GetFName() == Saved.HostName) { Host = *It; break; }
+		if (Host && Host->GetClass() != Saved.HostClass.Get()) return false;
+		if (!Host)
+		{
+			if (!Saved.bRuntimeCreated) return false;
+			FActorSpawnParameters Spawn;
+			Spawn.Name = Saved.HostName;
+			Spawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+			Host = World.SpawnActor<AActor>(Saved.HostClass.Get(), Saved.HostTransform, Spawn);
+		}
+		// 地图原有鱼护也可能已被玩家挪动；不能只给新生成的宿主恢复位置。
+		if (Host && Host->IsA<ACatFishGuardActor>() && !Host->GetActorTransform().Equals(Saved.HostTransform)
+			&& !Host->SetActorTransform(Saved.HostTransform, false, nullptr, ETeleportType::TeleportPhysics)) return false;
+		auto* Inventory = GetSavedHostInventory(Host);
+		if (!Inventory || !Inventory->RestoreTeamStorageRoleFromAuthority(Saved.TeamStorageRole)) return false;
+		if (auto* Tank = Cast<ACatFishTankActor>(Host))
+			if (!Tank->RestoreCapacityTierFromAuthority(Saved.CapacityTier)) return false;
+		Hosts.Add(Saved.HostName, Host);
+	}
+	for (const auto& Saved : Inventories)
+	{
+		AActor* Host = Hosts.FindChecked(Saved.HostName);
+		auto* Inventory = GetSavedHostInventory(Host);
+		const auto* Tank = Cast<ACatFishTankActor>(Host);
+		const int32 TargetCapacity = Tank ? Tank->ResolveSlotCapacityForTier(Saved.CapacityTier) : Saved.Capacity;
+		TArray<FCatSavedRunInventorySlot> Slots = Saved.InventorySlots;
+		if (Slots.Num() > TargetCapacity)
+		{
+			for (int32 Index = TargetCapacity; Index < Slots.Num(); ++Index)
+			{
+				if (Slots[Index].Quantity <= 0) continue;
+				const int32 Empty = Slots.IndexOfByPredicate([](const auto& Slot) { return Slot.Quantity == 0; });
+				if (Empty == INDEX_NONE || Empty >= TargetCapacity) return false; // 占用数已在宿主修改前预检。
+				Slots[Empty] = Slots[Index];
+			}
+			Slots.SetNum(TargetCapacity);
+		}
+		TArray<FCatInventoryEntry> Entries;
+		if (!PrepareInventoryEntriesFromSave(Slots, *Inventory, Entries, OutFailure)
+			|| !Inventory->RestoreInventorySlotsFromAuthority(Entries, TargetCapacity, OutFailure)) return false;
+		UE_LOG(LogCatRun, Log, TEXT("Event=persistence_inventory_restored World=%s NetMode=%d Authority=1 LocalRole=%d Host=%s Role=%d SavedCapacity=%d TargetCapacity=%d Tier=%d Slots=%d"),
+			*World.GetName(), World.GetNetMode(), Host->GetLocalRole(), *Host->GetName(), uint8(Saved.TeamStorageRole),
+			Saved.Capacity, TargetCapacity, Saved.CapacityTier, Saved.InventorySlots.Num());
+	}
+	return true;
+}
+
 bool UCatSaveSubsystem::RestoreWorldAfterHostsReady(ACatfishingGameModeBase& GameMode)
 {
 	if (!HasLoadedRunForTravel() || !GameMode.HasAuthority() || GameMode.GetWorld() != GetGameInstance()->GetWorld())
@@ -692,39 +967,61 @@ bool UCatSaveSubsystem::RestoreWorldAfterHostsReady(ACatfishingGameModeBase& Gam
 		return true;
 	}
 	UWorld* World = GameMode.GetWorld();
-	ACatCampInventoryActor* CampInventory = nullptr;
-	for (TActorIterator<ACatCampInventoryActor> It(World); It; ++It)
+	FText CheckpointFailure;
+	if (!PendingRestoreSaveGame->bHasWorldSnapshot || PendingRestoreSaveGame->bHasInventoryCheckpoint)
 	{
-		if (CampInventory)
+		if (!PendingRestoreSaveGame->bHasWorldSnapshot)
 		{
-			RejectPendingRestore(FText::FromString(TEXT("当前地图存在多个营地公共仓库，不能安全恢复世界槽。")));
-			return false;
+			TArray<FCatSavedWorldInventory> Initial;
+			if (!CaptureWorldInventories(*World, Initial, CheckpointFailure))
+			{ RejectPendingRestore(CheckpointFailure); return false; }
 		}
-		CampInventory = *It;
+		else
+		{
+			auto* Shop = World->GetSubsystem<UCatShopEconomyService>();
+			auto* State = World->GetGameState<ACatfishingGameState>();
+			if (!ValidateLoadedRunSaveGame(*PendingRestoreSaveGame, ActiveSlotId, CheckpointFailure)
+				|| !RestoreWorldInventories(*World, PendingRestoreSaveGame->WorldInventories, CheckpointFailure)
+				|| !Shop || !Shop->RestoreWalletFromAuthority(PendingRestoreSaveGame->TeamWalletBalance)
+				|| !GameMode.RestoreWorldProgressFromSave(PendingRestoreSaveGame->WorldProgress, PendingRestoreSaveGame->DayIndex)
+				|| !State || !State->GetRunFishCollection()->RestoreCapturesFromAuthority(PendingRestoreSaveGame->RunFishCollectionCaptures))
+			{
+				RejectPendingRestore(CheckpointFailure.IsEmpty() ? FText::FromString(TEXT("世界断点恢复失败，未开放玩法。")) : CheckpointFailure);
+				return false;
+			}
+		}
+		bWorldRestoreApplied = true;
+		bLoadedRunForTravel = false;
+		ActiveRunBasePlayedDurationSeconds = PendingRestoreSaveGame->PlayedDurationSeconds;
+		ActiveRunStartedWorldSeconds = World->GetTimeSeconds();
+		UE_LOG(LogCatRun, Log, TEXT("Event=persistence_checkpoint_restored Slot=%s World=%s NetMode=%d Authority=1 Hosts=%d WorldProgress=%d Wallet=%d"),
+			*ActiveSlotId.ToString(), *World->GetName(), World->GetNetMode(), PendingRestoreSaveGame->WorldInventories.Num(),
+			GameMode.GetRunPublicState().WorldProgress, PendingRestoreSaveGame->TeamWalletBalance);
+		return true;
+	}
+	// 旧 v6 单仓/旧服务快照的兼容读取；新保存不再生产这两个旧载荷。
+	ACatCampInventoryActor* CampInventory = nullptr;
+	// 旧文件没有宿主名：沿原 CampHub.PublicInventory 绑定定位原仓，新公共架／公库不参与猜测。
+	for (TActorIterator<ACatCampHubActor> It(World); It; ++It)
+	{
+		auto* Bound = It->ResolvePublicInventoryForShopOrder();
+		if (!Bound) continue;
+		if (CampInventory && CampInventory != Bound)
+		{ RejectPendingRestore(FText::FromString(TEXT("旧档公共仓库绑定不唯一。"))); return false; }
+		CampInventory = Bound;
+	}
+	if (!CampInventory)
+	{
+		for (TActorIterator<ACatCampInventoryActor> It(World); It; ++It)
+		{
+			if (CampInventory)
+			{ RejectPendingRestore(FText::FromString(TEXT("旧档缺少 CampHub.PublicInventory 迁移绑定。"))); return false; }
+			CampInventory = *It;
+		}
 	}
 	UCatFishContainerService* FishContainers = World ? World->GetSubsystem<UCatFishContainerService>() : nullptr;
 	const TArray<FCatSavedRunInventorySlot>& SavedCampInventory = PendingRestoreSaveGame->CampInventory.InventorySlots;
 	FText Failure;
-	if (!PendingRestoreSaveGame->bHasWorldSnapshot)
-	{
-		// 新局没有要覆盖的世界内容；验证真实宿主可采样即可，沿用关卡初始仓库和全部初始箱子。
-		TArray<FCatPersistentContainerSnapshot> InitialContainers;
-		TArray<FCatInventoryEntry> InitialCampInventorySlots;
-		if (!CampInventory || !FishContainers
-			|| !CampInventory->ExportInventorySlotsFromAuthority(InitialCampInventorySlots, Failure)
-			|| !FishContainers->ExportPersistedWorldFishContainers(InitialContainers, Failure))
-		{
-			RejectPendingRestore(Failure.IsEmpty() ? FText::FromString(TEXT("新局营地或容器尚未就绪。")) : Failure);
-			return false;
-		}
-		bWorldRestoreApplied = true;
-		bLoadedRunForTravel = false;
-		ActiveRunStartedWorldSeconds = World->GetTimeSeconds();
-		ActiveRunBasePlayedDurationSeconds = 0.0;
-		UE_LOG(LogCatRun, Log, TEXT("Event=persistence_new_world_ready Slot=%s World=%s Containers=%d"),
-			*ActiveSlotId.ToString(), *GetNameSafe(World), InitialContainers.Num());
-		return true;
-	}
 	if (!CampInventory || !FishContainers)
 	{
 		RejectPendingRestore(Failure.IsEmpty() ? FText::FromString(TEXT("营地或世界鱼容器尚未就绪。")) : Failure);
@@ -747,6 +1044,14 @@ bool UCatSaveSubsystem::RestoreWorldAfterHostsReady(ACatfishingGameModeBase& Gam
 		UE_LOG(LogCatRun, Error, TEXT("Event=persistence_world_restore_aborted Slot=%s CampRolledBack=%d FishContainersUsable=0"),
 			*ActiveSlotId.ToString(), bCampRolledBack);
 		RejectPendingRestore(FText::FromString(TEXT("世界鱼容器提交失败，已尝试回滚并阻止继续进入玩法。")));
+		return false;
+	}
+	// 公共板子跟世界槽恢复；启动前一次提交，已预检的旧档空数组也可接受，绝不读取个人图鉴补页。
+	const ACatfishingGameState* CollectionGameState = World->GetGameState<ACatfishingGameState>();
+	UCatRunFishCollectionComponent* RunCollection = CollectionGameState ? CollectionGameState->GetRunFishCollection() : nullptr;
+	if (!RunCollection || !RunCollection->RestoreCapturesFromAuthority(PendingRestoreSaveGame->RunFishCollectionCaptures))
+	{
+		RejectPendingRestore(FText::FromString(TEXT("局内公共图鉴恢复失败，已阻止继续进入玩法。")));
 		return false;
 	}
 	bWorldRestoreApplied = true;
@@ -932,9 +1237,9 @@ FCatSaveResult UCatSaveSubsystem::MakeResult(const bool bAccepted, const FText& 
 }
 
 // 运行载荷采集流程：
-// 1. 只接受 authority GameMode、唯一营地和已恢复的玩法 World，客户端或前端 World 不会写磁盘。
+// 1. 只接受 authority GameMode 和已恢复的玩法 World；多仓按宿主身份导出，客户端或前端不写磁盘。
 // 2. 世界槽只保留一个本机玩家快照；若有在线本机 Controller 就现场采样，否则沿用退出捕获已经写入内存的快照。
-// 3. 最后导出已提交世界鱼与真实 Run 展示元数据；Profile 和 Run 状态机都不会进入载荷。
+// 3. 最后导出已提交世界鱼与真实 Run 展示元数据，并读取终局原因把「已完结」写进载荷；Profile 不进入世界载荷，Run 世界进度与公款由各自权威恢复入口消费。
 bool UCatSaveSubsystem::BuildActiveRunSaveGame(UCatRunSaveGame& OutSaveGame, FText& OutFailure) const
 {
 	OutFailure = FText::GetEmpty();
@@ -950,28 +1255,25 @@ bool UCatSaveSubsystem::BuildActiveRunSaveGame(UCatRunSaveGame& OutSaveGame, FTe
 		OutFailure = PlayerCaptureFailure;
 		return false;
 	}
-	ACatCampInventoryActor* CampInventory = nullptr;
-	for (TActorIterator<ACatCampInventoryActor> It(World); It; ++It)
-	{
-		if (CampInventory)
-		{
-			OutFailure = FText::FromString(TEXT("当前地图存在多个营地公共仓库。"));
-			return false;
-		}
-		CampInventory = *It;
-	}
-	UCatFishContainerService* FishContainers = World->GetSubsystem<UCatFishContainerService>();
-	if (!CampInventory || !FishContainers)
-	{
-		OutFailure = FText::FromString(TEXT("营地或鱼容器服务未就绪。"));
-		return false;
-	}
+	if (!CaptureWorldInventories(*World, OutSaveGame.WorldInventories, OutFailure)) return false;
+	const auto* Shop = World->GetSubsystem<UCatShopEconomyService>();
+	if (!Shop || !Shop->ExportWalletFromAuthority(OutSaveGame.TeamWalletBalance))
+	{ OutFailure = FText::FromString(TEXT("公款尚未就绪。")); return false; }
+	OutSaveGame.bHasInventoryCheckpoint = true;
 	OutSaveGame.bHasPlayerSnapshot = PendingRestoreSaveGame->bHasPlayerSnapshot;
 	OutSaveGame.PlayerSnapshot = PendingRestoreSaveGame->PlayerSnapshot;
 	OutSaveGame.WorldFishContainers.Reset();
 	OutSaveGame.CampInventory = FCatSavedCampInventory();
 	OutSaveGame.FormatVersion = OutSaveGame.GetLatestDataVersion();
 	OutSaveGame.bHasWorldSnapshot = true;
+	const ACatfishingGameState* CollectionGameState = World->GetGameState<ACatfishingGameState>();
+	const UCatRunFishCollectionComponent* RunCollection = CollectionGameState ? CollectionGameState->GetRunFishCollection() : nullptr;
+	if (!RunCollection)
+	{
+		OutFailure = FText::FromString(TEXT("局内公共图鉴宿主未就绪，不能保存不完整的世界断点。"));
+		return false;
+	}
+	OutSaveGame.RunFishCollectionCaptures = RunCollection->GetCapturesForWorldSave();
 	OutSaveGame.SlotId = ActiveSlotId;
 	if (const FCatSaveSlotSummary* Summary = SlotSummaries.FindByPredicate(
 		[this](const FCatSaveSlotSummary& Entry) { return Entry.SlotId == ActiveSlotId; }))
@@ -979,15 +1281,6 @@ bool UCatSaveSubsystem::BuildActiveRunSaveGame(UCatRunSaveGame& OutSaveGame, FTe
 		OutSaveGame.DisplayName = Summary->DisplayName;
 	}
 	OutSaveGame.LastSavedAt = FDateTime::UtcNow();
-	TArray<FCatInventoryEntry> CampInventorySlots;
-	if (!CampInventory->ExportInventorySlotsFromAuthority(CampInventorySlots, OutFailure))
-	{
-		return false;
-	}
-	if (!WriteSavedInventorySlots(CampInventorySlots, OutSaveGame.CampInventory.InventorySlots, OutFailure))
-	{
-		return false;
-	}
 	APlayerController* ControllerToSave = nullptr;
 	for (TActorIterator<APlayerController> It(World); It; ++It)
 	{
@@ -1033,10 +1326,6 @@ bool UCatSaveSubsystem::BuildActiveRunSaveGame(UCatRunSaveGame& OutSaveGame, FTe
 		OutFailure = FText::FromString(TEXT("本机玩家快照尚未写入，不能覆盖世界存档。"));
 		return false;
 	}
-	if (!FishContainers->ExportPersistedWorldFishContainers(OutSaveGame.WorldFishContainers, OutFailure))
-	{
-		return false;
-	}
 	const FCatRunPublicState& RunPublicState = GameMode->GetRunPublicState();
 	OutSaveGame.DayIndex = RunPublicState.Phase.DayIndex;
 	OutSaveGame.LocationName = FPackageName::GetShortName(World->GetMapName());
@@ -1046,6 +1335,38 @@ bool UCatSaveSubsystem::BuildActiveRunSaveGame(UCatRunSaveGame& OutSaveGame, FTe
 	OutSaveGame.DailyOfferingTarget = RunPublicState.DailyOfferingTarget;
 	OutSaveGame.WorldProgress = RunPublicState.WorldProgress;
 	OutSaveGame.LastWorldProgressDelta = RunPublicState.LastWorldProgressDelta;
+	// 摘要与恢复共读正式鱼库存，不再从未注册现行鱼缸的旧服务推导点数。
+	OutSaveGame.TankOfferingPoints = INDEX_NONE;
+	int64 TankPoints = 0;
+	bool bHasTank = false;
+	bool bPointsValid = true;
+	for (const auto& Inventory : OutSaveGame.WorldInventories)
+	{
+		if (Inventory.CapacityTier == INDEX_NONE) continue;
+		bHasTank = true;
+		for (const auto& Fish : Inventory.InventorySlots)
+		{
+			if (!Fish.ItemInstanceId.IsValid()) continue;
+			ECatOfferingWeightClass WeightClass;
+			int32 Points = 0;
+			if (!GetDefault<UCatRunSettings>()->TryClassifyOfferingWeight(Fish.FishWeightKilograms, WeightClass, Points))
+			{ bPointsValid = false; break; }
+			TankPoints += Points;
+		}
+	}
+	if (bHasTank && bPointsValid && TankPoints <= MAX_int32) OutSaveGame.TankOfferingPoints = int32(TankPoints);
+	// 终局只认两个原因：进度归零＝团灭、Success＝毕业。房主退出（HostExit）是可续的局中断点，不是终局；
+	// StartupFailed 与 None 同理。标记只增不减，终局那一夜之后的任何一次写盘都不会把槽变回「可继续」。
+	const bool bTerminalRun = RunPublicState.EndReason == ECatRunEndReason::WorldProgressDepleted
+		|| RunPublicState.EndReason == ECatRunEndReason::Success;
+	OutSaveGame.bRunCompleted = PendingRestoreSaveGame->bRunCompleted || bTerminalRun;
+	if (OutSaveGame.bRunCompleted)
+	{
+		UE_LOG(LogCatRun, Log,
+			TEXT("Event=persistence_run_completed Slot=%s World=%s EndReason=%d Phase=%d Day=%d WorldProgress=%d"),
+			*ActiveSlotId.ToString(), *GetNameSafe(World), static_cast<int32>(RunPublicState.EndReason),
+			static_cast<int32>(RunPublicState.Phase.Phase), RunPublicState.Phase.DayIndex, RunPublicState.WorldProgress);
+	}
 	return ValidateLoadedRunSaveGame(OutSaveGame, ActiveSlotId, OutFailure);
 }
 
@@ -1071,15 +1392,22 @@ bool UCatSaveSubsystem::ValidateLoadedRunSaveGame(const UCatRunSaveGame& SaveGam
 		OutFailure = FText::FromString(TEXT("存档版本、槽归属或展示元数据无效。"));
 		return false;
 	}
+	// 墓碑（2026-09-14，T33；局与进程.md:103）：首个完整快照之前也可能终局；空槽允许仅持有完成位，仍禁止半套世界/玩家数据。
 	if (!SaveGame.bHasWorldSnapshot && (SaveGame.bHasPlayerSnapshot || !SaveGame.WorldFishContainers.IsEmpty()
-		|| !SaveGame.CampInventory.InventorySlots.IsEmpty()))
+		|| !SaveGame.CampInventory.InventorySlots.IsEmpty() || !SaveGame.RunFishCollectionCaptures.IsEmpty()
+		|| SaveGame.bHasInventoryCheckpoint || !SaveGame.WorldInventories.IsEmpty()))
 	{
-		OutFailure = FText::FromString(TEXT("未开始的新槽夹带已有世界库存，不能按新局进入。"));
+		OutFailure = FText::FromString(TEXT("没有完整世界快照的槽夹带世界或玩家数据，不能按新局进入。"));
 		return false;
 	}
 	if (SaveGame.bHasWorldSnapshot && !SaveGame.bHasPlayerSnapshot)
 	{
 		OutFailure = FText::FromString(TEXT("世界存档缺少本机玩家快照。"));
+		return false;
+	}
+	if (!UCatRunFishCollectionComponent::ValidateCaptures(SaveGame.RunFishCollectionCaptures))
+	{
+		OutFailure = FText::FromString(TEXT("局内公共图鉴的捕获身份或爪印记录无效。"));
 		return false;
 	}
 	TSet<FGuid> SeenItemInstanceIds;
@@ -1107,6 +1435,42 @@ bool UCatSaveSubsystem::ValidateLoadedRunSaveGame(const UCatRunSaveGame& SaveGam
 			}
 		}
 	}
+	if (SaveGame.bHasInventoryCheckpoint)
+	{
+		if (SaveGame.TeamWalletBalance < 0 || SaveGame.TeamWalletBalance > 16777216
+			|| !SaveGame.CampInventory.InventorySlots.IsEmpty() || !SaveGame.WorldFishContainers.IsEmpty()) return false;
+		TSet<FName> Names;
+		for (const auto& Saved : SaveGame.WorldInventories)
+		{
+			if (Names.Contains(Saved.HostName) || !ValidateWorldInventory(Saved, OutFailure)) return false;
+			Names.Add(Saved.HostName);
+			for (const auto& Slot : Saved.InventorySlots)
+			{
+				if (!Slot.ItemInstanceId.IsValid()) continue;
+				if (SeenItemInstanceIds.Contains(Slot.ItemInstanceId))
+				{ OutFailure = FText::FromString(TEXT("世界库存与玩家之间有重复物品身份。")); return false; }
+				SeenItemInstanceIds.Add(Slot.ItemInstanceId);
+			}
+		}
+		TSet<FName> ClaimedGuards;
+		const auto ValidateGuardLinks = [&](const TArray<FCatSavedRunInventorySlot>& Slots)
+		{
+			for (const auto& Slot : Slots)
+			{
+				if (Slot.FishGuardHostName.IsNone()) continue;
+				const auto* Host = SaveGame.WorldInventories.FindByPredicate(
+					[&](const auto& Candidate) { return Candidate.HostName == Slot.FishGuardHostName; });
+				if (!Host || !Host->HostClass.Get()->IsChildOf(ACatFishGuardActor::StaticClass())
+					|| ClaimedGuards.Contains(Slot.FishGuardHostName)) return false;
+				ClaimedGuards.Add(Slot.FishGuardHostName);
+			}
+			return true;
+		};
+		if (!ValidateGuardLinks(SaveGame.PlayerSnapshot.InventorySlots)) return false;
+		for (const auto& Host : SaveGame.WorldInventories)
+			if (!ValidateGuardLinks(Host.InventorySlots)) return false;
+	}
+	else if (!SaveGame.WorldInventories.IsEmpty()) return false;
 	const TArray<FCatSavedRunInventorySlot>& SavedCampInventory = SaveGame.CampInventory.InventorySlots;
 	if (!ValidateSavedInventorySlots(SavedCampInventory, OutFailure))
 	{
@@ -1173,6 +1537,7 @@ void UCatSaveSubsystem::HandleRunSaved(UCatRunSaveGame* SavedGame, const bool bS
 		[SlotId](const FCatSaveSlotSummary& Entry) { return Entry.SlotId == SlotId; });
 	FCatSaveSlotSummary& Summary = Existing ? *Existing : SlotSummaries.AddDefaulted_GetRef();
 	Summary = MakeSummary(*ActiveAsyncRunSaveGame);
+	Summary.bRunCompleted |= CompletedRunSlots.Contains(SlotId);
 	SlotSummaries.Sort([](const FCatSaveSlotSummary& Left, const FCatSaveSlotSummary& Right)
 	{
 		return Left.LastSavedAt > Right.LastSavedAt;
@@ -1213,6 +1578,16 @@ void UCatSaveSubsystem::HandleRunLoaded(ULocalPlayerSaveGame* LoadedGame,
 		RejectPendingRestore(Failure.IsEmpty() ? FText::FromString(TEXT("世界存档读取或校验失败。")) : Failure);
 		return;
 	}
+	// 实际载荷是最终依据；目录缓存之外的完成标记同样不得授予恢复/旅行许可。
+	if (LoadedRunSaveGame->bRunCompleted || CompletedRunSlots.Contains(RequestedSlotId))
+	{
+		bBusy = false;
+		CompletedRunSlots.Add(RequestedSlotId);
+		for (auto& Summary : SlotSummaries)
+			if (Summary.SlotId == RequestedSlotId) Summary.bRunCompleted = true;
+		RejectPendingRestore(FText::FromString(TEXT("这一局已经结束，请新建世界槽。")));
+		return;
+	}
 	PendingRestoreSaveGame = LoadedRunSaveGame;
 	if (FCatSaveSlotSummary* Summary = SlotSummaries.FindByPredicate(
 		[RequestedSlotId](const FCatSaveSlotSummary& Entry) { return Entry.SlotId == RequestedSlotId; }))
@@ -1242,11 +1617,36 @@ void UCatSaveSubsystem::HandleRunLoaded(ULocalPlayerSaveGame* LoadedGame,
 // 磁盘请求收口流程：先清候选对象和 busy，保留退出时更新的唯一玩家基线，再写结果与关联日志；最后广播 UI 和有效请求回执，回调可安全发起下一次请求。
 void UCatSaveSubsystem::FinishDiskRequest(const FGuid RequestId, const bool bSuccess, const FText& Message)
 {
+	const FName CompletedSlot = RequestId == ActiveQueuedSaveRequest && RequestId.IsValid()
+		? ActiveQueuedSaveSlot : (ActiveAsyncRunSaveGame ? ActiveAsyncRunSaveGame->SlotId : ActiveSlotId);
+	if (RequestId.IsValid() && RequestId == ActiveQueuedSaveRequest)
+	{
+		if (bSuccess)
+		{
+			RetrySavePayloads.Remove(ActiveQueuedSaveSlot);
+			if (ActiveAsyncRunSaveGame && ActiveAsyncRunSaveGame->bRunCompleted)
+				PendingCompletionSlots.Remove(ActiveQueuedSaveSlot);
+		}
+		else
+		{
+			RetrySavePayloads.Add(ActiveQueuedSaveSlot, ActiveAsyncRunSaveGame);
+			NextSaveRetrySeconds = FPlatformTime::Seconds() + 5.0;
+			UE_LOG(LogCatRun, Warning, TEXT("Event=persistence_retry_retained RequestId=%s Slot=%s World=%s CompletionPending=%d Reason=%s"),
+				*RequestId.ToString(), *ActiveQueuedSaveSlot.ToString(), *GetNameSafe(GetWorld()),
+				PendingCompletionSlots.Contains(ActiveQueuedSaveSlot), *Message.ToString());
+		}
+		UE_LOG(LogCatRun, Log, TEXT("Event=persistence_write_receipt RequestId=%s Slot=%s World=%s Success=%d CompletionPending=%d"),
+			*RequestId.ToString(), *ActiveQueuedSaveSlot.ToString(), *GetNameSafe(GetWorld()), bSuccess,
+			PendingCompletionSlots.Contains(ActiveQueuedSaveSlot));
+		ActiveQueuedSaveRequest.Invalidate();
+		ActiveQueuedSaveSlot = NAME_None;
+	}
+
 	ActiveAsyncRunSaveGame = nullptr;
 	bBusy = false;
 	LastResultText = Message;
 	UE_LOG(LogCatRun, Log, TEXT("Event=persistence_request_completed RequestId=%s Success=%d Slot=%s World=%s Message=%s"),
-		*RequestId.ToString(), bSuccess, *ActiveSlotId.ToString(), *GetNameSafe(GetWorld()), *Message.ToString());
+		*RequestId.ToString(), bSuccess, *CompletedSlot.ToString(), *GetNameSafe(GetWorld()), *Message.ToString());
 	OnChanged.Broadcast();
 	if (RequestId.IsValid())
 	{

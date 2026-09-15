@@ -1,16 +1,63 @@
 # 鱼运动与遛鱼逻辑：设计与实现
 
-## 2026-09-11：猫鱼/猫猫意图位移与合力钓鱼（当前规则）
+## 2026-09-14：体力账单按构成校验
+
+Runner 在采样时分别冻结绿色体力、黄色体力和绿色上限，支付前逐项比较。相同总量但绿黄构成变化，或余额不变但绿色上限变化，都会拒绝旧账单并记录 `Event=fishing_stamina_bill_rejected`。拒绝不写 ASC，旧账单不能重放；重新采样后的新账单仍按先绿后黄支付。没有新增属性、复制字段、资产、配置或存档格式。
+
+验证：隔离工作区 `Saved/Integration/FishingBiteTiming-20260914` 的 `Saved/BiteValidation/StaminaBuild.log` 编译成功；`StaminaReport/index.json` 的正式 Runner/ASC 集成测试 1 项通过、0 失败，覆盖上述两种余额变化、拒绝后重放、重新采样扣费及原有运动账单回归。属于 contract 与测试世界运行链证据；未运行真实打包联机，本项不改变正式 UI 表现。
+
+## 2026-09-14：黄色体力与搏斗外恢复（当前体力口径）
+
+来源：上游 `feature/design-backlog-batch1@d986285d` 的 `Knowledge/Design/设计修改记录.md`（2026-09-13 裁决②/⑥），以及仓库 `Knowledge/Design/GDD 系统分册/猫咪与状态/数值成长.md` §4/§5、鱼表 `鱼/鱼表格/第一版.csv` 的「限时Buff」列。本轮从本地 Debug `ee000ce4` 适配，未合并上游商店、成长选项或前端改造。
+
+绿色 `FightStamina` 与其 `MaxFightStamina` 保持点数和绿色段语义；新增 `YellowFightStamina` 默认 0、非负、可累积且不受绿段上限限制。总余额是绿＋黄，本帧容量是绿上限＋当前黄存量（不是黄段上限）。一次负向 `ApplyFishingStaminaDelta` 通过同一 GE 先扣绿再扣黄，正向只恢复绿；极小非零余额也必须结清。所有出力、主控采样、选鱼上下文、接管、结算和会话摘要读取总余额，低余额仍保持原力量，双段为零才无主动出力。猫耗尽后的既有钓鱼强拖/落水终局继续由原 Runner/Session 裁决。
+
+体力属于身体并跨竿保留。只有新身体属性播种可回满绿段；开始搏斗、取消、失败、终态、换人、重占有均不得补满。删除 Session 的恢复归属字段及 ASC 待重置链路，避免旧会话结束替另一根竿补体。
+
+搏斗外不出力且无外部负载时，从当前 CMC 结算帧起恢复 **5 点/秒**，只到绿色上限；取消 2 秒等待、先消耗后恢复、姿势前提及 20% 再入门槛。持续 `bExhausted`、耗尽自动松手和 `CanGripFromAuthority` 已退役；零余额仍可抓握，但无力量。逐来源的水平/竖直外力及待施加冲量仍阻止恢复，净力为零不构成休息。真正的主控搏斗用持握竿公开的 `bFightActive` 和服务查询到的 Runner 双重识别，由 Runner 独占付款；空竿和等待咬钩不被误当成搏斗。恢复沿本地既有一次 CMC 结算入口，不引入常驻计时器或第二份体力状态。
+
+正式基础放线恢复为 **0**，由 `/Game/Catfishing/Data/Fishing/DA_FishingFightBalance_Default.SlackStaminaRegenPerSecond` 以及新建资产脚本同步。Runner 保留明确配置加成后的恢复能力，仍受满线、身体负载和杆上线力限制；本轮不实现尚未接入的成长选项生产者。
+
+鱼表小彩鱼、风铃鱼、黑鱼各授予 **20 点**黄段，沿 `Condition::ConsumeCommittedFish` 的正式进食/重放链执行。同一请求只授予一次；三包既有运行 ID `LittleColorFish`、`WindbellFish`、`Blackfish` 保留。`GameMode::EnterRunPhaseFromStateTree(DayActive)` 对本世界猫清空黄段、保留绿段与 Poison；角色销毁随 ASC 释放。猫神祝福 +50 的数值已有文档，但当前项目没有正式祝福授予入口，本轮只提供黄段统一写口，不把该来源标为已实现。
+
+HUD 原 `FightStamina`/`FightStaminaMaximum`/`NormalizedFightStamina` 继续代表绿段，新增黄段/总余额/分段比例。正式 WBP 复用原体力条几何，NativePaint 在绿段容量后绘制黄色尾段；无黄段时兼容原只填写绿色比例的调用方。有黄色储备的离竿角色仍显示个人体力。精确文本、Debug 面板及默认落盘日志明确区分绿、黄、总余额。
+
+### 本轮影响对照与处理证据
+
+工作区基线：`ee000ce4`，保留此前资产生成器及旧节点清理；原工作区 UI/Online/前端资产、脚本和文档的未提交变更不纳入本轮。修改前未运行本轮基线构建/测试；已有文档记录初级竿耐久 150/500 基线差异和旧 WBP 警告，不能归因于本轮。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 属性/付款 | `AbilitySystem/Attributes/CatSurvivalAttributeSet`；Runner/Effort → `Core/CatAbilitySystemComponent::ApplyFishingStaminaDelta` | 原仅绿色，目标两段同一余额，恢复只绿 | 新增黄属性/复制/授予 GE；一张付款 GE 同时结算两段 | 属性→写口→读者 | 绿优先、无绿有黄、极小数、恢复夹取、重占有 | 已接入；YellowBalanceRecoveryAndFoodReplay、OperatorSamplesAndSingleASCSettlementRemainConservative |
+| 搏斗/生命周期 | Session 入场/终态/接管 → Runner、PhysicalRod、Service | 原入场/终态回满、只读绿；目标跨竿保留 | 删除 `StaminaOwner`、`bFightStaminaInitialized`、ASC pending reset 及旧接口；首次播种改名 | ASC→Runner→Session/杆/服务 | 真正提竿、取消、单步付款/重放、满线和原终局 | 已接入；OwnerRodHoldKeepsMouseFishingIndependentAndClearsLifecycle、原 Fishing 回归 |
+| 恢复/抓握 | CMC → `PhysicalEffort::SettleMovementFromAuthority`；Grab::TryLatch | 原消耗/2秒/姿势/20%门槛及耗尽松手 | 删除门槛；保留 `bUnderLoad`；真实搏斗独占付款 | 真实竿/Runner判定→个人CMC结算 | 受拉/抵消力/竖直/冲量、即时恢复、零体力持握 | 已接入；SupportStrengthAndImmediateRecovery、RealGripOppositionAndZeroStamina |
+| 吃鱼/跨天 | Items进食→Condition→Growth/ASC；GameMode DayActive | 原没有黄色生产和清除 | FishDefinition新增授予点数；既有进食重放边界授予；每日入口清黄 | 数据→ASC→Condition→天数入口 | 重复请求、三鱼正式可用性、翻天只清黄 | 三鱼数据已保存；原生进食/日入口测试及迁移报告 |
+| HUD/表现/诊断 | ASC delegate→HUDModel→HUDWidget/BP_RenderHUD；Debug面板 | 原只显示绿；目标绿字段不改义、黄段可见 | 新读字段/订阅与原生尾段绘制；解绑清句柄；每秒限频个人流水 | 付款/复制→DTO→原WBP | 旧DTO兼容、黄段余额/比例、客户端更新 | 四个正式BP类加载成功；正式HUD/个人HUD测试；真人画面仍待验收 |
+| 配置/资产/生成/Cook | PhysicalEffortSettings；3个Fish_*包；DA_FishingFightBalance_Default；`Scripts/create_fishing_fight_balance_asset.py` | 延迟/再入配置失效，鱼缺字段，放线默认3→0 | 删除两失效配置；新 `migrate_fishing_stamina_data.py` 按列名读表，只保存四包指定字段 | 接收schema→定向迁移→独立重载 | 不改运行ID、其他鱼数值/动画引用；四包重载，保留原Cook软引用入口 | 已定向迁移；没有新增资产路径，原Cook引用不变；Cook/打包未运行 |
+| 持久化/网络/退出 | 身体ASC复制；Session清理；GameMode天边界 | 黄段不进跨局存档；客户端只观察 | 使用GAS复制，删除旧恢复待办；无新增定时句柄 | 权威写→复制→HUD | Listen/三客户端；销毁/重新占有；默认日志 | 网络回归与完整证据见下；打包双端落盘未验收 |
+| 文档/检查 | 本指南；唯一进度入口 `Docs/Development/需求对齐差距清单.md`；既有测试目录 | 旧力竭/等待预期误导当前实现 | 更新本节及受影响断言；旧日期记录保留历史边界 | 按最终diff逐行复核 | 不以编译/静态检查替代行为/表现验收 | 本节维护证据，不另建业务进度账本 |
+
+验证日志与报告根目录：`Saved/Integration/FishingStaminaRecovery-20260914/Saved/StaminaValidation/`（相对主工作区）。最终验证结果如下。日志筛选：`physical_effort_settled`、`physical_effort_fight_gate`、`fishing_primary_stamina_bill`、`fish_yellow_stamina_grant`、`yellow_stamina_changed`、`daybreak_yellow_stamina_cleared`、`yellow_stamina_network_observed`。
+
+
+- `contract`：`FinalBuildEditor.log`、`FinalBuildGame.log` 均为 Win64 Development Succeeded；`VerifiedReport/index.json` 共73项，64项无警告通过、9项带警告通过、0失败、0未运行。警告包括无音频设备/World切换、联机旧控制纪元拒绝及既有失败路径诊断，未按错误消音。两资产脚本 `py_compile` 通过，最终 `git diff --check` 通过；旧重置/持续力竭/等待接口在 Source、Scripts、Config 中已无引用。
+- `runtime_behavior`：真实 ASC/CMC 出力、跨段与极小余额付款、5点/秒即时恢复、负载暂停、进食重放、真实提竿/取消、正式每日入口清黄均通过。`VerifiedTests.log` 的三条 `yellow_stamina_network_observed` 在同一 Session `FDB7E04C45E7792D485B029F9C59927B` 下分别确认三个客户端与房主的黄段均为20；这是单进程 Listen/三客户端 PIE 网络World验证。`data-migration.json` 记录3个鱼字段0→20与放线3→0，`data-audit.json` 记录新进程只读重载四包全部匹配；三鱼的完整 native readiness 由原生测试另行确认。
+- `presentation_delivery`：正式 `/Game/UI/HUD/WBP_CatHUD` 实例的原生绑定、绿色比例兼容、黄段文字和个人显示开关通过；相关4个正式Blueprint类均可加载。NullRHI测试不证明黄段实际画面、真人手感、Cook/打包或独立房主/客户端Development包落盘，以上仍未验收。猫神祝福来源、成长加成完整生产链未在本轮实施，继续保留模块缺口；不关闭 Fishing/Condition/Growth 的整体交付状态。
+
+以下旧日期章节中的历史通过记录不代表新体力规则已经验收；与本节冲突时以本节为准。
+
+
+## 2026-09-11：猫鱼/猫猫意图位移与合力钓鱼（力学保留，体力以09-14节为准）
 
 合力钓鱼保留一名明确主控，其余玩家通过实际抓猫、抓持握中的杆或推挤传力。没有 R 加入、辅助系数、合并力量、会话体力池或自动接任。每只猫的地面推拉/站稳共用本人力量上限；双手与多个接触点不重复增加这份力量。力量通过原 `FishingStrength × ForcePerStrengthNewtons` 转成 N，进入 CMC 时乘 100 转为 kg·cm/s²；质量、碰撞及被动地面阻力仍由原身体系统处理。
 
 鱼与猫共用 `Physics/Simulation/CatIntentMotionModel::ComputeDrain`：沿意图方向取得实际位移的有符号投影，缺失厘米数为 `max(0, 意图长度 - 实际投影)`，除以 100 后乘每米体力价格。想前进 10 cm、实际前进 6/0/−3 cm，对应缺失 4/10/13 cm；横移不抵扣，完成或超额完成免此项费用。瞬移和 CMC 解穿透纠偏不冒充实际进展。移动意图为输入方向和幅度 × 本人目标速度 × dt；不再按完成的身体位移收取旧做功费。鱼的出力、参考速度、独立每米价格与行为树不变，收线/转杆的实际做功仍走原计算。
 
-辅助者松方向键仍主动站稳，实际负载过强就被拖动，不锁定世界位置。以抵抗当前水平负载及惯性所需反力相对于自身上限的比例（0–1），乘支撑参考速度和 dt，生成沿反力方向的等效意图，再用同一缺失模型扣体；同样 10 N 负载下，强猫的相对用力更低。无负载、无漂移时不制造站稳费用。体力归零后主动地面力量为零，释放自己的辅助抓握，其他猫仍可拖动其身体；重量、碰撞和被动地面阻力保留。不会把强制脱手的辅助者升级为主控或触发新的倒地判定。
+辅助者松方向键仍主动站稳，实际负载过强就被拖动，不锁定世界位置。以抵抗当前水平负载及惯性所需反力相对于自身上限的比例（0–1），乘支撑参考速度和 dt，生成沿反力方向的等效意图，再用同一缺失模型扣体；同样 10 N 负载下，强猫的相对用力更低。无负载、无漂移时不制造站稳费用。绿＋黄归零后主动地面力量为零，保留已成立的抓握，其他猫仍可拖动其身体；重量、碰撞和被动地面阻力保留。零余额不会赋予协助者主控身份，也不触发新的倒地判定。
 
-**受力期间不恢复体力。** 逐个检查抓握/推挤等负载来源，并检查本帧待施加的冲量；两侧力抵消、只有竖直牵引、被别人抓住而自己不按键，都不能靠合力为零或主动出力为零回血。重力和正常地面支持力不属于这项外部玩法负载。辅助者完全卸载且不主动用力后等待 2 s，再以 5 点/s 恢复；再次受力清零等待，恢复到上限 20% 才重新开放辅助力量/抓握，原按住的手键必须松开后再按。主控仍由 Runner 唯一结算，保留原放线恢复速度及满线/零体力禁恢复规则，另以身体负载和本步杆上线力约束恢复资格；即使放线，被队友拉住也不回血。主控原收线、转杆、持竿支撑账单不由辅助者分摊。
+**受力期间不恢复体力。** 逐个检查抓握/推挤等负载来源，并检查本帧待施加的冲量；两侧力抵消、只有竖直牵引、被别人抓住而自己不按键，都不能靠合力为零或主动出力为零回血。重力和正常地面支持力不属于这项外部玩法负载。辅助者完全卸载且不主动用力时立即按 5 点/s 回绿；没有等待或再入比例。主控真正搏斗由 Runner 唯一结算，正式基础放线恢复为0，有加成时仍受满线与负载规则限制。主控原收线、转杆、持竿支撑账单不由辅助者分摊。
 
-新增 `[/Script/Catfishing.CatPhysicalEffortSettings]` 独立配置：`StaminaPerUnfulfilledMeter=2` 点/m，`SupportReferenceSpeedCmS=100` cm/s，`RecoveryPerSecond=5` 点/s，`RecoveryDelaySeconds=2` s，`ExhaustionResumeRatio=0.2`。它们使用新语义和独立默认，没有把旧每厘米做功价直接套入新模型。主控原 `CatMovementStaminaMultiplier` 仍是无量纲调价乘数；鱼仍使用原 Balance 的独立每米价格。角色默认子对象持有 `UCatPhysicalEffortComponent`，由服务器实际 CMC 完成一次后结算个人 ASC；预测只读，不扣体、不恢复。辅助体力在原 ASC 复制后由 HUD 显示，即使没有钓鱼 Session，未满的个人体力也可见，鱼信息仍仅随原会话显示。
+新增 `[/Script/Catfishing.CatPhysicalEffortSettings]` 独立配置：`StaminaPerUnfulfilledMeter=2` 点/m，`SupportReferenceSpeedCmS=100` cm/s，`RecoveryPerSecond=5` 点/s（延迟/再入比例配置已于09-14删除）。它们使用新语义和独立默认，没有把旧每厘米做功价直接套入新模型。主控原 `CatMovementStaminaMultiplier` 仍是无量纲调价乘数；鱼仍使用原 Balance 的独立每米价格。角色默认子对象持有 `UCatPhysicalEffortComponent`，由服务器实际 CMC 完成一次后结算个人 ASC；预测只读，不扣体、不恢复。辅助体力在原 ASC 复制后由 HUD 显示，即使没有钓鱼 Session，未满的个人体力也可见，鱼信息仍仅随原会话显示。
 
 修改前盘点及基线：工作区并行修改保存于 `Saved/Automation/CooperativeIntent-20260911/ParallelBaseline.patch`、`ParallelBaseline.txt`；期间已产生的 `e51e5a0` 入夜钓鱼提交和鱼类资产修改均保留，不纳入本轮检查点。基线 Editor 构建通过；`Report-20260911-111145-403` 的 197 项中 196 通过，唯一失败为 LightProps 联机夹具未抓到真正朋友身体。检查发现它在朋友抓握阶段每帧把瞄准重设为零，现只在该阶段之前重设；没有放宽臂长、贴手误差或换成虚拟握点。多人测试原来的“不扣辅助体力”断言由个人扣费/复制余额断言替换；对拉夹具显式设置强弱值，保留真实位移、碰撞、抓跳、退出及同竿身份验证。
 
@@ -19,7 +66,7 @@
 | 入口与主体归属 | `Source/Catfishing/Character/CatCharacter.cpp` 默认子对象；`Interaction/Grab/CatPhysicsGrabComponent::TryLatch`；Body/CMC 实际移动入口 | 原辅助仅身体传力、不结个人费用；保留原手键与单主控身份 | 新 `AbilitySystem/Physics/CatPhysicalEffortComponent` 读取个人 ASC；耗尽拒绝辅助抓握 | 接收方与属性就绪→CMC 调用→沿原 Grab 退出 | 真正双手/单手抓握、脱手、不自动接任 | 已接入；PhysicalEffort 与四端 GroupListenThreeClients 运行验证，最终结果见下 |
 | 共用核心与单位 | `Fishing/Simulation/CatFishingFightSimulator` 原鱼意图算法；`CatFishingOperatorWorkModel` 原身体做功算法 | 鱼保留签名投影行为；猫身体由完成距离做功转为未完成意图米价 | 提取 `Physics/Simulation/CatIntentMotionModel`；Operator 原入口为适配器；旧鱼专用 native 结构/函数删除 | 共用纯计算→鱼和猫调用→清旧纯计算 | 倒退/侧向/超额/零意图、时间分片、非法值 | 旧鱼测试迁入同一公式，方向与分片回归通过；无反射类型删除 |
 | 有限驱动、接触与支撑 | `Character/Physics/CatPhysicalBodyComponent::CaptureDriveSample/ComputeDriveForce` → `Character/CatCharacterMovementComponent::IntegrateGroundVelocity/UpdatePeerPushContacts`；模型形状和原生胶囊调用 | 原普通辅助电机/接触推力不受 ASC 力量约束；松键主动支撑目标明确 | 正式猫共用有限电机；接触由真实闭合速度、穿透和有限电机反力产生；零负载接触仍保留受限状态 | 原模型接触发现→单对互反力→每只猫实际 CMC | 等强站稳、强拉弱、零体力被拖、双手不叠力、跳跃/顶墙/小步 | 已替换；PhysicalEffort、GroupMovement/Collision、CMC 回归；主动反力不再套旧 30 N 总上限，被动碰撞部分仍为 30 N |
-| 结算、生命周期与恢复 | CMC `AdvanceFromAuthority/ResolvePenetrationImpl` → Effort `SettleMovementFromAuthority`；Body `HasExternalLoadFromAuthority` | 原无辅助扣费；不能以不按键/净力为零判断休息 | 实际帧一次个人 ASC 写入；剔除纠偏，ResetEpoch 变化跳过；逐来源含竖直/冲量受力禁止回血；耗尽放手和恢复门槛 | 冻结输入/负载→真实移动→扣体→退出或恢复 | 等强抵消、竖直、耗尽持续拖动、卸载等待重置、单次写入 | 已接入；SupportStrengthAndExhaustion/RealGripOppositionAndRelease 运行验证；默认日志可追踪恢复阻止原因 |
+| 结算、生命周期与恢复 | CMC `AdvanceFromAuthority/ResolvePenetrationImpl` → Effort `SettleMovementFromAuthority`；Body `HasExternalLoadFromAuthority` | 原无辅助扣费；不能以不按键/净力为零判断休息 | 实际帧一次个人 ASC 写入；剔除纠偏，ResetEpoch 变化跳过；逐来源含竖直/冲量受力禁止回血；零余额保留抓握、无等待恢复 | 冻结输入/负载→真实移动→扣体→退出或恢复 | 等强抵消、竖直、耗尽持续拖动、卸载即恢复、单次写入 | 已接入；SupportStrengthAndExhaustion/RealGripOppositionAndRelease 运行验证；默认日志可追踪恢复阻止原因 |
 | 主钓手衔接与资源 | `CatFishingFightRunner::UpdateOperatorIntentAndProperties/ApplyOperatorStaminaChanges`；原 Equipment/Session 写入 | 保留唯一主控账本与杆操作；身体收费切新公式，放线受身体负载时禁止恢复 | 真实位移保留负投影并剔除 CMC 纠偏；只读辅助物理结果；原杆账单不合并 | 新模型→采样→单一 ASC/Equipment→会话发布 | 补步不双扣、满线、力竭、收线/转杆、无人值守/同杆拾回 | OperatorSamplesAndSingleASCSettlementRemainConservative 通过；四端原会话/竿/装备身份和无自动接任验证；无持久化格式变更 |
 | 网络、UI 与动画 | `CatSurvivalAttributeSet::OnRep_FightStamina` → `UI/HUD/CatHUDModel/CatHUDWidget`；`/Game/UI/HUD/WBP_CatHUD` 原绑定 | 辅助无 Session 时原个人体力条被隐藏 | 新只读 `bShowPersonalStamina`；原 ASC 复制余额和 Effort 耗尽标记；鱼条仍沿会话显示 | 权威支付→属性复制→本地 HUD；原手部状态/动画消费不变 | 三客户端各自余额、正式 WBP 无 Session 时个人条/鱼条分离 | GroupListenThreeClients 核对三端余额；HUDPhysicalGrab 正式 WBP 契约验证；新真人画面见下述交付边界 |
 | 配置、资产、Cook 与兼容 | 新 `AbilitySystem/Config/CatPhysicalEffortSettings`；原 Balance/性格软引用、正式 BP/WBP；现有 `Build/Automation/verify_physics_grab_prototype.ps1` | 不改变鱼价、力量换算、生成器或二进制结构身份 | 独立 Config=Game 默认；不涉及资产生成迁移或 Cook 入口修改；保留无量纲调价字段 | C++ 默认子对象→原 BP 派生实例→现有打包入口 | 默认值/单位、正式 BP/WBP 加载、Editor/Game 构建 | 正式 BP 与 WBP 已实际运行；外部二进制消费者未穷举，未删除反射旧接口；新 Cook/打包未运行 |

@@ -4,7 +4,7 @@
 #include "Framework/Core/CatDomainCommandTypes.h"
 #include "CatFishingUseResults.generated.h"
 
-/** Fishing 使用冻结的 Begin 结果；bBaitFrozen 表示本次 Fishing 已从随身库存暂存一份鱼饵，直到 Commit 消耗或 Release 归还。 */
+/** Fishing 使用权 Begin 结果；bUseAccepted 表示竿已绑定且当前饵/漂通过准入，不表示扣除或预留鱼饵。 */
 USTRUCT(BlueprintType)
 struct FCatFishingUseFreezeResult
 {
@@ -34,9 +34,9 @@ struct FCatFishingUseFreezeResult
 	UPROPERTY(BlueprintReadOnly)
 	double RemainingRodDurability = 0.0;
 
-	/** 本次 Begin 是否真的从正式库存暂存了一份鱼饵；失败和重放不会重复扣量。 */
+	/** 当前会话使用权已接受；鱼饵数量直到真咬均不改变。 */
 	UPROPERTY(BlueprintReadOnly)
-	bool bBaitFrozen = false;
+	bool bUseAccepted = false;
 
 	/** Begin 后绑定鱼竿实例是否已经损坏；调用方用它阻止继续进入正常钓鱼流程。 */
 	UPROPERTY(BlueprintReadOnly)

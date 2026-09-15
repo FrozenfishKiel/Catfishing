@@ -21,10 +21,16 @@ public:
 	/** World 销毁时关闭新 Social 命令并清一局缓存。 */
 	virtual void Deinitialize() override;
 
-	/** Host teardown 时永久关闭全部新 Social 命令；已提交的求助和保护牌只随 World 生命周期释放。 */
+	/** Host teardown 时永久关闭全部新 Social 命令；Social 只持权限与信号，关门之后没有待收口的实物事务。 */
 	void CloseCommands();
 
-	/** 幂等检查普通恶作剧权限、冷却与 ProtectionSign；成功只表示 Social 允许，上层玩法仍负责自身命中/演出。 */
+	/**
+	 * 幂等检查普通恶作剧的距离、目标身体状态与 ProtectionSign；成功只表示 Social 允许，上层玩法仍负责自身命中/演出。
+	 *
+	 * 这里没有频率上限也没有时机限制（联机社交 §3.1.4，熟人自治）：连着整同一只猫、在人家搏斗最紧张的时候整，
+	 * 规则上都允许——被整正是戏。护栏只有两样：被整者立的防骚扰牌，和房主踢人。
+	 * 拒绝项只有三类：够不着、目标倒地、目标在牌子保护内或正臭着（臭臭鱼 90 秒「请勿靠近」）。
+	 */
 	FCatDomainCommandResult RequestMischief(AController* InstigatorController, AController* TargetController,
 		FGuid RequestId, FVector InteractionLocation);
 
@@ -49,8 +55,6 @@ private:
 	/** 判断项目 Character 当前可参与 Social 交互：角色/Condition 有效且未倒地。 */
 	static bool IsCharacterSociallyActive(const ACatCharacter* Character);
 
-	/** 玩家身份到上次普通恶作剧服务器时间；未裁冷却不会写入。 */
-	TMap<FString, double> LastMischiefTimeByPlayer;
 
 	/** 玩家身份到上次手动求助服务器时间；Giant 系统提示不占用该冷却。 */
 	TMap<FString, double> LastManualHelpTimeByPlayer;

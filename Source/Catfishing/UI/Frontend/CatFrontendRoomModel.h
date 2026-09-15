@@ -32,21 +32,47 @@ public:
 
 	/** 仅房主提交正式开始游戏意图；Online 会验证已加载的 Save 状态并在预载完成后旅行。 */
 	FCatOnlineResult StartGame();
+	FCatOnlineResult SetReady(bool bReady);
 
 	/** 请求刷新 Steam 好友缓存；好友数据变化通过 OnChanged 通知，失败信息通过 GetLastResultText 读取。 */
 	FCatOnlineResult RefreshFriends();
+	FCatOnlineResult JoinFriend(FCatOnlineFriendHandle FriendHandle);
+	FCatOnlineResult JoinLink(const FString& Input);
+	FCatOnlineResult RefreshPublicRooms();
+	FCatOnlineResult JoinPublicRoom(FCatSessionSearchHandle Handle);
+	FCatOnlineResult SubmitPassword(const FString& Password);
+	void CancelPassword();
+	FCatOnlineResult UpdateRoomSettings(const FString& Name, int32 Capacity, ECatSessionAccessPolicy Access, const FString& Password, bool bClearPassword);
 
 	/** 用好友行的 opaque 句柄请求平台邀请；Model 不解释或保存 Steam 身份。 */
 	FCatOnlineResult InviteFriend(FCatOnlineFriendHandle FriendHandle);
 
-	/** 返回 Online 的当前只读房间快照；来源不可用时返回默认空快照，不制造本地状态。 */
+	/**
+	 * 返回 Online 的当前只读房间快照；来源不可用时返回默认空快照，不制造本地状态。
+	 *
+	 * 房间属性（改名／密码／人数上限／语音开关）目前全是只读推导——名字与邀请码来自平台 Lobby，
+	 * 人数上限来自 `MaxCampSpawnPlayers`，语音开关在设置页而不在房间页。要让房主在房间页改这些，
+	 * 需要新建一条房间属性写口（Online 侧的 Lobby 属性提交＋快照回读），本轮没有建：
+	 * 属性清单与权限（谁能改、改了对已加入的人怎么生效）都还没裁。
+	 */
 	FCatOnlineSnapshot GetSnapshot() const;
 
 	/** 返回最近一次同步结果或 Online 邀请等待、Join 与错误的可展示文本；不返回平台错误、身份或连接信息。 */
 	FText GetLastResultText() const;
 
-	/** 当前用户是否可点击开始游戏；必须已经确认是 Host、没有并发操作且尚未预载。 */
+	/**
+	 * 当前用户是否可点击开始游戏；必须已经确认是 Host、没有并发操作且尚未预载。
+	 *
+	 * **这里刻意没有「全员已准备」这一项。** 现行关闭口径是房主不等待准备即可开始：
+	 * 房间成员事实 `FCatOnlineRoomMember` 只有 DisplayName 与 bIsLobbyOwner，平台 Lobby 里没有 ready 位，
+	 * 工程也没有第二条通道去造一个（`bIsReady`／`IsReady` 全库零命中）。
+	 * 主界面.md:25,45 写的是「全员准备后才能开始游戏」，与此冲突——改哪边要策划定：
+	 * 要么补房间属性写口与 ready 协议，要么把 ui 表改成现行口径。在定之前这里不自行加闸门，
+	 * 因为加一个没人写的 ready 位，结果就是谁都开不了局。
+	 */
 	bool CanStartGame() const;
+	/** 对指定快照计算相同规则，供只读 View 在一次刷新中保持字段一致。 */
+	static bool CanStartSnapshot(const FCatOnlineSnapshot& Snapshot);
 
 	/** 房间页的 native 变化入口；Online 快照变化和同步拒绝都会广播，View 随后重新读取查询。 */
 	FCatFrontendRoomModelChanged OnChanged;

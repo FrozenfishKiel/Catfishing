@@ -37,8 +37,10 @@ public:
 	/** 开始游戏流程；把入口标记为 StartGame、要求 SaveModel 刷新摘要并显示存档列表，不创建替身房间。 */
 	void RequestStartGameFlow();
 
-	/** 加入队伍占位请求；产品尚未定义流程，因此只保存可读反馈，不调用 RoomModel 的创建、搜索或加入接口。 */
+	/** 打开加入页并刷新好友房间；已有房间、存档或加入操作不能被抢占。 */
 	void RequestJoinParty();
+	void RequestJoinFriend(FCatOnlineFriendHandle FriendHandle);
+	void RequestJoinLink(const FString& Input);
 
 	/** 打开设置请求；显示设置页面，具体草稿初始化和数据读取仍属于 SettingsModel。 */
 	void RequestOpenFrontendSettings();
@@ -81,6 +83,7 @@ public:
 
 	/** 请求由房主开始游戏并消费可能同步结案的快照；正式 Start 预载或旅行由全局遮罩接管，失败保留 RoomModel 的正式反馈。 */
 	void RequestStartRoomGame();
+	void RequestToggleRoomReady();
 
 	/** 请求应用设置草稿；具体字段和提交结果由 SettingsModel 定义，Controller 只维持页面流程。 */
 	void RequestApplyFrontendSettings();
@@ -105,6 +108,9 @@ public:
 
 	/** 请求选择控制设置分类；当前只进入正式空分类说明，不发明控制字段或输入映射。 */
 	void RequestSelectControlsSettings();
+
+	/** 选择辅助功能分类（主界面.md:91 的第四个页签）；只切分类，不代 Model 写任何草稿。 */
+	void RequestSelectAccessibilitySettings();
 
 	/** 返回当前已被玩家选中且仍在 SaveModel 中有效的槽位标识；None 表示尚未选择或选择已失效。 */
 	FName GetSelectedSlotId() const;

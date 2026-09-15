@@ -1,4 +1,9 @@
-﻿#include "Fishing/Integration/CatFishingAimLibrary.h"
+#include "Fishing/Integration/CatFishingAimLibrary.h"
+#include "Fishing/Actors/CatFishEncounterActor.h"
+#include "Items/Fish/CatFishPickupActor.h"
+#include "EngineUtils.h"
+#include "Data/CatFishCatalogSettings.h"
+#include "Data/CatFishDefinition.h"
 
 #include "Equipment/Fragments/CatEquipmentFragment_Scoop.h"
 
@@ -168,7 +173,7 @@ bool UCatFishingAimLibrary::TryResolveScoopReach(const UCatEquipmentComponent* E
 	const UCatEquipmentDefinition* ScoopDefinition = SelectedScoopDefinitionId.IsNone() ? nullptr
 		: GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(SelectedScoopDefinitionId);
 	if (!ScoopDefinition || !ScoopDefinition->CanServeScoopNet()
-		|| !ScoopDefinition->IsRuntimeDefinitionReady() || ScoopDefinition->FindFragment<UCatEquipmentFragment_Scoop>()->ScoopReachCentimeters <= 0.0)
+		|| !ScoopDefinition->IsRuntimeDefinitionReady())
 	{
 		OutReachCentimeters = 0.0;
 		return false;
@@ -176,20 +181,18 @@ bool UCatFishingAimLibrary::TryResolveScoopReach(const UCatEquipmentComponent* E
 	return TryResolveScoopReach(ScoopDefinition, OutReachCentimeters);
 }
 
-// 精确抄网范围解析流程：先保留全局上限，再与服务器已验证实例所属定义的 reach 取较小值，公式与旧装备投影入口完全一致。
+// 精确实例沿用统一抄网距离；定义只证明该物品具备抄网能力，不恢复已退役的逐网距离上限。
 bool UCatFishingAimLibrary::TryResolveScoopReach(const UCatEquipmentDefinition* ScoopDefinition,
 	double& OutReachCentimeters)
 {
 	OutReachCentimeters = 0.0;
 	const UCatFishingSettings* FishingSettings = GetDefault<UCatFishingSettings>();
-	if (!FishingSettings || !FishingSettings->TryGetScoopReach(OutReachCentimeters) || !ScoopDefinition
-		|| !ScoopDefinition->CanServeScoopNet() || !ScoopDefinition->IsRuntimeDefinitionReady()
-		|| ScoopDefinition->FindFragment<UCatEquipmentFragment_Scoop>()->ScoopReachCentimeters <= 0.0)
+	if (!FishingSettings || !ScoopDefinition || !ScoopDefinition->CanServeScoopNet()
+		|| !ScoopDefinition->IsRuntimeDefinitionReady()
+		|| !FishingSettings->TryGetScoopReach(OutReachCentimeters))
 	{
 		return false;
 	}
-	OutReachCentimeters = FMath::Min(OutReachCentimeters,
-		ScoopDefinition->FindFragment<UCatEquipmentFragment_Scoop>()->ScoopReachCentimeters);
 	return FMath::IsFinite(OutReachCentimeters) && OutReachCentimeters > 0.0;
 }
 
@@ -239,4 +242,37 @@ bool UCatFishingAimLibrary::DoesScoopRayReachFish(const FVector ScooperLocation,
 	// 最近点到鱼心的水平距离 <= 半径 → 线段与圆相交（含线段整段在圆内的情形）。
 	return FVector2D::DistSquared(ClosestPointOnSegment, ToFish)
 		<= FMath::Square(static_cast<double>(RadiusCentimeters));
+}
+
+AActor* UCatFishingAimLibrary::ResolveFishingViewTarget(APlayerController* Controller, const FVector& Origin, const FVector& Direction)
+{
+	if (!Controller || !Controller->GetPawn() || !Controller->GetWorld() || Origin.ContainsNaN() || !Direction.IsNormalized()) return nullptr;
+	AActor* Best = nullptr;
+	double BestDot = -1.0;
+	double BestDepth = TNumericLimits<double>::Max();
+	const auto Consider = [&](AActor* Actor, const FVector& Center, double TargetRadius)
+	{
+		if (Actor->IsHidden() || Actor->IsActorBeingDestroyed() || FVector::Dist(Controller->GetPawn()->GetActorLocation(), Center) > 1500.0) return;
+		const FVector Delta = Center - Origin;
+		const double Depth = Delta.Size();
+		const double AlongView = FVector::DotProduct(Delta, Direction);
+		if (AlongView < 0.0 || (Delta - Direction * AlongView).SizeSquared() > FMath::Square(TargetRadius)) return;
+		const double Dot = FVector::DotProduct(Delta.GetSafeNormal(), Direction);
+		if (Dot > BestDot || (Dot == BestDot && Depth < BestDepth))
+		{
+			Best = Actor; BestDot = Dot; BestDepth = Depth;
+		}
+	};
+	for (TActorIterator<ACatFishEncounterActor> It(Controller->GetWorld()); It; ++It)
+	{
+		const UCatFishDefinition* Definition = GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(It->GetPresentationState().FishDefinitionId);
+		const double Radius = Definition ? Definition->ScoopTargetRadiusCentimeters : 0.0;
+		Consider(*It, It->GetFishingCollisionCenter(), FMath::Max(25.0, Radius));
+	}
+	for (TActorIterator<ACatFishPickupActor> It(Controller->GetWorld()); It; ++It)
+	{
+		if (It->GetPresentationState().State == ECatFishPickupState::Available)
+			Consider(*It, It->GetFishingCollisionCenter(), 25.0);
+	}
+	return Best;
 }

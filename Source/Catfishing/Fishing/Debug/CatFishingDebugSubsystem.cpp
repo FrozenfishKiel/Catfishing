@@ -165,8 +165,11 @@ namespace CatFishingDebugCommands
 		const TArray<FString> Participants{ StableNetId };
 		const double VisualScale = FishPresentation
 			? FishPresentation->ComputeUniformVisualScale(WeightKilograms) : 1.0;
+		// 调试给鱼把请求者当成上钩者：这条鱼的图鉴收集层就记给他，与正式路径同一条归属规则。
+		FCatCaptureConditionSnapshot DebugCondition;
+		DebugCondition.RegionId = TEXT("DebugSpawn");
 		if (!Pickup || !Pickup->InitializeFromAuthority(FGuid::NewGuid(), FGuid::NewGuid(), Definition,
-			WeightKilograms, VisualScale, TEXT("DebugSpawn"), Participants))
+			WeightKilograms, VisualScale, DebugCondition, StableNetId, Participants))
 		{
 			if (Pickup)
 			{
@@ -188,6 +191,80 @@ namespace CatFishingDebugCommands
 		TEXT("在玩家前方生成可按 E 叼起的死鱼。参数：FishDefinitionId WeightKg PlayerIndex。"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&GiveFishToPlayer),
 		ECVF_Cheat);
+
+#if WITH_DEV_AUTOMATION_TESTS
+	// 授予入口本身挂在 WITH_DEV_AUTOMATION_TESTS 下（CatEquipmentComponent.h:58），
+	// 所以这条命令跟着同一个开关；Editor 与 Development 构建都在。
+
+	// 一套钓具的授予流程：竿／漂／抄网／鱼护走非数量授予，饵与窝料走数量授予，
+	// 最后按正式 Use 入口把竿拿到手——不绕过装备事务，拿到的状态和正常流程一致。
+	static void GiveFishingKitToPlayer(const TArray<FString>& Args, UWorld* World)
+	{
+		const int32 PlayerIndex = Args.IsValidIndex(0) ? FMath::Max(0, FCString::Atoi(*Args[0])) : 0;
+		const int32 Portions = Args.IsValidIndex(1) ? FMath::Clamp(FCString::Atoi(*Args[1]), 1, 99) : 8;
+		APlayerController* Controller = ResolvePlayerController(World, PlayerIndex);
+		ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
+		UCatEquipmentComponent* Equipment = Character ? Character->GetEquipmentComponent() : nullptr;
+		if (!World || !Controller || !Controller->HasAuthority() || !Equipment)
+		{
+			UE_LOG(LogCatFishing, Warning,
+				TEXT("Event=fishing_debug_give_kit_rejected Reason=%s World=%s Controller=%s PlayerIndex=%d"),
+				Controller && !Controller->HasAuthority() ? TEXT("NotAuthority") : TEXT("MissingDependency"),
+				World ? *World->GetName() : TEXT("None"), *GetNameSafe(Controller), PlayerIndex);
+			return;
+		}
+
+		int32 Granted = 0;
+		const auto GrantItem = [&](const FName DefinitionId)
+		{
+			if (Equipment->GrantEquipmentFromAuthority(FGuid::NewGuid(),
+				Equipment->GetSnapshot().Revision, DefinitionId).bCommitted)
+			{
+				++Granted;
+			}
+		};
+		const auto GrantStack = [&](const FName DefinitionId, const int32 Quantity)
+		{
+			if (Equipment->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(),
+				Equipment->GetSnapshot().Revision, DefinitionId, Quantity).bCommitted)
+			{
+				++Granted;
+			}
+		};
+		// 一级竿＋羽毛漂是正式起步装（道具册鱼竿/鱼漂表首行）；抄网与鱼护非必带但手验收鱼要用。
+		for (const FName DefinitionId : {FName(TEXT("StarterRodT1")), FName(TEXT("FeatherFloat")),
+			FName(TEXT("StarterScoopNet")), FName(TEXT("FishGuard"))})
+		{
+			GrantItem(DefinitionId);
+		}
+		// 饵和窝料各有各的随身携带上限（道具册：普通饵 8 份、窝料 5 份），超出的份数库存那边会直接不收。
+		// 所以这里按各自上限夹一次，免得作弊指令看着给了 8 份窝料、实际只进 5 份，让人以为是 bug。
+		const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+		const int32 BaitPortions = InventorySettings
+			? FMath::Min(Portions, InventorySettings->GetBaitCarryLimit()) : Portions;
+		const int32 ChumPortions = InventorySettings
+			? FMath::Min(Portions, InventorySettings->GetChumCarryLimit()) : Portions;
+		GrantStack(TEXT("BugBait"), BaitPortions);
+		GrantStack(TEXT("BugChum"), ChumPortions);
+
+		// 竿要真的拿在手上才是「装备即状态」的钓鱼待机（钓鱼规则 §1:25），否则还得手动点一下背包。
+		const FGuid RodInstanceId = Equipment->GetSnapshot().RodItemInstanceId;
+		const bool bEquipped = RodInstanceId.IsValid()
+			&& Equipment->Use(FGuid::NewGuid(), Equipment->GetSnapshot().Revision, RodInstanceId).bCommitted;
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_debug_give_kit SessionOwner=%s PlayerIndex=%d GrantedEntries=%d Portions=%d BaitPortions=%d ChumPortions=%d RodEquipped=%s"),
+			*GetNameSafe(Character), PlayerIndex, Granted, Portions, BaitPortions, ChumPortions,
+			bEquipped ? TEXT("true") : TEXT("false"));
+	}
+
+	/** 手验用的一键钓具；只走正式授予与 Use 事务，不直写库存。 */
+	static FAutoConsoleCommandWithWorldAndArgs CmdGiveKit(
+		TEXT("cat.Fishing.Debug.GiveKit"),
+		TEXT("给玩家一整套钓具（一级竿／羽毛漂／抄网／鱼护／虫饵／虫窝料）并把竿拿到手，拿完即可抛竿。")
+		TEXT("参数：PlayerIndex（默认 0）BaitAndChumPortions（默认 8，实际按各自随身上限夹：饵 8／窝料 5）。"),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&GiveFishingKitToPlayer),
+		ECVF_Cheat);
+#endif
 }
 #endif
 
@@ -303,15 +380,12 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 			double StaminaScale = 1.0;
 			if (SessionSnapshot->bPerfectHook)
 			{
-				const UCatFishingSettings* FishingSettings = GetDefault<UCatFishingSettings>();
-				const UCatBitePersonalityDefinition* Bite = FishingSettings
-					? FishingSettings->FindBitePersonality(FishDefinition->BitePersonalityId) : nullptr;
-				if (Bite)
-				{
-					StaminaScale = Bite->PerfectFishStaminaMultiplier;
-				}
+				// 与正式入场削减同源；旧 Bite 完美倍率已退出运行链（2026-09-13）。
+				StaminaScale = GetDefault<UCatFishCatalogSettings>()->ResolvePerfectHookReduction(*FishDefinition).FishStaminaMultiplier;
 			}
-			const double MaximumStamina = FishDefinition->FishFightStamina * StaminaScale;
+			// 体力系数 × 实际重量才是本场体力上限；调试面板与会话必须同源，不能拿系数当体力点显示。
+			const double MaximumStamina = FishDefinition->ResolveInitialFightStamina(
+				SessionSnapshot->FishWeightKilograms) * StaminaScale;
 			const double StaminaPercent = MaximumStamina > 0.0
 				? FMath::Clamp(SessionSnapshot->FishFightStaminaRemaining / MaximumStamina * 100.0, 0.0, 100.0) : 0.0;
 			FishLine = FString::Printf(TEXT("FISH  Stamina %.1f / %.1f (%.1f%%)  Strength %.1f"),
@@ -370,15 +444,16 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 	{
 		if (const UAbilitySystemComponent* AbilitySystem = AbilityInterface->GetAbilitySystemComponent())
 		{
+			const double YellowStamina = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute());
 			const double CurrentStamina = AbilitySystem->GetNumericAttribute(
-				UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+				UCatSurvivalAttributeSet::GetFightStaminaAttribute()) + YellowStamina;
 			const double Strength = AbilitySystem->GetNumericAttribute(
 				UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
 			const double MaximumStamina = AbilitySystem->GetNumericAttribute(
-				UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+				UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute()) + YellowStamina;
 			CatLine = MaximumStamina > 0.0
-				? FString::Printf(TEXT("CAT   Stamina %.1f / %.1f  Strength %.1f"),
-					CurrentStamina, MaximumStamina, Strength)
+				? FString::Printf(TEXT("CAT   Green %.1f / %.1f  Yellow %.1f  Total %.1f  Strength %.1f"),
+					CurrentStamina - YellowStamina, MaximumStamina - YellowStamina, YellowStamina, CurrentStamina, Strength)
 				: FString::Printf(TEXT("CAT   Stamina %.1f  Strength %.1f"), CurrentStamina, Strength);
 		}
 	}

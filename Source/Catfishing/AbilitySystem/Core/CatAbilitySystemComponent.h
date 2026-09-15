@@ -62,22 +62,34 @@ public:
 	/** Character 的 ActorInfo 就绪后按 CatDefinitionId 整体播种身体初始属性；仅 authority 写入，已成功播种后重占有不会重置局内消耗。 */
 	bool InitializeCharacterAttributesFromDefinition(FName CatDefinitionId);
 
-	/** 按 ASC 当前 MaxFightStamina 把 FightStamina 回满到本次搏斗上限；上限未播种时 fail-closed。 */
-	bool InitializeFishingStaminaForSession();
+	/**
+	 * 身体属性播种时把 FightStamina 拉到当前 MaxFightStamina；上限未播种时 fail-closed。
+	 * 只服务角色初始播种与测试夹具：2026-09-11 裁决④删掉了「每次进搏斗把主控体力补满」，
+	 * 体力是跨竿资源，搏斗入口和任何终局路径都不得再调用它回满。
+	 */
+	bool SeedFightStaminaToMaximumFromAuthority();
 
-	/** 请求下一次 ActorInfo 可用时重置搏斗体力；无 Avatar 时保留待处理标记。 */
-	bool RequestFishingStaminaReset();
+	/** authority 通过正式 GameplayEffect 给力量加一次三选一增量；调用方只提交增量，不直接写属性基值。 */
+	bool ApplyFishingStrengthDelta(float Delta);
 
-	/** 在新搏斗开始前确认 FightStamina 与 MaxFightStamina 都可用；待重置未完成或数值非正都会拒绝进入会话。 */
-	bool EnsureFishingStaminaReadyForNewSession();
+	/** authority 提高（或降低）搏斗体力上限；提升时当场按同样的差值补当前体力，见升级效果页 §2。 */
+	bool ApplyMaxFightStaminaDelta(float Delta);
 
-#if WITH_DEV_AUTOMATION_TESTS
-	/** 自动化测试读取待重置标记；正式玩法只通过 EnsureFishingStaminaReadyForNewSession 观察结果。 */
-	bool HasPendingFishingStaminaReset() const { return bPendingFishingStaminaReset; }
-#endif
+	/** authority 增减黄色体力护盾段；负向扣盾夹到 0，正向无上限（数值成长页 §4）。 */
+	bool ApplyYellowFightStaminaDelta(float Delta);
 
-	/** 建立或刷新 GAS Owner/Avatar；若存在待处理体力重置，会在 ActorInfo 恢复后补做一次。 */
-	virtual void InitAbilityActorInfo(AActor* InOwnerActor, AActor* InAvatarActor) override;
+
+	/** authority 清空当天黄色体力；清晨流程调用，不改变绿色体力。 */
+	bool ClearYellowFightStaminaFromAuthority();
+
+	/** 读取当前黄色储备；HUD 与搏斗结算共用属性快照。 */
+	float GetYellowFightStamina() const;
+
+	/** 返回绿色与黄色当前体力之和，供搏斗判断实际可支付额度。 */
+	double GetTotalFightStamina() const;
+
+	/** 返回绿色上限加当前黄色储备，供 HUD 展示当前总容量。 */
+	double GetTotalFightStaminaCapacity() const;
 
 	/** 清理 ActorInfo 前先清输入状态；防止无占有期间失效输入句柄继续激活 Ability。 */
 	virtual void ClearActorInfo() override;
@@ -104,9 +116,6 @@ private:
 
 	/** 当前仍被按住的 Ability Spec；WhileInputActive Ability 依赖它在后续帧保持激活。 */
 	TArray<FGameplayAbilitySpecHandle> InputHeldSpecHandles;
-
-	/** FightStamina 等待 ActorInfo 恢复后按 MaxFightStamina 回满的标记；只由 authority 生命周期和会话入口读写。 */
-	bool bPendingFishingStaminaReset = false;
 
 	/** 配置默认 AbilitySet 的授予句柄集合；ASC authority 写入，最终销毁时用它整组撤销输入 Ability 和初始效果。 */
 	FCatGrantedAbilitySetHandles ConfiguredDefaultAbilitySetHandles;

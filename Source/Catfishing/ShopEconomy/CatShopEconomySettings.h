@@ -37,4 +37,9 @@ public:
 	/** 默认鱼类收购价表；行按鱼种 ID 提供每千克金币系数，缺表、缺行或坏系数由服务端整单拒绝。 */
 	UPROPERTY(Config, EditAnywhere, Category = "FishSale")
 	TSoftObjectPtr<UDataTable> DefaultFishSalePriceTable;
+
+	/** 毕业兑换物；单价只读取 DefaultShopCatalogTable 中同一商品的配置。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Settlement")
+	FName SettlementDriedFishDefinitionId = TEXT("buff_driedfish");
+
 };

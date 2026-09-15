@@ -20,10 +20,11 @@ UCLASS()
 class CATFISHING_API UCatFishingService : public UWorldSubsystem
 {
 	GENERATED_BODY()
+	friend class FCatRunTransientCleanupTest;
 
 public:
 	/** 每人场上合计最多两根实体竿；手持和损坏但尚未收回的竿也占名额。 */
-	static constexpr int32 MaximumDeployedRodsPerPlayer = 2;
+	// 墓碑（2026-09-13）：每人部署竿上限改读 CatFishingSettings，默认仍为两根。
 
 	/** 只在 authority Game World 创建服务；客户端通过复制 Session 观察。 */
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
@@ -38,9 +39,17 @@ public:
 	FCatFishingCommandResult LeaveRod(AController* Controller, const FCatLeaveRodCommand& Command);
 	FCatFishingCommandResult PackRod(AController* Controller, const FCatPackRodCommand& Command);
 
-	/** 旧协作协议转到指定会话，再统一走 OperateRod 的距离、资格与容量校验。 */
-	FCatDomainCommandResult SubmitFightAssist(FGuid FishingSessionId, AController* AssistingController,
-		FGuid RequestId, int64 ExpectedRevision);
+	/**
+	 * 换人握手的唯一入口（多人钓鱼附篇 §2.4）。同一个键按发起者的身份分派：
+	 * 主钓手按＝挂出换人请求、再按＝取消；岸上替补按＝接手最近一根挂着请求的竿。
+	 * 请求无时限挂起、没有超时出口，挂着期间这一竿没有任何特殊状态。
+	 * 墓碑（2026-09-14）：删除接手体力门槛；Knowledge/Design/设计修改记录.md 2026-09-13 裁决④；
+	 * 接手瞬间完成，鱼与竿的状态完全继承，猫体力各是各的，图鉴归属仍在原始上钩者身上（会话冻结的 CatchFisher 不动）。
+	 */
+	FCatFishingCommandResult SubmitFishingHandoff(AController* Controller, const FCatRodCommandContext& Context);
+
+	/** 范围内最近一根「主钓手已挂出换人请求」的竿；替补按键时用它找接手对象，不接受客户端指定目标。 */
+	ACatFishingRodActor* FindNearestRodAwaitingHandoff(const FVector& WorldLocation, double MaxDistanceCentimeters);
 
 	/** 把 NearShore 抢抄意图转给指定会话；服务不自己创建鱼或选择胜者。 */
 	FCatScoopResult RequestScoop(FGuid FishingSessionId, AController* ScoopingController, const FCatScoopCommand& Command);
@@ -53,8 +62,8 @@ public:
 	void FlushDeferredOperatorRemovalsFromAuthority();
 
 	/**
-	 * Run 启动失败或进入结束阶段时终止当前会话、释放全部竿位并恢复角色移动；夜晚不调用。
-	 * 该入口不永久关闭 World 内的 FishingService，下一天仍可重新使用已部署鱼竿。
+	 * Run 启动失败、献祭、翻天或终局时终止当前会话并释放全部竿位；普通入夜不调用。
+	 * 该入口不永久关闭 World 内的 FishingService，下一天使用场上鱼竿必须重新准备并建立新 Session，不继承旧倒计时。
 	 */
 	void SuspendFishingAndReleaseOperators();
 	/** Run 更新新咬钩准入后刷新等待计时，不结束真咬窗口或搏斗、不释放竿位。 */
@@ -69,6 +78,13 @@ public:
 	/** 按 Controller 当前占据的主操作位查询该鱼竿上的活动 Session；离开竿位后不再把旧会话路由给玩家输入。 */
 	bool TryGetActiveSessionForController(const AController* Controller, FGuid& OutFishingSessionId,
 		FCatFishingSessionSnapshot& OutSnapshot);
+
+	/**
+	 * 主动道具闸门：从咬钩成立（真咬）到本竿结局落定，这只猫禁止主动掏用道具；抄网是收鱼出口，由调用方单独放行。
+	 * 只读本人当前主控竿上的会话阶段，不牵连同场其他玩家——别人照常能用道具、能为同一个窝补料。
+	 * 补窝走的是同一条闸门，不另立一套搏斗判定（钓鱼规则 §2.1、§3.3）。
+	 */
+	bool IsActiveItemUseBlockedForController(const AController* Controller);
 
 	/** 只读查询该玩家任意一根存活登记竿；不表示当前操作或收纳目标，业务命令须按 RodActorId 解析。 */
 	ACatFishingRodActor* FindDeployedRod(const APlayerState* PlayerState);
@@ -97,8 +113,7 @@ public:
 	/** Only validates or revokes explicit primary control. Physical helpers never become Session members. */
 	bool ReconcilePrimaryControlFromPhysicalGrip(ACatFishingRodActor* Rod);
 
-	/** 抄网目标粗筛：按鱼与请求者的水平距离找最近的已上钩会话；精确范围仍由 Session 裁决。 */
-	ACatFishingSession* FindNearestScoopableSession(const FVector& WorldLocation, double MaxDistanceCentimeters);
+	// 墓碑（2026-09-14，T15；钓鱼规则 §5.5）：最近 Session 搜索已删除，准星目标由 CatFishingAimLibrary 统一解析。
 
 	/**
 	 * 空闲竿接管：会话唯一性属于鱼竿，主控可由不同玩家显式取得；
@@ -112,6 +127,13 @@ public:
 	/** 仅当当前登记值精确匹配 ExpectedRodActor 时注销，避免旧 Actor 迟到回调删除替代鱼竿。 */
 	void UnregisterDeployedRod(const APlayerState* PlayerState, const ACatFishingRodActor* ExpectedRodActor);
 
+	/**
+	 * 声明：把一根已经报废的鱼竿从世界里彻底撤掉——释放操作位、注销服务索引、销毁 Actor。
+	 * 用途：断竿报废（道具册「鱼竿断裂后直接消失」）。库存那半边由 Equipment 的报废入口负责，这里只收世界这半边。
+	 * 边界：它不判断竿是不是真的断了，调用方负责；不动任何库存实例，也不补发替代竿。
+	 */
+	void RetireDeployedRodActorFromAuthority(ACatFishingRodActor* RodActor);
+
 	/** 仅统计当前存活且未终态的 Session，不暴露服务器索引。 */
 	int32 GetTrackedSessionCountForDiagnostics() const;
 
@@ -121,6 +143,7 @@ public:
 private:
 	friend class FCatFishingBiteTimingWorldTest;
 	friend class FCatFishingPhysicalGripGraphTest;
+	friend class FCatFishingOperatorRunnerIntegrationTest;
 	friend class FCatFishingPhysicalCouplingTest;
 	friend class FCatFishingCMCStabilityTest;
 	friend class FCatFishingFormalPhysicalRunnerTest;
@@ -153,6 +176,14 @@ private:
 
 	/** 新 Fishing 写口的身体 gate；要求请求者仍拥有当前 Character 且未倒地，防止绕过 CommandComponent 的调用继续放竿、接竿或抛竿。 */
 	static bool CanControllerStartFishingAction(const AController* Controller);
+
+	/**
+	 * 这位替补能不能从当前主钓手手里接过这根竿：要求该竿上的会话确实挂着换人请求、请求人仍是当前主控，
+	 * 且替补体力恢复到门槛以上。不满足时写出具体拒绝原因，调用方原样回送给玩家。
+	 * 门槛未配置（<=0）时放行并记一次 Warning——宁可少一道闸，也不要因为没配一个数就让换人整条链静默死掉。
+	 */
+	bool CanAcceptHandoffTakeover(const ACatFishingSession* Session, const ACatFishingRodActor* Rod,
+		const AController* Controller, ECatFishingCommandError& OutError) const;
 
 	/** 用同一服务器谓词解析单个战斗参与者；必须是 Active Controller/当前 Character、未倒地且两项独立能力都为正有限值。 */
 	static bool TryGetFightCapability(const AController* Controller, FString& OutStableNetId,

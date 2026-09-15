@@ -34,11 +34,14 @@ public:
 	ECatWaterExposureUpdate UpdateWaterExposureFromAuthority(const FCatWaterRegionHandle& WaterRegion,
 		double DeltaSeconds, double& OutImmersionDepthCentimeters);
 
-	/** 在实物鱼被不可逆移除前只读校验食用定义和成长入口；返回 None 才允许上层提交库存事务。 */
-	ECatDomainCommandError ValidateFishConsumption(const UCatFishDefinition* FishDefinition) const;
+	/** 服务器更新纯表现疲惫档；相同值不发布，不影响体力或物品效果。 */
+	void SetFatigueTierFromAuthority(ECatFatigueTier NewTier);
 
-	/** 实物鱼消费提交后推进成长经验，并按请求标识重放首次结果，避免重试重复授予成长。 */
-	FCatDomainCommandResult ConsumeCommittedFish(FGuid RequestId, const UCatFishDefinition* FishDefinition);
+	/** 在实物鱼被不可逆移除前只读校验食用定义、实例实际重量（千克）和成长入口；返回 None 才允许上层提交库存事务。 */
+	ECatDomainCommandError ValidateFishConsumption(const UCatFishDefinition* FishDefinition, double WeightKilograms) const;
+
+	/** 实物鱼消费提交后按实际重量（千克）推进成长经验，并按请求标识重放首次结果，避免重试重复授予成长。 */
+	FCatDomainCommandResult ConsumeCommittedFish(FGuid RequestId, const UCatFishDefinition* FishDefinition, double WeightKilograms);
 
 	/** 服务器开发验证入口设置离散倒地状态；首次倒地会收口进行中的钓鱼，重复同值不会重复发布。 */
 	bool SetDownedFromAuthority(bool bNewDowned);

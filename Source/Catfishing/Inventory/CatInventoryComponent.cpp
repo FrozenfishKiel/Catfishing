@@ -1,4 +1,6 @@
-﻿#include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatWorldDropProtectionComponent.h"
+#include "Growth/CatGrowthComponent.h"
 
 #include "GameFramework/Pawn.h"
 #include "Character/CatCharacter.h"
@@ -6,6 +8,8 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Condition/CatConditionComponent.h"
 #include "Engine/World.h"
+#include "Equipment/CatEquipmentDefinition.h"
+#include "Fishing/CatFishingService.h"
 #include "FishContainers/CatFishGuardActor.h"
 #include "FishContainers/CatFishTankActor.h"
 #include "FishContainers/CatFishPickupSettings.h"
@@ -13,6 +17,8 @@
 #include "Inventory/CatFishInventoryItemInstance.h"
 #include "Items/Fish/CatFishPickupActor.h"
 #include "Inventory/CatInventoryWorldItem.h"
+#include "Inventory/CatInventoryAccessRules.h"
+#include "Camp/CatCampSettings.h"
 #include "Inventory/CatInventoryItemDefinition.h"
 #include "Inventory/CatInventoryItemInstance.h"
 #include "Inventory/CatInventorySettings.h"
@@ -22,6 +28,33 @@
 #include "UI/Inventory/CatInventoryModel.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogCatInventory, Log, All);
+
+namespace
+{
+	// 钓鱼主动道具闸门（钓鱼规则 §3.3）：从咬钩成立到本竿结局落定，这只猫不能再主动掏用道具。
+	// 1. 闸门只按使用者本人当前主控竿的会话阶段判；同场其他玩家照常能用道具、能为同一个窝补料。
+	// 2. 抄网是收鱼出口，单独放行；经这条路径的其余物品一律拒绝——吃鱼、放鱼护、恢复品、背包里换装都在内。
+	// 3. 不在这条路径上的两件事各自有归属：窝料投放由 ChumPlacementService 用同一条闸门拦，
+	//    切饵走装备选择 RPC 且设计明确「到点后再切饵无意义但无害」（§3.2），本来就不归这条闸门管。
+	// 4. 备装时已穿戴的被动效果不经过使用路径，不受影响。
+	// 5. FishingService 只在服务器 Game World 创建，客户端预检查不到会话时按放行处理，权威提交那一层仍会拒。
+	bool IsBlockedByActiveFishingItemGate(const AController* RequestingController, const APawn* UserPawn,
+		const UCatInventoryItemDefinition* Definition)
+	{
+		const AController* Controller = RequestingController ? RequestingController
+			: (UserPawn ? UserPawn->GetController() : nullptr);
+		const UWorld* World = UserPawn ? UserPawn->GetWorld() : (Controller ? Controller->GetWorld() : nullptr);
+		UCatFishingService* Fishing = World ? World->GetSubsystem<UCatFishingService>() : nullptr;
+		if (!Fishing || !Fishing->IsActiveItemUseBlockedForController(Controller))
+		{
+			return false;
+		}
+		const UCatEquipmentDefinition* Equipment = Cast<UCatEquipmentDefinition>(Definition);
+		return Equipment == nullptr || !Equipment->CanServeScoopNet();
+	}
+
+}
+
 
 // 操作提交先查同请求载荷的终态，再复核当前槽位身份、数量与定义声明；副作用前占住请求，避免回调重入重复执行。
 // 实例负责行为，库存只维护身份与事务边界；失败也缓存并回执，菜单不得把旧请求改载荷重发。
@@ -446,6 +479,19 @@ UCatInventoryItemInstance* UCatInventoryComponent::AddEntry(
 		return nullptr;
 	}
 
+	// 随身携带总量是格数、单格堆叠之外的第三道（道具册：普通饵 8 份、窝料 5 份）。
+	// 超出的份数不入库，InOutCount 保留余数，bOutFullyAdded 随之为 false，上游整批预检据此整单拒绝。
+	const int32 CarryAllowance = GetRemainingCarryAllowanceForDefinition(*ItemDefinition);
+	const int32 RejectedByCarryLimit = FMath::Max(0, InOutCount - CarryAllowance);
+	if (RejectedByCarryLimit > 0)
+	{
+		InOutCount -= RejectedByCarryLimit;
+		UE_LOG(LogCatInventory, Log,
+			TEXT("Event=inventory_carry_limit_clamped Owner=%s Definition=%s Requested=%d Allowance=%d"),
+			*GetNameSafe(GetOwner()), *ItemDefinition->GetInventoryDefinitionId().ToString(),
+			InOutCount + RejectedByCarryLimit, CarryAllowance);
+	}
+
 	UCatInventoryItemInstance* FirstAcceptedInstance = nullptr;
 	const int32 MaxStackCount = GetMaxStackCountForDefinition(*ItemDefinition);
 
@@ -517,6 +563,7 @@ UCatInventoryItemInstance* UCatInventoryComponent::AddEntry(
 		InventoryList.MarkItemDirty(TargetEntry);
 	}
 
+	InOutCount += RejectedByCarryLimit; // 余数交还调用方，让它看到真实的未入库份数。
 	bOutFullyAdded = InOutCount == 0;
 	if (FirstAcceptedInstance != nullptr)
 	{
@@ -549,6 +596,18 @@ void UCatInventoryComponent::AddEntry(UCatInventoryItemInstance* ItemInstance, i
 	if (TargetDefinition == nullptr)
 	{
 		return;
+	}
+
+	// 与按定义入库同一道随身携带总量；按实例入库同样要过（拾取地上的饵、从公库拖一叠饵进背包都走这里）。
+	const int32 CarryAllowance = GetRemainingCarryAllowanceForDefinition(*TargetDefinition);
+	const int32 RejectedByCarryLimit = FMath::Max(0, InOutCount - CarryAllowance);
+	if (RejectedByCarryLimit > 0)
+	{
+		InOutCount -= RejectedByCarryLimit;
+		UE_LOG(LogCatInventory, Log,
+			TEXT("Event=inventory_carry_limit_clamped Owner=%s Definition=%s Requested=%d Allowance=%d"),
+			*GetNameSafe(GetOwner()), *TargetDefinition->GetInventoryDefinitionId().ToString(),
+			InOutCount + RejectedByCarryLimit, CarryAllowance);
 	}
 
 	UCatInventoryItemInstance* FirstAcceptedInstance = nullptr;
@@ -644,6 +703,7 @@ void UCatInventoryComponent::AddEntry(UCatInventoryItemInstance* ItemInstance, i
 		InventoryList.MarkItemDirty(TargetEntry);
 	}
 
+	InOutCount += RejectedByCarryLimit; // 余数交还调用方，让它看到真实的未入库份数。
 	bOutFullyAdded = InOutCount == 0;
 	if (FirstAcceptedInstance != nullptr)
 	{
@@ -822,6 +882,17 @@ bool UCatInventoryComponent::ExportInventorySlotsFromAuthority(TArray<FCatInvent
 // 1. Save 已按磁盘 DTO 创建并恢复实例；库存先拒绝损坏 entry、未就绪定义、非法数量和重复实例。
 // 2. 目标容量可能尚未初始化出格子，因此只临时补齐内存中的空 entry 供槽位规则读取，不广播半份恢复状态。
 // 3. 验证失败会移除临时空 entry；全部通过后才一次性替换正式格子，避免部分恢复覆盖现有库存。
+bool UCatInventoryComponent::RestoreTeamStorageRoleFromAuthority(const ECatTeamStorageRole Role)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || uint8(Role) > uint8(ECatTeamStorageRole::SupplyStore)) return false;
+	if (TeamStorageRole == Role) return true;
+	for (const FCatInventoryEntry& Entry : InventoryList.Entries)
+		if (Entry.Instance) return false;
+	if (!ActiveHeldItemEntries.IsEmpty()) return false;
+	TeamStorageRole = Role;
+	return true;
+}
+
 bool UCatInventoryComponent::RestoreInventorySlotsFromAuthority(const TArray<FCatInventoryEntry>& RestoredSlots,
 	const int32 MinimumSlotCount, FText& OutFailure)
 {
@@ -2087,6 +2158,8 @@ FCatDomainCommandResult UCatInventoryComponent::ReleaseItemToWorldFromAuthority(
 		return Finish(ECatDomainCommandError::InvalidPayload);
 	if (!Character->GetConditionComponent() || Character->GetConditionComponent()->GetSnapshot().bDowned)
 		return Finish(ECatDomainCommandError::PermissionDenied);
+	if (GetOwner() != Character && !CatInventoryAccessRules::IsHostReachable(GetOwner(), Character, GetDefault<UCatCampSettings>()))
+		return Finish(ECatDomainCommandError::PermissionDenied);
 	// Carry 事务流程：
 	// 1. 仅鱼护/鱼缸里完整的一条鱼可进入嘴部，格位、实例、访问和倒地校验仍沿本方法完成。
 	// 2. 先复用或首次生成同一世界 Actor，再认领空嘴并在任何库存广播前完成附着；失败不扣格也不改来源 Actor。
@@ -2102,13 +2175,14 @@ FCatDomainCommandResult UCatInventoryComponent::ReleaseItemToWorldFromAuthority(
 			const FCatInventoryEntry* CurrentEntry = GetInventoryEntryAtSlot(SlotIndex);
 			return CurrentEntry && CurrentEntry->Instance == FishItem && CurrentEntry->StackCount == 1
 				&& FishItem && FishItem->GetItemInstanceId() == ItemInstanceId
-				&& FishItem->GetWorldActor() == OriginalWorldActor && FishItem->GetRuntimeOwnerActor() == OriginalRuntimeOwner;
+				&& FishItem->GetWorldActor() == OriginalWorldActor && FishItem->GetRuntimeOwnerActor() == OriginalRuntimeOwner
+				&& CatInventoryAccessRules::ResolveReachableFishContainer(GetOwner(), Character) == this;
 		};
-		const ACatFishGuardActor* SourceGuard = Cast<ACatFishGuardActor>(GetOwner());
-		const ACatFishTankActor* SourceTank = Cast<ACatFishTankActor>(GetOwner());
-		const bool bFishContainer = (SourceGuard && SourceGuard->GetFishInventoryComponent() == this)
-			|| (SourceTank && SourceTank->GetFishInventoryComponent() == this);
-		if (!bFishContainer || !FishItem || Quantity != 1 || Entry->StackCount != 1 || Character->GetMouthCarriedActor() != nullptr)
+		const bool bFishContainer = CatInventoryAccessRules::ResolveReachableFishContainer(GetOwner(), Character) == this;
+		if (!bFishContainer || !FishItem || !FishItem->GetFishDefinition()
+			|| !FishItem->GetFishDefinition()->IsInventoryRuntimeDefinitionReady()
+			|| !FMath::IsFinite(FishItem->GetFishWeightKilograms()) || FishItem->GetFishWeightKilograms() <= 0
+			|| Quantity != 1 || Entry->StackCount != 1 || Character->GetMouthCarriedActor() != nullptr)
 			return Finish(ECatDomainCommandError::PermissionDenied);
 		// 容器取鱼必须有真实嘴部挂点；在生成载体或认领嘴部前拒绝，不能退化成附着到空骨架根。
 		const UCatFishPickupSettings* PickupSettings = GetDefault<UCatFishPickupSettings>();
@@ -2398,6 +2472,7 @@ FCatDomainCommandResult UCatInventoryComponent::ReleaseItemToWorldFromAuthority(
 		Body->SetSimulatePhysics(true);
 		Body->SetPhysicsLinearVelocity(Character->GetActorForwardVector().GetSafeNormal2D() * Settings->DropForwardSpeed + FVector(0, 0, Settings->DropUpwardSpeed));
 	}
+	UCatWorldDropProtectionComponent::ArmFromAuthority(WorldActor);
 	WorldActor->ForceNetUpdate();
 	const FCatDomainCommandResult Completed = Finish(ECatDomainCommandError::None);
 	BroadcastInventoryChange(SlotIndex);
@@ -2526,7 +2601,7 @@ const FCatInventoryEntry* UCatInventoryComponent::GetInventoryEntryAtSlot(const 
 	return &InventoryList.Entries[SlotIndex];
 }
 
-// 使用预检流程：默认使用拥有者 Pawn，槽位、实例和定义都有效后才交给实例自己的真实 Use 语义判断。
+// 使用预检流程：默认使用拥有者 Pawn，槽位、实例和定义都有效后才过钓鱼道具闸门，最后交给实例自己的真实 Use 语义判断。
 bool UCatInventoryComponent::CanUseItemAtSlot(const int32 SlotIndex, APawn* UserPawn) const
 {
 	if (GetOwner() == nullptr)
@@ -2546,6 +2621,11 @@ bool UCatInventoryComponent::CanUseItemAtSlot(const int32 SlotIndex, APawn* User
 
 	const FCatInventoryEntry& Entry = InventoryList.Entries[SlotIndex];
 	if (Entry.Instance == nullptr || Entry.StackCount <= 0 || Entry.Instance->GetItemDefinition() == nullptr)
+	{
+		return false;
+	}
+
+	if (IsBlockedByActiveFishingItemGate(nullptr, UserPawn, Entry.Instance->GetItemDefinition()))
 	{
 		return false;
 	}
@@ -2593,6 +2673,15 @@ FCatDomainCommandResult UCatInventoryComponent::UseItemAtSlotFromAuthority(
 		else if (Definition == nullptr || Definition->GetInventoryDefinitionId().IsNone())
 		{
 			Result.Error = ECatDomainCommandError::InvalidPayload;
+		}
+		else if (IsBlockedByActiveFishingItemGate(UseContext.RequestingController, UseContext.UserPawn, Definition))
+		{
+			// 咬钩成立到本竿结局落定之间禁止主动掏道具；抄网已在闸门内单独放行。
+			// 这是本条唯一的权威拒绝点：随身使用与「指定宿主库存使用」两条 RPC 都汇到这里。
+			DefinitionId = Definition->GetInventoryDefinitionId();
+			ItemInstanceId = Instance->GetItemInstanceId();
+			StackCount = Entry->StackCount;
+			Result.Error = ECatDomainCommandError::InvalidPhase;
 		}
 		else
 		{
@@ -2737,6 +2826,13 @@ UCatInventoryComponent::FInventoryExchangeMutation UCatInventoryComponent::Execu
 	}
 
 	FCatInventoryEntry& DropEntry = DropInventory->InventoryList.Entries[DropSlotIndex];
+	if (DraggedOwner->GetWorld() != DropOwner->GetWorld())
+	{
+		Result.Error = ECatDomainCommandError::PermissionDenied;
+		UE_LOG(LogCatInventory, Warning, TEXT("Event=inventory_exchange_rejected Reason=WorldMismatch World=%s NetMode=%d Authority=1 LocalRole=%d Source=%s Target=%s"),
+			*GetNameSafe(DraggedOwner->GetWorld()), DraggedOwner->GetNetMode(), DraggedOwner->GetLocalRole(), *GetNameSafe(DraggedOwner), *GetNameSafe(DropOwner));
+		return Result;
+	}
 	if (!DropInventory->CanAcceptInventoryEntryAtSlot(DraggedEntry, DropSlotIndex))
 	{
 		Result.Error = ECatDomainCommandError::InvalidPayload;
@@ -2757,6 +2853,16 @@ UCatInventoryComponent::FInventoryExchangeMutation UCatInventoryComponent::Execu
 	const UCatInventoryItemDefinition* DropDefinition =
 		DropEntry.Instance != nullptr ? DropEntry.Instance->GetItemDefinition() : nullptr;
 
+	// 随身携带总量只在跨库存移动时问：同一份库存内部整理不改变这只猫身上带了多少
+	//（与 09-11 裁决③同源口径——挡的是涉及别处容器的转移，不挡整理自己的背包）。
+	const bool bCrossInventoryExchange = DraggedInventory != DropInventory;
+	const auto ExceedsCarryAllowance = [](const UCatInventoryComponent* Target,
+		const UCatInventoryItemDefinition* Definition, const int32 IncomingCount)
+	{
+		return Target != nullptr && Definition != nullptr && IncomingCount > 0
+			&& Target->GetRemainingCarryAllowanceForDefinition(*Definition) < IncomingCount;
+	};
+
 	if (bDropOccupied
 		&& DraggedDefinition != nullptr
 		&& DropDefinition != nullptr
@@ -2769,6 +2875,11 @@ UCatInventoryComponent::FInventoryExchangeMutation UCatInventoryComponent::Execu
 		if (MovedCount <= 0)
 		{
 			Result.Error = ECatDomainCommandError::AlreadyResolved;
+			return Result;
+		}
+		if (bCrossInventoryExchange && ExceedsCarryAllowance(DropInventory, DraggedDefinition, MovedCount))
+		{
+			Result.Error = ECatDomainCommandError::InvalidPayload;
 			return Result;
 		}
 
@@ -2791,6 +2902,14 @@ UCatInventoryComponent::FInventoryExchangeMutation UCatInventoryComponent::Execu
 		DropInventory->InventoryList.MarkItemDirty(DropEntry);
 		Result.bChanged = true;
 		Result.Error = ECatDomainCommandError::None;
+		return Result;
+	}
+
+	if (bCrossInventoryExchange
+		&& (ExceedsCarryAllowance(DropInventory, DraggedDefinition, DraggedEntry.StackCount)
+			|| (bDropOccupied && ExceedsCarryAllowance(DraggedInventory, DropDefinition, DropEntry.StackCount))))
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
 		return Result;
 	}
 
@@ -2906,6 +3025,30 @@ bool UCatInventoryComponent::SimulateAddItemDefinition(TArray<FSimulatedInventor
 	if (InOutRemainingCount <= 0)
 	{
 		return true;
+	}
+
+	// 预演必须和正式入库用同一道携带上限，否则整批预检会放行一个入库时会被削减的订单。
+	// 已带份数从**模拟格**里数，不从正式库存数：同一批里两行同类饵必须互相看得见彼此已经占掉的份额。
+	if (EnforcesCarryLimits())
+	{
+		const ECatInventoryCarryCategory Category = UCatInventorySettings::ResolveCarryCategory(ItemDefinition);
+		const int32 Limit = GetEffectiveCarryLimit(Category);
+		if (Category != ECatInventoryCarryCategory::None && Limit != MAX_int32)
+		{
+			int32 SimulatedCategoryTotal = 0;
+			for (const FSimulatedInventorySlot& SimulatedSlot : SimulatedSlots)
+			{
+				if (SimulatedSlot.ItemDefinition != nullptr && SimulatedSlot.StackCount > 0
+					&& UCatInventorySettings::ResolveCarryCategory(*SimulatedSlot.ItemDefinition) == Category)
+				{
+					SimulatedCategoryTotal += SimulatedSlot.StackCount;
+				}
+			}
+			if (SimulatedCategoryTotal + InOutRemainingCount > Limit)
+			{
+				return false;
+			}
+		}
 	}
 
 	const int32 MaxStackCount = GetMaxStackCountForDefinition(ItemDefinition);
@@ -3025,6 +3168,48 @@ int32 UCatInventoryComponent::GetMaxStackCountForDefinition(
 	return ItemDefinition.GetMaxStackCount();
 }
 
+// 同类总量统计流程：逐格判分类再累加数量；held entry 不计——借出去的竿漂不是数量型消耗品，不属于任何携带分类。
+int32 UCatInventoryComponent::CountVisibleQuantityForCarryCategory(const ECatInventoryCarryCategory Category) const
+{
+	if (Category == ECatInventoryCarryCategory::None)
+	{
+		return 0;
+	}
+	int32 Total = 0;
+	for (const FCatInventoryEntry& Entry : InventoryList.Entries)
+	{
+		const UCatInventoryItemDefinition* Definition =
+			Entry.Instance != nullptr ? Entry.Instance->GetItemDefinition() : nullptr;
+		if (Definition == nullptr || Entry.StackCount <= 0
+			|| UCatInventorySettings::ResolveCarryCategory(*Definition) != Category)
+		{
+			continue;
+		}
+		Total += Entry.StackCount;
+	}
+	return Total;
+}
+
+// 携带余量读取流程：
+// 1. 不受约束的库存（营地公库、鱼护、商店货架、鱼缸）一律返回 MAX_int32，「携带上限」只管猫身上那一份。
+// 2. 未配置上限的分类同样返回 MAX_int32 —— 漏配的后果是「这条规则还没生效」，不是把饵挡在背包外。
+// 3. 有效上限减去已带份数即余量；负值夹到 0。
+int32 UCatInventoryComponent::GetRemainingCarryAllowanceForDefinition(
+	const UCatInventoryItemDefinition& ItemDefinition) const
+{
+	if (!EnforcesCarryLimits())
+	{
+		return MAX_int32;
+	}
+	const ECatInventoryCarryCategory Category = UCatInventorySettings::ResolveCarryCategory(ItemDefinition);
+	const int32 Limit = GetEffectiveCarryLimit(Category);
+	if (Category == ECatInventoryCarryCategory::None || Limit == MAX_int32)
+	{
+		return MAX_int32;
+	}
+	return FMath::Max(0, Limit - CountVisibleQuantityForCarryCategory(Category));
+}
+
 // 实例引用检查流程：清理指定槽位时跳过该槽，确认同一实例没有被其他格继续持有。
 bool UCatInventoryComponent::IsItemInstanceReferencedByOtherSlots(
 	const UCatInventoryItemInstance* ItemInstance, const int32 IgnoredSlotIndex) const
@@ -3079,4 +3264,27 @@ bool UCatInventoryComponent::MoveHeldInventoryEntriesToCustodianFromAuthority(
 			*GetNameSafe(GetOwner()), *GetNameSafe(Target->GetOwner()), ItemInstanceIds.Num(), *GetNameSafe(GetWorld()), static_cast<int32>(GetWorld()->GetNetMode()), static_cast<int32>(GetOwner()->GetLocalRole()));
 	}
 	return true;
+}
+
+// T13，钓鱼规则 §2.3/§4.5：库存拥有原子写入，Session 不创建第二份数量状态。
+bool UCatInventoryComponent::ExchangeReservedBaitInternal(const int32 CurrentSlot, UCatInventoryItemDefinition* ReturnedBait)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !ReturnedBait) return false;
+	const TArray<FCatInventoryEntry> Before = InventoryList.Entries;
+	if (!ConsumeItemAtSlotInternal(CurrentSlot, 1, false)) return false;
+	int32 Remaining = 1;
+	bool bFullyAdded = false;
+	AddEntry(ReturnedBait, Remaining, bFullyAdded, nullptr, false);
+	if (bFullyAdded && Remaining == 0) return true;
+	ReplaceInventoryEntriesFromAuthority(Before, Before.Num(), false);
+	return false;
+}
+
+int32 UCatInventoryComponent::GetEffectiveCarryLimit(const ECatInventoryCarryCategory Category) const
+{
+	const int32 Base = GetDefault<UCatInventorySettings>()->GetCarryLimitForCategory(Category);
+	if (!EnforcesCarryLimits() || Category == ECatInventoryCarryCategory::None || Base == MAX_int32) return MAX_int32;
+	const auto* Growth = GetOwner() ? GetOwner()->FindComponentByClass<UCatGrowthComponent>() : nullptr;
+	const double Bonus = Growth ? Growth->GetTotalMagnitude(ECatGrowthOptionId::SupplyCapacity) : 0.0;
+	return static_cast<int32>(FMath::Min(double(MAX_int32), double(Base) + Bonus));
 }

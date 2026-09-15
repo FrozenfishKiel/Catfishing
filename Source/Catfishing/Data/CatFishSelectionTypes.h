@@ -11,6 +11,7 @@ class UCatFishDefinition;
 /**
  * 鱼种候选的可扩展条件门。测试期可让未验收条件保持旁路；正式启用时只切换配置，
  * 不改变挑战档、窝料/鱼饵权重和最终归一化流程。
+ * T23：时段与天气过滤开启后，空数组按未配置拒绝并 Warning；关闭开关仍遵守 D-31。
  */
 struct CATFISHING_API FCatFishEligibilityPolicy
 {
@@ -46,8 +47,14 @@ struct FCatFishSelectionContext
 	int32 ActivePlayerCount = 0;
 	double CombinedFishingStrength = 0.0;
 	double CombinedFightStamina = 0.0;
-	/** 本场统一的体重到力量换算：鱼的个体力量 = 实际重量 × 本系数。 */
+	/**
+	 * 正式鱼力量优先按 UCatFishDefinition::FishStrengthPerKilogram 逐鱼换算。
+	 * 本字段保留既有资产迁移兜底及搏斗计价的同源校验：普通池与基础池的逐鱼 K 未迁移时均读取它。
+	 * 待逐鱼 K 全部迁移且搏斗不再依赖本字段时再删除，不可把当前仍有消费者的字段标成退出主链。
+	 */
 	double StrengthPerKilogram = 0.0;
+	/** 抛竿者成长的重量上浮比例；抽样时夹到本鱼种上限，后续力量与实物共用该重量。 */
+	double CatchWeightBonus = 0.0;
 	int32 RandomSeed = 0;
 };
 
@@ -59,10 +66,16 @@ struct FCatFishSelectionResult
 	bool bSelected = false;
 	FName FishDefinitionId = NAME_None;
 	double WeightKilograms = 0.0;
-	/** 与 WeightKilograms 同一次确定性抽样对应的鱼力量，进入搏斗后只再叠加完美中鱼倍率。 */
+	/** 与 WeightKilograms 同一次确定性抽样对应的鱼力量（＝重量 × 该鱼力量系数K），进入搏斗后只再叠加完美中鱼倍率。 */
 	double BaseFishStrength = 0.0;
 	double SelectedFinalWeight = 0.0;
 	double SelectedNormalizedProbability = 0.0;
 	int32 EligibleCandidateCount = 0;
-	int32 SelectedBandCandidateCount = 0;
+	// 墓碑（2026-09-13，D-29）：不再统计选中带；此值为参与最终归一化的正权重候选数。
+	int32 PositiveWeightCandidateCount = 0;
+	/**
+	 * 本次是否走的无窝料基础池兜底（候选为空或总权重为零）。
+	 * 走兜底时窝料/鱼饵/挑战度三项都没参与，日志与调试面板需要能区分这两条路。
+	 */
+	bool bFromBasePool = false;
 };

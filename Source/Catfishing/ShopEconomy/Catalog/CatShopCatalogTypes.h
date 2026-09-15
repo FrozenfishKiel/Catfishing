@@ -199,7 +199,14 @@ struct FCatShopCatalogRefreshRule
 	int32 RandomEntryCount = 0;
 };
 
-/** 收购价格表的一行；DataTable RowName 就是鱼种 ID，行内只保留每千克金币系数。 */
+/**
+ * 收购价格表的一行；DataTable RowName 就是鱼种 ID，行内只保留每千克金币系数。
+ *
+ * 墓碑：这里原本还有一个按体重档定价的 FCatShopFishWeightPrice（小/中/大/巨四档各一个价）。
+ * 2026-09-09 晚裁「售价＝逐鱼金钱系数 × 实际重量」，体重档收购价表整条作废，随 c19cb8f
+ * 「实现：接通鱼护携带物品落地与 GAS 售鱼链路」一并删除，本轮复核确认全库与 DT_CatFishSalePrices.uasset
+ * 两侧都已无残留。体重档从此只服务献祭供奉值一条链（CatRunSettings 的三档重量），与收购定价无关。
+ */
 USTRUCT(BlueprintType)
 struct FCatShopFishSalePriceRow : public FTableRowBase
 {

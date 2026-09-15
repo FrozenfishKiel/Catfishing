@@ -191,7 +191,7 @@ namespace CatFishingSlackAimNetwork
 					ServerCharacter->GetCatAbilitySystemComponent()->SetNumericAttributeBase(
 						UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 50.0f);
 					if (!Test->TestTrue(TEXT("initialize the actual holder's available motor budget"),
-						ServerCharacter->GetCatAbilitySystemComponent()->InitializeFishingStaminaForSession())) return true;
+						ServerCharacter->GetCatAbilitySystemComponent()->SeedFightStaminaToMaximumFromAuthority())) return true;
 					ServerCharacter->GetPhysicalBodyComponent()->SetViewIntent(FRotator::ZeroRotator);
 					RemoteController->SetControlRotation(FRotator::ZeroRotator);
 					ClientController->SetControlRotation(FRotator::ZeroRotator);

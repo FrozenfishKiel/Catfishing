@@ -253,6 +253,14 @@ void UCatGameUserSettings::SetToDefaults()
 	AmbienceVolume = Defaults.AmbienceVolume;
 	VoiceVolume = Defaults.VoiceVolume;
 	AudioOutputDeviceId = Defaults.AudioOutputDeviceId;
+	TextSizeScale = Defaults.TextSizeScale;
+	bHighContrastUI = Defaults.bHighContrastUI;
+	ColorBlindMode = Defaults.ColorBlindMode;
+	bReduceCameraShake = Defaults.bReduceCameraShake;
+	bReduceFlashingEffects = Defaults.bReduceFlashingEffects;
+	MouseSensitivity = Defaults.MouseSensitivity;
+	CameraSensitivity = Defaults.CameraSensitivity;
+	bInvertYAxis = Defaults.bInvertYAxis;
 }
 
 // 销毁流程：
@@ -391,6 +399,73 @@ float UCatGameUserSettings::GetVoiceVolume() const
 float UCatGameUserSettings::GetUIScale() const
 {
 	return UIScale;
+}
+
+// 辅助功能保存流程：这五项没有引擎 API 可以「应用」，所以本函数只夹范围并存下来，不假装已经生效。
+// 文字大小夹在 0.75~2.0（与 UI 比例同一区间，理由也一样：出了这个范围界面不可读或不可操作）。
+// 为什么不在这里 fail-closed：这些偏好的消费方是 WBP 与表现层，现在还没有人读它。
+// 若因为「没人消费」就拒绝保存，玩家的选择会在关掉设置页时静默消失——那正是本分支反复踩到的坑。
+bool UCatGameUserSettings::ApplyAccessibilityPreferences(const float NewTextSizeScale, const bool bNewHighContrastUI,
+	const ECatColorBlindMode NewColorBlindMode, const bool bNewReduceCameraShake, const bool bNewReduceFlashingEffects)
+{
+	TextSizeScale = FMath::Clamp(FMath::IsFinite(NewTextSizeScale) ? NewTextSizeScale : 1.0f, 0.75f, 2.0f);
+	bHighContrastUI = bNewHighContrastUI;
+	ColorBlindMode = NewColorBlindMode;
+	bReduceCameraShake = bNewReduceCameraShake;
+	bReduceFlashingEffects = bNewReduceFlashingEffects;
+	return true;
+}
+
+// 控制项保存流程：灵敏度夹在 0.1~3.0 倍，避免配置异常把视角变成完全不动或一帧转半圈。
+// 真正的消费方是本地 PlayerController 的视角输入；本类只持久化并提供读取口，不直接改输入链。
+bool UCatGameUserSettings::ApplyControlPreferences(const float NewMouseSensitivity, const float NewCameraSensitivity,
+	const bool bNewInvertYAxis)
+{
+	MouseSensitivity = FMath::Clamp(FMath::IsFinite(NewMouseSensitivity) ? NewMouseSensitivity : 1.0f, 0.1f, 3.0f);
+	CameraSensitivity = FMath::Clamp(FMath::IsFinite(NewCameraSensitivity) ? NewCameraSensitivity : 1.0f, 0.1f, 3.0f);
+	bInvertYAxis = bNewInvertYAxis;
+	return true;
+}
+
+// 辅助功能与控制项读取流程：逐项返回已持久化的偏好；读取不触发任何渲染、输入或音频状态修改。
+float UCatGameUserSettings::GetTextSizeScale() const
+{
+	return TextSizeScale;
+}
+
+bool UCatGameUserSettings::IsHighContrastUIEnabled() const
+{
+	return bHighContrastUI;
+}
+
+ECatColorBlindMode UCatGameUserSettings::GetColorBlindMode() const
+{
+	return ColorBlindMode;
+}
+
+bool UCatGameUserSettings::IsReduceCameraShakeEnabled() const
+{
+	return bReduceCameraShake;
+}
+
+bool UCatGameUserSettings::IsReduceFlashingEffectsEnabled() const
+{
+	return bReduceFlashingEffects;
+}
+
+float UCatGameUserSettings::GetMouseSensitivity() const
+{
+	return MouseSensitivity;
+}
+
+float UCatGameUserSettings::GetCameraSensitivity() const
+{
+	return CameraSensitivity;
+}
+
+bool UCatGameUserSettings::IsInvertYAxisEnabled() const
+{
+	return bInvertYAxis;
 }
 
 // 亮度读取流程：返回最近一次成功写入 GEngine 的持久化 Gamma，不触发任何渲染状态修改。

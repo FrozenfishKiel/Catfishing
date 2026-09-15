@@ -67,6 +67,12 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Growth")
 	UCatGrowthComponent* GetGrowthComponent() const;
 
+	/**
+	 * 按当前倒地状态与三选一「移动速度」加成重算身体速度缩放。
+	 * Condition 与 Growth 各自变化时都会调用它——两个来源只有这一个合成点，物理层不认识它们。
+	 */
+	void RefreshLocomotionSpeedScale();
+
 	/** 返回 Character 唯一一局装备组件；永久解锁/选择仍在 LocalPlayer Profile。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Equipment")
 	UCatEquipmentComponent* GetEquipmentComponent() const;
@@ -198,7 +204,7 @@ private:
 	void HandleMouthCarriedActorDestroyed(AActor* DestroyedActor);
 
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatConditionPresentationComponent> ConditionPresentation;
-	/** 条件快照变化时在服务器同步身体移动开关；倒地会按当前 expected-actor 释放嘴叼鱼或鱼护，避免失能角色继续占有世界物。 */
+	/** 条件快照变化时在服务器同步身体移动状态；倒地会按当前 expected-actor 释放嘴叼鱼或鱼护，避免失能角色继续占有世界物。 */
 	void RefreshPhysicalCondition();
 	void ConfigureCharacterMovementAuthority();
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatPhysicalBodyComponent> PhysicalBodyComponent;

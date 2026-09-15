@@ -1,9 +1,33 @@
 #include "Run/CatRunSettings.h"
 
-// Runtime gate 计算流程：所有构建都要求显式总开关与当前唯一支持的 FixedDailyOfferingTarget 策略；任何未裁人数规则都不能启动 RunFlow。
+// Runtime gate 计算流程：所有构建都要求显式总开关与一个已明确选定的缩放策略；Undecided 仍然不能启动 RunFlow。
 bool UCatRunSettings::IsRuntimeReady() const
 {
-	return bEnableRunRuntime && PlayerScalingPolicy == ECatRunScalingPolicy::FixedDailyOfferingTarget;
+	return bEnableRunRuntime && PlayerScalingPolicy != ECatRunScalingPolicy::Undecided;
+}
+
+// 每人份判定流程：只回答策略本身怎么读日程，不读任何运行时人数；UI 与诊断据此解释同一份日程的两种含义。
+bool UCatRunSettings::IsPerPlayerDailyOfferingTarget() const
+{
+	return PlayerScalingPolicy == ECatRunScalingPolicy::PerMorningPlayerCountTarget;
+}
+
+// 目标缩放流程：基础目标非正时直接回 0 交调用方拒绝；固定档原样返回；每人份档乘清晨人数快照。
+// 快照缺失（<=0）时按 1 人算——这条路径是迁移兜底，不能因为「人数还没快照上」就把整天的目标判成不可用。
+int32 UCatRunSettings::ScaleDailyOfferingTargetForMorningPlayerCount(const int32 BaseDailyOfferingTarget,
+	const int32 MorningPlayerCount) const
+{
+	if (BaseDailyOfferingTarget <= 0)
+	{
+		return 0;
+	}
+	if (!IsPerPlayerDailyOfferingTarget())
+	{
+		return BaseDailyOfferingTarget;
+	}
+	const int64 EffectivePlayerCount = FMath::Max(1, MorningPlayerCount);
+	const int64 ScaledTarget = static_cast<int64>(BaseDailyOfferingTarget) * EffectivePlayerCount;
+	return ScaledTarget > MAX_int32 ? 0 : static_cast<int32>(ScaledTarget);
 }
 
 // 白天参数读取流程：先把输出恢复为 Unset；随后复用 runtime gate，并按天数读取日程项；超过表长时复用最后一项，失败不留下部分可用参数。

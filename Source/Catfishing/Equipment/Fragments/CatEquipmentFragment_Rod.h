@@ -4,7 +4,7 @@
 #include "Inventory/CatInventoryItemDefinition.h"
 #include "CatEquipmentFragment_Rod.generated.h"
 
-/** 鱼竿的长度、磨损和部署锚点配置，供钓鱼与装备实例读取；资产持有静态值，不复制运行状态。 */
+/** 鱼竿的强度、长度、磨损和部署锚点配置，供钓鱼与装备实例读取；资产持有静态值，不复制运行状态。 */
 UCLASS(BlueprintType, EditInlineNew, DefaultToInstanced)
 class CATFISHING_API UCatEquipmentFragment_Rod : public UCatInventoryItemFragment
 {
@@ -13,6 +13,18 @@ class CATFISHING_API UCatEquipmentFragment_Rod : public UCatInventoryItemFragmen
 public:
 	/** 校验本片段数值与空间约束；装备目录和具体玩法仅接收完整配置，不在这里补写缺省值。 */
 	virtual bool IsRuntimeReady() const override;
+
+	/**
+	 * 竿强度：静态承载阈值，鱼竿表三档 25／60／210（钓鱼规则 §4.1「竿强度」行、§4.2 强度检查）。
+	 * 与竿耐久是两个量——耐久是会磨损的动态资源，强度只管瞬断：
+	 * 竿强度不超过「总力量 F_total 与鱼力 F_fish 中较小者」时当场断竿（ECatFishingOutcome::LineBroken），
+	 * 张力由两端较小者决定；它同时是挑战湖心巨影的装备门槛（巨影力量系数 K5 与竿强 210 配对）。
+	 * 这是鱼竿资产的静态配置，与猫的 GAS 属性 UCatSurvivalAttributeSet::FishingStrength（猫力）是两个来源，不相互推导。
+	 * 0 表示"未裁"而不是"强度为零"：强度检查不得据此瞬断，也不得把它当成强度无限，
+	 * 具体处置归钓鱼会话的强度检查序（ACatFishingSession::TryResolveRodStrength）。
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "0.0", DisplayName = "竿强度"))
+	double FishingStrength = 0.0;
 
 	/** 鱼竿实例耐久上限；新物品按它初始化，钓鱼磨损跨会话保留。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "0.0", DisplayName = "鱼竿耐久上限"))

@@ -20,13 +20,30 @@ enum class ECatWaterExposureUpdate : uint8
 	DangerousEntered
 };
 
+/**
+ * 疲惫表现的离散档位，由服务器显式写入并复制给表现消费者。
+ * 不参与体力、移动或倒地裁决；枚举自身不包含恢复计时或回营重置行为。
+ */
+UENUM(BlueprintType)
+enum class ECatFatigueTier : uint8
+{
+	None,
+	Light,
+	Moderate,
+	Heavy
+};
+
 /** Character 局内身体离散状态的复制读模型；保存表现和交互资格需要的客观状态。 */
 USTRUCT(BlueprintType)
 struct FCatConditionSnapshot
 {
 	GENERATED_BODY()
 
-	/** 身体离散状态快照的版本，0 表示尚未提交变化；Condition 在 Wet、Downed 或水域暴露状态改变后递增，复制读模型的消费者读取它识别状态版本。 */
+	/** 当前疲惫表现档，由服务器写入，动画读取；不参与玩法数值。 */
+	UPROPERTY(BlueprintReadOnly)
+	ECatFatigueTier FatigueTier = ECatFatigueTier::None;
+
+	/** 身体离散状态快照的版本，0 表示尚未提交变化；Condition 在疲惫档、Wet、Downed 或水域暴露状态改变后递增，复制读模型的消费者读取它识别状态版本。 */
 	UPROPERTY(BlueprintReadOnly)
 	int64 Revision = 0;
 

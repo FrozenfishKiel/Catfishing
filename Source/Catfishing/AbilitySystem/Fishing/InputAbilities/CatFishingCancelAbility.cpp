@@ -13,16 +13,26 @@ void UCatGA_FishingCancel::ActivateAbility(const FGameplayAbilitySpecHandle Hand
 	const FGameplayAbilityActorInfo* ActorInfo, const FGameplayAbilityActivationInfo ActivationInfo,
 	const FGameplayEventData* TriggerEventData)
 {
-	// 激活流程：丢弃事件负载，跳过服务器远端镜像，在本地播放取消表现，然后提交一次权威取消命令。
 	(void)TriggerEventData;
-	if (IsRemoteAuthorityMirror(ActorInfo))
-	{
-		// Cancel 与 RodInteract 都是一次性输入；服务器远端镜像不提交第二次命令，但必须结束自身。
-		EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
-		return;
-	}
+	if (IsRemoteAuthorityMirror(ActorInfo)) return;
 	BP_OnLocalInputActivated();
 	UCatFishingCommandComponent* Commands = ResolveCommandComponent(ActorInfo);
-	FinishOneShot(Handle, ActorInfo, ActivationInfo,
-		CanSubmitLocalCommand(ActorInfo) && Commands->SubmitCancel().RequestId.IsValid());
+	if (!CanSubmitLocalCommand(ActorInfo) || !Commands || !Commands->SubmitCancel().RequestId.IsValid())
+		CancelAbility(Handle, ActorInfo, ActivationInfo, true);
+}
+
+void UCatGA_FishingCancel::InputReleased(const FGameplayAbilitySpecHandle Handle,
+	const FGameplayAbilityActorInfo* ActorInfo, const FGameplayAbilityActivationInfo ActivationInfo)
+{
+	BP_OnLocalInputReleased();
+	EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
+}
+void UCatGA_FishingCancel::EndAbility(const FGameplayAbilitySpecHandle Handle,
+	const FGameplayAbilityActorInfo* ActorInfo, const FGameplayAbilityActivationInfo ActivationInfo,
+	bool bReplicateEndAbility, bool bWasCancelled)
+{
+	// 松手、硬直取消、菜单／失焦清理都提交释放，客户端不自行确认 1.5 秒。
+	if (CanSubmitLocalCommand(ActorInfo))
+		if (UCatFishingCommandComponent* Commands = ResolveCommandComponent(ActorInfo)) Commands->SubmitCancelReleased();
+	Super::EndAbility(Handle, ActorInfo, ActivationInfo, bReplicateEndAbility, bWasCancelled);
 }

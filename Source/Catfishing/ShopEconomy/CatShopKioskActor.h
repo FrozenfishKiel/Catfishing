@@ -18,6 +18,8 @@ class CATFISHING_API ACatShopKioskActor : public AActor, public ICatInteractable
 public:
 	/** 构造商店摊位的空间根、页面打开组件和货架库存组件；具体外观可由蓝图或关卡美术继续添加。 */
 	ACatShopKioskActor();
+	/** 服务器读命令门，客户端读其 GameState 复制投影。 */
+	bool IsShopTradingOpen() const;
 
 	/** 判断本地玩家是否能打开此摊位；只检查交互开关、本地 Controller 和页面状态，不解析营地仓库。 */
 	virtual bool CanInteract_Implementation(AController* RequestingController) const override;

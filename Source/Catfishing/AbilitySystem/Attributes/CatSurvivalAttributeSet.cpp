@@ -12,7 +12,7 @@ namespace
 		return FMath::IsFinite(Value) ? FMath::Max(0.0f, Value) : 0.0f;
 	}
 
-	// 体力上限规整流程：MaxFightStamina 是搏斗恢复和模拟的硬上限，不能低于 1，避免后续除法和会话配置出现无意义零上限。
+	// 体力上限规整流程：MaxFightStamina 是绿段恢复的硬上限；模拟总容量另加当前黄段，不能低于 1，避免后续除法和会话配置出现无意义零上限。
 	float ClampMaxFightStaminaValue(const float Value)
 	{
 		return FMath::IsFinite(Value) ? FMath::Max(1.0f, Value) : 1.0f;
@@ -40,6 +40,7 @@ void UCatSurvivalAttributeSet::GetLifetimeReplicatedProps(TArray<FLifetimeProper
 	DOREPLIFETIME_CONDITION_NOTIFY(UCatSurvivalAttributeSet, FishingStrength, COND_None, REPNOTIFY_Always);
 	DOREPLIFETIME_CONDITION_NOTIFY(UCatSurvivalAttributeSet, FightStamina, COND_None, REPNOTIFY_Always);
 	DOREPLIFETIME_CONDITION_NOTIFY(UCatSurvivalAttributeSet, MaxFightStamina, COND_None, REPNOTIFY_Always);
+	DOREPLIFETIME_CONDITION_NOTIFY(UCatSurvivalAttributeSet, YellowFightStamina, COND_None, REPNOTIFY_Always);
 }
 
 // 基础值变化流程：配置播种或 GE 覆盖属性前统一清理坏数值；当前体力读取已经存在的 MaxFightStamina，所以上层必须先写上限再回满体力。
@@ -54,7 +55,7 @@ void UCatSurvivalAttributeSet::PreAttributeBaseChange(const FGameplayAttribute& 
 	{
 		NewValue = ClampMaxFightStaminaValue(NewValue);
 	}
-	else if (Attribute == GetFishingStrengthAttribute())
+	else if (Attribute == GetFishingStrengthAttribute() || Attribute == GetYellowFightStaminaAttribute())
 	{
 		NewValue = ClampSurvivalNonNegativeValue(NewValue);
 	}
@@ -72,13 +73,13 @@ void UCatSurvivalAttributeSet::PreAttributeChange(const FGameplayAttribute& Attr
 	{
 		NewValue = ClampMaxFightStaminaValue(NewValue);
 	}
-	else if (Attribute == GetFishingStrengthAttribute())
+	else if (Attribute == GetFishingStrengthAttribute() || Attribute == GetYellowFightStaminaAttribute())
 	{
 		NewValue = ClampSurvivalNonNegativeValue(NewValue);
 	}
 }
 
-// 上限变化收口流程：MaxFightStamina 降低时用 ASC 标准 Override 把当前体力压回新上限；上限升高不会自动回满，仍由会话重置入口显式处理。
+// 上限变化收口流程：MaxFightStamina 降低时用 ASC 标准 Override 把当前体力压回新上限；上限升高不会自动回满，只由明确的属性授予入口处理。
 void UCatSurvivalAttributeSet::PostAttributeChange(const FGameplayAttribute& Attribute, const float OldValue,
 	const float NewValue)
 {
@@ -106,11 +107,22 @@ void UCatSurvivalAttributeSet::OnRep_FightStamina(const FGameplayAttributeData& 
 	if (const auto* ASC = GetOwningAbilitySystemComponent())
 		if (AActor* Avatar = ASC->GetAvatarActor())
 			if (auto* Effort = Avatar->FindComponentByClass<UCatPhysicalEffortComponent>())
-				Effort->ObserveStaminaFromReplication(OldFightStamina.GetCurrentValue());
+				Effort->ObserveStaminaFromReplication(double(OldFightStamina.GetCurrentValue()) + GetYellowFightStamina());
 }
 
 // MaxFightStamina 复制通知流程：使用标准 RepNotify 更新搏斗体力上限；显示层和接力会话都只观察 ASC 的同一份上限。
 void UCatSurvivalAttributeSet::OnRep_MaxFightStamina(const FGameplayAttributeData& OldMaxFightStamina)
 {
 	GAMEPLAYATTRIBUTE_REPNOTIFY(UCatSurvivalAttributeSet, MaxFightStamina, OldMaxFightStamina);
+}
+
+// 黄色体力复制通知流程：使用标准 RepNotify 更新护盾段的客户端读模型；黄段无自然回复，客户端也不自行扣减。
+void UCatSurvivalAttributeSet::OnRep_YellowFightStamina(const FGameplayAttributeData& OldYellowFightStamina)
+{
+	GAMEPLAYATTRIBUTE_REPNOTIFY(UCatSurvivalAttributeSet, YellowFightStamina, OldYellowFightStamina);
+	// 裁决②：绿段归零后仍需观察黄段消费；不引入第二份复制余额。
+	if (const auto* ASC = GetOwningAbilitySystemComponent())
+		if (AActor* Avatar = ASC->GetAvatarActor())
+			if (auto* Effort = Avatar->FindComponentByClass<UCatPhysicalEffortComponent>())
+				Effort->ObserveStaminaFromReplication(double(GetFightStamina()) + OldYellowFightStamina.GetCurrentValue());
 }

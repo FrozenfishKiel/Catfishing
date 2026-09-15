@@ -58,6 +58,7 @@ struct CATFISHING_API FCatFightSimulationConfig
 	double DisplayTensionNewtons = 50.0;
 	/** 转矩模型的玩法杆长；来自鱼竿定义，不读取 Mesh 或锚点间距。 */
 	double RodPhysicsLengthCentimeters = 200.0;
+	/** 总容量（点）＝主控绿段恢复上限＋当前黄段；每步重采样，不作为黄色恢复上限。 */
 	double CatStaminaMaximum = 0.0;
 	/** 猫线性正功使用标准力量与已完成主动距离；受阻支撑独立按时间收费。 */
 	double CatStaminaCostPerStrengthCentimeter = 0.002;
@@ -74,17 +75,22 @@ struct CATFISHING_API FCatFightSimulationConfig
 	double CatRodStaminaMultiplier = 1.0;
 	double CatHoldStaminaMultiplier = 1.0;
 	double CatLoadStaminaMultiplier = 1.0;
-	double SlackStaminaRegenPerSecond = 1.5;
-	double StalemateRodWearPerFishStrength = 0.1;
-	/** 鱼满主动出力的基础每秒磨损，来源为竿定义；按实际u²和方向负载缩放，不读取动画档位。 */
+	/** 放线回体速率，基础为 0；猫册三选一「放线回体速度」是唯一把它抬起来的来源。 */
+	double SlackStaminaRegenPerSecond = 0.0;
+	double SlackStaminaGrowthPerSecond = 0.0;
+	double RodWearMultiplier = 1.0;
+	/** 线绷紧每秒按本场鱼力扣的竿耐久系数；名字沿用旧「僵持」口径，实际闸门是线绷紧。 */
+	double StalemateRodWearPerFishStrength = 0.05;
+	/** 竿定义给的满出力每秒磨损。设计无此项，磨损模型已不消费它，待竿片段一并删除。 */
 	double FishFullEffortRodWearPerSecond = 0.0;
+	/** 竿定义给的高张力磨损倍率。设计无此项，磨损模型已不消费它，待竿片段一并删除。 */
 	double TautRodWearMultiplier = 1.0;
 	double ReelSpeedCentimetersPerSecond = 0.0;
 	/** 满出力参考游速，校准固定水阻并生成 u*参考游速*dt 的本步主动意图。 */
 	double FishFullEffortSpeedCentimetersPerSecond = 0.0;
 	/** 主控零体力时的持续外冲速度，按满出力参考游速放大。 */
 	double ExhaustedCatEscapeSpeedMultiplier = 2.0;
-	double FishExhaustionThreshold = 0.5;
+	// 墓碑（2026-09-14，T14；钓鱼规则 §4.6）：删除提前归零配置，鱼体力仅 <=0 翻肚。
 	/** 仅供强对抗/僵持表现分类，不参与位移、做功或终局裁决。 */
 	double StrongConfrontationAlignmentThreshold = 0.55;
 	double StrongConfrontationConfirmationSeconds = 0.2;
@@ -152,6 +158,7 @@ struct CATFISHING_API FCatFightSimulationState
 {
 	bool bOperatorPresent = true;
 	bool bFishExhausted = false;
+	/** 主控总可用体力（点）＝绿＋黄；双段耗尽才触发猫强拖终局策略。 */
 	double CatStamina = 0.0;
 	double FishStamina = 0.0;
 	/** 行为层已平滑的实际主动出力，范围[0,1]；零出力仍保留活鱼惯性。 */

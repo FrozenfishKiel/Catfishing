@@ -20,6 +20,12 @@ class UCatFrontendPageController;
 class UCatFrontendRoomModel;
 class UCatFrontendSaveModel;
 class UCatFrontendSettingsModel;
+class ACatFrontendCharacterPreview;
+class ACharacter;
+class UAnimSequence;
+class UMaterialInterface;
+class UMaterialInstanceDynamic;
+DECLARE_MULTICAST_DELEGATE_OneParam(FCatRoomFriendInviteRequested, FCatOnlineFriendHandle);
 
 /** 存档列表的一行原生 View；它只保存当前渲染行的稳定 SlotId，并把选择点击原样交给 Root，不保存或修改世界存档。 */
 UCLASS(Abstract)
@@ -30,6 +36,15 @@ class CATFISHING_API UCatFrontendSaveSlotRowWidget : public UUserWidget
 public:
 	/** 用 SaveModel 的真实摘要配置本行；写入展示文本和稳定 SlotId，点击以后不通过行索引或文本猜测存档身份。 */
 	void ConfigureRow(UCatFrontendRootWidget* InRootWidget, const FCatSaveSlotSummary& Summary);
+
+	/** 只读展示状态；ConfigureRow 随摘要刷新，资产可据此绑定完成标识与颜色。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category="Catfishing|Save")
+	bool bRunCompleted = false;
+	/** 行内若另有继续按钮，直接绑定其 IsEnabled；选择行仍允许查看摘要或主动删除。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category="Catfishing|Save")
+	bool bCanContinue = false;
+	UPROPERTY(BlueprintReadOnly, Transient, Category="Catfishing|Save")
+	FText CompletionStatusText;
 
 protected:
 	/** WidgetTree 建立后绑定本行选择按钮；按钮缺失时保持不可操作并记录资产合同错误，不生成替身。 */
@@ -68,6 +83,8 @@ class CATFISHING_API UCatFrontendRoomFriendRowWidget : public UUserWidget
 public:
 	/** 用 RoomModel 的真实好友摘要配置本行；写入名称、在线状态和 opaque 句柄，邀请按钮不解析 Steam 身份。 */
 	void ConfigureRow(UCatFrontendRootWidget* InRootWidget, const FCatOnlineFriendSummary& Summary);
+	/** 局内组队页沿用同一好友行，仅将邀请意图转交其 Controller。 */
+	FCatRoomFriendInviteRequested OnInviteRequested;
 
 protected:
 	/** WidgetTree 建立后绑定本行邀请按钮；缺失时记录资产合同错误，本行不会用页面级默认好友替代。 */
@@ -97,6 +114,26 @@ private:
 	TObjectPtr<UButton> InviteFriendButton;
 };
 
+/** 加入页好友行；只持有当前展示句柄，查询与准入由 Online 完成。 */
+UCLASS(Abstract)
+class CATFISHING_API UCatFrontendJoinFriendRowWidget : public UUserWidget
+{
+	GENERATED_BODY()
+public:
+	void ConfigureRow(UCatFrontendRootWidget* Root, const FCatOnlineFriendSummary& Friend);
+	void ConfigurePublicRoom(UCatFrontendRootWidget* Root, const FCatSessionSearchSummary& Room);
+protected:
+	virtual void NativeOnInitialized() override;
+private:
+	UFUNCTION() void HandleJoinClicked();
+	TWeakObjectPtr<UCatFrontendRootWidget> RootWidget;
+	FCatOnlineFriendHandle FriendHandle;
+	FCatSessionSearchHandle PublicRoomHandle;
+	UPROPERTY(meta=(BindWidget)) TObjectPtr<UTextBlock> FriendNameText;
+	UPROPERTY(meta=(BindWidget)) TObjectPtr<UTextBlock> FriendStatusText;
+	UPROPERTY(meta=(BindWidget)) TObjectPtr<UButton> JoinFriendButton;
+};
+
 /** 房间成员的一行原生 View；它只渲染 RoomModel 的真实成员记录，不新增准备、人数或房主第二份状态。 */
 UCLASS(Abstract)
 class CATFISHING_API UCatFrontendRoomPlayerSlotWidget : public UUserWidget
@@ -105,12 +142,33 @@ class CATFISHING_API UCatFrontendRoomPlayerSlotWidget : public UUserWidget
 
 public:
 	/** 用 RoomModel 的真实成员摘要配置本行；成员名称和房主标记均来自当前 Snapshot，空位由 Root 显式决定是否创建。 */
+	UFUNCTION(BlueprintCallable, Category="Room Presentation")
 	void ConfigureRow(const FCatOnlineRoomMember& Member);
 
 	/** 配置一个明确的真实空槽表现；只有 Snapshot 给出可验证容量时 Root 才创建，不用静态假玩家占位。 */
+	UFUNCTION(BlueprintCallable, Category="Room Presentation")
 	void ConfigureEmptySlot();
+	UFUNCTION(BlueprintCallable, Category="Room Presentation")
+	void SetPreviewActive(bool bActive);
+	FGuid GetMemberId() const { return DisplayedMemberId; }
+
+protected:
+	virtual void NativeDestruct() override;
+	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
+	UPROPERTY(EditDefaultsOnly, Category="Room Preview") TSubclassOf<ACharacter> PreviewCharacterClass;
+	UPROPERTY(EditDefaultsOnly, Category="Room Preview") TObjectPtr<UAnimSequence> PreviewAnimation;
+	UPROPERTY(EditDefaultsOnly, Category="Room Preview") TObjectPtr<UMaterialInterface> PreviewMaterial;
 
 private:
+	void ReleasePreview();
+	FGuid DisplayedMemberId;
+	bool bPreviewActive = false;
+	float EntranceTime = 1.0f;
+	UPROPERTY(Transient) TObjectPtr<ACatFrontendCharacterPreview> PreviewActor;
+	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> PreviewBrush;
+	UPROPERTY(meta=(BindWidgetOptional)) TObjectPtr<UImage> CharacterPreviewImage;
+	UPROPERTY(meta=(BindWidgetOptional)) TObjectPtr<UWidget> ReadyMark;
+	UPROPERTY(meta=(BindWidgetOptional)) TObjectPtr<UWidget> EmptySeatMark;
 	/** 行内的成员名称文本；WBP_CatRoomPlayerSlot 必须提供，配置成员或空槽时写入。 */
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UTextBlock> PlayerNameText;
@@ -152,6 +210,18 @@ public:
 	 * 本方法只显式切换 MenuPage，不从当前显示页推导流程状态。
 	 */
 	void ShowMenu();
+	void ShowJoin();
+	void RequestJoinFriend(FCatOnlineFriendHandle FriendHandle);
+	void RequestJoinPublicRoom(FCatSessionSearchHandle Handle);
+	UFUNCTION() void RequestRefreshPublicRooms();
+	UFUNCTION() void RequestSubmitRoomPassword();
+	UFUNCTION() void RequestCancelRoomPassword();
+	UFUNCTION() void RequestCopyShortCode();
+	void BindPublicRoomControls(bool bBind);
+	UFUNCTION(BlueprintCallable, Category="Room Presentation")
+	void RefreshPublicRoomPresentation(const FCatOnlineSnapshot& Snapshot);
+	UFUNCTION() void RequestSubmitJoinLink();
+	UFUNCTION() void RequestPasteJoinLink();
 
 	/**
 	 * 显示 Minecraft 风格的单页存档列表；Controller 在开始游戏流程中调用，存档数据仍由 SaveModel 负责刷新。
@@ -200,7 +270,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
 	void RequestStartGameFlow();
 
-	/** 首页“加入队伍”占位意图；当前产品未定义加入流程，因此只交给 Controller 记录可见反馈，不触发搜索或本地替身房间。 */
+	/** 首页“加入队伍”意图；Controller 打开正式加入页并刷新好友房间。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
 	void RequestJoinParty();
 
@@ -259,6 +329,7 @@ public:
 	/** 房主开始游戏意图；Controller 只提交正式 Start 请求，全局加载遮罩由 LocalPlayer UI 根据 Online 快照显示。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
 	void RequestStartRoomGame();
+	UFUNCTION() void RequestToggleRoomReady();
 
 	/** 设置应用意图；具体草稿字段由 SettingsModel 定义，Root 仅把用户确认转交 Controller。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
@@ -276,9 +347,33 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
 	void RequestRefreshAudioOutputDevices();
 
-	/** 房间页复制邀请码意图；Root 仅将 Online 已确认的 joinlobby URI 放入系统剪贴板，空邀请码保持不可复制且不生成替代码。 */
+	/** 保留旧绑定名；复制 Online 已确认的完整 Lobby ID，空 ID 保持不可复制且不生成替代码。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
 	void RequestCopyRoomInviteCode();
+
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
+	void RequestOpenRoomInvite();
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
+	void RequestOpenRoomSettings();
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
+	void RequestCloseRoomDialog();
+	UFUNCTION()
+	void RequestRoomInviteFriendsTab();
+	UFUNCTION()
+	void RequestRoomInviteIdTab();
+	UFUNCTION()
+	void RequestSaveRoomSettings();
+	/** 只读表现入口，消费同一 Online DTO；不能改变成员、准备或房间权限。 */
+	UFUNCTION(BlueprintCallable, Category="Room Presentation")
+	void RenderRoomSnapshot(const FCatOnlineSnapshot& Snapshot);
+	UFUNCTION(BlueprintCallable, Category="Room Presentation")
+	void ShowRoomNotice(const FText& Title, const FText& Message, const FString& Value, bool bSuccess = false);
+	UFUNCTION() void RequestCopyRoomLink();
+	UFUNCTION() void RequestConfirmRoomNotice();
+	UFUNCTION() void RequestDismissRoomConfirmation();
+	bool IsRoomDialogOpen() const;
+	void BindRoomDialogControls(bool bBind);
+	void RefreshRoomDialogPresentation(const FCatOnlineSnapshot& Snapshot);
 
 	/** 设置页选择游戏分类的意图；Controller 转交 SettingsModel，不用字符串或页面编号表达分类。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
@@ -296,6 +391,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
 	void RequestSelectControlsSettings();
 
+	/** 切到辅助功能页签；只提交意图，页面内容由 Model 的草稿与可用性回答决定。 */
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
+	void RequestSelectAccessibilitySettings();
+
 protected:
 	/**
 	 * UMG 子控件完成创建后解析并绑定每页的必需控件；只有背景等扩展表现才可以省略，页面交互不得交给空蓝图事件图承接。
@@ -307,6 +406,8 @@ protected:
 	 * 接收 Root 获得键盘焦点后的 Escape；按下时交给 Controller 执行确认取消或流程返回，其余按键保持父类处理。
 	 * 本实现不根据当前 Switcher 索引做页面分发，避免 View 的表现状态反过来成为流程真相。
 	 */
+	virtual FReply NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
+	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 	virtual FReply NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
 	/**
@@ -332,11 +433,28 @@ protected:
 	void BP_RenderFrontendSettings();
 
 private:
+	void RefreshRoomScene(const FCatOnlineSnapshot& Snapshot);
+	void ResetRoomScene();
+	/** 仅用于展示差分和短暂提示；权威成员、准备及生命周期仍归 Online。 */
+	FString PresentedLobbyId;
+	TSet<FGuid> PresentedMembers;
+	double RoomJoinNoticeUntil = 0;
+	bool bConfirmRoomDismiss = false;
 	/**
 	 * 从四个已强制装配的子 WBP 中显式解析页面控件；UMG 的 BindWidget 不穿透嵌套 UserWidget，因此页面内部按钮必须在这里按所属 WidgetTree 查询。
 	 * 缺少必需控件时记录明确资产接线错误并保持该页面不可操作，避免空蓝图事件被误认为已交付交互。
 	 */
 	void ResolvePageControls();
+	void RefreshJoinPresentation();
+	UPROPERTY(meta=(BindWidget)) TObjectPtr<UUserWidget> JoinPage;
+	UPROPERTY(Transient) TObjectPtr<UScrollBox> JoinFriendsScrollBox;
+	UPROPERTY(Transient) TObjectPtr<UEditableTextBox> JoinLinkTextBox;
+	UPROPERTY(Transient) TObjectPtr<UTextBlock> JoinResultText;
+	UPROPERTY(Transient) TObjectPtr<UTextBlock> JoinEmptyText;
+	UPROPERTY(Transient) TObjectPtr<UButton> JoinLinkButton;
+	UPROPERTY(Transient) TObjectPtr<UButton> PasteJoinLinkButton;
+	UPROPERTY(Transient) TObjectPtr<UButton> RefreshJoinFriendsButton;
+	UPROPERTY(Transient) TObjectPtr<UButton> JoinBackButton;
 
 	/**
 	 * 按页面根与控件名解析指定类型的控件；只读取该子 WidgetTree，不扫描其他页面，避免同名控件被错误接线。
@@ -417,6 +535,22 @@ private:
 	UFUNCTION() void HandleBrightnessChanged(float NormalizedValue);
 	/** 震动勾选输入处理；只在 Model 确认本地 Controller 可用时写入 ForceFeedback 草稿。 */
 	UFUNCTION() void HandleVibrationChanged(bool bIsChecked);
+	/** 辅助功能：文字大小滑块（归一化 0~1 换算到 0.75~2.0，与界面缩放同区间）。 */
+	UFUNCTION() void HandleTextSizeChanged(float NormalizedValue);
+	/** 辅助功能：高对比度界面。 */
+	UFUNCTION() void HandleHighContrastChanged(bool bIsChecked);
+	/** 辅助功能：色觉模式；下拉项的序号即枚举值，越界按 None 处理。 */
+	UFUNCTION() void HandleColorBlindModeSelectionChanged(FString SelectedItem, ESelectInfo::Type SelectionType);
+	/** 辅助功能：减少镜头晃动。 */
+	UFUNCTION() void HandleReduceCameraShakeChanged(bool bIsChecked);
+	/** 辅助功能：减少闪光效果。 */
+	UFUNCTION() void HandleReduceFlashingEffectsChanged(bool bIsChecked);
+	/** 控制：鼠标灵敏度滑块（归一化 0~1 换算到 0.1~3.0）。 */
+	UFUNCTION() void HandleMouseSensitivityChanged(float NormalizedValue);
+	/** 控制：镜头灵敏度滑块（同上区间）。 */
+	UFUNCTION() void HandleCameraSensitivityChanged(float NormalizedValue);
+	/** 控制：反转 Y 轴。 */
+	UFUNCTION() void HandleInvertYAxisChanged(bool bIsChecked);
 	/** 网络语音勾选输入处理；只在 OSS Voice 正式可用时写入 Start/Stop 草稿。 */
 	UFUNCTION() void HandleVoiceChatChanged(bool bIsChecked);
 	/** 后台静音勾选输入处理；只写失焦音量草稿，Apply 前不改变当前窗口音频。 */
@@ -488,7 +622,7 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UButton> StartGameButton;
 
-	/** MenuPage 子 WidgetTree 中的加入队伍按钮；当前只转交占位意图，不接搜索、加入或创建房间流程。 */
+	/** MenuPage 子 WidgetTree 中的加入队伍按钮；转交 Controller 打开加入页面。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UButton> JoinPartyButton;
 
@@ -523,6 +657,10 @@ private:
 	/** FrontendSettingsPage 子 WidgetTree 中的控制分类按钮；当前只会显示正式不可用状态，不会生成临时键位配置。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UButton> ControlsSettingsCategoryButton;
+
+	/** 设置页的辅助功能页签按钮；WBP 里叫 AccessibilitySettingsCategoryButton，缺控件时该页签不可达但其余页签照常。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UButton> AccessibilitySettingsCategoryButton;
 
 	/** SaveListPage 子 WidgetTree 中的结果文本；Root 原生写入 SaveModel 的真实反馈，槽位详情仍由列表渲染图读取 Model。 */
 	UPROPERTY(Transient)
@@ -591,6 +729,7 @@ private:
 	/** RoomPage 子 WidgetTree 中的开始按钮；仅 RoomModel 确认当前用户可开始时可用，Root 不伪造本地主机权限。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UButton> StartRoomGameButton;
+	UPROPERTY(Transient) TObjectPtr<UButton> ReadyRoomButton;
 
 	/** RoomPage 子 WidgetTree 中的邀请码复制按钮；没有真实 joinlobby URI 时禁用，点击不构造备用码。 */
 	UPROPERTY(Transient)
