@@ -1,4 +1,4 @@
-#include "Inventory/CatInventoryStatics.h"
+﻿#include "Inventory/CatInventoryStatics.h"
 
 #include "Camp/CatCampSettings.h"
 #include "Character/CatCharacter.h"
@@ -14,13 +14,15 @@
 #include "Logging/CatLog.h"
 
 // 落点求解流程：只用物理根的局部包围盒检查占用，不把准星交互球算作实体；放置依次搜索正前方与左右各30度内的地面。
-// 丢弃从视点、角色半径和物理盒尺寸求前方释放中心，沿途扫盒并检查终点占用，阻挡即拒绝；成功把盒中心换算为Actor变换。
+// 丢弃从视点、角色半径和物理盒尺寸求前方释放中心，并可叠加批量事务传入的世界坐标偏移；沿途扫盒并检查终点占用，阻挡即拒绝。
 // 放置同时检查坡度、相对脚底高差、视线、物体占用和四角支撑，全部通过才返回最终 Actor 变换；全过程不移动 Actor。
 bool UCatInventoryStatics::FindWorldReleaseTransform(ACatCharacter* Character, AActor* ItemActor, const ECatInventoryWorldAction Action,
-	const UCatInventorySettings& Settings, FTransform& OutTransform)
+	const UCatInventorySettings& Settings, FTransform& OutTransform, const FVector DropOffset)
 {
 	if (!IsValid(Character) || !IsValid(ItemActor) || Character->GetWorld() != ItemActor->GetWorld()
-		|| (Action != ECatInventoryWorldAction::Drop && Action != ECatInventoryWorldAction::Place)) return false;
+		|| (Action != ECatInventoryWorldAction::Drop && Action != ECatInventoryWorldAction::Place)
+		|| (Action == ECatInventoryWorldAction::Drop && (!FMath::IsFinite(DropOffset.X)
+			|| !FMath::IsFinite(DropOffset.Y) || !FMath::IsFinite(DropOffset.Z)))) return false;
 	UWorld* World = Character->GetWorld();
 	const UPrimitiveComponent* Body = Cast<UPrimitiveComponent>(ItemActor->GetRootComponent());
 	if (!Body) return false;
@@ -39,7 +41,7 @@ bool UCatInventoryStatics::FindWorldReleaseTransform(ACatCharacter* Character, A
 	if (Action == ECatInventoryWorldAction::Drop)
 	{
 		const FQuat Rotation = Forward.Rotation().Quaternion();
-		const FVector Center = Eye + Forward * (Character->GetCapsuleComponent()->GetScaledCapsuleRadius() + Extent.GetMax() + 10.0);
+		const FVector Center = Eye + Forward * (Character->GetCapsuleComponent()->GetScaledCapsuleRadius() + Extent.GetMax() + 10.0) + DropOffset;
 		FHitResult Hit;
 		if (World->SweepSingleByChannel(Hit, Eye, Center, Rotation, ECC_WorldDynamic, Shape, Query)
 			|| World->OverlapBlockingTestByChannel(Center, Rotation, ECC_WorldDynamic, Shape, Query)) return false;
@@ -282,62 +284,21 @@ FCatDomainCommandResult UCatInventoryStatics::MoveItemBetweenInventoryHostsFromA
 	return Result;
 }
 
-// Actor 库存使用流程：
-// 1. 先重读 Character、World、RequestId 和来源宿主，客户端提交的 Actor 只作为候选。
-// 2. 再把宿主解析成正式 InventoryComponent；玩家自己直接用随身库存，其它世界库存必须通过触达规则。
-// 3. 正式 Use 只调用 Source InventoryComponent，具体食用或装备效果由 ItemInstance 按当前槽位事实裁决。
-// 4. 当前玩家随身库存参与时刷新 Equipment 读模型，失败只记录诊断，不回滚已经提交的库存事实。
-FCatDomainCommandResult UCatInventoryStatics::UseItemFromInventoryHostFromAuthority(
-	ACatCharacter* ControlledCharacter, const FGuid RequestId, AActor* SourceInventoryHost,
-	const int32 SourceSlotIndex)
+// 菜单路由只解析当前可访问的来源库存；操作内容与实例身份交给该库存唯一入口，成功后刷新既有装备投影。
+FCatDomainCommandResult UCatInventoryStatics::ExecuteInventoryActionFromAuthority(ACatCharacter* Character,
+	const FGuid RequestId, AActor* SourceHost, const int32 SourceSlot, const FGuid ItemInstanceId,
+	const FGameplayTag Action, const int32 Quantity)
 {
-	FCatDomainCommandResult Result;
-	Result.RequestId = RequestId;
-	UWorld* World = ControlledCharacter != nullptr ? ControlledCharacter->GetWorld() : nullptr;
-	if (!RequestId.IsValid())
-	{
-		Result.Error = ECatDomainCommandError::InvalidPayload;
-	}
-	else if (ControlledCharacter == nullptr || World == nullptr)
-	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-	}
-	else
-	{
-		FCatInventoryHostEndpoint SourceEndpoint;
-		if (!ResolveInventoryHostEndpoint(World, ControlledCharacter, SourceInventoryHost,
-				SourceSlotIndex, SourceEndpoint))
-		{
-			Result.Error = ECatDomainCommandError::DependencyUnavailable;
-			UE_LOG(LogCatfishing, Warning,
-				TEXT("Event=use_inventory_item_from_host_rejected Reason=EndpointUnavailable Request=%s SourceHost=%s"),
-				*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-				*GetNameSafe(SourceInventoryHost));
-		}
-		else
-		{
-			FCatInventoryItemUseContext UseContext;
-			UseContext.RequestId = RequestId;
-			UseContext.RequestingController = ControlledCharacter->GetController();
-			UseContext.UserPawn = ControlledCharacter;
-			UseContext.SourceInventory = SourceEndpoint.Inventory;
-
-			UseContext.InventorySlotIndex = SourceEndpoint.SlotIndex;
-			Result = SourceEndpoint.Inventory->UseItemAtSlotFromAuthority(UseContext);
-			if (SourceEndpoint.Equipment
-				&& !SourceEndpoint.Equipment->RefreshLoadoutFromInventoryComponentFromAuthority())
-			{
-				UE_LOG(LogCatfishing, Warning,
-					TEXT("Event=use_inventory_item_loadout_refresh_failed Request=%s Character=%s"),
-					*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(ControlledCharacter));
-			}
-		}
-	}
-
-	UE_LOG(LogCatfishing, Log,
-		TEXT("Event=use_inventory_item_from_host Committed=%s Error=%s SourceHost=%s SourceSlot=%d"),
-		Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error),
-		*GetNameSafe(SourceInventoryHost), SourceSlotIndex);
+	FCatDomainCommandResult Result; Result.RequestId = RequestId;
+	FCatInventoryHostEndpoint Endpoint;
+	if (!Character || !Character->HasAuthority() || !RequestId.IsValid()
+		|| !ResolveInventoryHostEndpoint(Character->GetWorld(), Character, SourceHost, SourceSlot, Endpoint))
+	{ Result.Error = ECatDomainCommandError::PermissionDenied; return Result; }
+	FCatInventoryItemUseContext Context;
+	Context.RequestId = RequestId; Context.RequestingController = Character->GetController();
+	Context.UserPawn = Character; Context.SourceInventory = Endpoint.Inventory; Context.InventorySlotIndex = Endpoint.SlotIndex;
+	Result = Endpoint.Inventory->ExecuteItemActionFromAuthority(Context, ItemInstanceId, Action, Quantity);
+	if (Result.bCommitted && Endpoint.Equipment) Endpoint.Equipment->RefreshLoadoutFromInventoryComponentFromAuthority();
 	return Result;
 }
 

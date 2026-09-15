@@ -1,4 +1,4 @@
-#include "ShopEconomy/Trading/CatShopTradeController.h"
+﻿#include "ShopEconomy/Trading/CatShopTradeController.h"
 
 #include "Camp/CatCampHubActor.h"
 #include "Camp/CatCampInventoryActor.h"
@@ -65,7 +65,7 @@ FCatShopOrderResult UCatShopTradeController::SubmitCartFromKiosk(AController* Re
 {
 	// 摊位购物车提交流程：
 	// 1. 先重读服务器玩法 gate 和原始 RPC 载荷大小，拒绝无效局状态或异常购物车。
-	// 2. 再从请求 Controller 重建稳定玩家身份，并要求摊位在当前 World 内证明玩家仍在服务半径。
+	// 2. 再从请求 Controller 重建稳定玩家身份，并要求摊位与玩家处于同一 World 且摊位仍启用；已打开页面不再限制下单距离。
 	// 3. 摊位只给来源货架库存，营地收货仓库由 ShopEconomy 在 World 中解析，Controller 只保留交易意图。
 	// 4. 将来源与收货库存交经济服务统一成交；实物回执直接采用成交终态，所有前置失败也带结果回到 UI。
 	FCatShopOrderResult Result;

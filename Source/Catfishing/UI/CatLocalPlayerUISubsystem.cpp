@@ -1,4 +1,4 @@
-#include "UI/CatLocalPlayerUISubsystem.h"
+﻿#include "UI/CatLocalPlayerUISubsystem.h"
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "UI/Run/CatAltarConfirmationWidget.h"
 #include "UI/Run/CatDayTransitionWidget.h"
@@ -27,6 +27,8 @@
 #include "UI/Interaction/CatInteractionPageController.h"
 #include "UI/Interaction/CatInteractionPromptWidget.h"
 #include "UI/Inventory/CatInventoryPageController.h"
+#include "UI/Inventory/CatInventoryQuickbarWidget.h"
+#include "Inventory/CatBackPackComponent.h"
 #include "UI/Inventory/CatInventoryWidget.h"
 #include "UI/ItemTooltip/CatItemTooltipController.h"
 #include "UI/ItemTooltip/CatItemTooltipWidget.h"
@@ -450,7 +452,13 @@ void UCatLocalPlayerUISubsystem::ClearAltarConfirmation()
 // 页面只为关闭和输入读取这个控制器；每个库存 WBP 自己绑定所属库存的 Model。
 UCatInventoryPageController* UCatLocalPlayerUISubsystem::GetInventoryPageController() const
 {
-    return InventoryPageController;
+	return InventoryPageController;
+}
+
+// 快捷栏读取流程：返回 AttachPlayerLakeUI 已创建的正式 View；未装配、换 Pawn 或旅行清理期间返回空，不创建新控件。
+UCatInventoryQuickbarWidget* UCatLocalPlayerUISubsystem::GetInventoryQuickbarWidget() const
+{
+	return InventoryQuickbarWidget;
 }
 
 // 快照消费流程：Online 变更时按当前 World 调和正式 Frontend Root，并刷新局内 HUD；库存只听自己的数据源，不把会话状态当库存变化。
@@ -1338,7 +1346,7 @@ void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 
 // 本地玩家 UI 装配流程：
 // 1. 验证本地设置、当前 Controller/Pawn 和 World；核心页面 WBP 缺失时停止装配，物品提示缺失则只关闭该提示并记录原因，均不创建原生替身。
-// 2. 创建 HUD Model/View、库存、菜单和交互提示实例；任一必需实例缺失则统一解绑已创建部分，再结束本次装配。
+// 2. 创建 HUD、背包、独立物品栏、菜单和交互提示；背包与物品栏分别装入各自格子 WBP，物品栏只读同一库存；任一必需实例缺失则统一解绑。
 // 3. 绑定 HUD 动作与角色 Model，订阅 Model 更新后把 HUD 放入视口；Model 绑定失败同样统一清理。
 // 4. 创建物品悬停 View；成功加入全视口层后才绑定控制器，失败释放引用并记录，库存格只提交来源。
 // 5. 刷新 HUD，绑定库存和菜单控制器；页面暂不入视口，仍由既有输入打开，任一绑定失败则整体解绑。
@@ -1359,18 +1367,22 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 
 	const TSubclassOf<UCatHUDWidget> HUDViewClass = Settings->LoadHUDWidgetClass();
 	const TSubclassOf<UCatInventoryWidget> InventoryViewClass = Settings->LoadInventoryWidgetClass();
+	const TSubclassOf<UCatInventoryQuickbarWidget> InventoryQuickbarViewClass = Settings->LoadInventoryQuickbarWidgetClass();
 	const TSubclassOf<UCatInventorySlotWidget> InventorySlotViewClass = Settings->LoadInventorySlotWidgetClass();
+	const TSubclassOf<UCatInventorySlotWidget> QuickbarSlotViewClass = Settings->LoadInventoryQuickbarSlotWidgetClass();
 	const TSubclassOf<UCatInteractionPromptWidget> InteractionPromptViewClass =
 		Settings->LoadInteractionPromptWidgetClass();
 	const TSubclassOf<UCatLakeMainMenuWidget> LakeMainMenuViewClass = Settings->LoadLakeMainMenuWidgetClass();
-	if (!HUDViewClass || !InventoryViewClass || !InventorySlotViewClass || !InteractionPromptViewClass
+	if (!HUDViewClass || !InventoryViewClass || !InventoryQuickbarViewClass || !InventorySlotViewClass || !QuickbarSlotViewClass || !InteractionPromptViewClass
 		|| !LakeMainMenuViewClass)
 	{
 		UE_LOG(LogCatUI, Warning,
-			TEXT("Event=ui_player_module_class_missing HUD=%s Inventory=%s Slot=%s Interaction=%s LakeMenu=%s"),
+			TEXT("Event=ui_player_module_class_missing HUD=%s Inventory=%s Quickbar=%s Slot=%s QuickbarSlot=%s Interaction=%s LakeMenu=%s"),
 			*Settings->HUDWidgetClass.ToSoftObjectPath().ToString(),
 			*Settings->InventoryWidgetClass.ToSoftObjectPath().ToString(),
+			*Settings->InventoryQuickbarWidgetClass.ToSoftObjectPath().ToString(),
 			*Settings->InventorySlotWidgetClass.ToSoftObjectPath().ToString(),
+			*Settings->InventoryQuickbarSlotWidgetClass.ToSoftObjectPath().ToString(),
 			*Settings->InteractionPromptWidgetClass.ToSoftObjectPath().ToString(),
 			*Settings->LakeMainMenuWidgetClass.ToSoftObjectPath().ToString());
 		return;
@@ -1380,11 +1392,12 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	HUDWidget = CreateWidget<UCatHUDWidget>(Controller, HUDViewClass);
 	InventoryPageController = NewObject<UCatInventoryPageController>(this);
 	InventoryWidget = CreateWidget<UCatInventoryWidget>(Controller, InventoryViewClass);
+	InventoryQuickbarWidget = CreateWidget<UCatInventoryQuickbarWidget>(Controller, InventoryQuickbarViewClass);
 	LakeMainMenuController = NewObject<UCatLakeMainMenuController>(this);
 	LakeMainMenuWidget = CreateWidget<UCatLakeMainMenuWidget>(Controller, LakeMainMenuViewClass);
 	InteractionPageController = NewObject<UCatInteractionPageController>(this);
 	InteractionPromptWidget = CreateWidget<UCatInteractionPromptWidget>(Controller, InteractionPromptViewClass);
-	if (!HUDModel || !HUDWidget || !InventoryPageController || !InventoryWidget
+	if (!HUDModel || !HUDWidget || !InventoryPageController || !InventoryWidget || !InventoryQuickbarWidget
 		|| !LakeMainMenuController || !LakeMainMenuWidget || !InteractionPageController || !InteractionPromptWidget)
 	{
 		DetachPlayerLakeUI();
@@ -1392,6 +1405,8 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	}
 	HUDActionHandle = HUDWidget->OnActionRequested.AddUObject(this, &ThisClass::HandleHUDActionRequested);
 	InventoryWidget->SetInventorySlotWidgetClass(InventorySlotViewClass);
+	InventoryQuickbarWidget->SetInventorySlotWidgetClass(QuickbarSlotViewClass);
+	InventoryQuickbarWidget->SetBackPackContext(Cast<UCatBackPackComponent>(Character->GetInventoryComponent()));
 	if (!HUDModel->Bind(GetLocalPlayer(), Controller, Character))
 	{
 		DetachPlayerLakeUI();
@@ -1400,6 +1415,7 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	HUDModelViewChangedHandle = HUDModel->OnViewStateChanged.AddUObject(
 		this, &ThisClass::HandleHUDModelViewStateChanged);
 	HUDWidget->AddToViewport(1);
+	InventoryQuickbarWidget->AddToViewport(2);
 	// 库存提示独立于页面但隶属于本玩家；类缺失只关闭提示并落盘，不影响既有库存操作。
 	if (const TSubclassOf<UCatItemTooltipWidget> TooltipClass = Settings->LoadItemTooltipWidgetClass())
 	{
@@ -1442,7 +1458,7 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	const UWorld* World = GetWorld();
 	const ULocalPlayer* LocalPlayer = GetLocalPlayer();
 	UE_LOG(LogCatUI, Log,
-		TEXT("Event=ui_player_modules_attached World=%s NetMode=%d LocalPlayerIndex=%d Controller=%s LocalController=%s HUD=%s HUDMode=minimal_main Inventory=%s Slot=%s LakeMenu=%s Interaction=%s ShopPrecreated=false"),
+		TEXT("Event=ui_player_modules_attached World=%s NetMode=%d LocalPlayerIndex=%d Controller=%s LocalController=%s HUD=%s HUDMode=minimal_main Inventory=%s Quickbar=%s Slot=%s QuickbarSlot=%s LakeMenu=%s Interaction=%s ShopPrecreated=false"),
 		World ? *World->GetName() : TEXT("None"),
 		World ? static_cast<int32>(World->GetNetMode()) : -1,
 		LocalPlayer ? LocalPlayer->GetLocalPlayerIndex() : INDEX_NONE,
@@ -1450,7 +1466,9 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 		Controller->IsLocalController() ? TEXT("true") : TEXT("false"),
 		*GetNameSafe(HUDWidget->GetClass()),
 		*GetNameSafe(InventoryWidget->GetClass()),
+		*GetNameSafe(InventoryQuickbarWidget->GetClass()),
 		*GetNameSafe(InventorySlotViewClass.Get()),
+		*GetNameSafe(QuickbarSlotViewClass.Get()),
 		*GetNameSafe(LakeMainMenuWidget ? LakeMainMenuWidget->GetClass() : nullptr),
 		*GetNameSafe(InteractionPromptWidget ? InteractionPromptWidget->GetClass() : nullptr));
 }
@@ -1497,6 +1515,11 @@ void UCatLocalPlayerUISubsystem::DetachPlayerLakeUI()
 	{
 		InventoryWidget->RemoveFromParent();
 		InventoryWidget = nullptr;
+	}
+	if (InventoryQuickbarWidget)
+	{
+		InventoryQuickbarWidget->RemoveFromParent();
+		InventoryQuickbarWidget = nullptr;
 	}
 	if (HUDModel)
 	{

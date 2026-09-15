@@ -3,11 +3,51 @@
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
 #include "GameplayTagContainer.h"
+#include "NativeGameplayTags.h"
 #include "CatInventoryItemDefinition.generated.h"
 
 class UCatInventoryItemInstance;
 class UTexture2D;
 class AActor;
+
+/** 库存操作标识；菜单和网络只传标识，具体行为由物品实例的虚函数处理。 */
+namespace CatInventoryActionTags
+{
+	/** 使用物品已有的领域效果。 */
+	CATFISHING_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Use);
+	/** 把所选数量逐件丢到世界。 */
+	CATFISHING_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Drop);
+	/** 按既有规则放置物品。 */
+	CATFISHING_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Place);
+	/** 从允许的容器把物品叼起。 */
+	CATFISHING_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Carry);
+	/** 向当前可用买家出售本件物品。 */
+	CATFISHING_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Sell);
+}
+
+/** 操作是否需要数量确认；它是输入方式，不限制可扩展的操作种类。 */
+UENUM(BlueprintType)
+enum class ECatInventoryActionQuantityMode : uint8
+{
+	Single,
+	Select
+};
+
+/** 物品定义声明的一项操作；数组顺序决定菜单顺序，运行时可用性由实例查询。 */
+USTRUCT(BlueprintType)
+struct CATFISHING_API FCatInventoryActionDefinition
+{
+	GENERATED_BODY()
+	/** 操作的稳定标识；服务器只允许执行定义中声明的项目。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly)
+	FGameplayTag Action;
+	/** 菜单显示名称；由物品定义维护，不从类名或按钮类型推断。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly)
+	FText Label;
+	/** 数量输入约定；可选数量的堆叠物才进入菜单内的数量页。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly)
+	ECatInventoryActionQuantityMode QuantityMode = ECatInventoryActionQuantityMode::Single;
+};
 
 /** 物品定义上的可组合语义片段；定义负责静态配置，片段只声明这份定义额外具备的库存语义。 */
 UCLASS(Abstract, DefaultToInstanced, EditInlineNew, BlueprintType)
@@ -84,6 +124,10 @@ public:
 	virtual bool IsSupportedForNetworking() const override;
 
 public:
+	/** 本物品支持的有序操作清单；资产声明能力，菜单只读，实例和服务器共同复核当前可用性。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Inventory|Actions")
+	TArray<FCatInventoryActionDefinition> InventoryActions;
+
 	/** 物品稳定 ID；普通库存资产直接写它，装备资产会通过覆盖方法返回自己的 EquipmentDefinitionId。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Identity")
 	FName InventoryDefinitionId = NAME_None;

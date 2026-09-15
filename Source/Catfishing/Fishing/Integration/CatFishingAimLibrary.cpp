@@ -173,7 +173,23 @@ bool UCatFishingAimLibrary::TryResolveScoopReach(const UCatEquipmentComponent* E
 		OutReachCentimeters = 0.0;
 		return false;
 	}
-	OutReachCentimeters = FMath::Min(OutReachCentimeters, ScoopDefinition->FindFragment<UCatEquipmentFragment_Scoop>()->ScoopReachCentimeters);
+	return TryResolveScoopReach(ScoopDefinition, OutReachCentimeters);
+}
+
+// 精确抄网范围解析流程：先保留全局上限，再与服务器已验证实例所属定义的 reach 取较小值，公式与旧装备投影入口完全一致。
+bool UCatFishingAimLibrary::TryResolveScoopReach(const UCatEquipmentDefinition* ScoopDefinition,
+	double& OutReachCentimeters)
+{
+	OutReachCentimeters = 0.0;
+	const UCatFishingSettings* FishingSettings = GetDefault<UCatFishingSettings>();
+	if (!FishingSettings || !FishingSettings->TryGetScoopReach(OutReachCentimeters) || !ScoopDefinition
+		|| !ScoopDefinition->CanServeScoopNet() || !ScoopDefinition->IsRuntimeDefinitionReady()
+		|| ScoopDefinition->FindFragment<UCatEquipmentFragment_Scoop>()->ScoopReachCentimeters <= 0.0)
+	{
+		return false;
+	}
+	OutReachCentimeters = FMath::Min(OutReachCentimeters,
+		ScoopDefinition->FindFragment<UCatEquipmentFragment_Scoop>()->ScoopReachCentimeters);
 	return FMath::IsFinite(OutReachCentimeters) && OutReachCentimeters > 0.0;
 }
 

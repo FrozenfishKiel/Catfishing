@@ -722,6 +722,7 @@ void UCatOnlineSubsystem::CollectGameplayStartupAssetPaths(TArray<FSoftObjectPat
 		AddUniquePath(OutAssetPaths, UISettings->HUDWidgetClass.ToSoftObjectPath());
 		AddUniquePath(OutAssetPaths, UISettings->InventoryWidgetClass.ToSoftObjectPath());
 		AddUniquePath(OutAssetPaths, UISettings->InventorySlotWidgetClass.ToSoftObjectPath());
+		AddUniquePath(OutAssetPaths, UISettings->InventoryContextMenuWidgetClass.ToSoftObjectPath());
 		AddUniquePath(OutAssetPaths, UISettings->InteractionPromptWidgetClass.ToSoftObjectPath());
 		AddUniquePath(OutAssetPaths, UISettings->LakeMainMenuWidgetClass.ToSoftObjectPath());
 		AddUniquePath(OutAssetPaths, UISettings->MainMenuToggleAction.ToSoftObjectPath());

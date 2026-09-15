@@ -5,6 +5,8 @@
 #include "Character/CatCharacter.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
+#include "Fishing/Integration/CatFishingCommandComponent.h"
+#include "Framework/Game/CatfishingPlayerController.h"
 #include "GameFramework/Controller.h"
 #include "Inventory/CatInventoryComponent.h"
 #include "Net/UnrealNetwork.h"
@@ -136,26 +138,25 @@ bool UCatEquipmentInventoryItemInstance::CanUseFromInventory(
 {
 	const UCatEquipmentDefinition* EquipmentDefinition = Cast<UCatEquipmentDefinition>(GetItemDefinition());
 	const ACatCharacter* Character = Cast<ACatCharacter>(UserPawn);
-	const bool bSupportedLoadoutSlot = EquipmentDefinition != nullptr
-		&& (EquipmentDefinition->CanServeFishingRod()
-			|| EquipmentDefinition->CanServeFishingBait()
-			|| EquipmentDefinition->CanServeFishingFloat()
+	const bool bSupportedUse = EquipmentDefinition != nullptr
+		&& (EquipmentDefinition->CanServeFishingRod() || EquipmentDefinition->CanServeChumPlacement()
+			|| EquipmentDefinition->CanServeFishingBait() || EquipmentDefinition->CanServeFishingFloat()
 			|| EquipmentDefinition->CanServeScoopNet());
 	return InventoryEntry.Instance == this
 		&& InventoryEntry.StackCount > 0
 		&& GetItemInstanceId().IsValid()
 		&& EquipmentDefinition != nullptr
 		&& EquipmentDefinition->IsRuntimeDefinitionReady()
-		&& bSupportedLoadoutSlot
+		&& bSupportedUse
 		&& Character != nullptr
 		&& Character->GetEquipmentComponent() != nullptr;
 }
 
 // 装备物品从库存使用的正式提交流程：
-// 1. 先复核库存 entry、使用 Pawn 和 Equipment 组件，避免装备实例被其他宿主或空格冒用。
-// 2. 再按服务器当前 Equipment 快照补齐未点击的 Rod/Bait/Float/ScoopNet 选择；客户端不提交完整 loadout。
-// 3. 库存槽位由正式库存原子裁决；钓鱼选择读模型版本由 Equipment 入口在调用后读取。
-// 4. 最后用当前 Equipment 版本调用正式选择提交入口，让解锁、消耗属性、断竿和同选择 AlreadyResolved 仍由原权威路径裁决。
+// 1. 先复核库存 entry、角色和定义，确保通用入口处理的就是客户端选中后提交的实例。
+// 2. 鱼竿、窝料和抄网分别把精确实例交给既有部署、蓄力或抢抄事务；这些事务仍持有原来的冷却、物理和结算规则。
+// 3. 鱼饵和鱼漂继续沿用既有装备配置 Use，避免本轮快捷栏接线改变其已存在的装备行为。
+// 4. 不在这里按 UI 或按键分支；持续窝料只由 Context 声明是否等待同一请求的 End。
 FCatDomainCommandResult UCatEquipmentInventoryItemInstance::UseFromInventorySlotFromAuthority(
 	const FCatInventoryEntry& InventoryEntry, const FCatInventoryItemUseContext& UseContext)
 {
@@ -187,6 +188,36 @@ FCatDomainCommandResult UCatEquipmentInventoryItemInstance::UseFromInventorySlot
 	{
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 	}
+	else if (Definition->CanServeFishingRod() || Definition->CanServeChumPlacement() || Definition->CanServeScoopNet())
+	{
+		ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(UseContext.RequestingController);
+		UCatFishingCommandComponent* Commands = Controller ? Controller->GetFishingCommandComponent() : nullptr;
+		if (!Controller || !Commands)
+		{
+			Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		}
+		else if (Definition->CanServeFishingRod())
+		{
+			FCatPlaceRodCommand Command;
+			Command.RequestId = UseContext.RequestId;
+			Command.RequestedRodItemInstanceId = GetItemInstanceId();
+			Command.ExpectedEquipmentRevision = Equipment->GetSnapshot().Revision;
+			Result = Commands->PlaceRodFromInventoryUseOnAuthority(Controller, Command);
+		}
+		else if (Definition->CanServeScoopNet())
+		{
+			Result = Commands->ScoopFromInventoryUseOnAuthority(Controller, UseContext, GetItemInstanceId());
+		}
+		else
+		{
+			Result = Commands->BeginChumUseFromInventoryOnAuthority(Controller, UseContext,
+				GetItemInstanceId(), GetItemDefinitionId());
+			if (Result.bCommitted && !UseContext.bContinuousInput)
+			{
+				Result = Commands->EndChumUseFromInventoryOnAuthority(Controller, UseContext, false);
+			}
+		}
+	}
 	else
 	{
 		SelectedDefinitionId = Definition->EquipmentDefinitionId;
@@ -203,13 +234,7 @@ FCatDomainCommandResult UCatEquipmentInventoryItemInstance::UseFromInventorySlot
 		FGuid ScoopNetItemInstanceId = Snapshot.ScoopNetItemInstanceId;
 		bool bSelectedLoadoutSlotSupported = true;
 
-		if (Definition->CanServeFishingRod())
-		{
-			RodDefinitionId = SelectedDefinitionId;
-			RodItemInstanceId = SelectedItemInstanceId;
-			SelectedLoadoutSlot = TEXT("Rod");
-		}
-		else if (Definition->CanServeFishingBait())
+		if (Definition->CanServeFishingBait())
 		{
 			BaitDefinitionId = SelectedDefinitionId;
 			BaitItemInstanceId = SelectedItemInstanceId;
@@ -220,12 +245,6 @@ FCatDomainCommandResult UCatEquipmentInventoryItemInstance::UseFromInventorySlot
 			FloatDefinitionId = SelectedDefinitionId;
 			FloatItemInstanceId = SelectedItemInstanceId;
 			SelectedLoadoutSlot = TEXT("Float");
-		}
-		else if (Definition->CanServeScoopNet())
-		{
-			ScoopNetDefinitionId = SelectedDefinitionId;
-			ScoopNetItemInstanceId = SelectedItemInstanceId;
-			SelectedLoadoutSlot = TEXT("ScoopNet");
 		}
 		else
 		{
@@ -263,6 +282,44 @@ FCatDomainCommandResult UCatEquipmentInventoryItemInstance::UseFromInventorySlot
 		*UEnum::GetValueAsString(Result.Error),
 		Result.Revision);
 	return Result;
+}
+
+// 持续输入声明流程：只有窝料的 Begin/End 之间存在蓄力时间，鱼竿部署和其它装备不会留下待结束状态。
+bool UCatEquipmentInventoryItemInstance::UsesContinuousInput() const
+{
+	const UCatEquipmentDefinition* Definition = Cast<UCatEquipmentDefinition>(GetItemDefinition());
+	return Definition != nullptr && Definition->CanServeChumPlacement();
+}
+
+// 本地连续表现流程：只有窝料把同一输入边沿交给命令组件维护预览时间；服务器蓄力和库存事务仍完全走 authority Begin/End。
+void UCatEquipmentInventoryItemInstance::SetUseInputActiveLocally(APlayerController* RequestingController, const bool bActive)
+{
+	const UCatEquipmentDefinition* Definition = Cast<UCatEquipmentDefinition>(GetItemDefinition());
+	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(RequestingController);
+	if (Definition && Definition->CanServeChumPlacement() && Controller && Controller->IsLocalController())
+	{
+		if (UCatFishingCommandComponent* Commands = Controller->GetFishingCommandComponent())
+		{
+			Commands->SetChumUsePreviewActiveLocally(bActive);
+		}
+	}
+}
+
+// 持续使用结束流程：只允许窝料把同一次固定上下文转回命令组件；其它装备没有 Release 阶段，不能借此触发旧装备选择。
+FCatDomainCommandResult UCatEquipmentInventoryItemInstance::EndUseFromInventorySlotFromAuthority(
+	const FCatInventoryItemUseContext& UseContext, const bool bCancelled)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = UseContext.RequestId;
+	const UCatEquipmentDefinition* Definition = Cast<UCatEquipmentDefinition>(GetItemDefinition());
+	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(UseContext.RequestingController);
+	UCatFishingCommandComponent* Commands = Controller ? Controller->GetFishingCommandComponent() : nullptr;
+	if (!Definition || !Definition->CanServeChumPlacement() || !Commands)
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		return Result;
+	}
+	return Commands->EndChumUseFromInventoryOnAuthority(Controller, UseContext, bCancelled);
 }
 
 // 定义绑定扩展流程：父类先执行通用片段初始化；装备层随后只为具备鱼竿能力的定义初始化耐久，其他装备保持无专属实例状态。

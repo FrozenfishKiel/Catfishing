@@ -44,6 +44,37 @@ bool FCatFishingCooldownGate::TryConsume(const double NowSeconds, const double D
 
 namespace
 {
+	// 物品 Use 需要回到库存通用错误码；钓鱼细分只写入命令组件日志和结果缓存，库存 UI 不借此猜测物品类型。
+	ECatDomainCommandError MapFishingUseErrorToDomain(const ECatFishingCommandError Error)
+	{
+		switch (Error)
+		{
+		case ECatFishingCommandError::None: return ECatDomainCommandError::None;
+		case ECatFishingCommandError::InvalidIdentity: return ECatDomainCommandError::InvalidIdentity;
+		case ECatFishingCommandError::InvalidPayload: return ECatDomainCommandError::InvalidPayload;
+		case ECatFishingCommandError::EquipmentRevisionConflict:
+		case ECatFishingCommandError::RevisionConflict: return ECatDomainCommandError::RevisionConflict;
+		case ECatFishingCommandError::CommandsClosed: return ECatDomainCommandError::CommandsClosed;
+		case ECatFishingCommandError::NoRod: return ECatDomainCommandError::NotFound;
+		case ECatFishingCommandError::DependencyUnavailable: return ECatDomainCommandError::DependencyUnavailable;
+		default: return ECatDomainCommandError::InvalidPhase;
+		}
+	}
+
+	// 窝料服务错误需要归并成库存通用结果；原始细分仍通过 PlaceChum 回执缓存提供给钓鱼表现使用。
+	ECatDomainCommandError MapChumUseErrorToDomain(const ECatChumFieldError Error)
+	{
+		switch (Error)
+		{
+		case ECatChumFieldError::None: return ECatDomainCommandError::None;
+		case ECatChumFieldError::InvalidIdentity: return ECatDomainCommandError::InvalidIdentity;
+		case ECatChumFieldError::InvalidPayload: return ECatDomainCommandError::InvalidPayload;
+		case ECatChumFieldError::AlreadyResolved: return ECatDomainCommandError::AlreadyResolved;
+		case ECatChumFieldError::CommandsClosed: return ECatDomainCommandError::CommandsClosed;
+		case ECatChumFieldError::DependencyUnavailable: return ECatDomainCommandError::DependencyUnavailable;
+		default: return ECatDomainCommandError::InvalidPhase;
+		}
+	}
 	FString BuildRodAimControllerFields(const AController* Controller)
 	{
 		return FString::Printf(TEXT("World=%s Authority=%s LocalRole=%d %s"),
@@ -69,6 +100,139 @@ UCatFishingCommandComponent::UCatFishingCommandComponent()
 {
 	SetIsReplicatedByDefault(true); // PresentationState 之外，这个组件自身也要在网络上存在（承载 RPC）
 	PrimaryComponentTick.bCanEverTick = false; // 纯事件驱动，不需要每帧轮询
+}
+
+// 选中鱼竿 Use 流程：
+// 1. 确认调用者就是本组件所属的权威 Controller，避免库存实例跨玩家借用命令组件。
+// 2. 再要求请求携带有效的指定实例，服务据此只从该实例所在库存格借出。
+// 3. 最后复用既有 PlaceRod 事务并投递钓鱼回执，同时把结果归并回库存 Use 的通用错误码。
+FCatDomainCommandResult UCatFishingCommandComponent::PlaceRodFromInventoryUseOnAuthority(
+	APlayerController* RequestingController, const FCatPlaceRodCommand& Command)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = Command.RequestId;
+	if (!RequestingController || RequestingController != GetOwner() || !RequestingController->HasAuthority()
+		|| !Command.RequestId.IsValid() || !Command.RequestedRodItemInstanceId.IsValid())
+	{
+		Result.Error = ECatDomainCommandError::PermissionDenied;
+		return Result;
+	}
+	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
+	if (!Fishing)
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		return Result;
+	}
+	const FCatFishingCommandResult FishingResult = Fishing->PlaceRod(RequestingController, Command);
+	DeliverResultFromAuthority(FishingResult);
+	Result.bCommitted = FishingResult.bCommitted;
+	Result.Revision = FishingResult.EquipmentRevision;
+	Result.Error = MapFishingUseErrorToDomain(FishingResult.Error);
+	return Result;
+}
+
+// 窝料持续 Use 开始流程：
+// 1. 先验证组件归属、服务器权威以及本次槽位/实例/定义身份均完整。
+// 2. 再只记录这次开始请求的来源事实和服务器时间，不做弹道、扣量或库存扫描。
+// 3. 重复 Begin 只有在同一请求和同一实例时幂等成功，其余请求拒绝，避免覆盖尚未松开的物品。
+FCatDomainCommandResult UCatFishingCommandComponent::BeginChumUseFromInventoryOnAuthority(
+	APlayerController* RequestingController, const FCatInventoryItemUseContext& UseContext,
+	const FGuid ChumItemInstanceId, const FName ChumDefinitionId)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = UseContext.RequestId;
+	if (!RequestingController || RequestingController != GetOwner() || !RequestingController->HasAuthority()
+		|| !UseContext.RequestId.IsValid() || !UseContext.SourceInventory || UseContext.InventorySlotIndex == INDEX_NONE
+		|| !ChumItemInstanceId.IsValid() || ChumDefinitionId.IsNone())
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		return Result;
+	}
+	if (ActiveChumUseRequestId.IsValid())
+	{
+		Result.bCommitted = ActiveChumUseRequestId == UseContext.RequestId
+			&& ActiveChumItemInstanceId == ChumItemInstanceId
+			&& ActiveChumSourceInventory.Get() == UseContext.SourceInventory
+			&& ActiveChumInventorySlotIndex == UseContext.InventorySlotIndex;
+		Result.Error = Result.bCommitted ? ECatDomainCommandError::None : ECatDomainCommandError::InvalidPhase;
+		return Result;
+	}
+	ChumChargeStartServerTime = GetWorld() ? GetWorld()->GetTimeSeconds() : -1.0;
+	ActiveChumUseRequestId = UseContext.RequestId;
+	ActiveChumItemInstanceId = ChumItemInstanceId;
+	ActiveChumDefinitionId = ChumDefinitionId;
+	ActiveChumSourceInventory = UseContext.SourceInventory;
+	ActiveChumInventorySlotIndex = UseContext.InventorySlotIndex;
+	Result.bCommitted = true;
+	Result.Error = ECatDomainCommandError::None;
+	return Result;
+}
+
+// 窝料持续 Use 结束流程：
+// 1. 先要求 Release/Cancel 回到同一个 Request、库存组件和槽位；不匹配时保留原状态，避免旧输入取消新输入。
+// 2. 匹配后立即取出并清空固定事实，保证重复 Release 不能二次投放。
+// 3. Cancel 只返回取消终态；正常结束才把同一槽位、同一实例交给原有蓄力投放计算。
+FCatDomainCommandResult UCatFishingCommandComponent::EndChumUseFromInventoryOnAuthority(
+	APlayerController* RequestingController, const FCatInventoryItemUseContext& UseContext, const bool bCancelled)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = UseContext.RequestId;
+	if (!RequestingController || RequestingController != GetOwner() || !RequestingController->HasAuthority()
+		|| ActiveChumUseRequestId != UseContext.RequestId || ActiveChumSourceInventory.Get() != UseContext.SourceInventory
+		|| ActiveChumInventorySlotIndex != UseContext.InventorySlotIndex)
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		return Result;
+	}
+	const double HeldSeconds = ChumChargeStartServerTime >= 0.0 && GetWorld()
+		? GetWorld()->GetTimeSeconds() - ChumChargeStartServerTime : 0.0;
+	const FGuid ChumItemInstanceId = ActiveChumItemInstanceId;
+	const FName ChumDefinitionId = ActiveChumDefinitionId;
+	ClearChumUseState();
+	if (bCancelled)
+	{
+		Result.Error = ECatDomainCommandError::Cancelled;
+		return Result;
+	}
+	ThrowChumFromChargeOnAuthority(RequestingController, UseContext, ChumItemInstanceId, ChumDefinitionId, HeldSeconds);
+	if (FCatPlaceChumResult ChumResult; TryGetPlaceChumResult(UseContext.RequestId, ChumResult))
+	{
+		Result.bCommitted = ChumResult.bCommitted;
+		Result.Revision = ChumResult.ChumFieldSetRevision;
+		Result.Error = MapChumUseErrorToDomain(ChumResult.Error);
+	}
+	else
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+	}
+	return Result;
+}
+
+// 选中抄网 Use 流程：把库存已经复核的实例身份和上下文原样传给抄取命令，冷却、目标筛选和 Session 原子交接仍由既有流程裁决。
+FCatDomainCommandResult UCatFishingCommandComponent::ScoopFromInventoryUseOnAuthority(
+	APlayerController* RequestingController, const FCatInventoryItemUseContext& UseContext,
+	const FGuid ScoopItemInstanceId)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = UseContext.RequestId;
+	if (!RequestingController || RequestingController != GetOwner() || !RequestingController->HasAuthority()
+		|| !UseContext.RequestId.IsValid() || !ScoopItemInstanceId.IsValid())
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		return Result;
+	}
+	FCatFishingInputEdge Edge;
+	Edge.RequestId = UseContext.RequestId;
+	HandleAbilityCommandFromAuthority(ECatFishingCommandType::RequestScoop, Edge, ScoopItemInstanceId);
+	FCatFishingCommandResult FishingResult;
+	if (TryGetResult(UseContext.RequestId, FishingResult))
+	{
+		Result.bCommitted = FishingResult.bCommitted;
+		Result.Revision = FishingResult.Revision;
+		Result.Error = MapFishingUseErrorToDomain(FishingResult.Error);
+	}
+	else Result.Error = ECatDomainCommandError::DependencyUnavailable;
+	return Result;
 }
 
 void UCatFishingCommandComponent::DeliverResultFromAuthority(const FCatFishingCommandResult& Result)
@@ -279,9 +443,26 @@ void UCatFishingCommandComponent::ResetTransientCommandState()
 	LocalPitchAimEpoch = 0;
 	bLocalPitchAimInitialized = false;
 	LocalChumChargeStartTime = -1.0; // 关卡/会话切换时收起残留的蓄力预览线。
-	ChumChargeStartServerTime = -1.0;
+	ClearChumUseState();
 	ScoopCooldownGate.Reset(); // 世界时间会在旅行时重建，旧世界的绝对时间戳不能带入新地图。
 	// This component lives on the Controller across pawn changes. Preserve monotonic sequence fences.
+}
+
+// 本地窝料预览流程：按下立刻记本地世界时间供客户端画蓄力线，松开/取消清空；这份表现状态不参与任何服务器裁决。
+void UCatFishingCommandComponent::SetChumUsePreviewActiveLocally(const bool bActive)
+{
+	LocalChumChargeStartTime = bActive && GetWorld() ? GetWorld()->GetTimeSeconds() : -1.0;
+}
+
+// 权威窝料会话清理流程：统一失效时间戳与 Begin 固定的请求、实例、定义、来源和槽位，防止生命周期或取消留下旧会话阻塞下一次 Use。
+void UCatFishingCommandComponent::ClearChumUseState()
+{
+	ChumChargeStartServerTime = -1.0;
+	ActiveChumUseRequestId.Invalidate();
+	ActiveChumItemInstanceId.Invalidate();
+	ActiveChumDefinitionId = NAME_None;
+	ActiveChumSourceInventory.Reset();
+	ActiveChumInventorySlotIndex = INDEX_NONE;
 }
 
 bool UCatFishingCommandComponent::TryGetHeldFightInputStateFromAuthority(bool& OutPrimaryHeld,
@@ -342,7 +523,7 @@ void UCatFishingCommandComponent::ServerClearHeldInputForLifecycle_Implementatio
 	}
 	const bool bCancelledAim = ServerAimingCorrelationId.IsValid();
 	ServerAimingCorrelationId.Invalidate();
-	ChumChargeStartServerTime = -1.0;
+	ClearChumUseState();
 	bServerPrimaryHeld = false;
 	bServerSlackHeld = false;
 	LastServerHeldInputSequence = Edge.InputSequence;
@@ -419,7 +600,7 @@ FCatFishingInputEdge UCatFishingCommandComponent::MakeDiscreteEdge()
 
 FCatFishingInputEdge UCatFishingCommandComponent::SubmitRodInteract()
 {
-	// R explicitly takes or releases primary control; physical assistance has no command role.
+	// 保留能力命令调用方的操作位入口；正式背包部署走实例 Use，准星操作走目标鱼竿交互，物理辅助不授予主控。
 	FCatFishingInputEdge Edge = MakeDiscreteEdge();
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_rod_interact_requested RequestId=%s InputSequence=%lld %s"),
@@ -771,7 +952,7 @@ void UCatFishingCommandComponent::BroadcastCosmeticEventFromAuthority(const FGam
 }
 
 void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFishingCommandType CommandType,
-	const FCatFishingInputEdge& Edge)
+	const FCatFishingInputEdge& Edge, const FGuid RequestedScoopItemInstanceId)
 {
 	// 权威输入收口流程：
 	// 1. 先验证拥有者、服务器权威和 RequestId，非法入口不产生任何结果。
@@ -910,6 +1091,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		FCatScoopCommand ScoopCommand;
 		ScoopCommand.Context.RequestId = Edge.RequestId;
 		ScoopCommand.Context.ExpectedRevision = TargetSnapshot.Revision;
+		ScoopCommand.RequestedScoopItemInstanceId = RequestedScoopItemInstanceId;
 		const FCatScoopResult ScoopResult = Fishing->RequestScoop(
 			TargetSnapshot.FishingSessionId, Controller, ScoopCommand);
 		Result.bCommitted = ScoopResult.Command.bCommitted;
@@ -924,11 +1106,11 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 	}
 	if (Fishing)
 	{
-		// R 架住当前主控竿；空手优先接管附近空闲竿，否则部署本人库存实体竿。
+		// 保留能力命令的目标解析契约；正式 E 直接指定目标 Actor，G 直接指定库存实例，不经过这里的最近竿回退。
 		if (CommandType == ECatFishingCommandType::OperateRod)
 		{
 			const ACatCharacter* Character = Cast<ACatCharacter>(Controller->GetPawn());
-			// 分支一：正在操作某根竿 → R 表示"离开竿位"；会话生命周期归鱼竿，不因角色离开而写终态。
+			// 已有主控时释放该操作位；会话生命周期归鱼竿，不因角色离开而写终态。
 			if (ACatFishingRodActor* OperatedRod = Fishing->FindRodOperatedBy(Controller->PlayerState))
 			{
 				const FCatFishingRodPresentationState& OperatedState = OperatedRod->GetPresentationState();
@@ -972,23 +1154,19 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 			DeliverResultFromAuthority(Fishing->PlaceRod(Controller, PlaceCommand));
 			return;
 		}
-		// Q 打窝蓄力：与是否有会话无关，等口/遛鱼中都可以补窝。按下只记时刻，松开才投放。
+		// 选中窝料持续 Use：与是否有会话无关，等口/遛鱼中都可以补窝。开始只记时刻，结束才投放。
 		if (CommandType == ECatFishingCommandType::ChumPressed)
 		{
-			// 只记录服务器时间戳，不做任何弹道/落点计算——真正的投放延后到松开那一刻才算蓄力时长
-			ChumChargeStartServerTime = GetWorld()->GetTimeSeconds();
-			Result.bCommitted = true;
-			Result.Error = ECatFishingCommandError::None;
+			// 旧打窝输入不再允许脱离选中库存实例启动蓄力；正式入口由物品 Use 写入固定实例后才会记录服务器时间。
+			Result.Error = ECatFishingCommandError::InvalidPayload;
 			DeliverResultFromAuthority(Result);
 			return;
 		}
 		if (CommandType == ECatFishingCommandType::ChumReleased)
 		{
-			// 蓄力时长 = 松开时刻 - 按下时刻；若从未记录过按下（<0），按 0 秒（最小力度）处理，防御性容错
-			const double Held = ChumChargeStartServerTime >= 0.0
-				? GetWorld()->GetTimeSeconds() - ChumChargeStartServerTime : 0.0;
-			ChumChargeStartServerTime = -1.0; // 立即复位，避免下次判断误用旧的按下时刻
-			ThrowChumFromChargeOnAuthority(Controller, Edge.RequestId, Held);
+			// 旧松开边沿没有 Begin 固定的实例身份，明确拒绝，不能回退到“扫描第一份可用窝料”的历史行为。
+			Result.Error = ECatFishingCommandError::InvalidPayload;
+			DeliverResultFromAuthority(Result);
 			return;
 		}
 		FGuid SessionId;
@@ -1299,93 +1477,41 @@ void UCatFishingCommandComponent::BeginCastFromViewOnAuthority(APlayerController
 	DeliverBeginCastResultFromAuthority(Fishing->BeginCast(Controller, Command));
 }
 
-// 服务器打窝流程：按按住时长算蓄力 → 与客户端预览同一套弹道预测得到落点 → 优先从正式库存选一份可用窝料 → 交给 PlaceChum 做射程、夹角、视线、水域和正式库存提交。
-void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerController* Controller, const FGuid& RequestId,
-	const double HeldSeconds)
+// 服务器打窝流程：按按住时长算蓄力 → 与客户端预览同一套弹道预测得到落点 → 重读 Begin 固定的窝料槽位与实例 → 交给 PlaceChum 做射程、夹角、视线、水域和正式库存提交。
+void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerController* Controller,
+	const FCatInventoryItemUseContext& UseContext, const FGuid ChumItemInstanceId,
+	const FName ChumDefinitionId, const double HeldSeconds)
 {
 	FCatPlaceChumResult Result;
-	Result.RequestId = RequestId;
+	Result.RequestId = UseContext.RequestId;
 	ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
-	const UCatInventoryComponent* OwnerInventory = Character ? Character->GetInventoryComponent() : nullptr;
+	UCatInventoryComponent* OwnerInventory = Character ? Character->GetInventoryComponent() : nullptr;
 	UCatChumPlacementService* Service = GetWorld() ? GetWorld()->GetSubsystem<UCatChumPlacementService>() : nullptr;
-	if (!Character || !OwnerInventory || !Service)
+	if (!Character || !OwnerInventory || OwnerInventory != UseContext.SourceInventory || !Service)
 	{
 		Result.Error = ECatChumFieldError::DependencyUnavailable;
 		DeliverPlaceChumResultFromAuthority(Result);
 		return;
 	}
-	// 选窝料实例流程：只在正式库存条目里按槽位顺序找足量 Chum；命令层只携带 PlaceChum 复核所需的定义和实例。
+	// 固定实例复核流程：只重读 Begin 时冻结的槽位，任何移动、换物或数量不足都会拒绝，绝不扫描其他格子寻找替代窝料。
 	const int32 ChumQuantity = FMath::Max(1, GetDefault<UCatFishingSettings>()->ChumThrowQuantity);
-	FName SelectedChumDefinitionId = NAME_None;
-	FGuid SelectedChumItemInstanceId;
-	bool bHasChumSlot = false;
-	const auto TrySelectFormalChumSlot = [&](const UCatInventoryComponent& OwnerInventory,
-		const FName RequiredDefinitionId)
+	const FCatInventoryEntry* Entry = OwnerInventory->GetInventoryEntryAtSlot(UseContext.InventorySlotIndex);
+	const UCatInventoryItemInstance* Instance = Entry ? Entry->Instance : nullptr;
+	const UCatEquipmentDefinition* Definition = Instance
+		? Cast<UCatEquipmentDefinition>(Instance->GetItemDefinition()) : nullptr;
+	if (!Entry || !Instance || Entry->StackCount < ChumQuantity
+		|| Instance->GetItemInstanceId() != ChumItemInstanceId
+		|| Instance->GetItemDefinitionId() != ChumDefinitionId
+		|| !Definition || !Definition->IsRuntimeDefinitionReady()
+		|| !Definition->CanServeChumPlacement() || !Instance->ConsumesInventoryQuantityOnUse())
 	{
-		// 正式库存自动选料：按槽位顺序读取实例和数量，避免 Equipment 选择投影决定本次要扣哪一堆窝料。
-		for (int32 SlotIndex = 0; SlotIndex < OwnerInventory.GetInventorySlotCount(); ++SlotIndex)
-		{
-			const FCatInventoryEntry* Entry = OwnerInventory.GetInventoryEntryAtSlot(SlotIndex);
-			const UCatInventoryItemInstance* Instance = Entry != nullptr ? Entry->Instance : nullptr;
-			UCatEquipmentDefinition* Definition =
-				Instance != nullptr ? Cast<UCatEquipmentDefinition>(Instance->GetItemDefinition()) : nullptr;
-			if (Instance != nullptr
-				&& Entry->StackCount >= ChumQuantity
-				&& (RequiredDefinitionId.IsNone() || Instance->GetItemDefinitionId() == RequiredDefinitionId)
-				&& Definition != nullptr
-				&& Definition->IsRuntimeDefinitionReady()
-				&& Definition->CanServeChumPlacement()
-				&& Instance->ConsumesInventoryQuantityOnUse())
-			{
-				SelectedChumDefinitionId = Instance->GetItemDefinitionId();
-				SelectedChumItemInstanceId = Instance->GetItemInstanceId();
-				bHasChumSlot = true;
-				return true;
-			}
-		}
-		return false;
-	};
-	TrySelectFormalChumSlot(*OwnerInventory, NAME_None);
-	if (!bHasChumSlot)
-	{
-		// 库存里没有一份能完整支付本次投放数量的窝料实例，直接拒绝，不进入弹道计算。
-		int32 OccupiedSlotCount = 0;
-		int32 ReadyChumSlotCount = 0;
-		int32 InsufficientReadyChumSlotCount = 0;
-		int32 InvalidChumCandidateSlotCount = 0;
-		for (int32 SlotIndex = 0; SlotIndex < OwnerInventory->GetInventorySlotCount(); ++SlotIndex)
-		{
-			const FCatInventoryEntry* Entry = OwnerInventory->GetInventoryEntryAtSlot(SlotIndex);
-			const UCatInventoryItemInstance* Instance = Entry != nullptr ? Entry->Instance : nullptr;
-			if (Instance == nullptr || Entry->StackCount <= 0)
-			{
-				continue;
-			}
-			++OccupiedSlotCount;
-			UCatEquipmentDefinition* Definition =
-				Cast<UCatEquipmentDefinition>(Instance->GetItemDefinition());
-			const bool bReadyChum = Definition != nullptr
-				&& Definition->IsRuntimeDefinitionReady()
-				&& Definition->CanServeChumPlacement()
-				&& Instance->ConsumesInventoryQuantityOnUse();
-			if (!bReadyChum)
-			{
-				++InvalidChumCandidateSlotCount;
-				continue;
-			}
-			if (Entry->StackCount < ChumQuantity)
-			{
-				++InsufficientReadyChumSlotCount;
-				continue;
-			}
-			++ReadyChumSlotCount;
-		}
 		Result.Error = ECatChumFieldError::EquipmentUnavailable;
 		UE_LOG(LogCatFishing, Warning,
-			TEXT("Event=chum_throw_chum_unavailable RequiredQuantity=%d InventorySlots=%d OccupiedSlots=%d ReadyChumSlots=%d InsufficientReadyChumSlots=%d InvalidCandidateSlots=%d"),
-			ChumQuantity,
-			OwnerInventory->GetInventorySlotCount(), OccupiedSlotCount, ReadyChumSlotCount,
-			InsufficientReadyChumSlotCount, InvalidChumCandidateSlotCount);
+			TEXT("Event=chum_throw_fixed_item_rejected Request=%s Slot=%d RequiredQuantity=%d ExpectedItem=%s ActualItem=%s ExpectedDefinition=%s ActualDefinition=%s"),
+			*UseContext.RequestId.ToString(EGuidFormats::DigitsWithHyphens), UseContext.InventorySlotIndex, ChumQuantity,
+			*ChumItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+			*GetNameSafe(Instance), *ChumDefinitionId.ToString(),
+			Instance ? *Instance->GetItemDefinitionId().ToString() : TEXT("None"));
 		DeliverPlaceChumResultFromAuthority(Result);
 		return;
 	}
@@ -1405,15 +1531,15 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 	}
 	// 组装真正的打窝命令；服务端按实际库存实例和数量裁决窝料扣量。
 	FCatPlaceChumCommand Command;
-	Command.RequestId = RequestId;
+	Command.RequestId = UseContext.RequestId;
 	Command.ExpectedWaterRegionHandle = Region;
-	Command.ChumItemInstanceId = SelectedChumItemInstanceId;
-	Command.ChumDefinitionId = SelectedChumDefinitionId;
+	Command.ChumItemInstanceId = ChumItemInstanceId;
+	Command.ChumDefinitionId = ChumDefinitionId;
 	Command.Quantity = ChumQuantity;
 	Command.ClientCandidateWorldPoint = Landing;
 	UE_LOG(LogCatFishing, Log, TEXT("Event=chum_throw Held=%.2f Alpha=%.2f Landing=%s Chum=%s ChumItem=%s"),
-		HeldSeconds, Alpha, *Landing.ToString(), *SelectedChumDefinitionId.ToString(),
-		*SelectedChumItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
+		HeldSeconds, Alpha, *Landing.ToString(), *ChumDefinitionId.ToString(),
+		*ChumItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
 	DeliverPlaceChumResultFromAuthority(Service->PlaceChum(Controller, Command));
 }
 

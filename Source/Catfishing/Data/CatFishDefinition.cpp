@@ -3,10 +3,13 @@
 #include "Fishing/Presentation/CatFishPresentationDefinition.h"
 #include "Inventory/CatFishInventoryItemInstance.h"
 
-// 鱼定义构造流程：父类仍初始化库存定义通用字段；鱼类覆盖方法会把正式口径收束到 FishDefinitionId 等鱼表字段。
+// 鱼定义构造流程：在通用落地动作之外声明食用、叼起与单鱼出售；是否可执行仍按实例、容器和买家当前状态判断。
 UCatFishDefinition::UCatFishDefinition(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
+	InventoryActions.Insert({CatInventoryActionTags::Use, NSLOCTEXT("CatInventory", "EatFish", "食用"), ECatInventoryActionQuantityMode::Single}, 0);
+	InventoryActions.Add({CatInventoryActionTags::Carry, NSLOCTEXT("CatInventory", "CarryFish", "叼起"), ECatInventoryActionQuantityMode::Single});
+	InventoryActions.Add({CatInventoryActionTags::Sell, NSLOCTEXT("CatInventory", "SellFish", "出售"), ECatInventoryActionQuantityMode::Single});
 }
 
 // 定义可用性检查流程：验证显式 gate、身份、独立稀有/体型轴、基础水域分布、权重/重量、协作人数、性格与食用成长数值；

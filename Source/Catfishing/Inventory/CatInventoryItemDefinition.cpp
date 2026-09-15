@@ -2,6 +2,15 @@
 
 #include "Inventory/CatInventoryItemInstance.h"
 
+namespace CatInventoryActionTags
+{
+	UE_DEFINE_GAMEPLAY_TAG(Use, "Inventory.Action.Use");
+	UE_DEFINE_GAMEPLAY_TAG(Drop, "Inventory.Action.Drop");
+	UE_DEFINE_GAMEPLAY_TAG(Place, "Inventory.Action.Place");
+	UE_DEFINE_GAMEPLAY_TAG(Carry, "Inventory.Action.Carry");
+	UE_DEFINE_GAMEPLAY_TAG(Sell, "Inventory.Action.Sell");
+}
+
 // 基础片段就绪流程：没有领域约束时直接放行；具体能力的配置校验由派生片段实现。
 bool UCatInventoryItemFragment::IsRuntimeReady() const
 {
@@ -14,10 +23,13 @@ void UCatInventoryItemFragment::OnInstanceCreated(UCatInventoryItemInstance* Ins
 	(void)Instance;
 }
 
-// 定义构造流程：只保留类默认配置；运行期状态由 UCatInventoryItemInstance 承载。
+// 定义构造流程：普通物品默认声明通用丢弃和放置；派生定义及资产可改清单，运行状态和执行仍由实例承载。
 UCatInventoryItemDefinition::UCatInventoryItemDefinition(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
+	InventoryActions = {
+		{CatInventoryActionTags::Drop, NSLOCTEXT("CatInventory", "Drop", "丢弃"), ECatInventoryActionQuantityMode::Select},
+		{CatInventoryActionTags::Place, NSLOCTEXT("CatInventory", "Place", "放置"), ECatInventoryActionQuantityMode::Select}};
 }
 
 // 片段查找流程：先拒绝空类型，再按 IsA 支持蓝图片段继承，找不到时返回空让调用方 fail closed。

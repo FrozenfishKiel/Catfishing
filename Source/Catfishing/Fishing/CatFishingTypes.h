@@ -315,6 +315,10 @@ struct FCatScoopCommand
 	/** 抢抄 RequestId、Session ExpectedRevision 与服务器身份。 */
 	UPROPERTY(BlueprintReadWrite)
 	FCatDomainCommandContext Context;
+
+	/** 统一物品 Use 指定的抄网实例；有效时 Session 只能按本人背包中这件抄网计算范围。 */
+	UPROPERTY(BlueprintReadWrite)
+	FGuid RequestedScoopItemInstanceId;
 };
 
 /** 抄网事务终态；成功表示鱼已成为抄手嘴上的世界鱼，尚未写入任何容器。 */

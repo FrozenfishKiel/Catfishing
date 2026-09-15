@@ -47,6 +47,16 @@ public:
 	virtual FCatDomainCommandResult UseFromInventorySlotFromAuthority(
 		const FCatInventoryEntry& InventoryEntry, const FCatInventoryItemUseContext& UseContext) override;
 
+	/** 读取装备实例是否需要等待同一次输入结束；当前只有窝料保留蓄力状态，鱼竿在 Begin 内完成部署。 */
+	virtual bool UsesContinuousInput() const override;
+
+	/** 窝料本地连续输入边沿转交钓鱼命令组件显示蓄力预览；其它装备不产生表现或权威写入。 */
+	virtual void SetUseInputActiveLocally(APlayerController* RequestingController, bool bActive) override;
+
+	/** 结束或取消装备实例的持续 Use；只把窝料转给钓鱼命令组件，其他装备没有第二阶段玩法。 */
+	virtual FCatDomainCommandResult EndUseFromInventorySlotFromAuthority(
+		const FCatInventoryItemUseContext& UseContext, bool bCancelled) override;
+
 protected:
 	/** 绑定装备定义后补齐装备专属运行初值；通用库存实例状态先由父类完成。 */
 	virtual void HandleItemDefinitionAssigned() override;

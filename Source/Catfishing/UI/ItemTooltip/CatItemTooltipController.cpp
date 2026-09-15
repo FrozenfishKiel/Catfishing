@@ -1,4 +1,4 @@
-#include "UI/ItemTooltip/CatItemTooltipController.h"
+﻿#include "UI/ItemTooltip/CatItemTooltipController.h"
 
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
 #include "UI/ItemTooltip/CatItemTooltipModel.h"
@@ -19,6 +19,7 @@ void UCatItemTooltipController::Bind(UCatItemTooltipWidget* InView)
 void UCatItemTooltipController::Unbind()
 {
 	ForceHideTooltip();
+	bContextMenuSuppressed = false;
 	View = nullptr;
 	Model = nullptr;
 }
@@ -27,6 +28,10 @@ void UCatItemTooltipController::Unbind()
 // 日志只记录显示边沿和稳定物品 ID，不输出捕获者身份，也不逐帧记录数值。
 void UCatItemTooltipController::ShowTooltip(UCatInventorySlotWidget* Source, const FVector2D& ScreenPosition)
 {
+	if (bContextMenuSuppressed)
+	{
+		return;
+	}
 	FCatItemTooltipViewData Data;
 	if (!IsValid(Source) || !View || !Model || Source->GetInventoryEntry().StackCount <= 0
 		|| !Model->BuildViewData(Source->GetInventoryEntry().Instance, Data))
@@ -60,6 +65,13 @@ void UCatItemTooltipController::ForceHideTooltip()
 {
 	ActiveSource.Reset();
 	if (View) View->HideTooltip(true);
+}
+
+// 菜单与关闭后的待恢复阶段共用一个显示门；打开立即清来源和动画，解除后只能由新的真实命中提供来源。
+void UCatItemTooltipController::SetContextMenuSuppressed(const bool bSuppressed)
+{
+	bContextMenuSuppressed = bSuppressed;
+	if (bSuppressed) ForceHideTooltip();
 }
 
 // 弱来源曾被设置时仍保留一次 Tick 处理失效对象；清理后立即停止，不扫描其他格子。

@@ -280,7 +280,7 @@ namespace CatFishSaleNetwork
 			}
 
 			WaitingFor = Stage == 7 ? TEXT("both formal guard views and first fish slots laid out")
-				: TEXT("both formal WBP quotes 48/96 and visible enabled sale controls");
+				: TEXT("both formal WBP show the 96 sell-all quote and one enabled aggregate sale control");
 			HostView = FindFormalView(HostController.Get(), ServerGuard->GetFishInventoryComponent());
 			ClientView = FindFormalView(ClientController.Get(), ClientGuard->GetFishInventoryComponent());
 			if (!HostView.IsValid() || !ClientView.IsValid()) return false;
@@ -298,19 +298,17 @@ namespace CatFishSaleNetwork
 					Slot->TakeWidget()->OnMouseButtonUp(Slot->GetCachedGeometry(), Released);
 					continue;
 				}
-				UTextBlock* SelectedPrice = Cast<UTextBlock>(View->GetWidgetFromName(TEXT("SellFishPriceText")));
 				UTextBlock* AllPrice = Cast<UTextBlock>(View->GetWidgetFromName(TEXT("SellAllFishPriceText")));
-				UButton* SelectedButton = Cast<UButton>(View->GetWidgetFromName(TEXT("SellFishButton")));
 				UButton* AllButton = Cast<UButton>(View->GetWidgetFromName(TEXT("SellAllFishButton")));
 				UWidget* Panel = View->GetWidgetFromName(TEXT("SellActionsPanel"));
-				if (!Test->TestTrue(TEXT("formal WBP binds both sale buttons, price labels and action panel"),
-					SelectedPrice && AllPrice && SelectedButton && AllButton && Panel)) return true;
-				if (!SelectedPrice->GetText().EqualTo(FText::AsNumber(48)) || !AllPrice->GetText().EqualTo(FText::AsNumber(96))
+				if (!Test->TestTrue(TEXT("formal WBP binds sell-all button, total price label and action panel"),
+					AllPrice && AllButton && Panel)) return true;
+				if (!Test->TestNull(TEXT("formal WBP no longer exposes removed per-fish sell button"), View->GetWidgetFromName(TEXT("SellFishButton")))
+					|| !Test->TestNull(TEXT("formal WBP no longer exposes removed per-fish price label"), View->GetWidgetFromName(TEXT("SellFishPriceText")))) return true;
+				if (!AllPrice->GetText().EqualTo(FText::AsNumber(96))
 					|| Panel->GetVisibility() != ESlateVisibility::Visible
-					|| SelectedPrice->GetVisibility() != ESlateVisibility::Visible || AllPrice->GetVisibility() != ESlateVisibility::Visible
-					|| SelectedButton->GetVisibility() != ESlateVisibility::Visible || AllButton->GetVisibility() != ESlateVisibility::Visible
-					|| !SelectedButton->GetIsEnabled() || !AllButton->GetIsEnabled()
-					|| SelectedButton->GetCachedGeometry().GetLocalSize().GetMin() <= 0.0
+					|| AllPrice->GetVisibility() != ESlateVisibility::Visible || AllButton->GetVisibility() != ESlateVisibility::Visible
+					|| !AllButton->GetIsEnabled()
 					|| AllButton->GetCachedGeometry().GetLocalSize().GetMin() <= 0.0) return false;
 			}
 			if (Stage == 7) { Stage = 8; return false; }

@@ -6,6 +6,75 @@
 #include "Inventory/CatInventoryComponent.h"
 #include "Items/Fish/CatFishPickupActor.h"
 #include "Net/UnrealNetwork.h"
+#include "Inventory/CatInventoryStatics.h"
+#include "FishContainers/CatFishGuardActor.h"
+#include "FishContainers/CatFishTankActor.h"
+#include "Inventory/CatFishOnlyInventoryComponent.h"
+#include "ShopEconomy/CatFishBuyerActor.h"
+#include "ShopEconomy/Trading/CatShopTradeController.h"
+#include "Interaction/CatInteractable.h"
+#include "Engine/World.h"
+
+// 鱼专属查询复核定义和真实容器；只读嘴部占用或买家资格，客户端展示不能替代服务器交易验证。
+bool UCatFishInventoryItemInstance::CanExecuteInventoryAction(const FGameplayTag& Action,
+	const FCatInventoryEntry& Entry, APawn* UserPawn, FText& OutReason) const
+{
+	if (Action != CatInventoryActionTags::Carry && Action != CatInventoryActionTags::Sell)
+		return Super::CanExecuteInventoryAction(Action, Entry, UserPawn, OutReason);
+	OutReason = NSLOCTEXT("CatInventory", "FishActionUnavailable", "当前容器或身体状态不允许此操作");
+	ACatCharacter* Character = Cast<ACatCharacter>(UserPawn);
+	if (!Character || !Character->GetConditionComponent() || Character->GetConditionComponent()->GetSnapshot().bDowned
+		|| Entry.Instance != this || Entry.StackCount != 1 || !GetItemDefinition()
+		|| !GetItemDefinition()->InventoryActions.ContainsByPredicate([&](const FCatInventoryActionDefinition& Row) { return Row.Action == Action; })) return false;
+	UCatInventoryComponent* Inventory = Entry.SlotOwnerComponent;
+	AActor* Host = Inventory ? Inventory->GetOwner() : nullptr;
+	ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(Host);
+	ACatFishTankActor* Tank = Cast<ACatFishTankActor>(Host);
+	if (Action == CatInventoryActionTags::Carry)
+	{
+		if (Character->GetMouthCarriedActor())
+		{ OutReason = NSLOCTEXT("CatInventory", "MouthOccupied", "嘴里已经有物品"); return false; }
+		if ((!Guard || Guard->GetFishInventoryComponent() != Inventory) && (!Tank || Tank->GetFishInventoryComponent() != Inventory)) return false;
+		if (!Host->Implements<UCatInteractable>() || !ICatInteractable::Execute_CanInteract(Host, Character->GetController())) return false;
+	}
+	else
+	{
+		ACatFishBuyerActor* Buyer = Guard ? ACatFishBuyerActor::FindAvailableBuyer(Character->GetController(), Guard) : nullptr;
+		int32 Price = 0;
+		if (!Buyer || !Buyer->TryAppraiseFish(const_cast<UCatFishInventoryItemInstance*>(this), Price))
+		{ OutReason = NSLOCTEXT("CatInventory", "NoFishBuyer", "附近没有可以收购这条鱼的买家"); return false; }
+	}
+	OutReason = FText::GetEmpty(); return true;
+}
+
+// 只扩展鱼的出售标识，公共动作仍由基类调用虚函数；不在RPC添加类型分支。
+FCatDomainCommandResult UCatFishInventoryItemInstance::ExecuteInventoryActionFromAuthority(const FGameplayTag& Action,
+	const FCatInventoryEntry& Entry, const FCatInventoryItemUseContext& Context, const int32 Quantity)
+{
+	if (Action == CatInventoryActionTags::Sell) return SellFromInventoryFromAuthority(Entry, Context);
+	return Super::ExecuteInventoryActionFromAuthority(Action, Entry, Context, Quantity);
+}
+
+// 叼鱼沿用已验证的库存世界事务；其内部继续验证容器、原载体和嘴部占用，失败时保留库存鱼。
+FCatDomainCommandResult UCatFishInventoryItemInstance::CarryFromInventoryFromAuthority(const FCatInventoryEntry& Entry,
+	const FCatInventoryItemUseContext& Context)
+{
+	return Context.SourceInventory->ReleaseItemToWorldFromAuthority(Cast<ACatCharacter>(Context.UserPawn),
+		Context.RequestId, Context.InventorySlotIndex, GetItemInstanceId(), 1, ECatInventoryWorldAction::Carry);
+}
+
+// 单鱼出售只固定本实例身份；服务器交易控制器重新校验地面鱼护、买家和价格后扣鱼入账。
+FCatDomainCommandResult UCatFishInventoryItemInstance::SellFromInventoryFromAuthority(const FCatInventoryEntry& Entry,
+	const FCatInventoryItemUseContext& Context)
+{
+	FCatDomainCommandResult Result; Result.RequestId = Context.RequestId;
+	ACatFishGuardActor* Guard = Context.SourceInventory ? Cast<ACatFishGuardActor>(Context.SourceInventory->GetOwner()) : nullptr;
+	ACatFishBuyerActor* Buyer = Guard ? ACatFishBuyerActor::FindAvailableBuyer(Context.RequestingController, Guard) : nullptr;
+	UCatShopTradeController* Trading = Context.UserPawn && Context.UserPawn->HasAuthority()
+		? Context.UserPawn->GetWorld()->GetSubsystem<UCatShopTradeController>() : nullptr;
+	if (!Trading || !Buyer) { Result.Error = ECatDomainCommandError::PermissionDenied; return Result; }
+	return Trading->SubmitFishSaleFromPlayer(Context.RequestingController, Buyer, Guard, {GetItemInstanceId()}, Context.RequestId).Delivery;
+}
 
 // 鱼实例构造流程：基础实例已分配 ItemInstanceId；鱼专属字段等捕获提交时再由服务器写入。
 UCatFishInventoryItemInstance::UCatFishInventoryItemInstance(const FObjectInitializer& ObjectInitializer)
@@ -99,7 +168,8 @@ bool UCatFishInventoryItemInstance::ConsumesInventoryQuantityOnUse() const
 	return true;
 }
 
-// 鱼使用预检流程：只读地确认库存格持有本实例，并让目标角色 Condition 判断这条鱼现在能否食用。
+// 鱼使用预检核对公开实例数据；服务器额外检查私有捕获身份与 Condition 的权威成长预检。
+// 客户端只展示公开数据能确定的可用性，不能调用仅允许 authority 的 Condition 入口，否则所有客户端的食用都会置灰。
 bool UCatFishInventoryItemInstance::CanUseFromInventory(
 	const FCatInventoryEntry& InventoryEntry, APawn* UserPawn) const
 {
@@ -110,13 +180,13 @@ bool UCatFishInventoryItemInstance::CanUseFromInventory(
 		&& InventoryEntry.StackCount == 1
 		&& GetItemInstanceId().IsValid()
 		&& SourceFishingSessionId.IsValid()
-		&& !OwnerStableNetId.IsEmpty()
+		&& (Character != nullptr && (!Character->HasAuthority() || !OwnerStableNetId.IsEmpty()))
 		&& FMath::IsFinite(WeightKilograms)
 		&& WeightKilograms > 0.0
 		&& Definition != nullptr
 		&& Definition->IsRuntimeDefinitionReady()
 		&& Condition != nullptr
-		&& Condition->ValidateFishConsumption(Definition) == ECatDomainCommandError::None;
+		&& (!Character->HasAuthority() || Condition->ValidateFishConsumption(Definition) == ECatDomainCommandError::None);
 }
 
 // 鱼库存 Use 提交流程：

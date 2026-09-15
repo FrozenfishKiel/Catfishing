@@ -2,6 +2,9 @@
 #include "Inventory/CatInventorySettings.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Bait.h"
+#include "Equipment/CatEquipmentDefinition.h"
+#include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventoryItemInstance.h"
 #include "Fishing/Simulation/CatFishingBiteTimingModel.h"
 
 #include "Character/CatCharacter.h"
@@ -343,9 +346,16 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 	ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
 	UCatEquipmentComponent* ScooperEquipment = ScoopingCharacter ? ScoopingCharacter->GetEquipmentComponent() : nullptr;
 	double ScoopReachCentimeters = 0.0;
-	// 全局设置和服务器当前装备快照中的已选抄网 DA 共同给出有效距离；临时测试发放只负责入库和选择，此处仍要求真实已装备抄网。
-	const bool bScoopReachReady = UCatFishingAimLibrary::TryResolveScoopReach(
-		ScooperEquipment, ScoopReachCentimeters);
+	// 抄网范围优先绑定统一 Use 指定的本人背包实例；旧入口没有实例时才退回服务器装备投影里的已选抄网定义。
+	const UCatInventoryComponent* ScooperInventory = ScoopingCharacter ? ScoopingCharacter->GetInventoryComponent() : nullptr;
+	const FCatInventoryEntry* RequestedScoopEntry = Command.RequestedScoopItemInstanceId.IsValid() && ScooperInventory
+		? ScooperInventory->GetInventoryEntryAtSlot(ScooperInventory->FindInventorySlotIndexFromInstanceId(Command.RequestedScoopItemInstanceId)) : nullptr;
+	const UCatEquipmentDefinition* RequestedScoopDefinition = RequestedScoopEntry && RequestedScoopEntry->Instance
+		&& RequestedScoopEntry->Instance->GetItemInstanceId() == Command.RequestedScoopItemInstanceId
+		? Cast<UCatEquipmentDefinition>(RequestedScoopEntry->Instance->GetItemDefinition()) : nullptr;
+	const bool bScoopReachReady = Command.RequestedScoopItemInstanceId.IsValid()
+		? UCatFishingAimLibrary::TryResolveScoopReach(RequestedScoopDefinition, ScoopReachCentimeters)
+		: UCatFishingAimLibrary::TryResolveScoopReach(ScooperEquipment, ScoopReachCentimeters);
 	// 这里不再要求"鱼处于近岸带内"：射线∩圆本身就是唯一的范围判定，再叠一层离岸距离等于两套口径，
 	// 会出现"圈画成绿色（够得着）但服务器因为鱼离岸 3.1 米而拒绝"这种表现与判定打架的情况。
 	// 几何上也已经蕴含：抄手必须站在岸上，射线长度有限，所以能被抄到的鱼必然离岸不远。

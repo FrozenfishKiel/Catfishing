@@ -1,4 +1,4 @@
-#if WITH_DEV_AUTOMATION_TESTS
+﻿#if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationEditorCommon.h"
@@ -23,6 +23,7 @@
 #include "Components/PrimitiveComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/WrapBox.h"
+#include "Components/VerticalBox.h"
 #include "Condition/CatConditionComponent.h"
 #include "Data/CatFishDefinition.h"
 #include "FishContainers/CatFishGuardActor.h"
@@ -41,7 +42,10 @@
 #include "Widgets/SWindow.h"
 #include "UI/CatLocalPlayerUISubsystem.h"
 #include "UI/Inventory/CatInventoryWidget.h"
+#include "UI/Inventory/CatInventoryPageController.h"
+#include "UI/Inventory/CatInventoryContextMenuWidget.h"
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
+#include "UI/ItemTooltip/CatItemTooltipWidget.h"
 #include "UObject/UnrealType.h"
 
 #include <type_traits>
@@ -268,7 +272,7 @@ namespace CatFishGuardCarryNetwork
 			if (Stage == 2 || Stage == 4 || Stage == 7)
 			{
 				if (!BothSidesMatch(true, false)) return false;
-				if (Stage == 2 && !VerifyFormalCarryButtonDisabledForOccupiedGuard()) return false;
+				if (Stage == 2 && !VerifyFormalCarryActionDisabledForOccupiedGuard()) return false;
 				if (Stage == 2 && CarryView.IsValid())
 				{
 					CarryView->RequestCloseInventory();
@@ -292,8 +296,8 @@ namespace CatFishGuardCarryNetwork
 				if (Stage == 2)
 				{
 					RequestId = FGuid::NewGuid();
-					ClientController->ServerReleaseInventoryItemToWorld(RequestId, ClientCat, Slot, Item->GetItemInstanceId(), 1,
-						ECatInventoryWorldAction::Place);
+					ClientController->ServerExecuteInventoryAction(RequestId, ClientCat, Slot, Item->GetItemInstanceId(),
+						CatInventoryActionTags::Place, 1);
 				}
 				else if (Stage == 4)
 				{
@@ -480,7 +484,7 @@ namespace CatFishGuardCarryNetwork
 
 		/** 原鱼护占嘴时，在另一个仍可交互的地面鱼护中选择鱼；等待它复制和页面布局，核对正式按钮禁用。
 		 * 已叼起鱼护自己的页面会按现行生命周期关闭，因此另放一只地面鱼护作为可见 UI 夹具，不强行保留失效页面。 */
-		bool VerifyFormalCarryButtonDisabledForOccupiedGuard()
+		bool VerifyFormalCarryActionDisabledForOccupiedGuard()
 		{
 			ACatCharacter* ServerCat = ServerController.IsValid() ? Cast<ACatCharacter>(ServerController->GetPawn()) : nullptr;
 			if (!OccupiedViewGuard.IsValid() && ServerCat)
@@ -519,20 +523,44 @@ namespace CatFishGuardCarryNetwork
 			const int32 FishSlotIndex = FishInventory->FindInventorySlotIndexFromInstanceId(OccupiedViewFishId);
 			UCatInventorySlotWidget* FishSlot = Slots && FishSlotIndex != INDEX_NONE
 				? Cast<UCatInventorySlotWidget>(Slots->GetChildAt(FishSlotIndex)) : nullptr;
-			UButton* CarryButton = View ? Cast<UButton>(View->GetWidgetFromName(TEXT("CarryButton"))) : nullptr;
-			WaitingFor = FString::Printf(TEXT("formal occupied UI View=%s InViewport=%d Slots=%s Count=%d Index=%d FishSlot=%s SlotSize=%s CarryButton=%s"),
-				*GetNameSafe(View), View && View->IsInViewport(), *GetNameSafe(Slots), Slots ? Slots->GetChildrenCount() : -1,
-				FishSlotIndex, *GetNameSafe(FishSlot), FishSlot ? *FishSlot->GetCachedGeometry().GetLocalSize().ToString() : TEXT("None"),
-				*GetNameSafe(CarryButton));
-			// 操作区可能随未选中状态折叠；先选鱼才有按钮布局，不能反过来等折叠按钮尺寸。
-			if (!FishSlot || !CarryButton || FishSlot->GetCachedGeometry().GetLocalSize().GetMin() <= 0.0) return false;
-			const FPointerEvent Released(0, FVector2D::ZeroVector, FVector2D::ZeroVector, TSet<FKey>(),
-				EKeys::LeftMouseButton, 0.0f, FModifierKeysState());
-			FishSlot->TakeWidget()->OnMouseButtonUp(FishSlot->GetCachedGeometry(), Released);
-			return Test->TestFalse(TEXT("formal CarryButton is disabled while original guard owns the mouth"), CarryButton->GetIsEnabled());
+			UCatInventoryPageController* Page = UI->GetInventoryPageController();
+			if (!Page || !FishSlot || FishSlot->GetCachedGeometry().GetLocalSize().GetMin() <= 0.0) return false;
+			if (!bOccupiedContextMenuRequested)
+			{
+				if (!Test->TestTrue(TEXT("real right click opens occupied-mouth fish menu"), RightClickInventorySlot(*FishSlot))) return true;
+				bOccupiedContextMenuRequested = true;
+				return false;
+			}
+			UCatInventoryContextMenuWidget* Menu = Page->GetInventoryContextMenu();
+			UVerticalBox* Actions = Menu ? Cast<UVerticalBox>(Menu->GetWidgetFromName(TEXT("ActionList"))) : nullptr;
+			WaitingFor = TEXT("occupied-mouth dynamic Carry action appears disabled");
+			if (!Menu || !Menu->IsMenuOpen() || !Actions) return false;
+			for (UWidget* Child : Actions->GetAllChildren())
+			{
+				UCatInventoryContextActionButton* Action = Cast<UCatInventoryContextActionButton>(Child);
+				if (Action && Action->GetAction() == CatInventoryActionTags::Carry)
+					return Test->TestFalse(TEXT("Carry action is disabled while guard occupies mouth"), Action->GetIsEnabled());
+			}
+			return false;
 		}
 
-		/** 在既有鱼护已经落地、嘴部已释放后，经正式 WBP 点击原鱼 Carry；等待权威回执并核对两端同一鱼身份成为唯一嘴部 Actor。 */
+		/** 通过真实 Slate 鼠标路由右键当前格；先把窗口和光标移到格子，随后成对按下/松开，覆盖输入预处理与槽位命中。 */
+		bool RightClickInventorySlot(UCatInventorySlotWidget& Slot)
+		{
+			FSlateApplication& Slate = FSlateApplication::Get();
+			const TSharedPtr<SWindow> Window = Slate.FindWidgetWindow(Slot.TakeWidget());
+			if (!Window.IsValid()) return false;
+			Window->BringToFront(true);
+			const FVector2D Center = Slot.GetCachedGeometry().LocalToAbsolute(Slot.GetCachedGeometry().GetLocalSize() * 0.5f);
+			const FVector2D Previous = Slate.GetCursorPos();
+			Slate.SetCursorPos(Center);
+			Slate.ProcessMouseMoveEvent(FPointerEvent(0, Center, Previous, TSet<FKey>(), EKeys::Invalid, 0.0f, FModifierKeysState()));
+			const bool bHandled = Slate.ProcessMouseButtonDownEvent(Window->GetNativeWindow(), FPointerEvent(0, Center, Center, TSet<FKey>{EKeys::RightMouseButton}, EKeys::RightMouseButton, 0.0f, FModifierKeysState()));
+			Slate.ProcessMouseButtonUpEvent(FPointerEvent(0, Center, Center, TSet<FKey>(), EKeys::RightMouseButton, 0.0f, FModifierKeysState()));
+			return bHandled;
+		}
+
+		/** 在既有鱼护已经落地、嘴部已释放后，先右键原鱼打开正式动态菜单，再按稳定 Carry 标签真实点击菜单行；等待权威回执并核对两端同一鱼身份成为唯一嘴部 Actor。 */
 		bool VerifyFormalFishCarryFromGroundedGuard(ACatCharacter& ServerCat, ACatCharacter& ClientCat)
 		{
 			UCatFishOnlyInventoryComponent* FishInventory = ClientGuard.IsValid() ? ClientGuard->GetFishInventoryComponent() : nullptr;
@@ -550,22 +578,50 @@ namespace CatFishGuardCarryNetwork
 			UWrapBox* Slots = View ? Cast<UWrapBox>(View->GetWidgetFromName(TEXT("InventorySlotWrapBox"))) : nullptr;
 			const int32 FishSlotIndex = FishInventory && !FishIds.IsEmpty() ? FishInventory->FindInventorySlotIndexFromInstanceId(FishIds[0]) : INDEX_NONE;
 			UCatInventorySlotWidget* FishSlot = Slots && FishSlotIndex != INDEX_NONE ? Cast<UCatInventorySlotWidget>(Slots->GetChildAt(FishSlotIndex)) : nullptr;
-			UButton* CarryButton = View ? Cast<UButton>(View->GetWidgetFromName(TEXT("CarryButton"))) : nullptr;
-			WaitingFor = TEXT("formal fish slot layout for free-mouth selection");
-			if (!CarryButton) return false;
-			if (!bCarryButtonClickSent)
+			WaitingFor = TEXT("formal fish slot layout for free-mouth context menu");
+			if (!bCarryContextMenuRequested)
 			{
 				if (!FishSlot || FishSlot->GetCachedGeometry().GetLocalSize().GetMin() <= 0.0) return false;
-				const FPointerEvent Released(0, FVector2D::ZeroVector, FVector2D::ZeroVector, TSet<FKey>(), EKeys::LeftMouseButton,
-					0.0f, FModifierKeysState());
-				FishSlot->TakeWidget()->OnMouseButtonUp(FishSlot->GetCachedGeometry(), Released);
-				WaitingFor = TEXT("selected CarryButton becomes laid out");
-				if (CarryButton->GetCachedGeometry().GetLocalSize().GetMin() <= 0.0) return false;
-				if (!Test->TestTrue(TEXT("formal fish slot selection enables CarryButton after guard release"), CarryButton->GetIsEnabled())) return true;
+				if (!Test->TestTrue(TEXT("real right click opens free-mouth fish menu"), RightClickInventorySlot(*FishSlot))) return true;
+				bCarryContextMenuRequested = true;
+				WaitingFor = TEXT("formal right-click opens the dynamic Carry action menu");
+				return false;
+			}
+			TArray<UUserWidget*> ContextMenus;
+			UWidgetBlueprintLibrary::GetAllWidgetsOfClass(ClientController.Get(), ContextMenus, UCatInventoryContextMenuWidget::StaticClass(), true);
+			UCatInventoryContextMenuWidget* ContextMenu = nullptr;
+			for (UUserWidget* Candidate : ContextMenus)
+			{
+				UCatInventoryContextMenuWidget* Menu = Cast<UCatInventoryContextMenuWidget>(Candidate);
+				if (Menu && Menu->GetOwningPlayer() == ClientController.Get() && Menu->IsInViewport()) { ContextMenu = Menu; break; }
+			}
+			UVerticalBox* ActionList = ContextMenu ? Cast<UVerticalBox>(ContextMenu->GetWidgetFromName(TEXT("ActionList"))) : nullptr;
+			UCatInventoryContextActionButton* CarryAction = nullptr;
+			if (ActionList)
+			{
+				for (int32 Index = 0; Index < ActionList->GetChildrenCount(); ++Index)
+				{
+					UCatInventoryContextActionButton* Candidate = Cast<UCatInventoryContextActionButton>(ActionList->GetChildAt(Index));
+					if (Candidate && Candidate->GetAction() == CatInventoryActionTags::Carry) { CarryAction = Candidate; break; }
+				}
+			}
+			WaitingFor = TEXT("dynamic menu action list contains enabled Carry tag row without Tooltip overlap");
+			if (!ContextMenu) return false;
+			if (!bCarryActionClickSent && (!ActionList || !CarryAction || CarryAction->GetCachedGeometry().GetLocalSize().GetMin() <= 0.0)) return false;
+			TArray<UUserWidget*> Tooltips;
+			UWidgetBlueprintLibrary::GetAllWidgetsOfClass(ClientController.Get(), Tooltips, UCatItemTooltipWidget::StaticClass(), true);
+			for (UUserWidget* Tooltip : Tooltips)
+			{
+				if (!bCarryActionClickSent && Tooltip->GetOwningPlayer() == ClientController.Get()
+					&& !Test->TestFalse(TEXT("dynamic context menu suppresses overlapping item tooltip"), Tooltip->IsVisible())) return true;
+			}
+			if (!bCarryActionClickSent)
+			{
+				if (!Test->TestTrue(TEXT("formal dynamic Carry action is enabled after guard release"), CarryAction->GetIsEnabled())) return true;
 				if (!Test->TestTrue(TEXT("capture actual client viewport before Carry"), CaptureCarryViewport(TEXT("BeforeCarry")))) return true;
-				const TSharedPtr<SWindow> Window = FSlateApplication::Get().FindWidgetWindow(CarryButton->TakeWidget());
-				if (!Test->TestTrue(TEXT("formal CarryButton belongs to a native client window"), Window.IsValid())) return true;
-				const FVector2D Center = CarryButton->GetCachedGeometry().LocalToAbsolute(CarryButton->GetCachedGeometry().GetLocalSize() * 0.5f);
+				const TSharedPtr<SWindow> Window = FSlateApplication::Get().FindWidgetWindow(CarryAction->TakeWidget());
+				if (!Test->TestTrue(TEXT("formal dynamic Carry action belongs to a native client window"), Window.IsValid())) return true;
+				const FVector2D Center = CarryAction->GetCachedGeometry().LocalToAbsolute(CarryAction->GetCachedGeometry().GetLocalSize() * 0.5f);
 				const FVector2D Previous = FSlateApplication::Get().GetCursorPos();
 				FSlateApplication::Get().SetCursorPos(Center);
 				const FPointerEvent Move(0, Center, Previous, TSet<FKey>(), EKeys::Invalid, 0.0f, FModifierKeysState());
@@ -574,18 +630,17 @@ namespace CatFishGuardCarryNetwork
 				const FPointerEvent Up(0, Center, Center, TSet<FKey>(), EKeys::LeftMouseButton, 0.0f, FModifierKeysState());
 				CarryReceiptBeforeClick = ClientController->GetLastCampCommandResult().RequestId;
 				Window->BringToFront(true);
-				if (!Test->TestTrue(TEXT("actual Slate CarryButton mouse click is handled"),
+				if (!Test->TestTrue(TEXT("actual Slate dynamic Carry action mouse click is handled"),
 					FSlateApplication::Get().ProcessMouseButtonDownEvent(Window->GetNativeWindow(), Down)
 					&& FSlateApplication::Get().ProcessMouseButtonUpEvent(Up))) return true;
-				if (!Test->TestFalse(TEXT("CarryButton is disabled while its request is pending"), CarryButton->GetIsEnabled())) return true;
-				bCarryButtonClickSent = true;
+				bCarryActionClickSent = true;
 				return false;
 			}
 			const FCatDomainCommandResult CarryResult = ClientController->GetLastCampCommandResult();
-			WaitingFor = TEXT("committed CarryButton receipt and cleared formal fish selection");
+			WaitingFor = TEXT("committed dynamic Carry receipt and closed formal action menu");
 			if (CarryResult.RequestId == CarryReceiptBeforeClick) return false;
-			if (!Test->TestTrue(TEXT("free-mouth fish CarryButton request commits on authority"), CarryResult.bCommitted)
-				|| !Test->TestFalse(TEXT("committed CarryButton clears the selected actionable fish"), CarryButton->GetIsEnabled())) return true;
+			if (!Test->TestTrue(TEXT("free-mouth fish dynamic Carry request commits on authority"), CarryResult.bCommitted)
+				|| !Test->TestFalse(TEXT("committed Carry closes the dynamic action menu"), ContextMenu->IsMenuOpen())) return true;
 			AActor* ServerMouth = ServerCat.GetMouthCarriedActor();
 			AActor* ClientMouth = ClientCat.GetMouthCarriedActor();
 			ACatFishPickupActor* ServerFish = Cast<ACatFishPickupActor>(ServerMouth);
@@ -885,8 +940,12 @@ namespace CatFishGuardCarryNetwork
 		TWeakObjectPtr<UCatInventoryWidget> CarryView;
 		/** 点击 Carry 前最后一条控制器回执；后续只有新 RequestId 才能作为本次 UI 请求的终态。 */
 		FGuid CarryReceiptBeforeClick;
-		/** 真实 Slate 点击是否已发生；置位后阶段机只等待本次回执，避免每帧重复提交同一条鱼。 */
-		bool bCarryButtonClickSent = false;
+		/** 右键菜单请求是否已经发出；菜单本身需要一帧完成创建和布局，置位后阶段机才开始查找动态行。 */
+		bool bCarryContextMenuRequested = false;
+		/** 嘴部占用场景只发送一次右键，等待正式菜单布局和禁用态复制观察。 */
+		bool bOccupiedContextMenuRequested = false;
+		/** 真实 Slate 动态 Carry 行是否已点击；置位后阶段机只等待本次回执，避免每帧对同一菜单项重复提交。 */
+		bool bCarryActionClickSent = false;
 		/** 原两条鱼的身份，按2.5和3.75公斤排列；播种保存，两端逐条精确匹配。 */
 		TArray<FGuid> FishIds;
 		/** 服务器原两条鱼的弱引用；播种保存，阶段检查防止以重新创建实例掩盖搬运丢失。 */

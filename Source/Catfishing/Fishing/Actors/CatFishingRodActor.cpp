@@ -17,9 +17,12 @@
 #include "GameFramework/Character.h"
 
 #include "GameFramework/Controller.h"
+#include "Framework/Game/CatfishingGameModeBase.h"
+#include "Framework/Game/CatfishingPlayerController.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerState.h"
 #include "Logging/CatLog.h"
+#include "Logging/CatLogContext.h"
 #include "Net/UnrealNetwork.h"
 
 // 构造流程：创建表现根、权威锚点和默认复制姿态；这里只搭好场景骨架，真实 Actor/Item 身份稍后由服务器初始化。
@@ -64,6 +67,104 @@ ACatFishingRodActor::ACatFishingRodActor()
 	RightStandAnchor->bEditableWhenInherited = false;
 	LeftStandAnchor->bEditableWhenInherited = false;
 	GripAnchor->bEditableWhenInherited = false;
+}
+
+// 鱼竿交互资格流程：只接受已部署未断裂的本体和握持点半径内有 Pawn 的请求者，既不扫描附近鱼竿也不从背包部署替代物。
+bool ACatFishingRodActor::CanInteract_Implementation(AController* RequestingController) const
+{
+	const APawn* Pawn = RequestingController ? RequestingController->GetPawn() : nullptr;
+	return PresentationState.bDeployed && !PresentationState.bBroken && Pawn
+		&& FVector::DistSquared(Pawn->GetActorLocation(), GetGripWorldTransform().GetLocation()) <= FMath::Square(GetInteractionRadius_Implementation());
+}
+
+// 鱼竿提示流程：只有当前 Actor 可以被 E 交互时显示统一操作文案，避免对收起或断裂对象留下误导提示。
+FText ACatFishingRodActor::GetInteractionPrompt_Implementation() const
+{
+	return PresentationState.bDeployed && !PresentationState.bBroken ? NSLOCTEXT("Catfishing", "RodInteractionPrompt", "操作鱼竿") : FText::GetEmpty();
+}
+
+// 鱼竿交互半径流程：保持现有 R 近距操作的 250cm 语义，返回固定值让准星扫描和服务器资格检查一致。
+double ACatFishingRodActor::GetInteractionRadius_Implementation() const { return 250.0; }
+
+// 鱼竿交互流程：本地请求交给本人 Controller 的既有 RPC；服务器先过 Fishing gate、重放缓存和本体身份校验，
+// 再只以本 Actor 的 RodActorId 构造首次 Operate/Leave。缓存命中时不依据当前操作位推导反向动作，避免可靠 RPC 重放把放下又变成拾起。
+bool ACatFishingRodActor::Interact_Implementation(AController* RequestingController, const FGuid RequestId)
+{
+	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(RequestingController);
+	if (!Controller || !RequestId.IsValid() || !CanInteract_Implementation(Controller)) return false;
+	if (!Controller->HasAuthority())
+	{
+		if (Controller->IsLocalController()) Controller->ServerRequestInteraction(this, RequestId);
+		return Controller->IsLocalController();
+	}
+	const auto LogInteractionResult = [this, Controller, RequestId](const TCHAR* Action, const FCatFishingCommandResult& Result, const TCHAR* Outcome)
+	{
+		const FString Message = FString::Printf(
+			TEXT("Event=fishing_rod_interaction_%s RequestId=%s RodActorId=%s Action=%s Committed=%d Error=%s Revision=%lld World=%s NetMode=%d Authority=%d LocalRole=%d %s"),
+			Outcome, *RequestId.ToString(EGuidFormats::DigitsWithHyphens), *PresentationState.RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
+			Action, Result.bCommitted, *UEnum::GetValueAsString(Result.Error), Result.RodActorRevision,
+			*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority(), static_cast<int32>(GetLocalRole()),
+			*CatLogContext::BuildControllerFields(Controller));
+		if (Result.bCommitted)
+		{
+			UE_LOG(LogCatFishing, Log, TEXT("%s"), *Message);
+		}
+		else
+		{
+			UE_LOG(LogCatFishing, Warning, TEXT("%s"), *Message);
+		}
+	};
+	if (!Controller->PlayerState) return false;
+	const FString CacheKey = FString::Printf(TEXT("%s|%s"), *GetPathNameSafe(Controller->PlayerState), *RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+	if (const FCatFishingCommandResult* Cached = InteractionTerminalByPlayerAndRequest.Find(CacheKey))
+	{
+		const TCHAR* CachedAction = Cached->CommandType == ECatFishingCommandType::LeaveRod ? TEXT("Leave") : TEXT("Operate");
+		LogInteractionResult(CachedAction, *Cached, TEXT("replayed"));
+		return Cached->bCommitted;
+	}
+	const ACatfishingGameModeBase* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
+	if (!GameMode || !GameMode->CanAcceptFishingCommand(Controller))
+	{
+		FCatFishingCommandResult Rejected;
+		Rejected.RequestId = RequestId;
+		Rejected.RodActorId = PresentationState.RodActorId;
+		Rejected.RodActorRevision = PresentationState.RodActorRevision;
+		Rejected.Error = ECatFishingCommandError::CommandsClosed;
+		// 已裁决的拒绝也是本次请求终态；阶段重新开放不能让同一个请求变成一次新交互。
+		InteractionTerminalByPlayerAndRequest.Add(CacheKey, Rejected);
+		LogInteractionResult(TEXT("Rejected"), Rejected, TEXT("rejected"));
+		return false;
+	}
+	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
+	if (!Fishing)
+	{
+		FCatFishingCommandResult Rejected;
+		Rejected.RequestId = RequestId;
+		Rejected.RodActorId = PresentationState.RodActorId;
+		Rejected.RodActorRevision = PresentationState.RodActorRevision;
+		Rejected.Error = ECatFishingCommandError::DependencyUnavailable;
+		InteractionTerminalByPlayerAndRequest.Add(CacheKey, Rejected);
+		LogInteractionResult(TEXT("Rejected"), Rejected, TEXT("rejected"));
+		return false;
+	}
+	const FCatFishingRodPresentationState& State = GetPresentationState();
+	FCatFishingCommandResult Result;
+	const TCHAR* Action = nullptr;
+	if (IsPrimaryOperator(Controller->PlayerState))
+	{
+		Action = TEXT("Leave");
+		FCatLeaveRodCommand Command; Command.Context.RequestId = RequestId; Command.Context.RodActorId = State.RodActorId; Command.Context.ExpectedRodActorRevision = State.RodActorRevision;
+		Result = Fishing->LeaveRod(Controller, Command);
+	}
+	else
+	{
+		Action = TEXT("Operate");
+		FCatOperateRodCommand Command; Command.Context.RequestId = RequestId; Command.Context.RodActorId = State.RodActorId; Command.Context.ExpectedRodActorRevision = State.RodActorRevision;
+		Result = Fishing->OperateRod(Controller, Command);
+	}
+	InteractionTerminalByPlayerAndRequest.Add(CacheKey, Result);
+	LogInteractionResult(Action, Result, Result.bCommitted ? TEXT("committed") : TEXT("rejected"));
+	return Result.bCommitted;
 }
 
 void ACatFishingRodActor::Tick(const float DeltaSeconds)

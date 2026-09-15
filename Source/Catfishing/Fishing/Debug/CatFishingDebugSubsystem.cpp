@@ -196,7 +196,7 @@ static TAutoConsoleVariable<int32> CVarCatFishingDebug(
 	TEXT("cat.Fishing.Debug"), 0,
 	TEXT("钓鱼世界调试可视化：0=全部关闭（默认）；1=全量（水域边界/瞄准落点/窝点/竿尖球/钩鱼球/抄网射线与鱼圈/鱼线/阶段提示）；")
 	TEXT("2=精简（只保留抄网射线、鱼身上的可捞圆圈、鱼线和阶段提示，关闭其余调试球/圈/线）。")
-	TEXT("抄网圆圈绿色=当前按 F 抄得到，红色=够不着；颜色直接来自服务器同一个判定函数。"),
+	TEXT("抄网圆圈绿色=当前抄网判定可触达，红色=够不着；选中抄网后按 G 使用。"),
 	ECVF_Default);
 
 // 三方资源/力量需要默认可见，便于 Development 包里快速核对鱼、竿和猫的运行事实。
@@ -537,7 +537,7 @@ void UCatFishingDebugSubsystem::DrawChumFields() const
 #endif
 }
 
-// 瞄准与蓄力：抛竿落点绿球（与服务器同一函数求解）；Q 蓄力时画预测抛物线与落点球（命中水=绿，否则红）。
+// 瞄准与蓄力：抛竿落点绿球与服务器共用求解；窝料使用期间显示原实例的蓄力轨迹，不随本地换格中断。
 // 抛竿瞄准落点（纯调试）：受 cat.Fishing.Debug 控制。
 void UCatFishingDebugSubsystem::DrawCastAimPoint(APlayerController* Controller) const
 {
@@ -588,7 +588,7 @@ void UCatFishingDebugSubsystem::DrawChumChargePreview(APlayerController* Control
 		DrawDebugLine(World, Path[Index - 1], Path[Index], PathColor, false, -1.0f, 0, 2.0f);
 	}
 	DrawDebugSphere(World, Landing, 24.0f, 12, bHitWater ? FColor::Green : FColor::Red, false, -1.0f, 0, 2.0f);
-	PushStatus(0, FColor::Yellow, FString::Printf(TEXT("窝料蓄力 %.0f%%  松开 Q 投出"), Alpha * 100.0f));
+	PushStatus(0, FColor::Yellow, FString::Printf(TEXT("窝料蓄力 %.0f%%  松开 G 投出"), Alpha * 100.0f));
 #endif
 }
 
@@ -623,7 +623,7 @@ void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const
 
 	if (!Session)
 	{
-		PushStatus(2, FColor::Silver, TEXT("R 放竿/操作/离开 · E 准星交互/拾取 · 操作中松开左键=抛竿 · Q 长按=打窝"));
+		PushStatus(2, FColor::Silver, TEXT("E 准星交互 · 选中鱼竿后 G 部署 · 操作中松开左键抛竿 · 选中窝料后长按 G 打窝"));
 		return;
 	}
 	const FCatFishingSessionSnapshot& Snapshot = Session->GetSnapshot();
@@ -678,7 +678,7 @@ void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const
 		}
 		else
 		{
-			PushStatus(2, FColor::Silver, TEXT("等待咬钩…（Q 可补窝 / X 收竿零损失）"));
+			PushStatus(2, FColor::Silver, TEXT("等待咬钩…（选中窝料后 G 补窝 / X 收竿零损失）"));
 		}
 		break;
 	case ECatFishingPhase::Probe:
@@ -704,15 +704,15 @@ void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const
 	}
 	case ECatFishingPhase::NearShore:
 		// 不受 bFullDetail 影响：精简模式（cat.Fishing.Debug 2）的用途正是"只看抄网相关"，这个圈是核心信息。
-		// 半径来自鱼定义、颜色来自权威判定函数，绿=现在按 F 抄得到，红=够不着。
+		// 半径来自鱼定义，颜色来自现有抄网判定函数；实际使用仍由服务器校验 G 请求携带的实例。
 		DrawScoopTargetCircle(Controller, Fish);
 		PushStatus(2, FColor::Emerald, TEXT("鱼到近岸了！快抄！（按 F）"));
 		break;
 	case ECatFishingPhase::ExhaustedReel:
 		DrawScoopTargetCircle(Controller, Fish);
 		PushStatus(2, FColor::Emerald, Snapshot.bReeling
-			? TEXT("鱼已力竭：正在收向竿尖水面投影（也可按 F 抄）")
-			: TEXT("鱼已力竭：按住左键收近（也可按 F 抄）"));
+			? TEXT("鱼已力竭：正在收向竿尖水面投影（也可选中抄网后按 G）")
+			: TEXT("鱼已力竭：按住左键收近（也可选中抄网后按 G）"));
 		break;
 	default:
 		break;
@@ -764,7 +764,7 @@ void UCatFishingDebugSubsystem::DrawScoopRange(APlayerController* Controller) co
 #endif
 }
 
-// 鱼身上的可捞圆圈：半径来自鱼定义，与权威判定同一个数；命中时变色，直接告诉玩家"现在按 F 抄得到"。
+// 鱼身上的可捞圆圈：半径来自鱼定义，沿用现有触达判定着色；它是距离提示，不能代替所选实例的服务器使用裁决。
 void UCatFishingDebugSubsystem::DrawScoopTargetCircle(APlayerController* Controller,
 	const ACatFishEncounterActor* Fish) const
 {

@@ -463,15 +463,33 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 			*CatLogContext::BuildControllerFields(Controller));
 		return Result;
 	}
-	// Use 会更新当前选择并广播库存；这里冻结选择与候选实例，不持有可被广播重入改变的快照引用。
+	// 精确实例 Use 只信任命令携带的鱼竿实例；旧入口仍用装备投影版本保护当前装备视图，不把本地快捷栏选择复制到服务器。
 	const FCatEquipmentLoadoutSnapshot Loadout = Equipment->GetSnapshot();
-	if (Loadout.Revision != Command.ExpectedEquipmentRevision)
+	if (!Command.RequestedRodItemInstanceId.IsValid() && Loadout.Revision != Command.ExpectedEquipmentRevision)
 	{
 		Result.Error = ECatFishingCommandError::EquipmentRevisionConflict;
 		return Result;
 	}
 	FCatInventoryEntry InventoryRod;
-	if (!Equipment->TryGetInventoryRodForDeployment(InventoryRod))
+	if (Command.RequestedRodItemInstanceId.IsValid())
+	{
+		const int32 RequestedSlot = OwnerInventory->FindInventorySlotIndexFromInstanceId(Command.RequestedRodItemInstanceId);
+		const FCatInventoryEntry* RequestedEntry = OwnerInventory->GetInventoryEntryAtSlot(RequestedSlot);
+		if (RequestedEntry)
+		{
+			InventoryRod = *RequestedEntry;
+		}
+	}
+	else
+	{
+		Equipment->TryGetInventoryRodForDeployment(InventoryRod);
+	}
+	const UCatEquipmentDefinition* RequestedDefinition = InventoryRod.Instance
+		? Cast<UCatEquipmentDefinition>(InventoryRod.Instance->GetItemDefinition()) : nullptr;
+	if (!InventoryRod.Instance || InventoryRod.StackCount != 1 || !RequestedDefinition
+		|| !RequestedDefinition->CanServeFishingRod()
+		|| (Command.RequestedRodItemInstanceId.IsValid()
+			&& InventoryRod.Instance->GetItemInstanceId() != Command.RequestedRodItemInstanceId))
 	{
 		Result.Error = ECatFishingCommandError::NoRod;
 		Result.EquipmentRevision = Loadout.Revision;
@@ -606,7 +624,7 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 			*Command.RequestId.ToString(), *RodActorId.ToString());
 		return Result;
 	}
-	// R explicitly commits the owner hold only after the inventory and control transaction succeeds.
+	// 只有库存实例部署与操作位事务都成功，才提交拥有者握持，避免留下无库存来源的持竿状态。
 	Result.bCommitted = true;
 	Result.Error = ECatFishingCommandError::None;
 	Result.RodActorId = RodActorId;
@@ -639,7 +657,7 @@ FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller,
 		Result.Error = ECatFishingCommandError::CommandsClosed;
 		return Result;
 	}
-	// R 显式接管空闲竿；物品实例不变，普通抓握不授予主控。
+	// 显式交互接管空闲竿；物品实例不变，普通抓握不授予主控。
 	ACatFishingRodActor* Rod = FindDeployedRodById(Command.Context.RodActorId);
 	if (!Rod || !Character)
 	{

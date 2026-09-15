@@ -7,6 +7,9 @@
 #include "Fishing/Integration/CatFishingRodAimState.h"
 #include "CatFishingCommandComponent.generated.h"
 
+class UCatInventoryComponent;
+struct FCatInventoryItemUseContext;
+
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
 	FCatFishingCommandResultReceived,
 	const FCatFishingCommandResult&, Result);
@@ -52,6 +55,18 @@ class CATFISHING_API UCatFishingCommandComponent : public UActorComponent
 
 public:
 	UCatFishingCommandComponent();
+	/** 选中鱼竿的库存 Use 进入权威放竿事务；只接受组件所属 Controller 和指定实例，失败不会改写装备选择。 */
+	FCatDomainCommandResult PlaceRodFromInventoryUseOnAuthority(APlayerController* RequestingController,
+		const FCatPlaceRodCommand& Command);
+	/** 选中窝料的持续 Use 开始入口；保存本次库存槽位和实例身份，后续 End 只能结算这同一份物品。 */
+	FCatDomainCommandResult BeginChumUseFromInventoryOnAuthority(APlayerController* RequestingController,
+		const FCatInventoryItemUseContext& UseContext, FGuid ChumItemInstanceId, FName ChumDefinitionId);
+	/** 选中窝料的持续 Use 结束入口；取消只清理已固定的状态，正常结束才沿用既有蓄力弹道与扣量服务。 */
+	FCatDomainCommandResult EndChumUseFromInventoryOnAuthority(APlayerController* RequestingController,
+		const FCatInventoryItemUseContext& UseContext, bool bCancelled);
+	/** 选中抄网的库存 Use 复用原 RequestScoop 命令，只在同步分派期间携带指定实例给 Session 权威复核。 */
+	FCatDomainCommandResult ScoopFromInventoryUseOnAuthority(APlayerController* RequestingController,
+		const FCatInventoryItemUseContext& UseContext, FGuid ScoopItemInstanceId);
 	void DeliverResultFromAuthority(const FCatFishingCommandResult& Result);
 	void DeliverBeginCastResultFromAuthority(const FCatBeginCastResult& Result);
 	void DeliverPlaceChumResultFromAuthority(const FCatPlaceChumResult& Result);
@@ -76,6 +91,8 @@ public:
 	void ConsumeResult(FGuid RequestId);
 
 	void ResetTransientCommandState();
+	/** 本地窝料 Use 表现边沿写入或清除预览开始时间；不发送 RPC、不影响服务器蓄力。 */
+	void SetChumUsePreviewActiveLocally(bool bActive);
 	/** 放下或取回本人竿时清持续按键并保留递增序号，取回后需要新的按键边沿。 */
 	void ClearHeldFightInputForControlTransferFromAuthority();
 	/** Focus/menu/body exit cancels pending aims and held effort without casting or cutting an existing line. */
@@ -153,7 +170,8 @@ private:
 	void HandleRodAimSampleFromAuthority(const FCatFishingRodAimSample& Sample, bool bTransition);
 	void DispatchAbilityCommand(ECatFishingCommandType CommandType, const FCatFishingInputEdge& Edge);
 	/** 权威侧统一处理 Ability 输入命令；抄网会搜索已上钩目标并交给 Session 完成嘴叼世界鱼交接。 */
-	void HandleAbilityCommandFromAuthority(ECatFishingCommandType CommandType, const FCatFishingInputEdge& Edge);
+	void HandleAbilityCommandFromAuthority(ECatFishingCommandType CommandType, const FCatFishingInputEdge& Edge,
+		FGuid RequestedScoopItemInstanceId = FGuid());
 	/**
 	 * 权威侧广播一次性表现事件；Character 按标签决定是否跳过已经由 Ability 预测过的本地动作。
 	 * 只用于"失败时不留任何权威痕迹"的动作；有复制状态可读的动作走各自的表现事件，走这条会播两遍。
@@ -162,13 +180,32 @@ private:
 	void BroadcastCosmeticEventFromAuthority(const FGameplayTag& EventTag) const;
 	/** 验证松开时采集的镜头/鼠标射线并与水面求交；所有 ID/Revision/Handle 由服务器填。 */
 	void BeginCastFromViewOnAuthority(APlayerController* Controller, const FCatFishingInputEdge& Edge);
-	/** 服务器按 Q 按住时长换算蓄力并投放窝料；自动选料只读正式库存条目，落点用与客户端预览相同的弹道预测。 */
-	void ThrowChumFromChargeOnAuthority(APlayerController* Controller, const FGuid& RequestId, double HeldSeconds);
-	/** 服务器记录的 Q 按下时刻（世界时间）；<0 表示当前未蓄力。 */
+	/** 服务器按已固定的窝料实例和按住时长投放；结束时重读原槽位，拒绝换物或移动后的迟到释放。 */
+	void ThrowChumFromChargeOnAuthority(APlayerController* Controller, const FCatInventoryItemUseContext& UseContext,
+		FGuid ChumItemInstanceId, FName ChumDefinitionId, double HeldSeconds);
+	/** 清空权威持续窝料会话的全部固定身份；End 先取必要快照再调用它，生命周期路径直接清理避免新 Use 卡在旧 Phase。 */
+	void ClearChumUseState();
+	/** 服务器记录的选中窝料 Use 开始时刻（世界时间）；<0 表示当前未蓄力。 */
 	double ChumChargeStartServerTime = -1.0;
 
+	/** 当前持续窝料 Use 的请求身份；开始阶段写入，End/Cancel 必须完全匹配它才能清理或结算。 */
+	FGuid ActiveChumUseRequestId;
+
+	/** 当前持续窝料 Use 固定的物品实例；防止松开时扫描背包并扣除另一堆同类窝料。 */
+	FGuid ActiveChumItemInstanceId;
+
+	/** 当前持续窝料 Use 固定的定义身份；End 时与原槽位重读结果比对，防止槽位换物后继续投放。 */
+	FName ActiveChumDefinitionId = NAME_None;
+
+	/** 当前持续窝料 Use 的来源库存；只接受角色个人背包仍是同一组件的结束请求。 */
+	TWeakObjectPtr<UCatInventoryComponent> ActiveChumSourceInventory;
+
+	/** 当前持续窝料 Use 的来源槽位；End 在该格复查实例、定义与数量，不自动寻找替代物。 */
+	int32 ActiveChumInventorySlotIndex = INDEX_NONE;
+
+
 	/**
-	 * 本地记录的 Q 按下时刻（世界时间）；<0 表示当前未蓄力。
+	 * 本地记录的选中窝料持续输入开始时刻（世界时间）；<0 表示当前未蓄力。
 	 * 与 ChumChargeStartServerTime 分开的理由：后者只在 HandleAbilityCommandFromAuthority 里写，
 	 * 远端客户端本地那一份永远是 -1，拿它画预览会变成"只有主机看得见"。
 	 * 这一份在本地提交边沿时就写好，纯表现用途，不参与任何裁决（实际蓄力时长仍以服务器那份为准）。

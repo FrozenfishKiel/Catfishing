@@ -103,7 +103,8 @@ struct FCatWaterGeometryBuildResult
 class FCatWaterGeometry
 {
 public:
-	static FCatWaterGeometryBuildResult Build(const FCatWaterGeometryBuildInput& Input);
+	/** 将正式水域边界输入烘焙成运行缓存；Runtime Region 与 Editor 自动化共用这一份算法，跨模块调用不复制几何规则。 */
+	static CATFISHING_API FCatWaterGeometryBuildResult Build(const FCatWaterGeometryBuildInput& Input);
 	static FCatWaterSpatialResult QueryPoint(
 		const FCatWaterGeometryCache& Cache,
 		const FVector& WorldPoint,

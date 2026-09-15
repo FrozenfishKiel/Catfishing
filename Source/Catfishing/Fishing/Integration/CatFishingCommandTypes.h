@@ -12,7 +12,7 @@ enum class ECatFishingCommandType : uint8
 	PrimaryReleased, CancelFishing, RequestScoop, AssistFight, PlaceChum, TailRescue,
 	/** 右键松开线杯的按下 / 松开边沿；只在 HookedFight 有效。 */
 	SlackPressed, SlackReleased,
-	/** Q 打窝蓄力按下 / 松开；服务器按按住时长换算蓄力并投放。 */
+	/** 选中窝料的持续 Use 按下 / 松开；服务器按同一请求的按住时长换算蓄力并投放。 */
 	ChumPressed, ChumReleased,
 	/** 主动切断当前上钩会话的鱼线；与鱼竿断裂及普通取消分别结算。 */
 	CutLine
@@ -61,6 +61,8 @@ struct FCatPlaceRodCommand
 	UPROPERTY(BlueprintReadWrite) FGuid RequestId;
 	/** 放竿命令发起时观察到的钓具选择投影版本；它只保护当前选中的竿、皮肤等装备视图。 */
 	UPROPERTY(BlueprintReadWrite) int64 ExpectedEquipmentRevision = 0;
+	/** 快捷栏 Use 指定的鱼竿运行实例；有效时服务只能借出这一件，不允许回退到装备投影或别的库存鱼竿。 */
+	UPROPERTY(BlueprintReadWrite) FGuid RequestedRodItemInstanceId;
 };
 
 USTRUCT(BlueprintType)

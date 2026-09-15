@@ -41,6 +41,9 @@
 #include "Interaction/CatInteractionTags.h"
 #include "Interaction/CatInteractionTargetingComponent.h"
 #include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatBackPackComponent.h"
+#include "Inventory/CatInventoryInputTags.h"
+#include "Inventory/CatInventoryItemDefinition.h"
 #include "Inventory/CatInventoryItemInstance.h"
 #include "Inventory/CatInventoryStatics.h"
 #include "Items/Fish/CatFishPickupActor.h"
@@ -215,6 +218,7 @@ void ACatfishingPlayerController::ClearDayTransition()
 void ACatfishingPlayerController::PreClientTravel(const FString& PendingURL, const ETravelType TravelType, const bool bIsSeamlessTravel)
 {
 	DayTransitionTravelWorld = GetWorld();
+	ClearSelectedItemUseInput(true);
 	ClearDayTransition();
 	Super::PreClientTravel(PendingURL, TravelType, bIsSeamlessTravel);
 }
@@ -250,7 +254,10 @@ void ACatfishingPlayerController::SetPawn(APawn* InPawn)
 {
 	if (GetPawn() != InPawn)
 	{
+		ClearSelectedItemUseInput(true);
 		ClearPhysicalControlInput(TEXT("PawnChanged"));
+		// 物品栏焦点属于本地玩家当前身体；在新 UI 绑定前重置，背包自身不保存选择。
+		SelectedQuickbarSlotIndex = 0;
 		SetDayTransitionLocked(false);
 	}
 	Super::SetPawn(InPawn);
@@ -509,6 +516,7 @@ void ACatfishingPlayerController::StopMove()
 // 物理输入清理流程：先清钓鱼保持态与 Ability 路由，再清身体移动/抓握意图，最后关闭疾跑；各子系统仍保留自己的权限与复制收口。
 void ACatfishingPlayerController::ClearPhysicalControlInput(const FName Reason)
 {
+	ClearSelectedItemUseInput(true);
 	if (FishingCommandComponent && GetPawn()) FishingCommandComponent->ClearHeldInputForLifecycle(Reason);
 	if (AbilityInputBindingComponent) AbilityInputBindingComponent->ReleaseAllInputRoutes(Reason);
 	if (const ACatCharacter* Cat = Cast<ACatCharacter>(GetPawn()))
@@ -521,6 +529,7 @@ void ACatfishingPlayerController::ClearPhysicalControlInput(const FName Reason)
 // 按键刷新流程：视口失焦或输入层切换时先撤销持续物理输入，再让父类丢弃引擎记录的按键状态，避免恢复焦点后重放旧意图。
 void ACatfishingPlayerController::FlushPressedKeys()
 {
+	ClearSelectedItemUseInput(true);
 	ClearPhysicalControlInput(TEXT("KeysFlushed"));
 	Super::FlushPressedKeys();
 }
@@ -751,7 +760,10 @@ void ACatfishingPlayerController::ServerRequestCampfirePlayback_Implementation(A
 	}
 }
 
-// 公共领域结果客户端流程：可靠接收结果后按请求落盘并整体替换本机读模型，再广播给 UI；未开界面也保留接收证据，不触发新的领域命令。
+// 公共领域结果客户端流程：
+// 1. 可靠接收结果后按请求落盘并整体替换本机读模型，再广播给 UI；未开界面也保留接收证据，不触发新的领域命令。
+// 2. 若连续 G 的 Begin 被服务器拒绝，本机立刻清掉同 RequestId 的等待记录；否则未松键时不能再次发起 Use。
+// 3. 已接受或无关请求绝不触碰当前持续记录，迟到旧回执不能取消后来开始的同类物品。
 void ACatfishingPlayerController::ClientReceiveCampCommandResult_Implementation(
 	const FCatDomainCommandResult& Result)
 {
@@ -761,6 +773,18 @@ void ACatfishingPlayerController::ClientReceiveCampCommandResult_Implementation(
 		Result.bCommitted, Result.bTerminalReplay, *UEnum::GetValueAsString(Result.Error));
 	if (CatIsAcceptedDomainCommandResult(Result)) { UE_LOG(LogCatfishing, Log, TEXT("%s"), *Event); }
 	else { UE_LOG(LogCatfishing, Warning, TEXT("%s"), *Event); }
+	if (ActiveSelectedItemUseRequestId == Result.RequestId && !CatIsAcceptedDomainCommandResult(Result))
+	{
+		if (ActiveSelectedItemUseInstance)
+		{
+			ActiveSelectedItemUseInstance->SetUseInputActiveLocally(this, false);
+		}
+		ActiveSelectedItemUseRequestId.Invalidate();
+		ActiveSelectedItemUseItemId.Invalidate();
+		ActiveSelectedItemUseSlotIndex = INDEX_NONE;
+		ActiveSelectedItemUseBackPack = nullptr;
+		ActiveSelectedItemUseInstance = nullptr;
+	}
 	LastCampCommandResult = Result;
 	OnCampCommandResultReceived.Broadcast(Result);
 }
@@ -858,94 +882,275 @@ void ACatfishingPlayerController::ServerConfigureEquipment_Implementation(const 
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 随身库存物品使用 RPC 路由流程：
-// 1. Controller 先执行玩法命令 gate、RequestId、Pawn 和库存组件校验，失败只回结构化错误。
-// 2. 通过后构造正式库存 Use 上下文；物品定义、数量扣减和钓具读模型刷新都留在 InventoryComponent/ItemInstance 内部。
-// 3. 最后统一回送 owning client，UI 只显示服务器确认后的终态。
-void ACatfishingPlayerController::ServerUseInventoryItem_Implementation(
-	const FGuid RequestId, const int32 InventorySlotIndex)
+// 背包读取流程：只从当前 Character 的构造期个人库存取得 BackPack；鱼护、鱼缸、商店和营地容器虽然也实现库存接口，却不能成为快捷栏来源。
+UCatBackPackComponent* ACatfishingPlayerController::GetControlledBackPack() const
+{
+	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
+	return ControlledCharacter ? Cast<UCatBackPackComponent>(ControlledCharacter->GetInventoryComponent()) : nullptr;
+}
+
+// 物品栏选格流程：先拒绝非本机和模态/过场输入，再只读当前背包检查槽位；成功只更新 Controller 焦点并通知物品栏，不写库存或发送 RPC。
+bool ACatfishingPlayerController::RequestSelectQuickbarSlotFromInput(const int32 RequestedSlotIndex)
+{
+	if (!IsLocalController() || IsDayTransitionInputBlocked() || IsMoveInputIgnored()) return false;
+	const UCatBackPackComponent* BackPack = GetControlledBackPack();
+	if (!BackPack || !BackPack->IsValidInventorySlotIndex(RequestedSlotIndex)) return false;
+	if (SelectedQuickbarSlotIndex != RequestedSlotIndex)
+	{
+		SelectedQuickbarSlotIndex = RequestedSlotIndex;
+		OnQuickbarSelectionChanged.Broadcast(SelectedQuickbarSlotIndex);
+	}
+	return true;
+}
+
+// 物品栏焦点读取流程：不存在库存格时无选择，容量尚在复制或缩小时返回有效第一格；库存内容变化不改变玩家选中的槽位。
+int32 ACatfishingPlayerController::GetSelectedQuickbarSlotIndex() const
+{
+	const UCatBackPackComponent* BackPack = IsLocalController() ? GetControlledBackPack() : nullptr;
+	if (!BackPack || BackPack->GetInventorySlotCount() <= 0) return INDEX_NONE;
+	return BackPack->IsValidInventorySlotIndex(SelectedQuickbarSlotIndex) ? SelectedQuickbarSlotIndex : 0;
+}
+
+// 滚轮物品栏选择流程：只读背包实际格数逐格循环，包含空格；最终复用物品栏选择入口的本地输入校验，背包窗口不参与。
+bool ACatfishingPlayerController::RequestCycleQuickbarSlotFromInput(const int32 Direction)
+{
+	if (Direction == 0) return false;
+	const UCatBackPackComponent* BackPack = GetControlledBackPack();
+	const int32 SlotCount = BackPack ? BackPack->GetInventorySlotCount() : 0;
+	if (SlotCount <= 0) return false;
+	const int32 CurrentSlot = FMath::Max(0, GetSelectedQuickbarSlotIndex());
+	const int32 Step = Direction < 0 ? -1 : 1;
+	return RequestSelectQuickbarSlotFromInput((CurrentSlot + Step + SlotCount) % SlotCount);
+}
+
+// 使用输入预检流程：本机只确认没有输入锁、当前选中槽位仍存在且已经解析到实例；可用性和真正效果仍由服务器按本次槽位和实例重新裁决。
+bool ACatfishingPlayerController::CanUseSelectedBackpackItemFromInput() const
+{
+	if (!IsLocalController() || IsDayTransitionInputBlocked() || IsMoveInputIgnored())
+	{
+		return false;
+	}
+	UCatBackPackComponent* BackPack = GetControlledBackPack();
+	const int32 SelectedSlotIndex = GetSelectedQuickbarSlotIndex();
+	return BackPack && BackPack->CanUseItemAtSlot(SelectedSlotIndex, GetPawn());
+}
+
+// G 按下流程：
+// 1. 先用 Controller 的独立物品栏焦点读取背包中的槽位和实例身份；未解析、空格或本地预检失败不发网络请求。
+// 2. 为本次 Use 创建稳定 RequestId，并把槽位与观察到的实例 ID 原样交给服务器；服务器不会读取客户端的“已选中”声明。
+// 3. 只有声明持续输入的实例才在本机冻结这组身份，松开和取消因此不会改用之后新选中的物品。
+void ACatfishingPlayerController::BeginSelectedItemUseFromInput()
+{
+	if (ActiveSelectedItemUseRequestId.IsValid() || !CanUseSelectedBackpackItemFromInput())
+	{
+		return;
+	}
+	UCatBackPackComponent* BackPack = GetControlledBackPack();
+	const int32 SelectedSlotIndex = GetSelectedQuickbarSlotIndex();
+	const FCatInventoryEntry* Entry = BackPack ? BackPack->GetInventoryEntryAtSlot(SelectedSlotIndex) : nullptr;
+	UCatInventoryItemInstance* Instance = Entry ? Entry->Instance.Get() : nullptr;
+	if (!Instance || !Instance->GetItemInstanceId().IsValid())
+	{
+		return;
+	}
+	const FGuid RequestId = FGuid::NewGuid();
+	if (Instance->UsesContinuousInput())
+	{
+		ActiveSelectedItemUseRequestId = RequestId;
+		ActiveSelectedItemUseItemId = Instance->GetItemInstanceId();
+		ActiveSelectedItemUseSlotIndex = SelectedSlotIndex;
+		ActiveSelectedItemUseBackPack = BackPack;
+		ActiveSelectedItemUseInstance = Instance;
+		Instance->SetUseInputActiveLocally(this, true);
+	}
+	UE_LOG(LogCatfishing, Log,
+		TEXT("Event=selected_inventory_use_submitted RequestId=%s Slot=%d ItemId=%s Continuous=%d World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s"),
+		*RequestId.ToString(EGuidFormats::DigitsWithHyphens), SelectedSlotIndex,
+		*Instance->GetItemInstanceId().ToString(EGuidFormats::DigitsWithHyphens), Instance->UsesContinuousInput(),
+		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority(), static_cast<int32>(GetLocalRole()), *GetNameSafe(this));
+	ServerUseSelectedBackpackItem(RequestId, SelectedSlotIndex, Instance->GetItemInstanceId());
+}
+
+// G 松开流程：持续 Use 已在按下时冻结了 RequestId、实例和槽位；本地清记录后发送同一组值，普通瞬时物品不会生成结束请求。
+void ACatfishingPlayerController::EndSelectedItemUseFromInput(const bool bCancelled)
+{
+	ClearSelectedItemUseInput(bCancelled);
+}
+
+// 持续使用清理流程：
+// 1. 没有活动请求时直接返回，普通物品的 G Completed/Canceled 不会制造额外服务器动作。
+// 2. 有请求时先保存 Begin 固定身份，再在 authority 直接执行或客户端发 RPC，保证 Pawn 切换和旅行也能取消旧效果。
+// 3. 客户端发送后清空自己的记录；authority 交给 End RPC 在身份匹配后清理，避免 listen host 先丢失原实例。
+void ACatfishingPlayerController::ClearSelectedItemUseInput(const bool bCancelled)
+{
+	if (!ActiveSelectedItemUseRequestId.IsValid())
+	{
+		return;
+	}
+	const FGuid RequestId = ActiveSelectedItemUseRequestId;
+	const FGuid ItemInstanceId = ActiveSelectedItemUseItemId;
+	if (ActiveSelectedItemUseInstance)
+	{
+		ActiveSelectedItemUseInstance->SetUseInputActiveLocally(this, false);
+	}
+	if (HasAuthority())
+	{
+		ServerEndSelectedBackpackItem_Implementation(RequestId, ItemInstanceId, bCancelled);
+		return;
+	}
+	else if (IsLocalController())
+	{
+		ServerEndSelectedBackpackItem(RequestId, ItemInstanceId, bCancelled);
+	}
+	ActiveSelectedItemUseRequestId.Invalidate();
+	ActiveSelectedItemUseItemId.Invalidate();
+	ActiveSelectedItemUseSlotIndex = INDEX_NONE;
+	ActiveSelectedItemUseBackPack = nullptr;
+	ActiveSelectedItemUseInstance = nullptr;
+}
+
+// 快捷栏 Use RPC 流程：
+// 1. 服务器只从当前 Controller 的 Character 解析个人 BackPack，并重新校验 RequestId、槽位和实例身份。
+// 2. 再构造同一份库存使用上下文并执行既有 Inventory.Action.Use；客户端本地选中状态不会参与权限判断。
+// 3. 连续实例仅在 Begin 成功后保存固定身份；所有结果写入统一领域回执和 Development 日志。
+void ACatfishingPlayerController::ServerUseSelectedBackpackItem_Implementation(const FGuid RequestId,
+	const int32 ExpectedSelectedSlot, const FGuid ItemInstanceId)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
-	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
-	UCatInventoryComponent* Inventory = ControlledCharacter ? ControlledCharacter->GetInventoryComponent() : nullptr;
+	UCatBackPackComponent* BackPack = GetControlledBackPack();
+	const FCatInventoryEntry* Entry = BackPack ? BackPack->GetInventoryEntryAtSlot(ExpectedSelectedSlot) : nullptr;
+	UCatInventoryItemInstance* Instance = Entry ? Entry->Instance.Get() : nullptr;
 	if (!CanForwardGameplayCommand())
 	{
 		Result.Error = ECatDomainCommandError::CommandsClosed;
-		UE_LOG(LogCatfishing, Warning,
-			TEXT("Event=use_inventory_item_rejected Reason=CommandsClosedOrInactive Request=%s Slot=%d"),
-			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), InventorySlotIndex);
 	}
-	else if (!RequestId.IsValid())
+	else if (!RequestId.IsValid() || !ItemInstanceId.IsValid() || !BackPack || !Entry || !Instance
+		|| Entry->StackCount <= 0 || Instance->GetItemInstanceId() != ItemInstanceId)
 	{
 		Result.Error = ECatDomainCommandError::InvalidPayload;
-		UE_LOG(LogCatfishing, Warning,
-			TEXT("Event=use_inventory_item_rejected Reason=InvalidRequest Request=%s Slot=%d"),
-			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), InventorySlotIndex);
 	}
-	else if (!ControlledCharacter || ControlledCharacter->GetWorld() != GetWorld() || !Inventory)
+	else if (ActiveSelectedItemUseRequestId.IsValid() && ActiveSelectedItemUseRequestId != RequestId)
 	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-		UE_LOG(LogCatfishing, Warning,
-			TEXT("Event=use_inventory_item_rejected Reason=MissingInventory Request=%s Slot=%d Character=%s"),
-			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), InventorySlotIndex,
-			*GetNameSafe(ControlledCharacter));
+		Result.Error = ECatDomainCommandError::InvalidPhase;
 	}
 	else
 	{
-		FCatInventoryItemUseContext UseContext;
-		UseContext.RequestId = RequestId;
-		UseContext.RequestingController = this;
-		UseContext.UserPawn = ControlledCharacter;
-		UseContext.SourceInventory = Inventory;
-		UseContext.InventorySlotIndex = InventorySlotIndex;
-		Result = Inventory->UseItemAtSlotFromAuthority(UseContext);
+		FCatInventoryItemUseContext Context;
+		Context.RequestId = RequestId;
+		Context.RequestingController = this;
+		Context.UserPawn = GetPawn();
+		Context.SourceInventory = BackPack;
+		Context.InventorySlotIndex = ExpectedSelectedSlot;
+		Context.bContinuousInput = Instance->UsesContinuousInput();
+		Result = BackPack->ExecuteItemActionFromAuthority(Context, ItemInstanceId, CatInventoryActionTags::Use, 1);
+		if (Result.bCommitted && !Result.bTerminalReplay && Instance->UsesContinuousInput())
+		{
+			ActiveSelectedItemUseRequestId = RequestId;
+			ActiveSelectedItemUseItemId = ItemInstanceId;
+			ActiveSelectedItemUseSlotIndex = ExpectedSelectedSlot;
+			ActiveSelectedItemUseBackPack = BackPack;
+			ActiveSelectedItemUseInstance = Instance;
+		}
 	}
-	UE_LOG(LogCatfishing, Log,
-		TEXT("Event=use_inventory_item Committed=%s Error=%s Slot=%d"),
-		Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error),
-		InventorySlotIndex);
+	const FString UseEvent = FString::Printf(
+		TEXT("Event=selected_inventory_use_result RequestId=%s Slot=%d ItemId=%s Committed=%d Error=%s World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s"),
+		*RequestId.ToString(EGuidFormats::DigitsWithHyphens), ExpectedSelectedSlot,
+		*ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), Result.bCommitted, *UEnum::GetValueAsString(Result.Error),
+		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority(), static_cast<int32>(GetLocalRole()), *GetNameSafe(this));
+	if (Result.bCommitted)
+	{
+		UE_LOG(LogCatfishing, Log, TEXT("%s"), *UseEvent);
+	}
+	else
+	{
+		UE_LOG(LogCatfishing, Warning, TEXT("%s"), *UseEvent);
+	}
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 指定宿主库存物品使用 RPC 流程：
-// 1. Controller 先执行玩法命令 gate、RequestId 和 Pawn 校验，失败只回结构化错误。
-// 2. 通过后把来源 Actor 和槽位交给 InventoryStatics，服务器重新解析可触达正式 InventoryComponent。
-// 3. 物品实际效果、数量扣减和失败回滚都由 InventoryComponent/ItemInstance 完成，Controller 不再拆鱼容器或物品类别。
-void ACatfishingPlayerController::ServerUseInventoryItemFromHost_Implementation(
-	const FGuid RequestId, AActor* SourceInventoryHost, const int32 InventorySlotIndex)
+// 持续 Use 结束 RPC 流程：
+// 1. 只接受服务器 Begin 成功后保存的 RequestId、实例和背包；当前本地选中格不参与匹配。
+// 2. 直接使用 Begin 保留的原实例和背包构造上下文；槽位换物或物品暂时离开可见格仍取消原持续效果，绝不改用新实例。
+// 3. 只有完整身份匹配的本轮结束才清服务器活动记录；迟到旧 End 被拒绝但不能取消较新的 Use。
+void ACatfishingPlayerController::ServerEndSelectedBackpackItem_Implementation(const FGuid RequestId,
+	const FGuid ItemInstanceId, const bool bCancelled)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
-	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
-	if (!CanForwardGameplayCommand())
-	{
-		Result.Error = ECatDomainCommandError::CommandsClosed;
-		UE_LOG(LogCatfishing, Warning,
-			TEXT("Event=use_inventory_item_from_host_rejected Reason=CommandsClosedOrInactive Request=%s Slot=%d Host=%s"),
-			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), InventorySlotIndex,
-			*GetNameSafe(SourceInventoryHost));
-	}
-	else if (!RequestId.IsValid())
+	UCatBackPackComponent* BackPack = ActiveSelectedItemUseBackPack;
+	UCatInventoryItemInstance* Instance = ActiveSelectedItemUseInstance;
+	const bool bMatchesActiveUse = RequestId.IsValid() && RequestId == ActiveSelectedItemUseRequestId
+		&& ItemInstanceId == ActiveSelectedItemUseItemId;
+	if (!bMatchesActiveUse
+		|| !BackPack || !Instance
+		|| Instance->GetItemInstanceId() != ItemInstanceId)
 	{
 		Result.Error = ECatDomainCommandError::InvalidPayload;
-		UE_LOG(LogCatfishing, Warning,
-			TEXT("Event=use_inventory_item_from_host_rejected Reason=InvalidRequest Request=%s Slot=%d Host=%s"),
-			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), InventorySlotIndex,
-			*GetNameSafe(SourceInventoryHost));
-	}
-	else if (!ControlledCharacter || ControlledCharacter->GetWorld() != GetWorld())
-	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-		UE_LOG(LogCatfishing, Warning,
-			TEXT("Event=use_inventory_item_from_host_rejected Reason=MissingCharacter Request=%s Slot=%d Character=%s Host=%s"),
-			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), InventorySlotIndex,
-			*GetNameSafe(ControlledCharacter), *GetNameSafe(SourceInventoryHost));
 	}
 	else
 	{
-		Result = UCatInventoryStatics::UseItemFromInventoryHostFromAuthority(ControlledCharacter, RequestId,
-			SourceInventoryHost, InventorySlotIndex);
+		FCatInventoryItemUseContext Context;
+		Context.RequestId = RequestId;
+		Context.RequestingController = this;
+		Context.UserPawn = GetPawn();
+		Context.SourceInventory = BackPack;
+		Context.InventorySlotIndex = ActiveSelectedItemUseSlotIndex;
+		Context.bContinuousInput = true;
+		Result = Instance->EndUseFromInventorySlotFromAuthority(Context, bCancelled);
+	}
+	if (bMatchesActiveUse)
+	{
+		ActiveSelectedItemUseRequestId.Invalidate();
+		ActiveSelectedItemUseItemId.Invalidate();
+		ActiveSelectedItemUseSlotIndex = INDEX_NONE;
+		ActiveSelectedItemUseBackPack = nullptr;
+		ActiveSelectedItemUseInstance = nullptr;
+	}
+	const FString EndEvent = FString::Printf(
+		TEXT("Event=selected_inventory_use_end_result RequestId=%s ItemId=%s Cancelled=%d Committed=%d Error=%s World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s"),
+		*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		bCancelled, Result.bCommitted, *UEnum::GetValueAsString(Result.Error), *GetNameSafe(GetWorld()),
+		static_cast<int32>(GetNetMode()), HasAuthority(), static_cast<int32>(GetLocalRole()), *GetNameSafe(this));
+	if (Result.bCommitted)
+	{
+		UE_LOG(LogCatfishing, Log, TEXT("%s"), *EndEvent);
+	}
+	else
+	{
+		UE_LOG(LogCatfishing, Warning, TEXT("%s"), *EndEvent);
+	}
+	DeliverCampCommandResultToOwningClient(Result);
+}
+
+// 统一库存操作 RPC 路由流程：
+// 1. 先记录客户端提交的宿主、槽位、实例、动作和数量，供房主端与客户端日志按 RequestId 对照。
+// 2. 命令门关闭时只产生拒绝回执；开启时由 Statics 重新解析当前 Pawn 可访问的正式库存，绝不信任客户端定义或效果。
+// 3. 组件随后复核实例身份、数量、定义声明和实时可用性，并把动作交给实例虚函数提交。
+// 4. 最后按成功或拒绝的诊断等级落盘并可靠回送 owning client；重放只回显首次终态，不重复执行副作用。
+void ACatfishingPlayerController::ServerExecuteInventoryAction_Implementation(const FGuid RequestId,
+	AActor* SourceInventoryHost, const int32 SourceSlotIndex, const FGuid ItemInstanceId,
+	const FGameplayTag Action, const int32 Quantity)
+{
+	FCatDomainCommandResult Result; Result.RequestId = RequestId;
+	UE_LOG(LogCatfishing, Log, TEXT("Event=inventory_action_received World=%s NetMode=%d Authority=%d Player=%s RequestId=%s Host=%s Slot=%d Instance=%s Action=%s Quantity=%d"),
+		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority(), *GetName(), *RequestId.ToString(),
+		*GetNameSafe(SourceInventoryHost), SourceSlotIndex, *ItemInstanceId.ToString(), *Action.ToString(), Quantity);
+	if (!CanForwardGameplayCommand()) Result.Error = ECatDomainCommandError::CommandsClosed;
+	else Result = UCatInventoryStatics::ExecuteInventoryActionFromAuthority(Cast<ACatCharacter>(GetPawn()),
+		RequestId, SourceInventoryHost, SourceSlotIndex, ItemInstanceId, Action, Quantity);
+	const FString Event = FString::Printf(
+		TEXT("Event=inventory_action_result World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s RequestId=%s Host=%s Slot=%d Instance=%s Action=%s Quantity=%d Committed=%d Replay=%d Error=%s"),
+		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority(), static_cast<int32>(GetLocalRole()), *GetName(),
+		*RequestId.ToString(), *GetNameSafe(SourceInventoryHost), SourceSlotIndex, *ItemInstanceId.ToString(), *Action.ToString(),
+		Quantity, Result.bCommitted, Result.bTerminalReplay, *UEnum::GetValueAsString(Result.Error));
+	if (CatIsAcceptedDomainCommandResult(Result))
+	{
+		UE_LOG(LogCatfishing, Log, TEXT("%s"), *Event);
+	}
+	else
+	{
+		UE_LOG(LogCatfishing, Warning, TEXT("%s"), *Event);
 	}
 	DeliverCampCommandResultToOwningClient(Result);
 }
@@ -1009,34 +1214,6 @@ void ACatfishingPlayerController::ServerSellFishBatch_Implementation(const FGuid
 		TEXT("Event=fish_sale_result RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Buyer=%s Source=%s Committed=%d Replay=%d Error=%s"),
 		*RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(),
 		*GetNameSafe(Buyer), *GetNameSafe(Guard), Result.bCommitted, Result.bTerminalReplay, *UEnum::GetValueAsString(Result.Error));
-	if (CatIsAcceptedDomainCommandResult(Result)) { UE_LOG(LogCatfishing, Log, TEXT("%s"), *Event); }
-	else { UE_LOG(LogCatfishing, Warning, TEXT("%s"), *Event); }
-	DeliverCampCommandResultToOwningClient(Result);
-}
-
-// 落地路由流程：先记录来源和意图，拒绝关闭阶段与错误载荷，其余交库存校验提交；结果按原请求落盘并回送，客户端不决定落点。
-void ACatfishingPlayerController::ServerReleaseInventoryItemToWorld_Implementation(const FGuid RequestId,
-	AActor* SourceHost, const int32 Slot, const FGuid ItemInstanceId, const int32 Quantity,
-	const ECatInventoryWorldAction Action)
-{
-	UE_LOG(LogCatfishing, Log,
-		TEXT("Event=inventory_world_requested RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Source=%s Slot=%d ItemInstanceId=%s Quantity=%d Action=%d"),
-		*RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(),
-		*GetNameSafe(SourceHost), Slot, *ItemInstanceId.ToString(), Quantity, static_cast<int32>(Action));
-	FCatDomainCommandResult Result;
-	Result.RequestId = RequestId;
-	if (!CanForwardGameplayCommand()) Result.Error = ECatDomainCommandError::CommandsClosed;
-	else if (!RequestId.IsValid() || !ItemInstanceId.IsValid() || Quantity <= 0
-		|| (Action != ECatInventoryWorldAction::Drop && Action != ECatInventoryWorldAction::Place && Action != ECatInventoryWorldAction::Carry))
-		Result.Error = ECatDomainCommandError::InvalidPayload;
-	else if (ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn()))
-		Result = UCatInventoryStatics::ReleaseItemToWorldFromAuthority(ControlledCharacter, RequestId,
-			SourceHost, Slot, ItemInstanceId, Quantity, Action);
-	else Result.Error = ECatDomainCommandError::DependencyUnavailable;
-	const FString Event = FString::Printf(
-		TEXT("Event=inventory_world_result RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Source=%s Action=%d Committed=%d Replay=%d Error=%s"),
-		*RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(),
-		*GetNameSafe(SourceHost), static_cast<int32>(Action), Result.bCommitted, Result.bTerminalReplay, *UEnum::GetValueAsString(Result.Error));
 	if (CatIsAcceptedDomainCommandResult(Result)) { UE_LOG(LogCatfishing, Log, TEXT("%s"), *Event); }
 	else { UE_LOG(LogCatfishing, Warning, TEXT("%s"), *Event); }
 	DeliverCampCommandResultToOwningClient(Result);
@@ -1155,12 +1332,54 @@ void ACatfishingPlayerController::ServerPlaceProtectionSign_Implementation(const
 }
 
 // Native 输入分流流程：
-// 1. 先拒绝翻天操作；快捷丢弃还检查本地输入锁，菜单打开时不丢物，空嘴也不发请求。
-// 2. 丢弃先查当前嘴部，取消尚未完成的交互长按，再通知服务器读取携带对象；Started 绑定避免按住重复触发。
-// 3. 其余仅处理 IA_Interact，由唯一 TargetingComponent 把交互交给准星 Actor；不认识的标签无副作用返回。
+// 1. 先拒绝翻天操作；键盘/滚轮选择标签还要服从现有模态输入锁，而背包页面按钮直接调用选择入口时仍可更新本地焦点。
+// 2. G Started 发起当前槽位/实例的统一 Use；Q 仍只丢嘴部携带物并检查既有模态输入锁，空嘴不发请求。
+// 3. 其余 IA_Interact 继续由唯一 TargetingComponent 处理；不认识的标签无副作用返回。
 void ACatfishingPlayerController::NativeInputTagPressed(const FGameplayTag InputTag)
 {
 	if (IsDayTransitionInputBlocked()) return;
+	const bool bIsInventorySelectionInput = InputTag.MatchesTagExact(CatInventoryInputTags::Input_SelectSlot1)
+		|| InputTag.MatchesTagExact(CatInventoryInputTags::Input_SelectSlot2)
+		|| InputTag.MatchesTagExact(CatInventoryInputTags::Input_SelectSlot3)
+		|| InputTag.MatchesTagExact(CatInventoryInputTags::Input_SelectSlot4)
+		|| InputTag.MatchesTagExact(CatInventoryInputTags::Input_SelectPreviousSlot)
+		|| InputTag.MatchesTagExact(CatInventoryInputTags::Input_SelectNextSlot);
+	if (bIsInventorySelectionInput && IsMoveInputIgnored()) return;
+	if (InputTag.MatchesTagExact(CatInventoryInputTags::Input_SelectSlot1))
+	{
+		RequestSelectQuickbarSlotFromInput(0);
+		return;
+	}
+	if (InputTag.MatchesTagExact(CatInventoryInputTags::Input_SelectSlot2))
+	{
+		RequestSelectQuickbarSlotFromInput(1);
+		return;
+	}
+	if (InputTag.MatchesTagExact(CatInventoryInputTags::Input_SelectSlot3))
+	{
+		RequestSelectQuickbarSlotFromInput(2);
+		return;
+	}
+	if (InputTag.MatchesTagExact(CatInventoryInputTags::Input_SelectSlot4))
+	{
+		RequestSelectQuickbarSlotFromInput(3);
+		return;
+	}
+	if (InputTag.MatchesTagExact(CatInventoryInputTags::Input_SelectPreviousSlot))
+	{
+		RequestCycleQuickbarSlotFromInput(-1);
+		return;
+	}
+	if (InputTag.MatchesTagExact(CatInventoryInputTags::Input_SelectNextSlot))
+	{
+		RequestCycleQuickbarSlotFromInput(1);
+		return;
+	}
+	if (InputTag.MatchesTagExact(CatInventoryInputTags::Input_UseSelectedItem))
+	{
+		BeginSelectedItemUseFromInput();
+		return;
+	}
 	if (InputTag.MatchesTagExact(CatInteractionTags::Input_DropCarriedItem))
 	{
 		if (!IsLocalController() || IsMoveInputIgnored()) return;
@@ -1185,16 +1404,26 @@ void ACatfishingPlayerController::NativeInputTagPressed(const FGameplayTag Input
 	}
 }
 
-// 松开流程：只处理交互标签；翻天锁已接管时取消候选，其他时候由目标组件决定是否属于短按。
+// 松开流程：G 只结束 Begin 固定的持续实例；交互标签仍由目标组件决定短按，翻天锁已接管时取消候选。
 void ACatfishingPlayerController::NativeInputTagReleased(const FGameplayTag InputTag)
 {
+	if (InputTag.MatchesTagExact(CatInventoryInputTags::Input_UseSelectedItem))
+	{
+		EndSelectedItemUseFromInput(false);
+		return;
+	}
 	if (InputTag.MatchesTagExact(CatInteractionTags::Input_Interact) && InteractionTargetingComponent)
 		InteractionTargetingComponent->EndInteractionInput(IsDayTransitionInputBlocked());
 }
 
-// 取消流程：输入层失效只释放计时器与候选，绝不提交短按或拾取命令。
+// 取消流程：G 取消会终止同一次持续 Use；交互输入只释放计时器与候选，绝不提交短按或拾取命令。
 void ACatfishingPlayerController::NativeInputTagCanceled(const FGameplayTag InputTag)
 {
+	if (InputTag.MatchesTagExact(CatInventoryInputTags::Input_UseSelectedItem))
+	{
+		EndSelectedItemUseFromInput(true);
+		return;
+	}
 	if (InputTag.MatchesTagExact(CatInteractionTags::Input_Interact) && InteractionTargetingComponent)
 		InteractionTargetingComponent->EndInteractionInput(true);
 }

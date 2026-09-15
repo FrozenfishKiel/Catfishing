@@ -22,6 +22,7 @@ class UCatInteractionPromptWidget;
 class UCatInventoryComponent;
 class UCatInventoryPageController;
 class UCatInventoryWidget;
+class UCatInventoryQuickbarWidget;
 class UCatLakeMainMenuController;
 class UCatLakeMainMenuWidget;
 class UCatAltarConfirmationWidget;
@@ -65,6 +66,9 @@ public:
 
 	/** 返回当前 LocalPlayer 的库存窗口控制器；WBP 只用它关闭窗口，库存 Model 由各库存组件提供。 */
 	UCatInventoryPageController* GetInventoryPageController() const;
+
+	/** 返回当前本地玩家已装配的常驻快捷栏 View；自动化和调试只读它，背包数据仍由组件 Model 持有。 */
+	UCatInventoryQuickbarWidget* GetInventoryQuickbarWidget() const;
 
 	/** 返回此玩家已经装配的唯一悬停控制器；库存格只提交显示意图，不创建各自的 Tooltip。 */
 	UCatItemTooltipController* GetItemTooltipController() const;
@@ -272,6 +276,10 @@ private:
 	/** 当前 LocalPlayer 的默认背包 WBP；始终显示角色库存，外部库存由页面控制器另建指定 WBP。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryWidget> InventoryWidget;
+
+	/** 当前 LocalPlayer 的常驻快捷栏 WBP；它只读角色随身背包 Model，随 Pawn 切换在本子系统成对创建和移除。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatInventoryQuickbarWidget> InventoryQuickbarWidget;
 
 	/** 当前 LocalPlayer 的库存窗口控制器；它管理背包与外部库存的页面、输入和焦点，不中转物品操作。 */
 	UPROPERTY(Transient)
