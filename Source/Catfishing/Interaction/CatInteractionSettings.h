@@ -13,7 +13,8 @@ class CATFISHING_API UCatInteractionSettings : public UDeveloperSettings
 public:
 	/**
 	 * 全游戏统一交互半径，厘米（钓鱼规则 §5.5:273「落岸鱼的可拾距离是 1.5 米，全游戏统一交互半径」；
-	 * 参数页「线长与收鱼」行 交互半径 1.5 米）。准星容差与落岸鱼拾取共用这一个事实源。
+	 * 参数页「线长与收鱼」行 交互半径 1.5 米）。准星以 Pawn 位置到命中点测量，不包含第三人称相机退距。
+	 * 准星容差与落岸鱼拾取共用这一个事实源；射线覆盖距离另计，不能用它放宽身体触达半径。
 	 * 抄网射程是另一个参数（UCatFishingSettings::ScoopReachCentimeters，现值 2 米），两者互不替代。
 	 * 墓碑：原 MaximumTargetingDistanceCentimeters（准星 300 厘米）2026-09-12 并入本字段后删除，
 	 * 理由是它和落岸鱼拾取距离本来就应该是同一个数，分开配会让「准星亮了但按不动」。

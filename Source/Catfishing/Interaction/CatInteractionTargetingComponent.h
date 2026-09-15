@@ -62,7 +62,7 @@ private:
 	UPROPERTY(EditDefaultsOnly, Category="Catfishing|Interaction", meta=(ClampMin="0.1", Units="s"))
 	float GuardHoldSeconds = 0.5f;
 	/** 执行唯一准星射线并记录观察对象，再按原有交互合同筛出可执行目标。 */
-	AActor* TraceInteractableFromCrosshair();
+	AActor* TraceInteractableFromCrosshair(bool bLogDecision = false);
 	/** 目标变化时成对切换高亮；目标不变时仅通知消费者重读动态提示。 */
 	void ApplyTarget(AActor* NewTarget);
 	APlayerController* GetOwningPlayerController() const;

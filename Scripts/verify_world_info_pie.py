@@ -155,8 +155,8 @@ def tick(delta):
         elif stage == 2 and now - state['at'] > 1.0:
             for world, player, local_tank in [(server, host, tank), (client, remote, client_tank)]:
                 targeting = player.get_component_by_class(unreal.CatInteractionTargetingComponent)
-                check(targeting.get_observed_target() == local_tank, 'same ray observes tank beyond original 3m on {}'.format(world.get_path_name()))
-                check(targeting.get_current_target() is None, 'observation does not expand executable 3m target')
+                check(targeting.get_observed_target() == local_tank, 'same ray observes distant tank on {}'.format(world.get_path_name()))
+                check(targeting.get_current_target() is None, 'observation does not expand the 1.5m pawn reach radius')
                 found = find_view(world, '共享鱼缸')
                 unreal.log('WORLD_INFO_PROBE TANK World={} View={}'.format(world.get_name(), found))
                 check(found and found['visible'] and found['detail'] == 1, 'focused tank shows full formal WBP')

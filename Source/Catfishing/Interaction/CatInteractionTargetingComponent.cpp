@@ -4,6 +4,8 @@
 #include "FishContainers/CatFishGuardActor.h"
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "Interaction/CatInteractionSettings.h"
+#include "Logging/CatLog.h"
+#include "Components/PrimitiveComponent.h"
 #include "Engine/World.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/GameViewportClient.h"
@@ -56,17 +58,42 @@ void UCatInteractionTargetingComponent::SetObservationDistanceCentimeters(const 
 // 观察与执行分流：
 // 1. 清空上次观察命中；缺 Controller、设置、World、本地视口或投影数据时返回空，不能继续使用旧世界焦点。
 // 2. 以所属玩家受限视图矩形的中心反投影；这样分屏与宽高比留黑边时仍对准实际画面，空矩形或反投影失败时结束。
-// 3. 忽略自身 Pawn，以交互上限和观察需求中的较大距离发出唯一射线；未命中返回空，命中则保存原始观察对象。
-// 4. 只有命中距离仍在原交互上限内、实现交互接口且 CanInteract 通过时才返回执行目标；远处或不可交互对象仍可供信息牌观察。
-AActor* UCatInteractionTargetingComponent::TraceInteractableFromCrosshair()
+// 3. 忽略自身 Pawn，射线覆盖相机到身体的距离加交互半径，并保留更远的观察需求。
+// 4. 以身体到命中点的距离筛选交互目标；相机拉远不消耗玩法半径，远处对象仍只供信息牌观察。
+AActor* UCatInteractionTargetingComponent::TraceInteractableFromCrosshair(const bool bLogDecision)
 {
 	ObservedTarget.Reset();
 	APlayerController* PlayerController = GetOwningPlayerController();
 	const UCatInteractionSettings* Settings = GetDefault<UCatInteractionSettings>();
 	UWorld* World = GetWorld();
-	if (!PlayerController || !PlayerController->IsLocalController() || !Settings || !World)
+	APawn* Pawn = PlayerController ? PlayerController->GetPawn() : nullptr;
+	FHitResult Hit;
+	const double InteractionRadius = Settings ? Settings->GetInteractionRadiusCentimeters() : 0.0;
+	double ReachDistance = -1.0;
+	const auto Finish = [&](AActor* Target, const TCHAR* Reason) -> AActor*
 	{
-		return nullptr;
+		// 仅按键诊断落盘；20 Hz 扫描不刷日志。未命中用 -1，不能把默认 Hit.Distance=0 当作距离证据。
+		if (bLogDecision)
+		{
+			const FString Message = FString::Printf(TEXT("Event=interaction_target_decision World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Pawn=%s HitActor=%s HitComponent=%s RayDistanceCm=%.3f ReachDistanceCm=%.3f RadiusCm=%.3f Result=%s"),
+				*GetNameSafe(World), World ? int32(World->GetNetMode()) : -1,
+				PlayerController && PlayerController->HasAuthority(), PlayerController ? int32(PlayerController->GetLocalRole()) : -1,
+				*GetNameSafe(PlayerController), *GetNameSafe(Pawn), *GetNameSafe(Hit.GetActor()), *GetNameSafe(Hit.GetComponent()),
+				Hit.bBlockingHit ? Hit.Distance : -1.0, ReachDistance, InteractionRadius, Reason);
+			if (Target)
+			{
+				UE_LOG(LogCatfishing, Log, TEXT("%s"), *Message);
+			}
+			else
+			{
+				UE_LOG(LogCatfishing, Warning, TEXT("%s"), *Message);
+			}
+		}
+		return Target;
+	};
+	if (!PlayerController || !PlayerController->IsLocalController() || !Pawn || !Settings || !World)
+	{
+		return Finish(nullptr, TEXT("MissingLocalContext"));
 	}
 
 	const ULocalPlayer* LocalPlayer = PlayerController->GetLocalPlayer();
@@ -74,39 +101,38 @@ AActor* UCatInteractionTargetingComponent::TraceInteractableFromCrosshair()
 	if (!LocalPlayer || !LocalPlayer->ViewportClient || !LocalPlayer->ViewportClient->Viewport
 		|| !LocalPlayer->GetProjectionData(LocalPlayer->ViewportClient->Viewport, ProjectionData))
 	{
-		return nullptr;
+		return Finish(nullptr, TEXT("NoViewportProjection"));
 	}
 	const FIntRect ViewRect = ProjectionData.GetConstrainedViewRect();
-	if (ViewRect.Width() <= 0 || ViewRect.Height() <= 0) return nullptr;
+	if (ViewRect.Width() <= 0 || ViewRect.Height() <= 0) return Finish(nullptr, TEXT("EmptyViewRect"));
 
 	FVector RayOrigin = FVector::ZeroVector;
 	FVector RayDirection = FVector::ForwardVector;
 	if (!PlayerController->DeprojectScreenPositionToWorld(
 		(ViewRect.Min.X + ViewRect.Max.X) * 0.5f, (ViewRect.Min.Y + ViewRect.Max.Y) * 0.5f, RayOrigin, RayDirection))
 	{
-		return nullptr;
+		return Finish(nullptr, TEXT("DeprojectionFailed"));
 	}
 
 	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(CatInteractionTargeting), Settings->bTraceComplex);
-	if (APawn* Pawn = PlayerController->GetPawn())
-	{
-		QueryParams.AddIgnoredActor(Pawn);
-	}
-	FHitResult Hit;
-	// 准星容差与落岸鱼拾取共用同一个 1.5 米事实源（钓鱼规则 §5.5:273）；观察距离只放长射线、不放宽可交互判定。
-	const double InteractionRadius = Settings->GetInteractionRadiusCentimeters();
+	QueryParams.AddIgnoredActor(Pawn);
+	// 三角不等式保证身体半径内的命中点都在射程内；唯一射线仍取第一个遮挡，不穿墙寻找目标。
+	const double CameraToPawnDistance = FVector::Dist(RayOrigin, Pawn->GetActorLocation());
 	const FVector TraceEnd = RayOrigin + RayDirection.GetSafeNormal()
-		* FMath::Max(InteractionRadius, ObservationDistanceCentimeters);
+		* FMath::Max(CameraToPawnDistance + InteractionRadius, ObservationDistanceCentimeters);
 	if (!World->LineTraceSingleByChannel(Hit, RayOrigin, TraceEnd, Settings->TargetingTraceChannel, QueryParams))
 	{
-		return nullptr;
+		return Finish(nullptr, TEXT("NoBlockingHit"));
 	}
 	AActor* HitActor = Hit.GetActor();
 	ObservedTarget = HitActor;
-	return HitActor && InteractionRadius > 0.0 && Hit.Distance <= InteractionRadius
-		&& HitActor->GetClass()->ImplementsInterface(UCatInteractable::StaticClass())
-		&& ICatInteractable::Execute_CanInteract(HitActor, PlayerController)
-		? HitActor : nullptr;
+	ReachDistance = FVector::Dist(Pawn->GetActorLocation(), Hit.ImpactPoint);
+	if (InteractionRadius <= 0.0) return Finish(nullptr, TEXT("InvalidRadius"));
+	if (ReachDistance > InteractionRadius) return Finish(nullptr, TEXT("OutOfReach"));
+	if (!HitActor || !HitActor->GetClass()->ImplementsInterface(UCatInteractable::StaticClass()))
+		return Finish(nullptr, TEXT("NotInteractable"));
+	if (!ICatInteractable::Execute_CanInteract(HitActor, PlayerController)) return Finish(nullptr, TEXT("TargetDenied"));
+	return Finish(HitActor, TEXT("TargetReady"));
 }
 
 void UCatInteractionTargetingComponent::RefreshTargetFromCrosshair()
@@ -151,7 +177,7 @@ void UCatInteractionTargetingComponent::ClearTarget()
 void UCatInteractionTargetingComponent::BeginInteractionInput()
 {
 	EndInteractionInput(true);
-	RefreshTargetFromCrosshair();
+	ApplyTarget(TraceInteractableFromCrosshair(true));
 	if (Cast<ACatFishGuardActor>(CurrentTarget.Get()) && GetWorld())
 	{
 		PendingGuardTarget = CurrentTarget;
@@ -194,6 +220,10 @@ void UCatInteractionTargetingComponent::TryInteract()
 		&& Target->GetClass()->ImplementsInterface(UCatInteractable::StaticClass())
 		&& ICatInteractable::Execute_CanInteract(Target, PlayerController))
 	{
-		ICatInteractable::Execute_Interact(Target, PlayerController, FGuid::NewGuid());
+		const FGuid RequestId = FGuid::NewGuid();
+		UE_LOG(LogCatfishing, Log, TEXT("Event=interaction_request_submitted World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Target=%s RequestId=%s"),
+			*GetNameSafe(GetWorld()), int32(PlayerController->GetNetMode()), PlayerController->HasAuthority(), int32(PlayerController->GetLocalRole()),
+			*GetNameSafe(PlayerController), *GetNameSafe(Target), *RequestId.ToString());
+		ICatInteractable::Execute_Interact(Target, PlayerController, RequestId);
 	}
 }
