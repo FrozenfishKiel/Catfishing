@@ -15,7 +15,7 @@
   所以正文里的 **x** 自动换成 <b>x</b>，表格行里的加粗去掉标记。
 - 含内嵌表的页（现只有商店两张，王甜甜在飞书填）不能整页覆盖（sheet 标签会复制出新表、旧表消失）：
   先按同父连续段逐段删掉旧正文块，只剩表格，再把摘要插在表格前面。
-- 覆盖会丢掉飞书页上的评论；横幅里写明意见去同步页。
+- 覆盖会丢掉飞书页上的评论。
 - 仓库在 Windows 上检出是 CRLF，读文件先归一成 LF。
 """
 from __future__ import annotations
@@ -93,7 +93,7 @@ def banner(doc: dict, head: str) -> str:
     ts = dt.datetime.now().strftime("%Y-%m-%d")
     return (f"> <b>规则版摘要</b>（{ts}，据仓库 {head}）。本页帮你快速建立心智模型，不保证与仓库同步；"
             f"判定细节、数值与出处以仓库 `Knowledge/Design/{doc['file']}` 为准，改设计只改仓库。"
-            f"在这里改正文不会回流，下次刷新会覆盖；意见写到「裁决同步」下你的页。" + LF + LF)
+            + LF + LF)
 
 
 def doc_url(doc: dict) -> str:
