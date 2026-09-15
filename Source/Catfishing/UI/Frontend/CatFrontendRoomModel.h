@@ -50,6 +50,8 @@ public:
 
 	/** 当前用户是否可点击开始游戏；必须已经确认是 Host、没有并发操作且尚未预载。 */
 	bool CanStartGame() const;
+	/** 对指定快照计算相同规则，供只读 View 在一次刷新中保持字段一致。 */
+	static bool CanStartSnapshot(const FCatOnlineSnapshot& Snapshot);
 
 	/** 房间页的 native 变化入口；Online 快照变化和同步拒绝都会广播，View 随后重新读取查询。 */
 	FCatFrontendRoomModelChanged OnChanged;

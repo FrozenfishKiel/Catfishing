@@ -6,9 +6,11 @@ import traceback
 import runpy
 import unreal
 
+check_room_dialogs=globals().get('CHECK_ROOM_DIALOGS',False) or '-RoomDialogChecks' in unreal.SystemLibrary.get_command_line()
+
 out=Path(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_saved_dir()))/'Automation/RoomStage'
 out.mkdir(parents=True,exist_ok=True)
-state={'phase':0,'deadline':time.monotonic()+120,'checks':{},'rows':[]}
+state={'phase':0,'deadline':time.monotonic()+180,'checks':{},'rows':[]}
 state['member_ids']=[unreal.GuidLibrary.new_guid() for _ in range(4)]
 
 def child(root,name):
@@ -20,6 +22,29 @@ def member(index,ready=False):
     m.set_editor_properties({'member_id':state['member_ids'][index],'display_name':['小白','阿吉','月牙','松果'][index],
                             'is_lobby_owner':index==0,'is_local_player':index==0,'is_ready':ready})
     return m
+
+def room_snapshot(count=2,host=True,ready=False,second_ready=True):
+    snapshot=unreal.CatOnlineSnapshot()
+    members=[member(i,ready or (second_ready and i==1)) for i in range(count)]
+    for i,m in enumerate(members): m.set_editor_property('is_local_player',i==(0 if host else 1))
+    snapshot.set_editor_properties({'lobby_id':'109775241384567890','room_name':'镜湖营地','is_host':host,'current_players':count,'max_players':4,
+        'session_state':unreal.CatOnlineSessionState.HOST if host else unreal.CatOnlineSessionState.CLIENT,
+        'world_state':unreal.CatOnlineWorldState.FRONTEND,'session_access':unreal.CatSessionAccessPolicy.FRIENDS_ONLY,
+        'join_lobby_uri':'steam://joinlobby/480/109775241384567890','room_members':members})
+    return snapshot
+
+def present_members(snapshot):
+    state['root'].render_room_snapshot(snapshot)
+    members=snapshot.get_editor_property('room_members')
+    for i,row in enumerate(state['rows']):
+        if i<len(members): row.configure_row(members[i])
+        else: row.configure_empty_slot()
+
+def settings_values():
+    r=state['root']
+    child(r,'RoomNameInput').set_text('镜湖营地')
+    child(r,'RoomCapacityInput').set_selected_option('4')
+    child(r,'RoomAccessInput').set_selected_index(1)
 
 def shot(name):
     unreal.SystemLibrary.execute_console_command(state['root'].get_world(),'Shot showui filename='+str(out/(name+'.png')).replace('\\','/'))
@@ -49,6 +74,7 @@ def tick(delta):
             state['checks']['viewport']=str(unreal.WidgetLayoutLibrary.get_viewport_size(r))
             unreal.SystemLibrary.execute_console_command(r.get_world(),'cat.Fishing.Stats 0')
             child(r,'FrontendPageSwitcher').set_active_widget(child(r,'RoomPage'))
+            r.render_room_snapshot(room_snapshot())
             scroll=child(r,'PlayersScrollBox');scroll.clear_children()
             cls=unreal.load_asset('/Game/UI/Frontend/WBP_CatRoomPlayerSlot').generated_class()
             for i in range(4):
@@ -59,6 +85,7 @@ def tick(delta):
             state['phase']=1;state['next']=time.monotonic()+5
         elif phase==1:
             rows=state['rows']
+            state['checks']['settings_caption_present']=str(child(state['root'],'OpenRoomSettingsButtonLabel').get_text())=='房间设置'
             state['checks']['unready_mark_hidden']=child(rows[0],'ReadyMark').get_visibility()==unreal.SlateVisibility.HIDDEN
             state['checks']['ready_mark_visible']=child(rows[1],'ReadyMark').get_visibility()==unreal.SlateVisibility.HIT_TEST_INVISIBLE
             state['checks']['two_empty_seats']=all(str(child(row,'PlayerSlotStateText').get_text())=='等待加入' for row in rows[2:])
@@ -104,7 +131,7 @@ def tick(delta):
             state['checks']['idle_time_advances']=abs(state['preview_mesh'].get_position()-state['animation_position'])>.001
             shot('RoomIdleSecondFrame')
             rows[0].configure_row(member(0,True))
-            state['phase']=20 if '-RoomDialogChecks' in unreal.SystemLibrary.get_command_line() else 2
+            state['phase']=20 if check_room_dialogs else 2
             state['next']=time.monotonic()+2
         elif phase==20:
             r=state['root'];r.request_open_room_invite()
@@ -119,9 +146,15 @@ def tick(delta):
                 child(row,'FriendNameText').set_text(name);child(row,'FriendStatusText').set_text(status)
                 child(row,'InviteFriendButton').set_is_enabled(i<2)
                 if i==2: child(row,'InviteFriendButtonLabel').set_text('已发送')
+                if i==3: child(row,'InviteFriendButtonLabel').set_text('离线')
                 scroll.add_child(row)
             state['phase']=21;state['next']=time.monotonic()+2
         elif phase==21:
+            button=child(state['root'],'RoomInviteFriendsTabButton')
+            padding=button.get_editor_property('widget_style').get_editor_property('normal_padding')
+            state['checks']['button_padding_symmetric']=padding.left==padding.right and padding.top==padding.bottom
+            label=button.get_content();slot=label.get_editor_property('slot')
+            state['checks']['button_content_centered']=slot.get_editor_property('horizontal_alignment')==unreal.HorizontalAlignment.H_ALIGN_CENTER and slot.get_editor_property('vertical_alignment')==unreal.VerticalAlignment.V_ALIGN_CENTER
             shot('RoomInviteDialog')
             state['phase']=211;state['next']=time.monotonic()+1
         elif phase==211:
@@ -136,6 +169,7 @@ def tick(delta):
             r=state['root'];r.request_cancel()
             state['checks']['cancel_closes_modal_not_room']=child(r,'RoomDialogLayer').get_visibility()==unreal.SlateVisibility.COLLAPSED and child(r,'FrontendPageSwitcher').get_active_widget()==child(r,'RoomPage')
             r.request_open_room_settings()
+            r.render_room_snapshot(room_snapshot(host=False))
             state['checks']['settings_capacity_options_persisted']=child(r,'RoomCapacityInput').get_option_count()==4
             state['checks']['settings_access_options_persisted']=child(r,'RoomAccessInput').get_option_count()==3
             state['checks']['settings_save_unavailable']=not child(r,'SaveRoomSettingsButton').get_is_enabled()
@@ -161,7 +195,65 @@ def tick(delta):
         elif phase==3:
             actors=unreal.GameplayStatics.get_all_actors_of_class(state['root'].get_world(),unreal.CatFrontendCharacterPreview)
             state['checks']['leave_releases_preview']=len(actors)==1
-            state['root'].request_cancel()
+            if check_room_dialogs:
+                present_members(room_snapshot(count=1))
+                state['phase']=30
+            else:
+                state['root'].request_cancel();state['phase']=4
+            state['next']=time.monotonic()+2
+        elif phase==30:
+            state['checks']['solo_host_can_start']=child(state['root'],'StartRoomGameButton').get_is_enabled()
+            state['checks']['solo_has_three_empty_seats']=all(str(child(row,'PlayerSlotStateText').get_text())=='等待加入' for row in state['rows'][1:])
+            shot('RoomHostAlone');state['phase']=31;state['next']=time.monotonic()+1
+        elif phase==31:
+            present_members(room_snapshot(second_ready=False))
+            state['checks']['new_member_toast_visible']=child(state['root'],'RoomJoinedToast').get_visibility()==unreal.SlateVisibility.HIT_TEST_INVISIBLE
+            state['phase']=32;state['next']=time.monotonic()+1
+        elif phase==32:
+            state['checks']['unready_member_blocks_start']=not child(state['root'],'StartRoomGameButton').get_is_enabled()
+            state['checks']['unready_members_have_no_checks']=all(child(row,'ReadyMark').get_visibility()==unreal.SlateVisibility.HIDDEN for row in state['rows'][:2])
+            shot('RoomMemberJoined');state['phase']=33;state['next']=time.monotonic()+4
+        elif phase==33:
+            state['checks']['join_toast_expires']=child(state['root'],'RoomJoinedToast').get_visibility()==unreal.SlateVisibility.COLLAPSED
+            shot('RoomMembersNotReady');state['phase']=34;state['next']=time.monotonic()+1
+        elif phase==34:
+            snapshot=room_snapshot(count=4,ready=True)
+            members=snapshot.get_editor_property('room_members');members[0].set_editor_property('is_ready',False);snapshot.set_editor_property('room_members',members)
+            present_members(snapshot)
+            state['checks']['host_implicitly_ready_to_start']=child(state['root'],'StartRoomGameButton').get_is_enabled()
+            present_members(room_snapshot(count=4,ready=True))
+            state['phase']=35;state['next']=time.monotonic()+5
+        elif phase==35:
+            state['checks']['all_ready_can_start']=child(state['root'],'StartRoomGameButton').get_is_enabled()
+            state['checks']['four_ready_checks_visible']=all(child(row,'ReadyMark').get_visibility()==unreal.SlateVisibility.HIT_TEST_INVISIBLE for row in state['rows'])
+            state['checks']['four_previews_only']=len(unreal.GameplayStatics.get_all_actors_of_class(state['root'].get_world(),unreal.CatFrontendCharacterPreview))==4
+            shot('RoomAllReady');state['phase']=36;state['next']=time.monotonic()+1
+        elif phase==36:
+            r=state['root'];r.request_open_room_settings();r.render_room_snapshot(room_snapshot(count=4,ready=True));settings_values()
+            state['checks']['host_can_edit_draft']=child(r,'RoomNameInput').get_is_enabled()
+            state['checks']['host_dismiss_visible']=child(r,'DismissRoomButton').get_visibility()==unreal.SlateVisibility.VISIBLE
+            state['checks']['host_save_still_unavailable']=not child(r,'SaveRoomSettingsButton').get_is_enabled()
+            state['phase']=37;state['next']=time.monotonic()+2
+        elif phase==37:
+            shot('RoomHostSettings');state['phase']=38;state['next']=time.monotonic()+1
+        elif phase==38:
+            # Read-only presentation fixture: this is not a platform invitation success.
+            r=state['root'];r.show_room_notice('邀请已发送！','已向 阿吉 发送房间邀请','',True)
+            state['checks']['notice_replaces_settings']=child(r,'RoomSettingsDialog').get_visibility()==unreal.SlateVisibility.COLLAPSED and child(r,'RoomNoticeDialog').get_visibility()==unreal.SlateVisibility.VISIBLE
+            state['checks']['empty_notice_value_collapsed']=child(r,'RoomNoticeValueText').get_visibility()==unreal.SlateVisibility.COLLAPSED
+            state['phase']=39;state['next']=time.monotonic()+2
+        elif phase==39:
+            shot('RoomInviteSent');state['phase']=40;state['next']=time.monotonic()+1
+        elif phase==40:
+            r=state['root'];child(r,'ConfirmRoomNoticeButton').get_editor_property('on_clicked').broadcast()
+            state['checks']['notice_confirm_returns_room']=child(r,'RoomDialogLayer').get_visibility()==unreal.SlateVisibility.COLLAPSED and child(r,'FrontendPageSwitcher').get_active_widget()==child(r,'RoomPage')
+            r.show_room_notice('复制房间链接','已复制到剪贴板\n快去分享给你的朋友吧！','steam://joinlobby/480/109775241384567890')
+            state['checks']['link_notice_value_visible']=child(r,'RoomNoticeValueText').get_visibility()==unreal.SlateVisibility.HIT_TEST_INVISIBLE or child(r,'RoomNoticeValueText').get_visibility()==unreal.SlateVisibility.VISIBLE
+            state['phase']=41;state['next']=time.monotonic()+2
+        elif phase==41:
+            shot('RoomLinkCopied');state['phase']=42;state['next']=time.monotonic()+1
+        elif phase==42:
+            state['root'].request_cancel();state['root'].request_cancel()
             state['phase']=4;state['next']=time.monotonic()+2
         elif phase==4:
             r=state['root']
@@ -212,7 +304,7 @@ state['previous_stats']=unreal.SystemLibrary.get_console_variable_int_value('cat
 room_style=runpy.run_path(str(Path(__file__).with_name('style_frontend_room.py')))
 if '-RoomPreviewMaterialOnly' in unreal.SystemLibrary.get_command_line():
     room_style['preview_material']()
-elif '-RoomDialogChecks' in unreal.SystemLibrary.get_command_line():
+elif check_room_dialogs:
     room_style['main']()
 else:
     room_style['main']()
@@ -220,6 +312,7 @@ else:
 state['checks']['frontend_fonts']=unreal.CatFrontendWidgetAuthoringLibrary.validate_frontend_widget_blueprint_fonts()
 registry=unreal.AssetRegistryHelpers.get_asset_registry()
 state['checks']['party_cook_reference']='/Game/UI/Party/WBP_CatPartyMemberRow' in [str(n) for n in registry.get_dependencies('/Game/UI/Save/WBP_CatLakeMainMenu',unreal.AssetRegistryDependencyOptions())]
+state['checks']['room_background_cook_reference']='/Game/UI/Texture/Frontend/T_UI_Frontend_CampNight' in [str(n) for n in registry.get_dependencies('/Game/UI/Frontend/WBP_CatFrontendRoom',unreal.AssetRegistryDependencyOptions())]
 slot=unreal.get_default_object(unreal.load_asset('/Game/UI/Frontend/WBP_CatRoomPlayerSlot').generated_class())
 state['checks']['cute_cat_class']=slot.get_editor_property('preview_character_class').get_path_name()
 state['checks']['idle_animation']=slot.get_editor_property('preview_animation').get_path_name()

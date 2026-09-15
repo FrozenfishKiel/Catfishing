@@ -12,6 +12,18 @@ PAGE = '/Game/UI/Frontend/WBP_CatFrontendRoom'
 ROW = '/Game/UI/Frontend/WBP_CatRoomPlayerSlot'
 MATERIAL = '/Game/UI/Frontend/M_UI_RoomCharacterPreview'
 FRIEND = '/Game/UI/Frontend/WBP_CatRoomFriendRow'
+CAMP = '/Game/UI/Texture/Frontend/T_UI_Frontend_CampNight'
+
+def camp_texture(project):
+    texture=unreal.load_asset(CAMP) if unreal.EditorAssetLibrary.does_asset_exist(CAMP) else None
+    if texture is None:
+        task=unreal.AssetImportTask();task.set_editor_property('factory',unreal.TextureFactory())
+        task.set_editor_properties({'filename':str(project/'ArtSource/UI/Frontend/T_UI_Frontend_CampNight.png'),'destination_path':'/Game/UI/Texture/Frontend','destination_name':'T_UI_Frontend_CampNight','automated':True,'replace_existing':False,'save':False})
+        unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task]);texture=unreal.load_asset(CAMP)
+    if not texture: raise RuntimeError('Camp background import failed')
+    texture.set_editor_properties({'lod_group':unreal.TextureGroup.TEXTUREGROUP_UI,'compression_settings':unreal.TextureCompressionSettings.TC_EDITOR_ICON,'mip_gen_settings':unreal.TextureMipGenSettings.TMGS_NO_MIPMAPS,'srgb':True,'never_stream':True})
+    if not unreal.EditorAssetLibrary.save_loaded_asset(texture): raise RuntimeError('Camp background save failed')
+    return texture
 
 def preview_material():
     mat = unreal.load_asset(MATERIAL)
@@ -47,11 +59,11 @@ def preview_material():
 def main():
     assert not unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).is_in_play_in_editor(), 'Stop PIE first'
     dirty = {p.get_name() for p in unreal.EditorLoadingAndSavingUtils.get_dirty_content_packages()}
-    assert not dirty.intersection((PAGE,ROW,MATERIAL,FRIEND)), 'Unsaved target asset edits'
+    assert not dirty.intersection((PAGE,ROW,MATERIAL,FRIEND,CAMP)), 'Unsaved target asset edits'
     project = Path(unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir()))
     backup = project/'Saved/Automation/RoomStage/Backups'
     backup.mkdir(parents=True,exist_ok=True)
-    for package in (PAGE,ROW,MATERIAL,FRIEND):
+    for package in (PAGE,ROW,MATERIAL,FRIEND,CAMP):
         source = project/'Content'/(package.removeprefix('/Game/')+'.uasset')
         if source.exists():
             target = backup/(source.stem+'-'+hashlib.sha256(source.read_bytes()).hexdigest()+'.uasset')
@@ -137,10 +149,10 @@ def main():
     attach(widget(page,'PlayersColumn'),hint).set_padding(unreal.Margin(0,8,0,12))
     hint.set_auto_wrap_text(True)
     friend=unreal.load_asset(FRIEND)
-    runpy.run_path(str(Path(__file__).with_name('style_frontend_room_dialogs.py')))['style'](page,friend)
+    runpy.run_path(str(Path(__file__).with_name('style_frontend_room_dialogs.py')))['style'](page,friend,row,camp_texture(project))
     for bp in (row,page,friend):
         if not unreal.CatFrontendWidgetAuthoringLibrary.compile_styled_frontend_widget(bp): raise RuntimeError('WBP compile failed: '+bp.get_name())
         if not unreal.EditorAssetLibrary.save_loaded_asset(bp,only_if_is_dirty=False): raise RuntimeError('Save failed')
-    unreal.log('Event=frontend_room_stage_authored Assets=3 Character=BP_CuteCatCharacter')
+    unreal.log('Event=frontend_room_stage_authored Widgets=3 Textures=1 Character=BP_CuteCatCharacter')
 
 if __name__=='__main__': main()

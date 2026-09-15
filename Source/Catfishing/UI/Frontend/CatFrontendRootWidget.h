@@ -143,6 +143,7 @@ public:
 
 protected:
 	virtual void NativeDestruct() override;
+	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 	UPROPERTY(EditDefaultsOnly, Category="Room Preview") TSubclassOf<ACharacter> PreviewCharacterClass;
 	UPROPERTY(EditDefaultsOnly, Category="Room Preview") TObjectPtr<UAnimSequence> PreviewAnimation;
 	UPROPERTY(EditDefaultsOnly, Category="Room Preview") TObjectPtr<UMaterialInterface> PreviewMaterial;
@@ -151,6 +152,7 @@ private:
 	void ReleasePreview();
 	FGuid DisplayedMemberId;
 	bool bPreviewActive = false;
+	float EntranceTime = 1.0f;
 	UPROPERTY(Transient) TObjectPtr<ACatFrontendCharacterPreview> PreviewActor;
 	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> PreviewBrush;
 	UPROPERTY(meta=(BindWidgetOptional)) TObjectPtr<UImage> CharacterPreviewImage;
@@ -326,7 +328,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
 	void RequestRefreshAudioOutputDevices();
 
-	/** 房间页复制邀请码意图；Root 仅将 Online 已确认的 joinlobby URI 放入系统剪贴板，空邀请码保持不可复制且不生成替代码。 */
+	/** 保留旧绑定名；复制 Online 已确认的完整 Lobby ID，空 ID 保持不可复制且不生成替代码。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
 	void RequestCopyRoomInviteCode();
 
@@ -342,6 +344,14 @@ public:
 	void RequestRoomInviteIdTab();
 	UFUNCTION()
 	void RequestSaveRoomSettings();
+	/** 只读表现入口，消费同一 Online DTO；不能改变成员、准备或房间权限。 */
+	UFUNCTION(BlueprintCallable, Category="Room Presentation")
+	void RenderRoomSnapshot(const FCatOnlineSnapshot& Snapshot);
+	UFUNCTION(BlueprintCallable, Category="Room Presentation")
+	void ShowRoomNotice(const FText& Title, const FText& Message, const FString& Value, bool bSuccess = false);
+	UFUNCTION() void RequestCopyRoomLink();
+	UFUNCTION() void RequestConfirmRoomNotice();
+	UFUNCTION() void RequestDismissRoomConfirmation();
 	bool IsRoomDialogOpen() const;
 	void BindRoomDialogControls(bool bBind);
 	void RefreshRoomDialogPresentation(const FCatOnlineSnapshot& Snapshot);
@@ -374,6 +384,7 @@ protected:
 	 * 本实现不根据当前 Switcher 索引做页面分发，避免 View 的表现状态反过来成为流程真相。
 	 */
 	virtual FReply NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
+	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 	virtual FReply NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
 	/**
@@ -399,6 +410,13 @@ protected:
 	void BP_RenderFrontendSettings();
 
 private:
+	void RefreshRoomScene(const FCatOnlineSnapshot& Snapshot);
+	void ResetRoomScene();
+	/** 仅用于展示差分和短暂提示；权威成员、准备及生命周期仍归 Online。 */
+	FString PresentedLobbyId;
+	TSet<FGuid> PresentedMembers;
+	double RoomJoinNoticeUntil = 0;
+	bool bConfirmRoomDismiss = false;
 	/**
 	 * 从四个已强制装配的子 WBP 中显式解析页面控件；UMG 的 BindWidget 不穿透嵌套 UserWidget，因此页面内部按钮必须在这里按所属 WidgetTree 查询。
 	 * 缺少必需控件时记录明确资产接线错误并保持该页面不可操作，避免空蓝图事件被误认为已交付交互。

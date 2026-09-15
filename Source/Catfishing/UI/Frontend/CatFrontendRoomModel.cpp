@@ -216,7 +216,11 @@ FText UCatFrontendRoomModel::GetLastResultText() const
 // 开始权限查询流程：读取同一份 Online 快照，要求本地已确认 Host、没有任何活动操作且预载未开始；最终的 Save 已加载校验仍在 RequestStartHostedGame 内完成。
 bool UCatFrontendRoomModel::CanStartGame() const
 {
-	const FCatOnlineSnapshot Snapshot = GetSnapshot();
+	return CanStartSnapshot(GetSnapshot());
+}
+
+bool UCatFrontendRoomModel::CanStartSnapshot(const FCatOnlineSnapshot& Snapshot)
+{
 	return Snapshot.bIsHost
 		&& Snapshot.WorldState == ECatOnlineWorldState::Frontend
 		&& Snapshot.SessionState == ECatOnlineSessionState::Host

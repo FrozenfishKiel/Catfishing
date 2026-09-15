@@ -66,6 +66,12 @@ HUD、背包、背包格子、交互提示和局内 ESC 菜单的默认路径来
 
 2026-09-14 房间弹窗：`style_frontend_room.py` 调用 `style_frontend_room_dialogs.py::style`，在原 Room WBP 中生成左侧房间摘要、居中邀请弹窗和右侧设置弹窗。`OpenRoomInviteButton` / `OpenRoomSettingsButton` 绑定 Root 同名请求；`RoomDialogLayer` 控制模态遮罩，关闭按钮、背景点击和 Escape 优先关闭弹窗，切页清空密码草稿。好友搜索、滚动列表、刷新和行邀请仍消费原 RoomModel/好友句柄，未增加平台请求入口。
 
+2026-09-15 营地流程呈现：同一房间生成入口调用 `style_frontend_room_scene.py` 排列左侧存档卡、成员席位、底部操作和加入提示，不再生成旧“围炉等你”说明面板。`RoomBackgroundSource` 硬引用 CampNight，Root 的 `RefreshRoomScene/ResetRoomScene` 切换全屏背景；房主存档摘要来自 SaveModel 当前槽，客户端未同步摘要时明确显示“房主的存档”。`RoomJoinedToast` 仅对同一 Lobby 中新出现的非本地成员显示 3.5 秒，最后 0.5 秒淡出；成员行仅在 GUID 变化时执行 0.45 秒淡入，准备刷新复用捕获。展示缓存不承担 Online 状态。
+
+邀请弹窗设计尺寸为 500×640，名称和状态占据可伸缩区域；头像为通用图形，不是 Steam 头像。`RoomInviteRecentTabButton` 禁用，最近玩家未接入。`CopyRoomLinkButton` 复制真实 `Snapshot.JoinLobbyUri`；`RoomNoticeDialog` 由 `ShowRoomNotice` 统一呈现邀请已发送、ID/链接复制及解散确认。邀请成功提示只在原请求后观察到同一好友 `bHasInvited` 从 false 变 true 且无错误时出现，不表示对方已经加入。`ConfirmRoomNoticeButton` 通常关闭提示；只有房主发起解散确认时才继续原 `RequestLeaveRoom`。`DismissRoomButton` 非房主隐藏，未添加第二套退出入口。
+
+所有房间按钮使用四字段对称 `unreal.Margin(left,top,right,bottom)`、内容槽水平/垂直居中；Python 的 `Margin(14,8)` 不具有 C++ 的水平/垂直简写含义。复制和设置图标使用 UMG 图形，避免字体缺字。好友行“已发送”与离线状态不可再次点击。房间聊天、大厅图鉴、最近玩家和房间语音仍为明确未开放的表现；不生成模拟玩家或聊天内容。Root 的 `RenderRoomSnapshot` 是只读表现入口，生产调用仍来自 RoomModel；`CanStartSnapshot` 与 `CanStartGame` 共用原准备规则，服务端裁决未变。
+
 `RoomInviteCodeText` / `CopyInviteCodeButton` / `RequestCopyRoomInviteCode` 保留现有绑定名，但本轮显示和复制的值明确改为 **Snapshot.LobbyId（完整平台房间 ID 字符串）**，不再是 JoinLobbyUri，也不是免密邀请码。加入页原解析器继续接受完整 ID 和 URI，局内邀请链接入口不变。六位邀请码和准入由 Online 后续实现，不得截断 Lobby ID 伪装短码。
 
 设置控件为 `RoomNameInput`、`RoomCapacityInput`（人数整数 1–4）、`RoomAccessInput`（Public/FriendsOnly/InviteOnly 的三个显示选项）、`RoomPasswordInput`（遮罩、关闭即清空）及 `RoomClearPasswordCheckBox`。打开时读取快照现值，非房主只读。**SaveRoomSettingsButton 当前禁用，保存、密码校验和邀请免密尚未接通**；输入不写 Online、Session 元数据或存档。后续必须接权威保存请求与成功/拒绝回执，并按 Online 的容量范围及准入策略替换选项和提示；不能仅启用按钮便宣称完成。设置草稿目前不跨关闭保存，也不能回读原密码。正式设置仍待接口与双端验收。
