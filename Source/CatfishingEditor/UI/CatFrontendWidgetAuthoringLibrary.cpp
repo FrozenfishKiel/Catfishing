@@ -1,8 +1,9 @@
-#include "CatFrontendWidgetAuthoringLibrary.h"
+﻿#include "CatFrontendWidgetAuthoringLibrary.h"
 #include "UI/Save/CatLakeMainMenuController.h"
 #include "GameFramework/PlayerController.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "Animation/WidgetAnimation.h"
 #include "UI/Frontend/CatFrontendRootWidget.h"
 #include "UI/Save/CatLakeMainMenuWidget.h"
 #include "Blueprint/WidgetBlueprintGeneratedClass.h"
@@ -1827,17 +1828,31 @@ namespace CatFrontendWidgetAuthoring
 }
 }
 
+// 编译流程：先收集现存控件与动画，补齐新控件 GUID，再注销已删除变量；最后编译并返回结果，不在此保存资产。
+// 保留动画变量，避免把动画轨道仍引用的 GUID 当成旧控件误删；源码树是增删判断的唯一依据。
 bool UCatFrontendWidgetAuthoringLibrary::CompileStyledFrontendWidget(UBlueprint* Blueprint)
 {
 	UWidgetBlueprint* WidgetBlueprint = Cast<UWidgetBlueprint>(Blueprint);
 	if (!WidgetBlueprint) { return false; }
-	WidgetBlueprint->ForEachSourceWidget([WidgetBlueprint](UWidget* Widget)
+	TSet<FName> ExistingVariables;
+	WidgetBlueprint->ForEachSourceWidget([WidgetBlueprint, &ExistingVariables](UWidget* Widget)
 	{
+		ExistingVariables.Add(Widget->GetFName());
 		if (!WidgetBlueprint->WidgetVariableNameToGuidMap.Contains(Widget->GetFName()))
 		{
 			WidgetBlueprint->OnVariableAdded(Widget->GetFName());
 		}
 	});
+	for (const UWidgetAnimation* Animation : WidgetBlueprint->Animations)
+	{
+		if (Animation) ExistingVariables.Add(Animation->GetFName());
+	}
+	TArray<FName> RegisteredVariables;
+	WidgetBlueprint->WidgetVariableNameToGuidMap.GetKeys(RegisteredVariables);
+	for (const FName Name : RegisteredVariables)
+	{
+		if (!ExistingVariables.Contains(Name)) WidgetBlueprint->OnVariableRemoved(Name);
+	}
 	FKismetEditorUtilities::CompileBlueprint(WidgetBlueprint);
 	return WidgetBlueprint->Status != BS_Error;
 }

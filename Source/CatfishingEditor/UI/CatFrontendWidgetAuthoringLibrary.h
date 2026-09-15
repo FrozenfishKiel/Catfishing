@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
@@ -30,7 +30,7 @@ public:
 	static UCatLakeMainMenuController* BindLakeMenuPreview(UCatLakeMainMenuWidget* View, APlayerController* Player);
 	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Preview")
 	static void ReleaseLakeMenuPreview(UCatLakeMainMenuController* Controller);
-	/** 样式脚本新增控件后补齐 UE 编辑器变量 GUID 再编译；保留已有 GUID，不重建控件树。 */
+	/** 样式脚本增删控件后同步 UE 变量 GUID 并编译；保留现存控件与动画的 GUID，不重建控件树或保存资产。 */
 	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Frontend")
 	static bool CompileStyledFrontendWidget(UBlueprint* Blueprint);
 
