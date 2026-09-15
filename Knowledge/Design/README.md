@@ -35,7 +35,7 @@ python Scripts/push_feishu_summary.py --doc 钓鱼规则 --file <摘要.md>   # 
 
 新东西在飞书起草是正常路径（李前臻 2026-09-15 定）：策划案、方案、点子先在飞书写，属主与李前臻审核；**通过审核才迁入本目录、成为 SSOT**。没迁入的不算现行设计，对表工具也不把它当要求读。迁入的动作：导出 Markdown、补 front matter（`ssot: true`、node_token／obj_token、migrated_from_feishu_revision）、登进 `_manifest.json` 的 docs 与对表配置、跑一次哈希刷新、飞书原页页头挂横幅指回仓库。
 
-这些页只在飞书：裁决同步下的属主页、程序页与分支交接页，裁决账本「设计修改记录」（完整版只在飞书；新裁决在那页文末追加：`lark-cli docs +update --doc <页链接> --command append --doc-format markdown --content @./新条目.md --as user`），点子库，临时美术资源表格，入侵物种（09-10 裁「点子库，不实装」），以及里程碑这类不是设计文档的页。**仓库不再放它们的快照**（2026-09-15 李前臻定：本地只留经过审核、用来指导实现的设计文档；原 `_feishu/` 目录与对表配置里的三处 refs 同日删除）。
+这些页只在飞书：裁决同步下的属主页、程序页与分支交接页，裁决账本「设计修改记录」（完整版只在飞书；新裁决在那页文末追加：`lark-cli docs +update --doc <页链接> --command append --doc-format markdown --content @./新条目.md --as user`），点子（知识库根下的 Ideas 多维表格，只记不裁；原「点子库」页 2026-09-15 并入），临时美术资源表格，入侵物种（09-10 裁「点子库，不实装」），以及里程碑这类不是设计文档的页。**仓库不再放它们的快照**（2026-09-15 李前臻定：本地只留经过审核、用来指导实现的设计文档；原 `_feishu/` 目录与对表配置里的三处 refs 同日删除）。
 
 ---
 
