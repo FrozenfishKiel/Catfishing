@@ -1,6 +1,12 @@
 #include "UI/Frontend/CatFrontendRoomModel.h"
 #include "Online/CatOnlineSubsystem.h"
 
+bool UCatFrontendRoomModel::IsFindingPublicRooms() const
+{
+ const UCatOnlineSubsystem* Source = Online.Get();
+ return Source && Source->IsFindingPublicRooms();
+}
+
 FCatOnlineResult UCatFrontendRoomModel::RefreshPublicRooms()
 {
  FCatOnlineResult Result;

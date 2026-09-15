@@ -1263,10 +1263,11 @@ void UCatFrontendRootWidget::RefreshJoinPresentation()
 	const bool bIdle = RoomModel && Snapshot.SessionState == ECatOnlineSessionState::NoSession
 		&& Snapshot.ActiveOperation == ECatOnlineOperation::None && !Snapshot.bIsAcceptedInvitePending;
 	if (JoinLinkButton) { JoinLinkButton->SetIsEnabled(bIdle); }
-	if (PasteJoinLinkButton) { PasteJoinLinkButton->SetIsEnabled(bIdle); }
-	if (JoinLinkTextBox) { JoinLinkTextBox->SetIsEnabled(bIdle); }
+	const bool bCanEdit = bIdle || (RoomModel && RoomModel->IsFindingPublicRooms());
+	if (PasteJoinLinkButton) { PasteJoinLinkButton->SetIsEnabled(bCanEdit); }
+	if (JoinLinkTextBox) { JoinLinkTextBox->SetIsEnabled(bCanEdit); }
 	if (RefreshJoinFriendsButton) { RefreshJoinFriendsButton->SetIsEnabled(bIdle && !Snapshot.bFriendsRefreshPending); }
-	if (JoinBackButton) { JoinBackButton->SetIsEnabled(bIdle || (RoomModel && RoomModel->CanCancelAdmission())); }
+	if (JoinBackButton) { JoinBackButton->SetIsEnabled(bCanEdit || (RoomModel && RoomModel->CanCancelAdmission())); }
 	if (JoinFriendsScrollBox)
 	{
 		JoinFriendsScrollBox->ClearChildren();

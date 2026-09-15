@@ -58,7 +58,9 @@ void UCatFrontendRootWidget::RefreshPublicRoomPresentation(const FCatOnlineSnaps
  if (auto* Empty = Control<UTextBlock>(JoinPage, TEXT("PublicRoomsEmptyText")))
  {
    Empty->SetVisibility(Snapshot.SearchResults.IsEmpty() ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-   Empty->SetText(FText::FromString(Snapshot.ActiveOperation == ECatOnlineOperation::Find ? TEXT("正在搜索房间…") : TEXT("暂无可发现的房间，点击刷新重试。")));
+   Empty->SetText(FText::FromString(Snapshot.ActiveOperation == ECatOnlineOperation::Find
+     ? RoomModel && RoomModel->IsFindingPublicRooms() ? TEXT("正在搜索房间…\n可先输入邀请码，稍后加入。") : TEXT("正在查找邀请码对应的房间…")
+     : TEXT("暂无可发现的房间，点击刷新重试。")));
  }
  if (auto* Rows = Control<UScrollBox>(JoinPage, TEXT("PublicRoomsScrollBox")))
  {

@@ -40,6 +40,8 @@ public:
 	FCatOnlineResult JoinLink(const FString& Input);
 	bool CanCancelAdmission() const;
 	bool CancelAdmission();
+	/** 普通列表搜索可以后台完成；不包括会自动加入的短码检索。 */
+	bool IsFindingPublicRooms() const;
 	FCatOnlineResult RefreshPublicRooms();
 	FCatOnlineResult JoinPublicRoom(FCatSessionSearchHandle Handle);
 	FCatOnlineResult SubmitPassword(const FString& Password);

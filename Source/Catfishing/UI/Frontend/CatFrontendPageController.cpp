@@ -91,13 +91,20 @@ void UCatFrontendPageController::RequestStartGameFlow()
 	if (UCatFrontendSaveModel* Save = SaveModel.Get()) { Save->RefreshSlotSummaries(); }
 }
 
-// 加入页只服务空闲前台；已有房间或存档操作不能被另一次加入抢占。
+// 普通列表搜索允许返回后再次打开同一页面；已有房间、存档或自动加入不能被抢占。
 void UCatFrontendPageController::RequestJoinParty()
 {
 	if (bWaitingForSaveLoad || bWaitingForRoomCreation || (SaveModel.IsValid() && SaveModel->IsBusy())) { return; }
 	if (UCatFrontendRoomModel* Room = RoomModel.Get())
 	{
 		const FCatOnlineSnapshot Snapshot = Room->GetSnapshot();
+		if (Room->IsFindingPublicRooms())
+		{
+			UE_LOG(LogCatUI, Log, TEXT("Event=frontend_search_page_reopened RequestId=%s Epoch=%lld World=%s NetMode=%d Result=ReuseQuery"),
+				*Snapshot.RequestId.ToString(), Snapshot.OperationEpoch, *GetNameSafe(GetWorld()), GetWorld() ? int32(GetWorld()->GetNetMode()) : -1);
+			if (UCatFrontendRootWidget* Root = RootWidget.Get()) { Root->ShowJoin(); }
+			return; // 复用原查询，不重复刷新好友或重新提交 Steam 搜索。
+		}
 		if (Snapshot.SessionState != ECatOnlineSessionState::NoSession || Snapshot.ActiveOperation != ECatOnlineOperation::None || Snapshot.bIsAcceptedInvitePending)
 		{ HandleRoomModelChanged(); return; }
 		if (bStartGameFlowActive && !ReleaseUnjoinedSave()) { return; }
@@ -312,7 +319,7 @@ void UCatFrontendPageController::RequestCancel()
 	if (UCatFrontendRoomModel* Room = RoomModel.Get())
 	{
 		const FCatOnlineSnapshot Snapshot = Room->GetSnapshot();
-		if (Snapshot.ActiveOperation != ECatOnlineOperation::None || Snapshot.bIsAcceptedInvitePending)
+		if ((Snapshot.ActiveOperation != ECatOnlineOperation::None && !Room->IsFindingPublicRooms()) || Snapshot.bIsAcceptedInvitePending)
 		{
 			if (Room->CanCancelAdmission() && Room->CancelAdmission())
 			{
@@ -327,6 +334,11 @@ void UCatFrontendPageController::RequestCancel()
 		{
 			RequestLeaveRoom();
 			return;
+		}
+		if (Room->IsFindingPublicRooms())
+		{
+			UE_LOG(LogCatUI, Log, TEXT("Event=frontend_search_page_left RequestId=%s Epoch=%lld World=%s NetMode=%d Result=QueryContinues"),
+				*Snapshot.RequestId.ToString(), Snapshot.OperationEpoch, *GetNameSafe(GetWorld()), GetWorld() ? int32(GetWorld()->GetNetMode()) : -1);
 		}
 	}
 	if (bStartGameFlowActive && !ReleaseUnjoinedSave())
