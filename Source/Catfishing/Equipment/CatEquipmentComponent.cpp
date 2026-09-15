@@ -1429,6 +1429,17 @@ UCatEquipmentInventoryItemInstance* UCatEquipmentComponent::ResolveFishingRodFor
 	return FormalInstance;
 }
 
+UCatEquipmentInventoryItemInstance* UCatEquipmentComponent::ResolveDeployedRodItemInstanceFromAuthority(const FGuid RodItemInstanceId) const
+{
+	// 部署实例解析流程：世界竿只能引用 Owner 库存 held-entry 中的同一实例，不能按定义回退到另一根同类鱼竿。
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !RodItemInstanceId.IsValid()) return nullptr;
+	FCatInventoryEntry HeldSlot;
+	if (!TryBuildHeldInventoryUseSlot(RodItemInstanceId, HeldSlot)) return nullptr;
+	UCatEquipmentInventoryItemInstance* Instance = Cast<UCatEquipmentInventoryItemInstance>(HeldSlot.Instance);
+	const UCatEquipmentDefinition* Definition = Instance ? Cast<UCatEquipmentDefinition>(Instance->GetItemDefinition()) : nullptr;
+	return Definition && Definition->CanServeFishingRod() && Instance->GetItemInstanceId() == RodItemInstanceId ? Instance : nullptr;
+}
+
 bool UCatEquipmentComponent::HasActiveInventoryItemUse() const
 {
 	// 活动物品使用 gate 流程：以 Inventory held-entry 为部署占用事实；缺少正式库存时返回未占用。

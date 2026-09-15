@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
@@ -320,14 +320,14 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bHasFishingSession = false;
 
-	/** 抓握只读状态来自当前身体；只有鱼竿的明确主控切换到钓鱼鼠标操作提示。 */
+	/** 身体状态区域是否显示；Model 在绑定当前身体后设置，Widget 用它收起失去来源的左右爪状态。 */
 	UPROPERTY(BlueprintReadOnly) bool bShowPhysicalControls = false;
 	UPROPERTY(BlueprintReadOnly) bool bPrimaryRodOperator = false;
 	UPROPERTY(BlueprintReadOnly) bool bLeftHandReaching = false;
 	UPROPERTY(BlueprintReadOnly) bool bRightHandReaching = false;
 	UPROPERTY(BlueprintReadOnly) bool bLeftHandGripped = false;
 	UPROPERTY(BlueprintReadOnly) bool bRightHandGripped = false;
-	UPROPERTY(BlueprintReadOnly) FText PhysicalControlText;
+	/** 左右爪的实际状态文字，由 Model 投影给 HUD；不包含输入键位或操作教程。 */
 	UPROPERTY(BlueprintReadOnly) FText PhysicalHandStateText;
 
 	/** 当前是否显示主页菜单入口；布局可用它隐藏设置按钮而不改玩法状态或天数展示。 */
@@ -556,7 +556,7 @@ protected:
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category = "Catfishing|HUD")
 	void BP_HandleHUDAction(ECatHUDAction Action);
 
-	/** 按 ViewState 绘制中心准星；默认显示，仍可由投影显式隐藏。 */
+	/** 按只读投影绘制准星、黄体力和取消进度；不检测交互目标，也不生成操作提示。 */
 	virtual int32 NativePaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry,
 		const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId,
 		const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const override;
@@ -569,6 +569,7 @@ private:
 	bool bHasLoggedCrosshairVisibility = false;
 	/** 正式 WBP 缺失钓鱼体力控件时只记录一次，避免固定步投影反复刷屏。 */
 	bool bHasLoggedMissingFishingMeter = false;
+	/** 左右爪状态控件缺失时的诊断去重，避免刷新 HUD 时反复写相同警告。 */
 	bool bHasLoggedMissingPhysicalControls = false;
 	/** 正式 WBP 还没有公款余额位或全场广播位时只记录一次，避免余额每变一次就刷同一条诊断。 */
 	bool bHasLoggedMissingShopHUD = false;
@@ -580,8 +581,7 @@ private:
 	/** 当前「他人解锁新鱼种」提示的本机到期时间，单位秒；用本地单调时钟，不牵扯服务器时间或 Run 事实。 */
 	double FishDiscoveryBroadcastUntilSeconds = 0.0;
 
-	UPROPERTY(Transient, meta = (BindWidgetOptional))
-	TObjectPtr<UTextBlock> PhysicalControlTextBlock;
+	/** 正式 WBP 的左右爪状态控件；RenderHUD 写入 Model 文本并随身体来源显隐。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> PhysicalHandStateTextBlock;
 

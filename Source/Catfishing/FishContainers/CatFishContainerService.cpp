@@ -1,3 +1,6 @@
+#include "Inventory/Fragments/CatConsumableEffectFragment.h"
+#include "AbilitySystem/Effects/CatFishExperienceEffect.h"
+#include "Growth/CatGrowthComponent.h"
 #include "FishContainers/CatFishContainerService.h"
 
 #include "Camp/CatCampSettings.h"
@@ -228,7 +231,7 @@ bool UCatFishContainerService::TryGetContainerSnapshot(const FGuid ContainerId, 
 }
 
 // 可触达容器进食流程：先校验服务器身份、鱼定义和触达距离，再预检身体效果；
-// 容器移除成功后提交身体效果，已有终态按原结果重放，身体提交失败会保留明确错误和日志。
+// 实物暂扣后同步申请 GE；失败恢复原快照，成功缓存效果和实物终态，重放不再申请效果。
 FCatFishConsumeResult UCatFishContainerService::ConsumeReachableFish(AController* RequestingController,
 	ACatCharacter* EatingCharacter, FCatFishConsumeCommand Command)
 {
@@ -262,7 +265,8 @@ FCatFishConsumeResult UCatFishContainerService::ConsumeReachableFish(AController
 			Result.Body.Error = ECatDomainCommandError::PolicyUndecided;
 			return;
 		}
-		Result.Body = Conditions->ConsumeCommittedFish(Command.Context.RequestId, Definition, WeightKilograms);
+		Result.Body = Definition->FindFragment<UCatConsumableEffectFragment>()->ApplyFromAuthority(EatingCharacter, Command.Context.RequestId, this,
+			{{UCatGE_FishExperience::GetExperienceTag(), static_cast<float>(FMath::FloorToInt(Definition->ResolveEatingExperiencePoints(WeightKilograms)))}});
 		if (CatIsAcceptedDomainCommandResult(Result.Body) && Definition
 			&& CatFishCollectionLayers::HasKnowledgeLayer(Definition))
 		{
@@ -290,14 +294,7 @@ FCatFishConsumeResult UCatFishContainerService::ConsumeReachableFish(AController
 	if (TryReplayFishConsumeTerminal(Command, ReplayResult))
 	{
 		Result = ReplayResult;
-		Result.Body.RequestId = Command.Context.RequestId;
-		if (CatIsAcceptedDomainCommandResult(Result.Command))
-		{
-			UCatFishDefinition* ReplayDefinition =
-				GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(Result.Fish.FishDefinitionId);
-			// 重放走的是已经记下来的那条鱼实例，重量取终态里的冻结值，与首次提交同源。
-			SubmitBodyFromDefinition(ReplayDefinition, Result.Fish.WeightKilograms);
-		}
+
 		return Result;
 	}
 	if (!GameMode || !GameMode->CanAcceptGameplayCommand(RequestingController))
@@ -364,22 +361,24 @@ FCatFishConsumeResult UCatFishContainerService::ConsumeReachableFish(AController
 	}
 	const double EatenWeightKilograms = Fish->WeightKilograms;
 	// 预检也要带重量：经验＝系数×重量，重量非法时这条鱼吃不出经验，要在移除实物之前就拒绝。
-	Result.Command.Error = Conditions->ValidateFishConsumption(Definition, EatenWeightKilograms);
+	const UCatConsumableEffectFragment* Effect = Definition->FindFragment<UCatConsumableEffectFragment>();
+	UCatGrowthComponent* Growth = EatingCharacter->GetGrowthComponent();
+	Result.Command.Error = Effect && Effect->ValidateForUser(EatingCharacter) && Growth
+		? Growth->ValidateFishGrowth(Definition, EatenWeightKilograms) : ECatDomainCommandError::DependencyUnavailable;
 	if (Result.Command.Error != ECatDomainCommandError::None)
 	{
 		return Result;
 	}
-	Result = ConsumeFish(Command);
-	Result.Body.RequestId = Command.Context.RequestId;
-	if (CatIsAcceptedDomainCommandResult(Result.Command))
+	return ConsumeFish(Command, [&](const FCatFishInstance& CommittedFish)
 	{
-		SubmitBodyFromDefinition(Definition, EatenWeightKilograms);
-	}
-	return Result;
+		SubmitBodyFromDefinition(Definition, CommittedFish.WeightKilograms);
+		return Result.Body;
+	});
 }
 
-// 直接进食流程：先重放终态，再拒绝恢复窗口并校验身份、当前容器和目标鱼；地面鱼护作为公共容器，成功后才发布移除结果。
-FCatFishConsumeResult UCatFishContainerService::ConsumeFish(const FCatFishConsumeCommand& Command)
+// 直接进食事务：预先记处理中终态，暂扣目标鱼后申请可选效果；失败还原快照，成功才发布，重复请求只重放。
+FCatFishConsumeResult UCatFishContainerService::ConsumeFish(const FCatFishConsumeCommand& Command,
+	TFunction<FCatDomainCommandResult(const FCatFishInstance&)> FinalizeEffect)
 {
 	FCatFishConsumeResult Result;
 	Result.Command.RequestId = Command.Context.RequestId;
@@ -406,7 +405,7 @@ FCatFishConsumeResult UCatFishContainerService::ConsumeFish(const FCatFishConsum
 	}
 	FContainerRecord* Source = Containers.Find(Command.SourceContainerId);
 	int32 FishIndex = INDEX_NONE;
-	if (!bCommandsOpen || bRestoringPersistentContainers)
+	if (!bCommandsOpen || bRestoringPersistentContainers || bFinalizingConsumption)
 	{
 		Result.Command.Error = ECatDomainCommandError::CommandsClosed;
 	}
@@ -424,12 +423,39 @@ FCatFishConsumeResult UCatFishContainerService::ConsumeFish(const FCatFishConsum
 		else
 		{
 			Result.Fish = Source->Snapshot.Fish[FishIndex];
+			const FCatContainerSnapshot Before = Source->Snapshot;
+			Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
+			ConsumeTerminalCache.Add(CacheKey, Result);
+			ConsumeTerminalPayloadByKey.Add(CacheKey, PayloadSignature);
 			Source->Snapshot.Fish[FishIndex] = FCatFishInstance();
-			TrimTrailingEmptyFishSlots(Source->Snapshot);
-			++Source->Snapshot.Revision;
-			PublishContainer(*Source);
-			Result.Command.bCommitted = true;
-			Result.Command.Error = ECatDomainCommandError::None;
+			// 效果回调可触发其他系统委托；期间拒绝其他容器消费与恢复，不持有跨回调的 TMap 元素引用。
+			if (FinalizeEffect)
+			{
+				TGuardValue<bool> Guard(bFinalizingConsumption, true);
+				Result.Body = FinalizeEffect(Result.Fish);
+			}
+			Source = Containers.Find(Command.SourceContainerId);
+			if (!Source)
+			{
+				Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
+			}
+			else if (FinalizeEffect && !CatIsAcceptedDomainCommandResult(Result.Body))
+			{
+				Source->Snapshot = Before;
+				Result.Command.Error = Result.Body.Error;
+			}
+			else
+			{
+				TrimTrailingEmptyFishSlots(Source->Snapshot);
+				++Source->Snapshot.Revision;
+				Result.Command.bCommitted = true;
+				Result.Command.Error = ECatDomainCommandError::None;
+				// 在发布前记终态，监听者重入时不能再施加同一效果。
+				Result.Command.Revision = Source->Snapshot.Revision;
+				ConsumeTerminalCache.Add(CacheKey, Result);
+				PublishContainer(*Source);
+				Source = Containers.Find(Command.SourceContainerId);
+			}
 		}
 	}
 	Result.Command.Revision = Source ? Source->Snapshot.Revision : 0;
@@ -506,7 +532,7 @@ bool UCatFishContainerService::ExportPersistedWorldFishContainers(TArray<FCatPer
 {
 	OutContainers.Reset();
 	OutFailure = FText::GetEmpty();
-	if (!bCommandsOpen || !GetWorld() || GetWorld()->GetNetMode() == NM_Client || bRestoringPersistentContainers)
+	if (!bCommandsOpen || bFinalizingConsumption || !GetWorld() || GetWorld()->GetNetMode() == NM_Client || bRestoringPersistentContainers)
 	{
 		OutFailure = FText::FromString(TEXT("世界鱼容器导出上下文不可用。"));
 		return false;
@@ -547,7 +573,7 @@ bool UCatFishContainerService::ValidatePersistedWorldFishContainersForRestore(
 	const TArray<FCatPersistentContainerSnapshot>& SavedContainers, FText& OutFailure) const
 {
 	OutFailure = FText::GetEmpty();
-	if (!bCommandsOpen || !GetWorld() || GetWorld()->GetNetMode() == NM_Client || bRestoringPersistentContainers)
+	if (!bCommandsOpen || bFinalizingConsumption || !GetWorld() || GetWorld()->GetNetMode() == NM_Client || bRestoringPersistentContainers)
 	{
 		OutFailure = FText::FromString(TEXT("世界鱼容器恢复上下文不可用。"));
 		return false;

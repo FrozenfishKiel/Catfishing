@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Abilities/GameplayAbility.h"
@@ -23,7 +23,7 @@ enum class ECatAbilityActivationPolicy : uint8
 	OnGranted
 };
 
-/** AbilitySet 中的一条授予配置；把 Ability 类、输入 Tag、等级、激活策略和可选初始效果绑定成同一个授予单元。 */
+/** AbilitySet 中的一条能力授予配置；定义类型、等级和输入策略，属性效果由独立 GrantedEffects 配置。 */
 USTRUCT(BlueprintType)
 struct FCatAbilitySetAbility
 {
@@ -45,9 +45,18 @@ struct FCatAbilitySetAbility
 	UPROPERTY(EditAnywhere, Category="Ability")
 	ECatAbilityActivationPolicy ActivationPolicy = ECatAbilityActivationPolicy::OnInputTriggered;
 
-	/** 授予 Ability 时同步施加的初始 GameplayEffect；为空表示本条配置只授予 Ability，不改变属性或状态。 */
-	UPROPERTY(EditAnywhere, Category="Ability")
-	TSubclassOf<UGameplayEffect> InitialEffect;
+
+};
+
+/** AbilitySet 的独立初始效果配置；效果不依附某条 Ability，便于装备来源按自身句柄完整回收。 */
+USTRUCT(BlueprintType)
+struct FCatAbilitySetGameplayEffect
+{
+	GENERATED_BODY()
+	/** 授予集合时施加给同一 ASC 的效果类型；为空或无法生成 Spec 时整组授予回滚。 */
+	UPROPERTY(EditAnywhere, Category="Effect") TSubclassOf<UGameplayEffect> GameplayEffect;
+	/** 效果等级；设计资产维护，运行期拒绝小于一的配置。 */
+	UPROPERTY(EditAnywhere, Category="Effect", meta=(ClampMin="1")) int32 Level = 1;
 };
 
 /** 一次 AbilitySet 授予后产生的可回收句柄集合；拥有者在同一个 ASC 生命周期内用它整组撤销授予内容。 */
@@ -59,6 +68,10 @@ struct FCatGrantedAbilitySetHandles
 public:
 	/** 返回本次授予得到的 AbilitySpec 句柄只读视图；调用方只观察数量和可寻址性，不能直接改内部数组。 */
 	const TArray<FGameplayAbilitySpecHandle>& GetAbilitySpecHandles() const { return AbilitySpecHandles; }
+	/** 判断本批句柄是否含 Ability 或 Effect；effects-only 装备集合也必须被外层当成成功授予。 */
+	bool HasAnyGrantedHandle() const { return !AbilitySpecHandles.IsEmpty() || !GameplayEffectHandles.IsEmpty(); }
+	/** 合并另一独立授予批次；调用方只在该批完整成功后调用，失败批次必须自行回滚。 */
+	void Append(FCatGrantedAbilitySetHandles&& Other);
 
 	/** 从服务器 ASC 上撤销本集合记录的 Ability 和 GameplayEffect；成功后清空句柄，重复调用保持无副作用。 */
 	void TakeFromAbilitySystem(UCatAbilitySystemComponent* AbilitySystem);
@@ -75,21 +88,26 @@ private:
 	TArray<FActiveGameplayEffectHandle> GameplayEffectHandles;
 };
 
-/** 项目默认能力授予资产；Character authority 读取它给 ASC 建立 Fishing 输入能力、保留 BodyAction 事件能力和初始效果的唯一默认集合。 */
+/** 可组合的来源能力资产；角色或装备在服务器授予能力和可回收效果，调用方拥有对应 ASC 的撤销句柄。 */
 UCLASS(BlueprintType, Const)
 class CATFISHING_API UCatAbilitySet : public UPrimaryDataAsset
 {
 	GENERATED_BODY()
 
 public:
-	/** 判断默认能力集是否足以支撑正式 Fishing 输入和保留 BodyAction 事件入口；缺少任一稳定入口都会 fail-closed。 */
+	/** 检查本集合的能力与效果是否可授予；不要求装备包含角色默认能力，效果必须能按来源独立回收。 */
 	bool IsRuntimeReady() const;
+	/** 判断角色默认能力集是否只保留 BodyAction 长期入口；鱼竿操作能力由部署实例另行授予。 */
+	bool IsDefaultCharacterAbilitySetReady() const;
 
 	/** 在服务器 ASC 上整组授予能力与初始效果；任一授予失败会回滚本次已授予内容并返回 false。 */
 	bool GiveToAbilitySystem(UCatAbilitySystemComponent* AbilitySystem,
-		FCatGrantedAbilitySetHandles& OutGrantedHandles) const;
+		FCatGrantedAbilitySetHandles& OutGrantedHandles, UObject* SourceObject = nullptr) const;
 
-	/** 设计资产配置的授予条目列表；运行时门禁读取它验证六个 Fishing 输入能力和四个无输入 BodyAction 能力都齐全且无重复。 */
+	/** 本来源授予的能力条目；定义或角色默认资产维护，运行时校验类型与输入无重复，空数组允许纯效果集合。 */
 	UPROPERTY(EditDefaultsOnly, Category="Abilities")
 	TArray<FCatAbilitySetAbility> GrantedAbilities;
+
+	/** 与 Ability 条目独立的初始效果；装备 AbilitySet 能只提供状态效果，不必伪造无意义 Ability。 */
+	UPROPERTY(EditDefaultsOnly, Category="Effects") TArray<FCatAbilitySetGameplayEffect> GrantedEffects;
 };

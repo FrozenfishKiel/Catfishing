@@ -1,5 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "Camp/CatAltarActor.h"
+#include "Run/CatRunSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 #include "AbilitySystemComponent.h"
@@ -783,7 +785,7 @@ bool FCatWorldFishMouthDropTest::RunTest(const FString& Parameters)
 		&& Item->GetRuntimeOwnerActor() == Fish);
 	TestFalse(TEXT("库存Carry后原鱼实例离开鱼护格"), GuardInventory->HasItemAtSlot(GuardFishSlot));
 	CheckMouth(TEXT("库存Carry取回"), Fish->GetActorTransform());
-	AddExpectedMessagePlain(TEXT("Event=fish_drop_rejected"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 2);
+	AddExpectedMessagePlain(TEXT("Event=carry_drop_rejected"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 2);
 	TestFalse(TEXT("错误携带者没有丢弃"), Fish->DropFromAuthority(OtherController));
 	CheckMouth(TEXT("错误携带者拒绝"), BeforeReject);
 
@@ -971,6 +973,85 @@ bool FCatWorldFishMouthDropTest::RunTest(const FString& Parameters)
 	Guard->Destroy();
 	TestTrue(TEXT("容器销毁只清理仍保管的原载体"), !IsValid(Fish) || Fish->IsActorBeingDestroyed());
 	return !HasAnyErrors();
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatAltarGuardBatchTest,
+	"Catfishing.Runtime.Inventory.WorldActions.AltarGuardBatchRollbackAndCommit",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+// 祭坛鱼护整批测试流程：搭建真实库存、正式鱼定义和祭坛，只用回调替代外层结算结果，计分仍读取正式规则。
+// 覆盖冻结后换物、准备期重入拒绝、结算回滚、接受后清空护内鱼、重复请求拒绝和鱼护本体保留，不把“执行了函数”当成验证结果。
+bool FCatAltarGuardBatchTest::RunTest(const FString& Parameters)
+{
+	using namespace CatInventoryWorldActionsTests;
+	FTestWorldWrapper Wrapper;
+	if (!StartWorld(*this, Wrapper)) return false;
+	UWorld* World = Wrapper.GetTestWorld();
+	ACatfishingGameState* State = World->SpawnActor<ACatfishingGameState>();
+	World->SetGameState(State);
+	FCatRunPublicState Run;
+	Run.Phase.DayIndex = 1;
+	State->SetRunPublicStateFromAuthority(Run);
+	ACatAltarActor* Altar = World->SpawnActor<ACatAltarActor>();
+	ACatFishGuardActor* Guard = World->SpawnActor<ACatFishGuardActor>(FVector(100, 0, 0), FRotator::ZeroRotator);
+	ACatfishingPlayerController* Controller = World->SpawnActor<ACatfishingPlayerController>();
+	ACatfishingPlayerState* PlayerState = World->SpawnActor<ACatfishingPlayerState>();
+	const FUniqueNetIdRef UniqueId = FUniqueNetIdString::Create(TEXT("AltarBatch"), FName(TEXT("CAT_TEST")));
+	PlayerState->SetUniqueId(FUniqueNetIdRepl(UniqueId));
+	Controller->PlayerState = PlayerState;
+	UCatFishDefinition* Definition = LoadObject<UCatFishDefinition>(nullptr, TEXT("/Game/Catfishing/Data/Fish/Fish_LittleSilver.Fish_LittleSilver"));
+	if (!TestTrue(TEXT("祭坛、鱼护、正式鱼种就绪"), Altar && Guard && Definition)) return false;
+	UCatInventoryComponent* Inventory = Guard->GetFishInventoryComponent();
+	TArray<UCatFishInventoryItemInstance*> Fish;
+	int32 ExpectedPoints = 0;
+	for (double Weight : {2.5, 3.75})
+	{
+		UCatFishInventoryItemInstance* Item = NewObject<UCatFishInventoryItemInstance>(Guard);
+		Item->SetItemDefinition(Definition);
+		Item->InitializeFishFromAuthority(FGuid::NewGuid(), FGuid::NewGuid(), TEXT("AltarBatch"), Weight);
+		if (!TestTrue(TEXT("原鱼实例装进真实鱼护"), Inventory->AddItemInstance(Item, 1))) return false;
+		Fish.Add(Item);
+		ECatOfferingWeightClass WeightClass;
+		int32 Points = 0;
+		GetDefault<UCatRunSettings>()->TryClassifyOfferingWeight(Weight, WeightClass, Points);
+		ExpectedPoints += Points;
+	}
+	Altar->Tick(0.2f);
+	int32 PreviewPoints = 0;
+	TestTrue(TEXT("供品预览可读"), Altar->TryGetGroundOfferingPoints(PreviewPoints));
+	TestEqual(TEXT("预览包含全部护内鱼"), PreviewPoints, ExpectedPoints);
+	FCatOfferingSettlementCommand Command;
+	FText Error;
+	FGuid Request = FGuid::NewGuid();
+	if (!TestTrue(TEXT("冻结地面鱼护"), Altar->FreezeOffering(Controller, Request, Command, Error))) return false;
+	int32 SettlementCalls = 0;
+	TestFalse(TEXT("结算拒绝完整回滚"), Altar->ConsumeFrozenOffering(Controller, Request, [&]()
+	{
+		++SettlementCalls;
+		TestFalse(TEXT("准备期间不可重入消费"), Inventory->ConsumeItemAtSlot(0, 1));
+		TestFalse(TEXT("准备期间不可重入清空"), Inventory->ReplaceInventoryEntriesFromAuthority({}, Inventory->GetInventorySlotCount()));
+		return false;
+	}));
+	TestFalse(TEXT("拒绝后释放预留"), Inventory->HasPreparedRemoval());
+	TestTrue(TEXT("拒绝保留第一条原鱼"), Inventory->GetInventoryEntryAtSlot(0)->Instance == Fish[0]);
+	TestTrue(TEXT("拒绝保留第二条原鱼"), Inventory->GetInventoryEntryAtSlot(1)->Instance == Fish[1]);
+	Guard->SetActorLocation(FVector(1000, 0, 0));
+	TestFalse(TEXT("鱼护离开范围使冻结失效"), Altar->ValidateFrozenOffering(Controller, Request, Error));
+	Guard->SetActorLocation(FVector(100, 0, 0));
+	Inventory->ConsumeItemAtSlot(1, 1);
+	TestFalse(TEXT("冻结后内容变化拒绝"), Altar->ConsumeFrozenOffering(Controller, Request, [&]() { ++SettlementCalls; return true; }));
+	TestEqual(TEXT("内容变化未进入结算"), SettlementCalls, 1);
+	Inventory->AddItemInstance(Fish[1], 1);
+	Request = FGuid::NewGuid();
+	if (!TestTrue(TEXT("重新冻结现有鱼"), Altar->FreezeOffering(Controller, Request, Command, Error))) return false;
+	TestTrue(TEXT("接受后整批消费"), Altar->ConsumeFrozenOffering(Controller, Request, [&]() { ++SettlementCalls; return true; }));
+	TestTrue(TEXT("鱼护本体保留且仍在地面"), IsValid(Guard) && !Guard->IsActorBeingDestroyed() && Guard->IsGrounded());
+	TestFalse(TEXT("第一格已经清空"), Inventory->HasItemAtSlot(0));
+	TestFalse(TEXT("第二格已经清空"), Inventory->HasItemAtSlot(1));
+	TestFalse(TEXT("重复请求不能再次结算"), Altar->ConsumeFrozenOffering(Controller, Request, [&]() { ++SettlementCalls; return true; }));
+	TestEqual(TEXT("只有拒绝和接受各调用一次结算"), SettlementCalls, 2);
+	return true;
 }
 
 #endif

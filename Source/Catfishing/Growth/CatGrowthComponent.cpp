@@ -1,4 +1,4 @@
-#include "Growth/CatGrowthComponent.h"
+﻿#include "Growth/CatGrowthComponent.h"
 #include "Inventory/CatBackPackComponent.h"
 #include "Fishing/CatFishingSession.h"
 #include "EngineUtils.h"
@@ -43,9 +43,9 @@ ECatDomainCommandError UCatGrowthComponent::ValidateFishGrowth(const UCatFishDef
 		? ECatDomainCommandError::None : ECatDomainCommandError::DependencyUnavailable;
 }
 
-// 吃鱼成长流程：先按 RequestId 重放，再验证 authority/定义；首次提交写经验槽、待选次数并按配表抽出待选三项。
-FCatDomainCommandResult UCatGrowthComponent::ApplyCommittedFish(const FGuid RequestId,
-	const UCatFishDefinition* FishDefinition, const double WeightKilograms)
+// 效果成长流程：先按 RequestId 重放，再验证服务器与已求值经验；首次提交沿用经验槽、待选次数和抽取流程。
+// 保留旧的逐鱼取整边界：正浮点经验取整为 0 时仍接受进食，但经验槽、选项和总经验均不增加。
+FCatDomainCommandResult UCatGrowthComponent::ApplyExperienceFromEffect(const FGuid RequestId, const int32 ExperienceAmount)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
@@ -56,14 +56,17 @@ FCatDomainCommandResult UCatGrowthComponent::ApplyCommittedFish(const FGuid Requ
 		MarkCommandReplayed(Result);
 		return Result;
 	}
-	if (!RequestId.IsValid() || ValidateFishGrowth(FishDefinition, WeightKilograms) != ECatDomainCommandError::None)
+	if (!RequestId.IsValid() || !GetOwner() || !GetOwner()->HasAuthority() || ExperienceAmount < 0
+		|| !GetDefault<UCatGrowthSettings>()->IsRuntimeReady())
 	{
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 	}
 	else
 	{
-		AddExperienceFromCommittedFish(
-			FMath::FloorToInt(FishDefinition->ResolveEatingExperiencePoints(WeightKilograms)));
+		// 槽位发布会调用表现委托，先记处理中结果，防止同步监听者以同一请求重复推进成长。
+		Result.Error = ECatDomainCommandError::AlreadyResolved;
+		TerminalCache.Add(Key, Result);
+		AddExperienceFromCommittedFish(ExperienceAmount);
 		Result.bCommitted = true;
 		Result.Error = ECatDomainCommandError::None;
 		Result.Revision = Snapshot.Revision;
@@ -211,7 +214,7 @@ void UCatGrowthComponent::RefreshCurrentOffer()
 }
 
 // 叠加流程：同项跨次累加，按配表上限夹住绝对值（减益类配表写正上限、实际量为负，所以按绝对值比较）。
-// 返回本次真正生效的增量：已经顶上限时返回 0，调用方不会把被夹掉的部分写进属性。
+// 累计加成达到配表上限后，本次属性增量必须为 0；调用方只应用剩余额度，避免属性实际值超过成长记录。
 double UCatGrowthComponent::AccumulateStack(const ECatGrowthOptionId OptionId, const FCatGrowthOptionConfig& Config)
 {
 	FCatGrowthOptionStack* Stack = Snapshot.Stacks.FindByPredicate(

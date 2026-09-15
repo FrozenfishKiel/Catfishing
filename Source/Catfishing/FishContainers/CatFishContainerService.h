@@ -48,12 +48,13 @@ public:
 
 
 
-	/** Controller 在服务器上发起直接吃鱼时调用；本服务会用服务器身份重读可触达的鱼护或共享鱼缸，并在容器移除成功或终态重放成功后才把食用效果交给目标 Character。 */
+	/** Controller 在服务器上发起直接吃鱼时调用；本服务会用服务器身份重读可触达的鱼护或共享鱼缸，并在容器暂扣期间申请定义 GE，效果成功后提交实物；终态重放不会重复申请效果。 */
 	FCatFishConsumeResult ConsumeReachableFish(AController* RequestingController,
 		ACatCharacter* EatingCharacter, FCatFishConsumeCommand Command);
 
-	/** 非恢复窗口中从鱼护或共享鱼缸移除目标鱼；成功后上层才可应用食用效果。 */
-	FCatFishConsumeResult ConsumeFish(const FCatFishConsumeCommand& Command);
+	/** 暂扣目标鱼后同步执行可选效果；效果失败恢复实物，成功才发布，完整结果参与幂等重放。 */
+	FCatFishConsumeResult ConsumeFish(const FCatFishConsumeCommand& Command,
+		TFunction<FCatDomainCommandResult(const FCatFishInstance&)> FinalizeEffect = {});
 
 	/** 只读查询直接吃鱼请求是否已有鱼容器终态；命中前校验鱼实例签名，不命中时不读取或修改容器。 */
 	bool TryReplayFishConsumeTerminal(const FCatFishConsumeCommand& Command, FCatFishConsumeResult& OutResult) const;
@@ -103,4 +104,6 @@ private:
 	TMap<FString, FString> ConsumeTerminalPayloadByKey;
 	/** teardown 后永久关闭本 World 的新鱼容器命令。 */
 	bool bCommandsOpen = true;
+	/** 同步效果尚未返回的事务窗口；拒绝消费及恢复重入，避免回滚覆盖其他实物变更。 */
+	bool bFinalizingConsumption = false;
 };

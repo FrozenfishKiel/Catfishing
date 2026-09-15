@@ -457,6 +457,20 @@ public:
 	bool RestoreTeamStorageRoleFromAuthority(ECatTeamStorageRole Role);
 
 protected:
+	/** 正在准备离库的请求标识；非空表示这份库存被同步事务占用，普通写入口必须拒绝以保护已核对的槽位。 */
+	FGuid PreparedRemovalRequest;
+	/** 本批将整件移出的原槽位集合；PrepareRemovalFromAuthority 写入，FinishRemovalFromAuthority 读取，取消时只清锁不重建实例。 */
+	TArray<int32> PreparedRemovalSlots;
+
+public:
+	/** 校验一组精确实例仍在本库存并独占到 Finish；准备阶段不改槽位，失败不改变库存，调用方必须在同一同步事务中完成或取消。 */
+	bool PrepareRemovalFromAuthority(FGuid RequestId, const TArray<FGuid>& ItemIds);
+	/** 完成已准备的整件离库或取消预留；提交不再执行可失败预检，可延后广播到外层全部来源完成后统一通知。 */
+	void FinishRemovalFromAuthority(FGuid RequestId, bool bCommit, bool bBroadcast = true);
+	/** 库存是否正在参与尚未完成的同步事务；容器拾取、交换、使用和恢复等写入口读取它来拒绝重入。 */
+	bool HasPreparedRemoval() const { return PreparedRemovalRequest.IsValid(); }
+
+protected:
 	friend class ACatFishPickupActor;
 	friend class ACatFishGuardActor;
 	friend class ACatFishTankActor;

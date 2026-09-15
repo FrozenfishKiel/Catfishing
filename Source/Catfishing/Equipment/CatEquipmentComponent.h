@@ -125,6 +125,9 @@ public:
 	/** 本机随身库存或钓鱼选择变化通知；不携带可写指针或客户端授权。 */
 	FCatEquipmentSnapshotChanged OnSnapshotChanged;
 
+	/** 按已部署鱼竿的精确实例 ID 从 held entry 解析原始库存实例；RodActor 的操作能力授予以它作 SourceObject。 */
+	UCatEquipmentInventoryItemInstance* ResolveDeployedRodItemInstanceFromAuthority(FGuid RodItemInstanceId) const;
+
 private:
 	/** 仅验证钓具选择是否仍由当前 InventoryComponent 中的实例支撑；导出与恢复共用，authority 和活动事务由各自入口控制。 */
 	bool ValidatePersistentSnapshotPayload(const FCatEquipmentLoadoutSnapshot& Candidate, FText& OutFailure) const;
@@ -159,6 +162,7 @@ private:
 	/** Begin 冻结鱼竿的正式实例解析；正式库存存在时，耐久读写必须落到可见格或 held entry 里的同一 UObject。 */
 	UCatEquipmentInventoryItemInstance* ResolveFishingRodFormalInstanceFromInventory(
 		const FCatFishingUseRecord& Record, FCatInventoryEntry& OutSlot) const;
+
 	/** 是否存在正式库存活动区尚未收口的物品 Use；失败预算用它避免改写正在由场景持有的物品状态。 */
 	bool HasActiveInventoryItemUse() const;
 	/** 正式库存刷新后校正钓鱼选择；选中实例离开随身库存时换到仍存在的同类实例或清空选择。 */

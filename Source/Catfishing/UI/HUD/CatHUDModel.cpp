@@ -1,4 +1,4 @@
-#include "UI/HUD/CatHUDModel.h"
+﻿#include "UI/HUD/CatHUDModel.h"
 
 #include "FishContainers/CatFishContainerSettings.h"
 
@@ -201,14 +201,12 @@ void UCatHUDModel::Refresh()
 		NewState.bRightHandGripped = Grab->IsGripping(false);
 		const ACatFishingRodActor* Rod = UCatFishingCameraComponent::FindHeldRodOperatedBy(Controller);
 		NewState.bPrimaryRodOperator = Rod && Rod->IsPrimaryOperator(Controller->PlayerState);
-		NewState.PhysicalControlText = FText::FromString(NewState.bPrimaryRodOperator
-			? TEXT("主控 · 左键抛竿 / 收线 · 右键放线 · E 放竿")
-			: TEXT("按住左 / 右键抓人或抓竿 · WASD 拉动 · 松键释放"));
+		// 手部投影只描述正在持竿、抓握或伸手的事实；按键映射不属于 HUD 状态。
 		const auto HandLabel = [&](const bool bLeft, const bool bReaching, const bool bGripped)
 		{
 			if (bGripped && Grab->GetGripState(bLeft).bExplicitHold && NewState.bPrimaryRodOperator && Grab->GetGripTarget(bLeft) == Rod)
-				return TEXT("持竿（E 放竿）");
-			return bGripped ? TEXT("抓住（松键释放）") : (bReaching ? TEXT("伸手中") : TEXT("收回"));
+				return TEXT("持竿");
+			return bGripped ? TEXT("抓住") : (bReaching ? TEXT("伸手中") : TEXT("收回"));
 		};
 		NewState.PhysicalHandStateText = FText::FromString(FString::Printf(TEXT("左爪：%s    右爪：%s"),
 			HandLabel(true, NewState.bLeftHandReaching, NewState.bLeftHandGripped),

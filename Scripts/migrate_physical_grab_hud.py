@@ -1,4 +1,4 @@
-"""在正式 HUD 原资产内补齐个人体力和左右手抓握控件；只保存此 HUD 包。"""
+﻿"""在正式 HUD 原资产内补齐个人体力和左右手抓握控件；只保存此 HUD 包。"""
 
 import hashlib
 from pathlib import Path
@@ -12,7 +12,6 @@ HUD_OBJECT = HUD_PACKAGE + ".WBP_CatHUD"
 CONTROL_TYPES = {
     "CatStaminaTextBlock": unreal.TextBlock,
     "CatStaminaProgressBar": unreal.ProgressBar,
-    "PhysicalControlTextBlock": unreal.TextBlock,
     "PhysicalHandStateTextBlock": unreal.TextBlock,
 }
 
@@ -45,6 +44,11 @@ def main():
         raise RuntimeError("Formal Chinese font is missing")
 
     changed = []
+    # 从源树移除旧教程控件，编译后不再生成运行时绑定；不影响体力和手部状态控件。
+    for widget in root.get_all_children():
+        if widget.get_name() == "PhysicalControlTextBlock":
+            widget.remove_from_parent()
+            changed.append("RemovedLegacyControlHint")
     for name, expected_type in CONTROL_TYPES.items():
         widget = unreal.find_object(None, HUD_OBJECT + ":WidgetTree." + name)
         if widget is not None:
@@ -53,9 +57,6 @@ def main():
             if name == "CatStaminaTextBlock" and str(widget.get_text()) != "玩家体力":
                 widget.set_text("玩家体力")
                 changed.append(name + ":PersonalLabel")
-            if name == "PhysicalControlTextBlock" and str(widget.get_text()) != "按住左 / 右键抓人或抓竿 · WASD 拉动 · 松键释放":
-                widget.set_text("按住左 / 右键抓人或抓竿 · WASD 拉动 · 松键释放")
-                changed.append(name + ":PhysicalLabel")
             continue
         widget = unreal.new_object(expected_type, outer=tree, name=name)
         slot = root.add_child_to_canvas(widget)
@@ -78,13 +79,12 @@ def main():
             widget.set_percent(0.0)
             widget.set_fill_color_and_opacity(unreal.LinearColor(0.3, 0.78, 0.53, 1.0))
         else:
-            is_controls = name == "PhysicalControlTextBlock"
-            slot.set_position(unreal.Vector2D(0.0, -82.0 if is_controls else -52.0))
+            slot.set_position(unreal.Vector2D(0.0, -52.0))
             slot.set_size(unreal.Vector2D(860.0, 28.0))
             widget.set_editor_property("justification", unreal.TextJustify.CENTER)
-            widget.set_text("按住左 / 右键抓人或抓竿 · WASD 拉动 · 松键释放" if is_controls else "左爪：收回    右爪：收回")
+            widget.set_text("左爪：收回    右爪：收回")
             font = widget.get_editor_property("font")
-            font.set_editor_property("size", 17 if is_controls else 15)
+            font.set_editor_property("size", 15)
             font.set_editor_property("font_object", chinese_font)
             widget.set_font(font)
             widget.set_color_and_opacity(unreal.SlateColor(specified_color=unreal.LinearColor(1.0, 0.97, 0.87, 1.0)))
@@ -92,11 +92,11 @@ def main():
             widget.set_shadow_offset(unreal.Vector2D(1.0, 1.0))
         changed.append(name)
 
-    if changed:
-        # The existing native authoring pipeline registers source-widget GUIDs before compilation.
-        # Its HUD entry rejects every other package, so this script cannot save unrelated UI assets.
-        if not unreal.CatFrontendWidgetAuthoringLibrary.compile_and_save_hud_widget_blueprint(blueprint):
-            raise RuntimeError("Unable to save migrated formal HUD")
+    # 复用现有作者器补齐控件 GUID 并编译；保存目标仍限于上面显式加载的 HUD，不保存其他脏包。
+    if not unreal.CatFrontendWidgetAuthoringLibrary.compile_styled_frontend_widget(blueprint):
+        raise RuntimeError("Unable to compile migrated formal HUD")
+    if not unreal.EditorAssetLibrary.save_loaded_asset(blueprint, only_if_is_dirty=False):
+        raise RuntimeError("Unable to save migrated formal HUD")
 
     # 从实际生成类模板再核对一遍，防止只改源树却没进入运行时实例。
     generated_tree_path = HUD_PACKAGE + ".WBP_CatHUD_C:WidgetTree."
@@ -112,7 +112,7 @@ def main():
                + " OriginalSHA256=" + original_hash
                + " Backup=" + str(backup)
                + " PersonalStaminaText=CatStaminaTextBlock PersonalStaminaBar=CatStaminaProgressBar"
-               + " PhysicalControls=PhysicalControlTextBlock PhysicalHands=PhysicalHandStateTextBlock"
+               + " PhysicalHands=PhysicalHandStateTextBlock"
                + " SkeletonUnchangedSHA256=" + skeleton_hash)
 
 

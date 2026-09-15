@@ -1,4 +1,4 @@
-#if WITH_DEV_AUTOMATION_TESTS
+﻿#if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationEditorCommon.h"
@@ -304,7 +304,7 @@ public:
 			if (!Test->TestEqual(TEXT("one production HUD belongs to the owning client"),ActiveHUDCount,1)) return true;
 			if (!Test->TestEqual(TEXT("production HUD uses actual formal WBP"),Widget->GetClass()->GetPathName(),FString(TEXT("/Game/UI/HUD/WBP_CatHUD.WBP_CatHUD_C")))) return true;
 			if (!Widget->GetLastHUDViewState().bLeftHandGripped) return Wait(TEXT("production HUD receives replicated grip through its bound model"));
-			if (!Test->TestNotNull(TEXT("formal WBP delivers physical instructions"),Widget->GetWidgetFromName(TEXT("PhysicalControlTextBlock")))
+			if (!Test->TestNull(TEXT("formal WBP excludes hardcoded control instructions"),Widget->GetWidgetFromName(TEXT("PhysicalControlTextBlock")))
 				|| !Test->TestNotNull(TEXT("formal WBP delivers actual hand state"),Widget->GetWidgetFromName(TEXT("PhysicalHandStateTextBlock")))) return true;
 			GripRevision=ServerGrab->GetGripRevision(true);
 			TargetStart=HostCat->GetActorLocation();

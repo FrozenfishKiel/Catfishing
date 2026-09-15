@@ -1,15 +1,19 @@
-#pragma once
+﻿#pragma once
 
 #include "NativeGameplayTags.h"
 
 namespace CatFishingAbilityTags
 {
-	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_Fishing_RodInteract);
-	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_Fishing_Primary);
-	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_Fishing_Cancel);
+	/** 历史专用鱼竿交互标识；Editor 迁移据此移除已由通用 E 交互替代的默认授予。 */
+	CATFISHING_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_Fishing_RodInteract);
+	/** 鱼竿主操作输入标识；运行 ASC 路由按下/松开，Editor 来源能力迁移读取同一常量。 */
+	CATFISHING_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_Fishing_Primary);
+	/** 鱼竿取消输入标识；运行与来源能力资产共享，不保存任何按键状态。 */
+	CATFISHING_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_Fishing_Cancel);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_Fishing_Scoop);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_Fishing_Chum);
-	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_Fishing_Slack);
+	/** 鱼竿放线输入标识；来源能力与 Editor 迁移共同使用，释放生命周期归对应 Ability。 */
+	CATFISHING_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_Fishing_Slack);
 	/** 换人握手输入（多人钓鱼附篇 §2.4）；键位随装备栏重构另定，现按 E 设计。 */
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_Fishing_Handoff);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Fishing_RodInteract);

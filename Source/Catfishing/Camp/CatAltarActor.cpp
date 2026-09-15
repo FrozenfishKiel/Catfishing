@@ -1,4 +1,7 @@
 #include "Camp/CatAltarActor.h"
+#include "FishContainers/CatFishGuardActor.h"
+#include "Inventory/CatFishOnlyInventoryComponent.h"
+#include "Inventory/CatFishInventoryItemInstance.h"
 #include "Camp/CatCampHubActor.h"
 #include "UI/WorldInfo/CatAltarWorldInfoComponent.h"
 
@@ -47,7 +50,7 @@ void ACatAltarActor::Tick(float DeltaSeconds)
 }
 
 // 生命周期退出：先核对公开确认是否属于本祭坛，只取消匹配的确认；再让 GameMode 按祭坛身份中止正式过渡。
-// 不影响另一座祭坛的确认，最后丢弃冻结鱼弱引用并交由父类销毁 Actor，未提交鱼不会被消费。
+// 不影响另一座祭坛的确认，最后丢弃冻结散鱼弱引用并交由父类销毁 Actor；未提交的鱼和鱼护库存不会被消费。
 void ACatAltarActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	if (ACatfishingGameModeBase* GameMode = GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>())
@@ -58,7 +61,7 @@ void ACatAltarActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		}
 		GameMode->CancelAltarDayTransition(this, NSLOCTEXT("Catfishing", "AltarUnavailable", "祭坛已不可用"));
 	}
-	FrozenFish.Reset();
+	ResetOffering();
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -147,7 +150,7 @@ bool ACatAltarActor::CanPrepareOffering(FText& OutError) const
 	FCatRunDailyOfferingTuning Tuning;
 	ECatOfferingWeightClass WeightClass;
 	int32 OfferingPoints = 0;
-	// 分类函数在处理任意正重量前都会验证全部档位；这里用一千克只触发配置校验，不读取地面鱼也不预定点数。
+	// 分类函数在处理任意正重量前都会验证全部档位；这里用一千克只触发配置校验，不读取现场供品也不预定点数。
 	if (!GameState || !Settings->TryGetDayParameters(GameState->GetRunPublicState().Phase.DayIndex, DayLengthSeconds, Tuning)
 		|| !Settings->TryClassifyOfferingWeight(1.0, WeightClass, OfferingPoints))
 	{
@@ -157,13 +160,13 @@ bool ACatAltarActor::CanPrepareOffering(FText& OutError) const
 	return true;
 }
 
-// 冻结流程：先核对服务器权限、请求标识和供品配置，再用共用筛选器填充冻结鱼引用和分类命令。
-// 收集成功才写入祭坛与命令的请求标识，随后预检同一批鱼；失败输出不可提交，已写的短期引用由调用方 ResetOffering 收口，空集合合法。
+// 冻结流程：先核对服务器权限、请求标识和供品配置，再用共用筛选器填充散鱼引用、鱼护槽快照和分类命令。
+// 收集成功才写入祭坛与命令的请求标识，随后预检同一批来源；失败输出不可提交，已写的短期引用由调用方 ResetOffering 收口，空集合合法。
 bool ACatAltarActor::FreezeOffering(AController* Controller, FGuid RequestId, FCatOfferingSettlementCommand& OutCommand, FText& OutError)
 {
 	if (!RequestId.IsValid() || !CanPrepareOffering(OutError)) return false;
 	int32 PreviewPoints = 0;
-	if (!CollectOffering(FrozenFish, OutCommand, PreviewPoints, OutError)) return false;
+	if (!CollectOffering(FrozenFish, FrozenGuards, OutCommand, PreviewPoints, OutError)) return false;
 	OfferingRequestId = RequestId;
 	OutCommand.Context.RequestId = RequestId;
 	return ValidateFrozenOffering(Controller, RequestId, OutError);
@@ -171,30 +174,28 @@ bool ACatAltarActor::FreezeOffering(AController* Controller, FGuid RequestId, FC
 
 // 共用筛选：
 // 1. 清空所有输出；无服务器权限、World 或有限正半径时返回 false。
-// 2. 扫描本世界鱼，保留 Available、无父附着且根位置在厘米半径内的对象；按真实千克重量分类，并单独累计臭鱼数量。
-// 3. 分类失败、负点数或累计将溢出时拒绝整批；输出可能保留此前已累计的部分，调用方必须以返回值为准，只有分类失败设置具体错误文本。
-// 4. 将有效点数和弱引用写入输出；空集合返回 true，本方法不冻结鱼的可交互状态、不消费实物。
+// 2. 扫描本世界散鱼，保留 Available、未隐藏、无父附着且根位置在厘米半径内的对象；按真实千克重量分类。
+// 3. 再扫描地面鱼护，复制每个槽位快照并把非空护内鱼按同一分类口径累计；同一鱼 GUID 出现两次时拒绝整批。
+// 4. 身份、定义、重量、负点数或累计溢出异常都会返回 false；调用方必须以返回值为准，不能提交部分输出。
+// 5. 本方法只生成预览/冻结输入，不预留库存、不隐藏散鱼、不消费实物，空集合合法。
 bool ACatAltarActor::CollectOffering(TArray<TWeakObjectPtr<ACatFishPickupActor>>& OutFish,
-	FCatOfferingSettlementCommand& OutCommand, int32& OutPoints, FText& OutError) const
+	TMap<TWeakObjectPtr<ACatFishGuardActor>, TArray<FCatInventoryEntry>>& OutGuards, FCatOfferingSettlementCommand& OutCommand, int32& OutPoints, FText& OutError) const
 {
 	OutFish.Reset();
+	OutGuards.Reset();
 	OutCommand = FCatOfferingSettlementCommand();
 	OutPoints = 0;
 	OutError = FText::GetEmpty();
 	if (!HasAuthority() || !GetWorld() || !FMath::IsFinite(OfferingRadiusCentimeters) || OfferingRadiusCentimeters <= 0.0f) return false;
 	const UCatRunSettings* Settings = GetDefault<UCatRunSettings>();
-	for (TActorIterator<ACatFishPickupActor> It(GetWorld()); It; ++It)
+	TSet<FGuid> Seen;
+	// 两种来源只在取身份与重量处不同，分类和点数保持一个口径；重复身份不会二次计分或消费。
+	const auto AddFish = [&](FGuid Id, FName DefinitionId, double Weight)
 	{
-		const FCatFishPickupPresentationState& Fish = It->GetPresentationState();
-		if (Fish.State != ECatFishPickupState::Available || It->GetAttachParentActor()
-			|| FVector::DistSquared(It->GetActorLocation(), GetActorLocation()) > FMath::Square(OfferingRadiusCentimeters)) continue;
+		if (!Id.IsValid() || Seen.Contains(Id)) return false;
 		ECatOfferingWeightClass WeightClass;
 		int32 Points = 0;
-		if (!Settings->TryClassifyOfferingWeight(Fish.WeightKilograms, WeightClass, Points))
-		{
-			OutError = NSLOCTEXT("Catfishing", "AltarInvalidWeight", "供品重量或重量档配置无效");
-			return false;
-		}
+		if (!Settings->TryClassifyOfferingWeight(Weight, WeightClass, Points) || Points < 0 || OutPoints > MAX_int32 - Points) return false;
 		switch (WeightClass)
 		{
 		case ECatOfferingWeightClass::Small: ++OutCommand.SmallFishCount; break;
@@ -202,23 +203,58 @@ bool ACatAltarActor::CollectOffering(TArray<TWeakObjectPtr<ACatFishPickupActor>>
 		case ECatOfferingWeightClass::Large: ++OutCommand.LargeFishCount; break;
 		case ECatOfferingWeightClass::Giant: ++OutCommand.GiantFishCount; break;
 		}
-		if (Settings->IsStinkyOfferingFish(Fish.FishDefinitionId)) ++OutCommand.StinkyFishCount;
-		if (Points < 0 || OutPoints > MAX_int32 - Points) return false;
+		if (Settings->IsStinkyOfferingFish(DefinitionId)) ++OutCommand.StinkyFishCount;
 		OutPoints += Points;
+		Seen.Add(Id);
+		return true;
+	};
+	for (TActorIterator<ACatFishPickupActor> It(GetWorld()); It; ++It)
+	{
+		const FCatFishPickupPresentationState& Fish = It->GetPresentationState();
+		if (Fish.State != ECatFishPickupState::Available || It->GetAttachParentActor() || It->IsHidden()
+			|| FVector::DistSquared(It->GetActorLocation(), GetActorLocation()) > FMath::Square(OfferingRadiusCentimeters)) continue;
+		if (!AddFish(Fish.FishInstanceId, Fish.FishDefinitionId, Fish.WeightKilograms))
+		{
+			OutError = NSLOCTEXT("Catfishing", "AltarInvalidFish", "供品身份或重量无效，请检查供品");
+			return false;
+		}
 		OutFish.Add(*It);
+	}
+	for (TActorIterator<ACatFishGuardActor> It(GetWorld()); It; ++It)
+	{
+		if (!It->IsGrounded() || It->GetAttachParentActor() || It->IsHidden()
+			|| FVector::DistSquared(It->GetActorLocation(), GetActorLocation()) > FMath::Square(OfferingRadiusCentimeters)) continue;
+		UCatInventoryComponent* Inventory = It->GetFishInventoryComponent();
+		if (!Inventory || Inventory->HasPreparedRemoval()) return false;
+		TArray<FCatInventoryEntry>& Slots = OutGuards.Add(*It);
+		for (int32 Index = 0; Index < Inventory->GetInventorySlotCount(); ++Index)
+		{
+			const FCatInventoryEntry* Entry = Inventory->GetInventoryEntryAtSlot(Index);
+			if (!Entry) return false;
+			Slots.Add(*Entry);
+			if (!Entry->Instance && Entry->StackCount == 0) continue;
+			const UCatFishInventoryItemInstance* Fish = Cast<UCatFishInventoryItemInstance>(Entry->Instance);
+			if (!Fish || Entry->StackCount != 1 || !Fish->GetFishDefinition()
+				|| !AddFish(Fish->GetItemInstanceId(), Fish->GetFishDefinition()->FishDefinitionId, Fish->GetFishWeightKilograms()))
+			{
+				OutError = NSLOCTEXT("Catfishing", "AltarInvalidGuardFish", "鱼护内供品身份或重量无效");
+				return false;
+			}
+		}
 	}
 	return true;
 }
 
-// 预览发布：服务器 Tick 调用共用筛选器取得临时总数；失败将公开点数清零并标为未就绪，临时鱼引用随函数退出释放。
+// 预览发布：服务器 Tick 调用共用筛选器取得临时总数；失败将公开点数清零并标为未就绪，临时散鱼引用和鱼护快照随函数退出释放。
 // 就绪标记或点数变化时才写入展示字段、通知本地信息牌、请求复制并记录日志；相同结果直接返回，不触发供品提交。
 void ACatAltarActor::RefreshGroundOfferingPreview()
 {
 	TArray<TWeakObjectPtr<ACatFishPickupActor>> Candidates;
+	TMap<TWeakObjectPtr<ACatFishGuardActor>, TArray<FCatInventoryEntry>> Guards;
 	FCatOfferingSettlementCommand Command;
 	FText Error;
 	int32 Points = 0;
-	const bool bReady = CollectOffering(Candidates, Command, Points, Error);
+	const bool bReady = CollectOffering(Candidates, Guards, Command, Points, Error);
 	if (bGroundOfferingReady == bReady && GroundOfferingPoints == (bReady ? Points : 0)) return;
 	bGroundOfferingReady = bReady;
 	GroundOfferingPoints = bReady ? Points : 0;
@@ -247,42 +283,90 @@ void ACatAltarActor::OnRep_InfoChanged()
 	if (WorldInfo) WorldInfo->NotifyInfoChanged();
 }
 
-// 提交前整批预检：只校验正式过场冻结的同一批地面鱼与消费依赖；全员同意已由 GameMode 在进入过场前裁决，不在这里重复检查。
+// 提交前核对冻结的来源、位置、实例和数量：
+// 1. 先确认请求仍匹配本祭坛且没有同步提交正在进行。
+// 2. 对散鱼逐条复核 Available、无附着、消费资格和仍在半径内。
+// 3. 对鱼护复核仍在地面、未隐藏、未被其它事务预留、槽位数量和每格实例/数量完全等于冻结快照。
+// 4. 任一差异都让本次确认失效；不把此刻的新鱼替换进冻结名单，也不因点数相同接受另一条实例。
 bool ACatAltarActor::ValidateFrozenOffering(AController* Controller, FGuid RequestId, FText& OutError)
 {
-	if (!HasAuthority() || RequestId != OfferingRequestId) return false;
+	OutError = NSLOCTEXT("Catfishing", "AltarOfferingChanged", "供品已变化或暂时无法消费，请重新确认");
+	if (!HasAuthority() || RequestId != OfferingRequestId || bOfferingCommitInProgress) return false;
 	for (const TWeakObjectPtr<ACatFishPickupActor>& Fish : FrozenFish)
 	{
 		if (!Fish.IsValid() || Fish->GetPresentationState().State != ECatFishPickupState::Available
-			|| Fish->GetAttachParentActor() || !Fish->CanConsumeFromAuthority(Controller))
-		{
-			OutError = NSLOCTEXT("Catfishing", "AltarOfferingChanged", "供品已变化或暂时无法消费，请重新确认");
-			return false;
-		}
+			|| Fish->GetAttachParentActor() || !Fish->CanConsumeFromAuthority(Controller)
+			|| FVector::DistSquared(Fish->GetActorLocation(), GetActorLocation()) > FMath::Square(OfferingRadiusCentimeters)) return false;
 	}
-	return true;
-}
-
-// 实物消费：调用既有单鱼入口，不操作库存；上层必须在同一游戏线程先通过整批预检和 GAS 提交。
-bool ACatAltarActor::ConsumeFrozenOffering(AController* Controller, FGuid RequestId)
-{
-	if (!HasAuthority() || RequestId != OfferingRequestId) return false;
-	for (const TWeakObjectPtr<ACatFishPickupActor>& Fish : FrozenFish)
+	for (const auto& Pair : FrozenGuards)
 	{
-		if (!Fish.IsValid() || !Fish->ConsumeFromAuthority(Controller, RequestId))
+		ACatFishGuardActor* Guard = Pair.Key.Get();
+		if (!IsValid(Guard) || !Guard->IsGrounded() || Guard->GetAttachParentActor() || Guard->IsHidden()
+			|| FVector::DistSquared(Guard->GetActorLocation(), GetActorLocation()) > FMath::Square(OfferingRadiusCentimeters)) return false;
+		UCatInventoryComponent* Inventory = Guard->GetFishInventoryComponent();
+		if (!Inventory || Inventory->HasPreparedRemoval() || Inventory->GetInventorySlotCount() != Pair.Value.Num()) return false;
+		for (int32 Index = 0; Index < Pair.Value.Num(); ++Index)
 		{
-			UE_LOG(LogCatAltar, Error, TEXT("Event=AltarConsumeFailed World=%s NetMode=%d Authority=1 LocalRole=%d Altar=%s RequestId=%s Fish=%s"),
-				*GetWorld()->GetName(), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *GetName(), *RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(Fish.Get()));
-			return false;
+			const FCatInventoryEntry* Entry = Inventory->GetInventoryEntryAtSlot(Index);
+			if (!Entry || Entry->Instance != Pair.Value[Index].Instance || Entry->StackCount != Pair.Value[Index].StackCount) return false;
 		}
 	}
-	FrozenFish.Reset();
+	OutError = FText::GetEmpty();
 	return true;
 }
 
-// 收口流程：只释放冻结鱼引用与关联标识，不销毁未提交的鱼，也不改写由 GameMode 持有的确认结果。
+// 整批提交流程：
+// 1. 先复核冻结批次并设置重入门，避免结算回调再次验证或清理同一批。
+// 2. 逐条准备散鱼消费，再逐个鱼护准备护内鱼整批移除；任何准备失败都跳过结算并释放已取得的预留。
+// 3. 所有来源准备成功后同步调用结算回调；只有回调接受才提交库存清空和散鱼销毁。
+// 4. 接受后销毁护内鱼保管 Actor、统一广播库存变化并清掉冻结状态；拒绝时数量、实物和鱼护本体都保持原样。
+bool ACatAltarActor::ConsumeFrozenOffering(AController* Controller, FGuid RequestId, TFunction<bool()> CommitSettlement)
+{
+	FText Error;
+	if (!ValidateFrozenOffering(Controller, RequestId, Error)) return false;
+	TGuardValue<bool> Committing(bOfferingCommitInProgress, true);
+	TArray<ACatFishPickupActor*> PreparedFish;
+	TArray<UCatInventoryComponent*> PreparedInventories;
+	TArray<AActor*> RetainedFishActors;
+	bool bPrepared = true;
+	for (const auto& Fish : FrozenFish)
+	{
+		if (!Fish->PrepareConsumptionFromAuthority(Controller, RequestId)) { bPrepared = false; break; }
+		PreparedFish.Add(Fish.Get());
+	}
+	if (bPrepared) for (const auto& Pair : FrozenGuards)
+	{
+		UCatInventoryComponent* Inventory = Pair.Key->GetFishInventoryComponent();
+		TArray<FGuid> Ids;
+		for (const FCatInventoryEntry& Entry : Pair.Value) if (Entry.Instance)
+		{
+			Ids.Add(Entry.Instance->GetItemInstanceId());
+			if (AActor* Actor = Entry.Instance->GetWorldActor()) RetainedFishActors.AddUnique(Actor);
+		}
+		if (!Inventory->PrepareRemovalFromAuthority(RequestId, Ids)) { bPrepared = false; break; }
+		PreparedInventories.Add(Inventory);
+	}
+	const bool bAccepted = bPrepared && (!CommitSettlement || CommitSettlement());
+	for (UCatInventoryComponent* Inventory : PreparedInventories) Inventory->FinishRemovalFromAuthority(RequestId, bAccepted, false);
+	for (ACatFishPickupActor* Fish : PreparedFish) Fish->FinishConsumptionFromAuthority(Controller, RequestId, bAccepted);
+	if (bAccepted)
+	{
+		for (AActor* Actor : RetainedFishActors) if (IsValid(Actor)) Actor->Destroy();
+		for (UCatInventoryComponent* Inventory : PreparedInventories) Inventory->BroadcastInventoryChange();
+		FrozenFish.Reset();
+		FrozenGuards.Reset();
+		OfferingRequestId.Invalidate();
+	}
+	UE_LOG(LogCatAltar, Log, TEXT("Event=AltarOfferingBatchFinished RequestId=%s Altar=%s Prepared=%d Accepted=%d Fish=%d Guards=%d World=%s NetMode=%d Authority=1 LocalRole=%d"),
+		*RequestId.ToString(), *GetName(), bPrepared, bAccepted, PreparedFish.Num(), PreparedInventories.Num(), *GetNameSafe(GetWorld()), GetNetMode(), GetLocalRole());
+	return bAccepted;
+}
+
+// 非提交期清除本轮候选；同步结算回调不能清空正在配对完成的批次，已取得的散鱼和库存预留由消费入口成对完成。
 void ACatAltarActor::ResetOffering()
 {
+	if (bOfferingCommitInProgress) return;
 	FrozenFish.Reset();
+	FrozenGuards.Reset();
 	OfferingRequestId.Invalidate();
 }

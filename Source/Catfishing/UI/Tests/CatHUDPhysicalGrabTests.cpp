@@ -1,4 +1,4 @@
-#if WITH_DEV_AUTOMATION_TESTS
+﻿#if WITH_DEV_AUTOMATION_TESTS
 
 #include "AbilitySystemComponent.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
@@ -248,7 +248,6 @@ bool FCatHUDPhysicalGrabProjectionTest::RunTest(const FString& Parameters)
 	Model->FishingViewBridge=NewObject<UCatFishingViewBridge>(Model);
 	Model->Refresh();
 	TestTrue(TEXT("空手提示来自正式 Model"),Model->GetViewState().bShowPhysicalControls);
-	TestTrue(TEXT("空手说明按住左右键抓握"),Model->GetViewState().PhysicalControlText.ToString().Contains(TEXT("按住左 / 右键")));
 	Grab->SetGrabInput(false,true);
 	Model->RefreshFishingSessionBinding();
 	TestTrue(TEXT("没有钓鱼会话时调和仍刷新右手观察"),Model->GetViewState().bRightHandReaching);
@@ -261,12 +260,9 @@ bool FCatHUDPhysicalGrabProjectionTest::RunTest(const FString& Parameters)
 	Rod->SetPrimaryOperatorFromAuthority(Primary,Rod->GetPresentationState().RodActorRevision);
 	Model->Refresh();
 	TestFalse(TEXT("旁人不会获得主控身份"),Model->GetViewState().bPrimaryRodOperator);
-	TestFalse(TEXT("普通抓握提示没有会话辅助身份"),Model->GetViewState().PhysicalControlText.ToString().Contains(TEXT("辅助")));
-	TestTrue(TEXT("普通抓握说明任意方向移动拉动"),Model->GetViewState().PhysicalControlText.ToString().Contains(TEXT("WASD 拉动")));
 	Controller->PlayerState=Primary;
 	Model->Refresh();
 	TestTrue(TEXT("明确主控保留原钓鱼输入"),Model->GetViewState().bPrimaryRodOperator);
-	TestTrue(TEXT("主控提示原收放线输入"),Model->GetViewState().PhysicalControlText.ToString().Contains(TEXT("右键放线")));
 	Grab->SetGrabInput(false,false);
 	Rod->SetPrimaryOperatorFromAuthority(nullptr,Rod->GetPresentationState().RodActorRevision);
 	Model->RefreshFishingSessionBinding();
@@ -278,9 +274,10 @@ bool FCatHUDPhysicalGrabProjectionTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatHUDFormalPhysicalGrabTest,
-	"Catfishing.PhysicalGrab.Presentation.FormalHUDRendersGripInstructionsAndHandRelease",
+	"Catfishing.PhysicalGrab.Presentation.FormalHUDRendersHandStateWithoutControlHints",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
+// 验证流程：加载正式 WBP，确认旧教程控件已移除，再检查手状态显示及解绑清理，不改变玩法状态。
 bool FCatHUDFormalPhysicalGrabTest::RunTest(const FString& Parameters)
 {
 	FTestWorldWrapper Scene;
@@ -291,20 +288,16 @@ bool FCatHUDFormalPhysicalGrabTest::RunTest(const FString& Parameters)
 	if (!Widget) return false;
 	UTextBlock* Controls=Cast<UTextBlock>(Widget->GetWidgetFromName(TEXT("PhysicalControlTextBlock")));
 	UTextBlock* Hands=Cast<UTextBlock>(Widget->GetWidgetFromName(TEXT("PhysicalHandStateTextBlock")));
-	if (!TestNotNull(TEXT("正式 WBP 包含玩法提示控件"),Controls)||!TestNotNull(TEXT("正式 WBP 包含左右爪控件"),Hands)) return false;
+	if (!TestNull(TEXT("正式 WBP 不再包含硬编码操作教程"),Controls)||!TestNotNull(TEXT("正式 WBP 包含左右爪控件"),Hands)) return false;
 	FCatHUDViewState State;
 	State.bShowPhysicalControls=true;
 	State.bLeftHandGripped=true;
-	State.PhysicalControlText=FText::FromString(TEXT("按住左 / 右键抓人或抓竿 · WASD 拉动 · 松键释放"));
-	State.PhysicalHandStateText=FText::FromString(TEXT("左爪：抓住（松键释放）    右爪：收回"));
+	State.PhysicalHandStateText=FText::FromString(TEXT("左爪：抓住    右爪：收回"));
 	Widget->RenderHUD(State);
-	TestEqual(TEXT("实际 BindWidget 显示普通抓握控制文本"),Controls->GetText().ToString(),State.PhysicalControlText.ToString());
-	TestEqual(TEXT("实际 BindWidget 显示抓住和释放文本"),Hands->GetText().ToString(),State.PhysicalHandStateText.ToString());
-	TestEqual(TEXT("普通抓握时提示可见"),Controls->GetVisibility(),ESlateVisibility::HitTestInvisible);
+	TestEqual(TEXT("实际 BindWidget 显示手部状态文本"),Hands->GetText().ToString(),State.PhysicalHandStateText.ToString());
 	TestNotNull(TEXT("保留原正式背包按钮"),Widget->GetWidgetFromName(TEXT("InventoryButton")));
 	TestNotNull(TEXT("保留原正式个人体力条"),Widget->GetWidgetFromName(TEXT("CatStaminaProgressBar")));
 	Widget->RenderHUD(FCatHUDViewState());
-	TestEqual(TEXT("退出身体后清两项正式控件"),Controls->GetVisibility(),ESlateVisibility::Collapsed);
 	TestEqual(TEXT("退出身体后清手状态控件"),Hands->GetVisibility(),ESlateVisibility::Collapsed);
 	return !HasAnyErrors();
 }

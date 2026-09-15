@@ -42,7 +42,7 @@ void UCatAltarWorldInfoComponent::TickComponent(float DeltaTime, ELevelTick Tick
 // 1. 清空输出并核对挂载者；非祭坛返回 false。本实现依赖控制器先判定观察者和层级，不再检查 Viewer 或 Detail。
 // 2. 读取本机 Run 公开快照，依次选择未就绪、结算中、本祭坛或另一祭坛的确认阶段、白天、开放夜晚或已关闭的状态说明。
 // 3. 写入进度和目标，再沿显式营地关系取得鱼缸摘要；缸内储备与地面预览分别判定有效性，缺失显示不可用；确认人数由顶部窗口直接读取公开快照。
-// 4. 有有效的历史提交凭据才追加旧天结果及进度变化；客户端只消费服务器复制结果，不分类地面鱼或预测结算。
+// 4. 有有效的历史提交凭据才追加旧天结果及进度变化；客户端只消费服务器复制结果，不分类现场供品或预测结算。
 bool UCatAltarWorldInfoComponent::BuildInfo_Implementation(APlayerController* Viewer, ECatWorldInfoDetail Detail, FCatWorldInfoViewData& OutData) const
 {
 	OutData = FCatWorldInfoViewData();
@@ -86,7 +86,7 @@ bool UCatAltarWorldInfoComponent::BuildInfo_Implementation(APlayerController* Vi
 	const bool bStockReady = TankInfo && TankInfo->TryGetOfferingSummary(StockPoints, Count, Capacity);
 	AddRow(TEXT("TankReserve"), NSLOCTEXT("CatWorldInfo", "TankReserve", "缸内储备"), bStockReady
 		? FText::Format(NSLOCTEXT("CatWorldInfo", "Points", "{0} 点"), FText::AsNumber(StockPoints)) : Unavailable);
-	AddRow(TEXT("GroundOffering"), NSLOCTEXT("CatWorldInfo", "GroundOffering", "本次地面待献"), Altar->TryGetGroundOfferingPoints(GroundPoints)
+	AddRow(TEXT("GroundOffering"), NSLOCTEXT("CatWorldInfo", "GroundOffering", "本次待献（散鱼及地面鱼护）"), Altar->TryGetGroundOfferingPoints(GroundPoints)
 		? FText::Format(NSLOCTEXT("CatWorldInfo", "Points", "{0} 点"), FText::AsNumber(GroundPoints)) : Unavailable);
 	if (Run && Run->DayTransition.LastCommittedOffering.RequestId.IsValid())
 	{

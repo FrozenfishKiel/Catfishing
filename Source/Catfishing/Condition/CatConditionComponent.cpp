@@ -2,11 +2,9 @@
 
 #include "Character/CatCharacter.h"
 #include "Condition/CatConditionSettings.h"
-#include "Data/CatFishDefinition.h"
 #include "Environment/CatWaterQuerySubsystem.h"
 #include "Fishing/CatFishingService.h"
 #include "GameFramework/Controller.h"
-#include "Growth/CatGrowthComponent.h"
 #include "Logging/CatLog.h"
 #include "Logging/CatLogContext.h"
 #include "Net/UnrealNetwork.h"
@@ -141,50 +139,6 @@ void UCatConditionComponent::SetFatigueTierFromAuthority(const ECatFatigueTier N
 		*Owner->GetName(), *UEnum::GetValueAsString(NewTier), Snapshot.Revision);
 }
 
-// 食用预检流程：只读核对 authority、正式鱼定义、实例实际重量（千克）和成长入口；通过后上层才可以不可逆移除库存实物。
-ECatDomainCommandError UCatConditionComponent::ValidateFishConsumption(const UCatFishDefinition* FishDefinition, const double WeightKilograms) const
-{
-	const ACatCharacter* Character = Cast<ACatCharacter>(GetOwner());
-	const UCatGrowthComponent* Growth = Character ? Character->GetGrowthComponent() : nullptr;
-	return GetOwner() && GetOwner()->HasAuthority() && FishDefinition && FishDefinition->IsRuntimeDefinitionReady()
-		&& Growth && Growth->ValidateFishGrowth(FishDefinition, WeightKilograms) == ECatDomainCommandError::None
-		? ECatDomainCommandError::None : ECatDomainCommandError::DependencyUnavailable;
-}
-
-// 进食流程：先按 RequestId 回放首次终态，再复用预检并提交成长；进食不会再写入中毒、倒地或其他身体数值。
-FCatDomainCommandResult UCatConditionComponent::ConsumeCommittedFish(const FGuid RequestId,
-	const UCatFishDefinition* FishDefinition, const double WeightKilograms)
-{
-	FCatDomainCommandResult Result;
-	Result.RequestId = RequestId;
-	const FString Key = MakeTerminalKey(TEXT("EatFish"), RequestId);
-	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
-	{
-		Result = *Cached;
-		MarkCommandReplayed(Result);
-		return Result;
-	}
-	const ACatCharacter* Character = Cast<ACatCharacter>(GetOwner());
-	UCatGrowthComponent* Growth = Character ? Character->GetGrowthComponent() : nullptr;
-	if (!RequestId.IsValid() || ValidateFishConsumption(FishDefinition, WeightKilograms) != ECatDomainCommandError::None)
-	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-	}
-	else
-	{
-		Result = Growth->ApplyCommittedFish(RequestId, FishDefinition, WeightKilograms);
-		Result.RequestId = RequestId;
-		if (CatIsAcceptedDomainCommandResult(Result))
-		{
-			Result.bCommitted = true;
-			Result.Error = ECatDomainCommandError::None;
-			Result.Revision = Snapshot.Revision;
-		}
-	}
-	TerminalCache.Add(Key, Result);
-	return Result;
-}
-
 // 倒地写入流程：只供服务器开发验证入口提交离散身体事实；相同状态不产生复制噪声，首次倒地会终止该角色的进行中钓鱼会话。
 bool UCatConditionComponent::SetDownedFromAuthority(const bool bNewDowned)
 {
@@ -219,12 +173,6 @@ bool UCatConditionComponent::SetDownedFromAuthority(const bool bNewDowned)
 void UCatConditionComponent::OnRep_Snapshot()
 {
 	OnSnapshotChanged.Broadcast();
-}
-
-// 幂等键流程：在组件局内内存中组合操作和 RequestId；不包含 StableNetId，不进入日志、复制或 Profile。
-FString UCatConditionComponent::MakeTerminalKey(const TCHAR* Operation, const FGuid RequestId)
-{
-	return FString::Printf(TEXT("%s|%s"), Operation, *RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 }
 
 // Snapshot 发布流程：authority 先要求 Owner 立即复制，再向同机只读订阅者广播；无 Owner 时仍广播当前对象变化但不尝试网络写入。

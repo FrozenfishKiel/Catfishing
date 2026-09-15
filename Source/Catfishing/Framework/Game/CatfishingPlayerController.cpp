@@ -1,4 +1,5 @@
 #include "Framework/Game/CatfishingPlayerController.h"
+#include "Interaction/Carry/CatCarryableActor.h"
 #include "Framework/Game/CatfishingGameState.h"
 #include "Components/InputComponent.h"
 #include "Logging/CatLogContext.h"
@@ -1273,20 +1274,27 @@ void ACatfishingPlayerController::ServerSellFishBatch_Implementation(const FGuid
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 快捷丢弃流程：服务器检查玩法门和身体，再读取当前携带对象；空嘴直接返回。
-// 单鱼解除原Actor携带；鱼护属于背包，走库存Drop/Place，不再通过嘴部快捷键释放。
-void ACatfishingPlayerController::ServerDropCarriedItem_Implementation()
+// 丢弃请求流程：
+// 1. 先用 RequestId 防重入，重复请求只记录拒绝，不再次释放。
+// 2. 再核对玩法命令门、当前 Pawn、客户端声明的原 Actor 和携带代次，确保 Q 的目标仍是按下时那次嘴叼。
+// 3. 只有当前本人嘴叼物且代次匹配才把同一 RequestId 交给公共释放；空嘴、旧目标、旧携带和玩法门关闭都不以当前新目标替代请求里的对象。
+void ACatfishingPlayerController::ServerDropCarriedItem_Implementation(FGuid RequestId, AActor* ExpectedItem, uint32 ExpectedCarryRevision)
 {
 	ACatCharacter* CatCharacter = Cast<ACatCharacter>(GetPawn());
-	if (!CanForwardGameplayCommand() || !CatCharacter || !CatCharacter->GetConditionComponent()
-		|| CatCharacter->GetConditionComponent()->GetSnapshot().bDowned) return;
-	ACatFishPickupActor* Fish = Cast<ACatFishPickupActor>(CatCharacter->GetMouthCarriedActor());
-	if (!IsValid(Fish)) return;
-	const bool bDropped = Fish->DropFromAuthority(this);
-	const FString Event = FString::Printf(
-		TEXT("Event=mouth_drop_result World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s ItemActor=%s Dropped=%d"),
-		*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(),
-		*GetNameSafe(Fish), bDropped);
+	ACatCarryableActor* Item = Cast<ACatCarryableActor>(ExpectedItem);
+	bool bDropped = false;
+	const bool bFresh = RequestId.IsValid() && !ProcessedDropRequests.Contains(RequestId);
+	if (bFresh)
+	{
+		ProcessedDropRequests.Add(RequestId);
+		if (CanForwardGameplayCommand() && CatCharacter && IsValid(Item)
+			&& CatCharacter->GetMouthCarriedActor() == Item && Item->GetCarryRevision() == ExpectedCarryRevision)
+		{
+			bDropped = Item->DropFromAuthority(this, RequestId);
+		}
+	}
+	const FString Event = FString::Printf(TEXT("Event=mouth_drop_result RequestId=%s ItemActor=%s CarryRevision=%u Fresh=%d Dropped=%d Player=%s World=%s NetMode=%d Authority=%d LocalRole=%d"),
+		*RequestId.ToString(), *GetNameSafe(ExpectedItem), ExpectedCarryRevision, bFresh, bDropped, *GetName(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole());
 	if (bDropped) { UE_LOG(LogCatfishing, Log, TEXT("%s"), *Event); }
 	else { UE_LOG(LogCatfishing, Warning, TEXT("%s"), *Event); }
 }
@@ -1392,8 +1400,9 @@ void ACatfishingPlayerController::ServerPlaceProtectionSign_Implementation(const
 
 // Native 输入分流流程：
 // 1. 先拒绝翻天操作；键盘/滚轮选择标签还要服从现有模态输入锁，而背包页面按钮直接调用选择入口时仍可更新本地焦点。
-// 2. G Started 发起当前槽位/实例的统一 Use；Q 仍只丢嘴部携带物并检查既有模态输入锁，空嘴不发请求。
-// 3. 其余 IA_Interact 继续由唯一 TargetingComponent 处理；不认识的标签无副作用返回。
+// 2. G Started 发起当前槽位/实例的统一 Use；Q 只在未被模态输入锁拦截且本地确有嘴叼物时提交目标 Actor 与携带代次。
+// 3. 提交 Q 前结束可能正在蓄力的交互输入，避免长按交互和丢弃同时占用同一玩家意图。
+// 4. 其余 IA_Interact 继续由唯一 TargetingComponent 处理；不认识的标签无副作用返回。
 void ACatfishingPlayerController::NativeInputTagPressed(const FGameplayTag InputTag)
 {
 	if (UCatGE_FishingScoopCooldown::IsOperationBlocked(GetPawn())) return;
@@ -1445,13 +1454,14 @@ void ACatfishingPlayerController::NativeInputTagPressed(const FGameplayTag Input
 		if (!IsLocalController() || IsMoveInputIgnored()) return;
 		ACatCharacter* CatCharacter = Cast<ACatCharacter>(GetPawn());
 		if (!CatCharacter) return;
-		AActor* Item = CatCharacter->GetMouthCarriedActor();
+		ACatCarryableActor* Item = Cast<ACatCarryableActor>(CatCharacter->GetMouthCarriedActor());
 		if (!Item) return;
+		const FGuid RequestId = FGuid::NewGuid();
 		if (InteractionTargetingComponent) InteractionTargetingComponent->EndInteractionInput(true);
 		UE_LOG(LogCatfishing, Log,
-			TEXT("Event=mouth_drop_submitted World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s ItemActor=%s"),
-			*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(), *GetNameSafe(Item));
-		ServerDropCarriedItem();
+			TEXT("Event=mouth_drop_submitted RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s ItemActor=%s"),
+			*RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(), *GetNameSafe(Item));
+		ServerDropCarriedItem(RequestId, Item, Item->GetCarryRevision());
 		return;
 	}
 	if (!InputTag.MatchesTagExact(CatInteractionTags::Input_Interact))

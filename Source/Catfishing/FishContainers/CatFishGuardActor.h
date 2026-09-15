@@ -44,8 +44,6 @@ public:
 	/** 查找嘴部正在携带的鱼护；与既有叼鱼检测共同维持单嘴占用，未叼任何鱼护时返回空。 */
 	static ACatFishGuardActor* FindCarriedGuard(const ACatCharacter* Character);
 
-	/** 角色倒地、失去占有或销毁时把同一鱼护放回地面；仅释放仍指向本鱼护的嘴部引用。 */
-	void ReleaseMouthCarryFromAuthority(const FVector& DropLocation);
 
 	/** 蓝图读取鱼护持有的正式鱼库存组件；拖拽、吃鱼、售鱼和复制共用这份事实，避免鱼护再维护一套鱼数组。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|FishContainers")
@@ -64,6 +62,10 @@ public:
 	virtual bool Interact_Implementation(AController* RequestingController, FGuid RequestId) override;
 
 protected:
+	/** 鱼护本体对应的库存身份；公共丢弃只据此移出外壳实例，内部鱼继续留在本 Actor 的 FishInventory。 */
+	virtual UCatInventoryItemInstance* GetCarriedInventoryItem() const override;
+	/** 公共释放完成后恢复鱼护交互探测，物理和附着不由物品重复处理。 */
+	virtual void OnCarryReleased(ACatCharacter* Character, bool bThrow) override;
 	/** authority 进入 World 时按配置补齐正式鱼库存槽位；客户端只等待 InventoryComponent 复制。 */
 	virtual void BeginPlay() override;
 

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
@@ -6,6 +6,7 @@
 #include "Fishing/Integration/CatFishingRodAimState.h"
 #include "Fishing/Integration/CatFishingCommandTypes.h"
 #include "Fishing/Simulation/CatFishingRodResistanceModel.h"
+#include "AbilitySystem/Config/CatAbilitySet.h"
 #include "Interaction/CatInteractable.h"
 #include "CatFishingRodActor.generated.h"
 
@@ -18,6 +19,19 @@ class UPrimitiveComponent;
 class ACatCharacter;
 class UCatFishingPhysicalRodComponent;
 class UCatLightPropComponent;
+
+/** 一名操作员在本鱼竿上的来源授予；原 ASC 与句柄配对，换 Pawn 后仍能撤销旧身体的能力。 */
+USTRUCT()
+struct FCatFishingRodAbilityGrant
+{
+	GENERATED_BODY()
+	/** 真正接收本批授予的 ASC；服务器授予时写入，撤销不能改用玩家的新 Pawn。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UCatAbilitySystemComponent> AbilitySystem;
+	/** 本批来源独占的能力与效果句柄；只在上面的原 ASC 上授予和回收。 */
+	UPROPERTY(Transient)
+	FCatGrantedAbilitySetHandles Handles;
+};
 
 /** Read-only control observation; no predicted pose or second physics integration. */
 struct CATFISHING_API FCatFishingRodControlObservation
@@ -222,9 +236,13 @@ private:
 	void QueueOrDispatchPresentationChanged(const FCatFishingRodPresentationState& Previous, const FCatFishingRodPresentationState& Current);
 	/** 立即应用皮肤、隐藏状态和蓝图通知；服务器与客户端各自在本地执行这一层表现副作用。 */
 	void DispatchPresentationChanged(const FCatFishingRodPresentationState& Previous, const FCatFishingRodPresentationState& Current);
-	/** 初始化与图投影变更共用成员元数据；不改变任何身体或竿姿态。 */
+	/** 操作位版本记录主控身份的变更；初始化和关系图更新使用相同规则，确保旧输入不能作用于新操作者。 */
 	void PrepareOperatorMemberships(FCatFishingRodPresentationState& Next);
 	void ResetAuthoritativeRotationEffort();
+	/** 将当前真实操作位与本竿授予句柄对齐；来源固定为 Owner held-entry 的精确库存实例。 */
+	void ReconcileOperatorAbilityGrantsFromAuthority();
+	/** 回收某操作员因本竿获得的能力与效果；交接和 EndPlay 共用同一配对出口。 */
+	void RevokeOperatorAbilityGrantFromAuthority(APlayerState* PlayerState);
 	/** 提交一次权威可变状态；它保留 Actor/Item/Owner 身份，只允许操作位、皮肤、部署和断竿状态变化。 */
 	bool CommitAuthoritativeMutation(const FCatFishingRodPresentationState& Next, int64 ExpectedRevision);
 	/** 鱼竿 Actor 的场景根节点；所有可视锚点跟随它接受 Actor Transform。 */
@@ -277,6 +295,8 @@ private:
 	bool bIdentityInitialized = false;
 	/** BeginPlay 前是否积压了一次表现变化；用于延迟蓝图通知而不丢掉状态跳变。 */
 	bool bHasPendingPresentationNotification = false;
+	/** 本竿按操作员保存的授予句柄；Actor 管理多人会话生命周期，Spec.SourceObject 仍是库存实例。 */
+	TMap<TObjectPtr<APlayerState>, FCatFishingRodAbilityGrant> OperatorAbilityGrants;
 	/** BeginPlay 前积压变化的最早前值；蓝图收到时仍能看到一次完整 Previous → Current。 */
 	FCatFishingRodPresentationState PendingPreviousPresentationState;
 	/** BeginPlay 前积压变化的最新当前值；多次变化会合并成最后状态再分发。 */

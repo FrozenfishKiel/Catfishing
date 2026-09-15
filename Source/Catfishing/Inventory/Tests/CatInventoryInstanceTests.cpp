@@ -1,4 +1,4 @@
-#if WITH_DEV_AUTOMATION_TESTS
+﻿#if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
@@ -11,6 +11,7 @@
 #include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatInventoryItemDefinition.h"
 #include "Inventory/CatInventoryItemInstance.h"
+#include "Inventory/CatFishInventoryItemInstance.h"
 #include "Interaction/CatInteractable.h"
 #include "Items/CatEquipmentItem.h"
 #include "UObject/GarbageCollection.h"
@@ -273,6 +274,63 @@ bool FCatEquipmentItemPickupBoundaryTest::RunTest(const FString& Parameters)
 		bInstanceHoldsPickup = Entry && Entry->Instance && Entry->Instance->GetWorldActor() == Pickup;
 	}
 	TestTrue(TEXT("入账实例保存原Actor"), bInstanceHoldsPickup);
+	return !HasAnyErrors();
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatInventoryUseAtomicCallbackTest,
+	"Catfishing.Unit.Inventory.UseCallbackIsIdempotentAndPublishesOnlyCommittedQuantity",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+// 真实库存回调边界：用一条带身份的鱼进入同一扣量事务，验证预检重入、效果拒绝、通知时重放都不产生第二次效果或临时空格。
+bool FCatInventoryUseAtomicCallbackTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FTestWorldWrapper WorldWrapper;
+	if (!TestTrue(TEXT("创建 authority 世界"), WorldWrapper.CreateTestWorld(EWorldType::Game))) return false;
+	AActor* Owner = WorldWrapper.GetTestWorld()->SpawnActor<AActor>();
+	UCatInventoryComponent* Inventory = CatInventoryInstanceTests::AddInventoryComponent(*Owner, 2);
+	UCatFishDefinition* Definition = NewObject<UCatFishDefinition>();
+	Definition->FishDefinitionId = TEXT("UseCallbackFish");
+	UCatFishInventoryItemInstance* Fish = NewObject<UCatFishInventoryItemInstance>(Owner);
+	Fish->SetItemDefinition(Definition);
+	Fish->SetRuntimeOwnerActor(Owner);
+	if (!TestTrue(TEXT("写入实际鱼身份"), Fish->InitializeFishFromAuthority(FGuid::NewGuid(), FGuid::NewGuid(), TEXT("TestPlayer"), 1.0))) return false;
+	TArray<FCatInventoryEntry> Entries;
+	FCatInventoryEntry& Entry = Entries.AddDefaulted_GetRef();
+	Entry.Instance = Fish; Entry.StackCount = 1;
+	if (!TestTrue(TEXT("恢复一条真实鱼"), Inventory->ReplaceInventoryEntriesFromAuthority(Entries, 2))) return false;
+	int32 Notifications = 0;
+	int32 Effects = 0;
+	const FDelegateHandle Observer = Inventory->OnInventoryObservedChanged.AddLambda([&]() { ++Notifications; });
+	const FGuid FailedRequest = FGuid::NewGuid();
+	const auto Ready = [](FCatInventoryItemUseResult&) { return ECatDomainCommandError::None; };
+	const auto UnexpectedEffect = [&](FCatInventoryItemUseResult&) { ++Effects; return true; };
+	const FCatInventoryItemUseResult Failed = Inventory->UseItemInstanceFromAuthority(FailedRequest, Fish->GetItemInstanceId(), 1, TEXT("failure"),
+		[&](FCatInventoryItemUseResult&)
+		{
+			const auto Reentrant = Inventory->UseItemInstanceFromAuthority(FailedRequest, Fish->GetItemInstanceId(), 1, TEXT("failure"), Ready, UnexpectedEffect);
+			TestFalse(TEXT("预检中的重入不能提交"), Reentrant.bCommitted);
+			TestTrue(TEXT("预检中的重入有缓存标记"), Reentrant.bTerminalReplay);
+			return ECatDomainCommandError::None;
+		},
+		[&](FCatInventoryItemUseResult&) { ++Effects; return false; });
+	TestFalse(TEXT("拒绝效果不提交"), Failed.bCommitted);
+	TestEqual(TEXT("失败只执行一次效果尝试"), Effects, 1);
+	TestEqual(TEXT("失败不向UI发布临时扣量"), Notifications, 0);
+	CatInventoryInstanceTests::TestPreservesEntry(*this, *Inventory, Fish);
+	const auto FailedReplay = Inventory->UseItemInstanceFromAuthority(FailedRequest, Fish->GetItemInstanceId(), 1, TEXT("failure"), Ready, UnexpectedEffect);
+	TestTrue(TEXT("失败终态可以重放"), FailedReplay.bTerminalReplay);
+	TestEqual(TEXT("失败重放不重试效果"), Effects, 1);
+	const FGuid SuccessRequest = FGuid::NewGuid();
+	const auto Success = Inventory->UseItemInstanceFromAuthority(SuccessRequest, Fish->GetItemInstanceId(), 1, TEXT("success"), Ready, UnexpectedEffect);
+	TestTrue(TEXT("首次成功正式提交"), Success.bCommitted);
+	TestEqual(TEXT("成功只发布一次库存"), Notifications, 1);
+	const auto SuccessReplay = Inventory->UseItemInstanceFromAuthority(SuccessRequest, Fish->GetItemInstanceId(), 1, TEXT("success"), Ready, UnexpectedEffect);
+	TestTrue(TEXT("原格耗尽后仍可重放成功"), SuccessReplay.bReplayedTerminalCommitted);
+	TestEqual(TEXT("成功重放不重复效果"), Effects, 2);
+	TestEqual(TEXT("成功重放不重复通知"), Notifications, 1);
+	Inventory->OnInventoryObservedChanged.Remove(Observer);
 	return !HasAnyErrors();
 }
 
