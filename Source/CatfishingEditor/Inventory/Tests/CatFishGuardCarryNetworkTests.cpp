@@ -864,17 +864,18 @@ namespace CatFishGuardCarryNetwork
 				const UPrimitiveComponent* Body = Cast<UPrimitiveComponent>(Guard->GetRootComponent());
 				if (!OwnerProperty || OwnerProperty->GetObjectPropertyValue_InContainer(Guard) != (bCarried ? Character : nullptr)
 					|| Guard->GetOwner() != (bCarried ? Character : nullptr) || Guard->IsGrounded() == bCarried
-					|| Guard->IsHidden() != bCarried || Guard->GetActorEnableCollision() == bCarried || !Body || Body->IsSimulatingPhysics() != bDrop) return false;
+					|| Guard->IsHidden() || Guard->GetActorEnableCollision() == bCarried || !Body || Body->IsSimulatingPhysics() != bDrop) return false;
 				WaitingFor = FString::Printf(TEXT("peer=%d mouth attachment/socket and backpack agree with carried=%d"), Peer, bCarried);
 				const UCatInventoryComponent* Backpack = Character->GetInventoryComponent();
 				if (!Backpack || ACatFishPickupActor::FindCarriedFish(Character)
-					|| Character->GetMouthCarriedActor() != nullptr) return false;
+					|| Character->GetMouthCarriedActor() != (bCarried ? static_cast<AActor*>(Guard) : nullptr)) return false;
 				// 初始背包必须没有其他鱼护，首次客户端按正式定义查槽位才唯一对应本用例生成的载体。
 				if (!GuardId.IsValid() && !bCarried && Backpack->CountVisibleInventoryQuantityByDefinitionId(TEXT("FishGuard")) != 0) return false;
 				if (bCarried)
 				{
-					// 墓碑（T25，道具:64）：携带鱼护改为库存隐藏保管；继续核对原Actor、双方归属、内鱼GUID和重量。
-					if (Character->GetMouthCarriedActor() || Guard->GetAttachParentActor() || !Guard->IsHidden()) return false;
+					if (ACatFishGuardActor::FindCarriedGuard(Character) != Guard || Guard->GetAttachParentActor() != Character
+						|| Guard->GetRootComponent()->GetAttachParent() != Character->GetMesh()
+						|| Guard->GetRootComponent()->GetAttachSocketName() != GetDefault<UCatFishPickupSettings>()->MouthCarrySocketName) return false;
 				}
 				else if (Guard->GetAttachParentActor() || Character->GetMouthCarriedActor()
 					|| (GuardId.IsValid() && Backpack->FindInventorySlotIndexFromInstanceId(GuardId) != INDEX_NONE)) return false;

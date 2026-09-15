@@ -1273,22 +1273,46 @@ void ACatfishingPlayerController::ServerSellFishBatch_Implementation(const FGuid
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 快捷丢弃流程：服务器检查玩法门和身体，再读取当前携带对象；空嘴直接返回。
-// 单鱼解除原Actor携带；鱼护属于背包，走库存Drop/Place，不再通过嘴部快捷键释放。
+// 快捷丢弃流程：服务器检查玩法门和身体，再读取当前嘴部对象；空嘴直接返回。
+// 单鱼沿原Drop入口释放；鱼护按原Actor定位唯一库存实例，再走统一库存Drop事务，不另改附件或扣格。
 void ACatfishingPlayerController::ServerDropCarriedItem_Implementation()
 {
 	ACatCharacter* CatCharacter = Cast<ACatCharacter>(GetPawn());
 	if (!CanForwardGameplayCommand() || !CatCharacter || !CatCharacter->GetConditionComponent()
 		|| CatCharacter->GetConditionComponent()->GetSnapshot().bDowned) return;
-	ACatFishPickupActor* Fish = Cast<ACatFishPickupActor>(CatCharacter->GetMouthCarriedActor());
-	if (!IsValid(Fish)) return;
-	const bool bDropped = Fish->DropFromAuthority(this);
+	AActor* CarriedActor = CatCharacter->GetMouthCarriedActor();
+	ACatFishPickupActor* Fish = Cast<ACatFishPickupActor>(CarriedActor);
+	ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(CarriedActor);
+	if (!IsValid(Fish) && !IsValid(Guard)) return;
+	FCatDomainCommandResult Result;
+	Result.RequestId = FGuid::NewGuid();
+	Result.Error = ECatDomainCommandError::InvalidPayload;
+	if (Fish)
+	{
+		Result.bCommitted = Fish->DropFromAuthority(this);
+		if (Result.bCommitted) Result.Error = ECatDomainCommandError::None;
+	}
+	else if (UCatInventoryComponent* Inventory = CatCharacter->GetInventoryComponent())
+	{
+		for (const FCatInventoryEntry& Entry : Inventory->GetInventoryEntries())
+		{
+			if (Entry.Instance && Entry.StackCount == 1 && Entry.Instance->GetWorldActor() == Guard)
+			{
+				const int32 Slot = Inventory->FindInventorySlotIndexFromInstance(Entry.Instance);
+				const FGuid ItemId = Entry.Instance->GetItemInstanceId();
+				Result = UCatInventoryStatics::ExecuteInventoryActionFromAuthority(CatCharacter,
+					Result.RequestId, CatCharacter, Slot, ItemId, CatInventoryActionTags::Drop, 1);
+				break; // 事务可能广播并改变库存，不能再访问此前的Entry。
+			}
+		}
+	}
 	const FString Event = FString::Printf(
-		TEXT("Event=mouth_drop_result World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s ItemActor=%s Dropped=%d"),
-		*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(),
-		*GetNameSafe(Fish), bDropped);
-	if (bDropped) { UE_LOG(LogCatfishing, Log, TEXT("%s"), *Event); }
+		TEXT("Event=mouth_drop_result RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s ItemActor=%s Dropped=%d Error=%s"),
+		*Result.RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(),
+		*GetNameSafe(CarriedActor), Result.bCommitted, *UEnum::GetValueAsString(Result.Error));
+	if (Result.bCommitted) { UE_LOG(LogCatfishing, Log, TEXT("%s"), *Event); }
 	else { UE_LOG(LogCatfishing, Warning, TEXT("%s"), *Event); }
+	if (Guard) DeliverCampCommandResultToOwningClient(Result);
 }
 
 // 鱼护拾取路由：记录请求后确认命令窗口与同世界对象，再让鱼护裁决所有权和容量；按原请求记录及回送结果，不创建第二份携带状态。
