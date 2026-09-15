@@ -95,3 +95,9 @@ __pycache__/
 !.codex/docs/
 !.codex/docs/**
 .codex/state/
+
+# superpowers 插件的会话残留（2026-09-15 起不入库）
+.superpowers/
+
+# 发布脚本的临时文件
+Knowledge/Design/_publish.tmp.md

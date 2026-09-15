@@ -22,13 +22,13 @@ struct CATFISHING_API FCatBodyActionPresentationConfig
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Catfishing|BodyAction") TSoftObjectPtr<UAnimMontage> Montage;
 };
 
-/** BodyAction 长动作表现设置；只服务仍保留的 Camp/Social 事件 Ability，Wet 复制事实不从这里触发或清除。 */
+/** BodyAction 长动作表现设置；只服务仍保留的 Camp/Social 事件 Ability。 */
 UCLASS(Config=Game, DefaultConfig, meta=(DisplayName="Catfishing Body Action Presentation"))
 class CATFISHING_API UCatBodyActionPresentationSettings : public UDeveloperSettings
 {
 	GENERATED_BODY()
 public:
-	/** 建立六个正式 BodyAction 的默认表现记录；库存、供品结算、偷鱼和 Wet 反馈不进入这张表现表。 */
+	/** 建立四个正式 BodyAction 的默认表现记录；库存和供品结算不进入这张表现表。 */
 	UCatBodyActionPresentationSettings();
 	/** 查找事件标签对应的显式表现配置；重复配置时以最后一条为准，空标签直接拒绝。 */
 	const FCatBodyActionPresentationConfig* FindPresentationConfig(FGameplayTag BodyActionEventTag) const;

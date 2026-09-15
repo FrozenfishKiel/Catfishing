@@ -4,17 +4,7 @@
 #include "AbilitySystem/Attributes/CatAttributeSet.h"
 #include "CatSurvivalAttributeSet.generated.h"
 
-/**
- * Character-owned ASC 的唯一局内数值属性集；只复制当前仍是玩法真相的 FishingStrength、FightStamina、
- * 它的上限，以及黄色体力护盾段。
- *
- * 墓碑（2026-09-12，09-12 裁决「中毒按鱼各配、无渐进升级」）：这里原本还有一条 Poison 属性，
- * 用来做「跨鱼累加中毒值、到阈值 100 倒地」的渐进加重模型。该模型在 2026-08-21 已被设计砍掉
- * （猫册 v1.13），倒地改由单条鱼的食用结论直接裁决，Poison 因此失去全部消费者，连同
- * UCatGE_PoisonDelta、ApplyPoisonDelta/IsPoisonAtLeast、CatConditionSettings::PoisonDownedThreshold
- * 与三处 Recovery 清毒值一并删除。想找「中毒」的现行口径：轻档中毒是按鱼种配置的限时 buff
- * （吃鱼效果页 §4），重档＝吃下即倒地，由 CatConditionComponent 直接写 bDowned。
- */
+/** Character-owned ASC 的唯一搏斗属性集；复制力量、绿段体力及上限、黄色储备，消费和恢复共用同一事实源。 */
 UCLASS()
 class CATFISHING_API UCatSurvivalAttributeSet : public UCatAttributeSet
 {
@@ -74,4 +64,8 @@ protected:
 	UFUNCTION()
 	void OnRep_YellowFightStamina(const FGameplayAttributeData& OldYellowFightStamina);
 
+private:
+	/** 仅用于客户端复制诊断限频；不参与体力、恢复或复制裁决。 */
+	double NextFightStaminaDiagnosticWorldSeconds = 0.0;
+	bool bHasFightStaminaDiagnostic = false;
 };

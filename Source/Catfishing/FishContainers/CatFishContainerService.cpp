@@ -191,7 +191,7 @@ bool UCatFishContainerService::RegisterContainer(UCatContainerReplicationCompone
 	return true;
 }
 
-// 容器注销流程：先核对恢复时预期的销毁宿主，意外注销会关闭命令；再允许 pending-kill 弱引用仅作同一性比较，移除精确记录或保留 escrow 返还槽，前一个 Actor 不能删新登记。
+// 容器注销流程：先核对恢复时预期的销毁宿主，意外注销会关闭命令；再允许 pending-kill 弱引用仅作同一性比较，移除精确记录，前一个 Actor 不能删新登记。
 void UCatFishContainerService::UnregisterContainer(UCatContainerReplicationComponent* ReplicationComponent)
 {
 	if (!ReplicationComponent)
@@ -208,7 +208,6 @@ void UCatFishContainerService::UnregisterContainer(UCatContainerReplicationCompo
 	{
 		if (It.Value().ReplicationComponent.Get(true) == ReplicationComponent)
 		{
-			// 容器不再有「已移出但可能放回」的待归还槽；宿主一走记录就整条移除，不保留只剩弱引用的空壳。
 			It.RemoveCurrent();
 			return;
 		}
@@ -475,7 +474,7 @@ bool UCatFishContainerService::TryReplayFishConsumeTerminal(const FCatFishConsum
 	return true;
 }
 
-// Teardown 流程：永久关闭新命令；容器里没有可逆的中间态事务需要回滚，容器数组随后由 World 生命周期释放。
+// Teardown 流程：永久关闭新命令；容器数组随后由 World 生命周期释放。
 void UCatFishContainerService::CloseCommandsFromAuthority()
 {
 	bCommandsOpen = false;
@@ -500,11 +499,8 @@ bool UCatFishContainerService::TryGetContainerHost(const FGuid ContainerId, ECat
 }
 
 // 世界鱼容器导出流程：
-// 1. 先拒绝已关门、客户端上下文和恢复窗口；这三道守卫保证导出读到的是一份静止的服务器真相。
-//    （原先还有第四道「仍有未收口的偷鱼 escrow」——escrow 随偷鱼协议于 2026-09-11 删除，
-//    容器里不再存在「已从数组取出、尚未落到任何容器」的鱼，这个状态在数据模型上已经不可能出现。）
-// 2. 导出所有地图和动态容器，空箱同样记录；动态宿主保留正式类、位置和可延续实体键。
-// 3. 复用鱼容器服务私有恢复校验检查定义、容量、空格与实例唯一性；任一容器无法恢复就整体失败。
+// 1. 导出所有地图和动态容器，空箱同样记录；动态宿主保留正式类、位置和可延续实体键。
+// 2. 复用鱼容器服务私有恢复校验检查定义、容量、空格与实例唯一性；任一容器无法恢复就整体失败。
 bool UCatFishContainerService::ExportPersistedWorldFishContainers(TArray<FCatPersistentContainerSnapshot>& OutContainers,
 	FText& OutFailure) const
 {
@@ -512,7 +508,7 @@ bool UCatFishContainerService::ExportPersistedWorldFishContainers(TArray<FCatPer
 	OutFailure = FText::GetEmpty();
 	if (!bCommandsOpen || !GetWorld() || GetWorld()->GetNetMode() == NM_Client || bRestoringPersistentContainers)
 	{
-		OutFailure = FText::FromString(TEXT("世界鱼容器已关门、处于客户端上下文或正在恢复中。"));
+		OutFailure = FText::FromString(TEXT("世界鱼容器导出上下文不可用。"));
 		return false;
 	}
 	for (const TPair<FGuid, FContainerRecord>& Pair : Containers)
@@ -544,7 +540,7 @@ bool UCatFishContainerService::ExportPersistedWorldFishContainers(TArray<FCatPer
 }
 
 // 世界鱼容器恢复私有校验流程：
-// 1. 先确认服务仍开门、不在客户端且不在另一次恢复中，再建立当前地图稳定键到鱼容器记录的只读映射。
+// 1. 先确认新 World 的恢复上下文可用，再建立当前地图稳定键到鱼容器记录的只读映射。
 // 2. 地图对象必须全部原位匹配；动态对象只接受真实领域宿主类、组件名和合法 Transform，提前读取现行容量。
 // 3. 校验全部鱼定义、鱼缸资格、空格残留和跨容器重复 ID；这是恢复入口内部使用的只读步骤，不创建 Actor、不改数组或发布复制。
 bool UCatFishContainerService::ValidatePersistedWorldFishContainersForRestore(

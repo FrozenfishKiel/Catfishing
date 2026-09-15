@@ -3,8 +3,6 @@
 #include "Tests/AutomationEditorCommon.h"
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
-#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
-#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "Character/CatCharacter.h"
 #include "Character/Animation/CatForceReactionComponent.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
@@ -133,15 +131,14 @@ namespace CatCuteNetwork
 				for (ACatCharacter* Cat : {ServerCat,ClientCat}) Test->TestTrue(TEXT("multicast plays mapped CuteCat montage on both endpoints"),
 					Cat->GetMesh()->GetAnimInstance()->Montage_IsPlaying(Cast<UAnimMontage>(Cat->FindComponentByClass<UCatPhysicsPrototypeVisualComponent>()->ResolveAnimationAsset(Source))));
 				Test->AddExpectedMessage(TEXT("Event=character_downed"),ELogVerbosity::Warning);
-				// 2026-09-12：倒地来源是单条重毒鱼的结论，不再是 Poison 累加到阈值。
-				Test->TestTrue(TEXT("real condition authority accepts downed transition"),ServerCat->GetConditionComponent()->ApplySevereToxicityFromAuthority());
+				Test->TestTrue(TEXT("authority sets downed transition"),ServerCat->GetConditionComponent()->SetDownedFromAuthority(true));
 				Stage=5; StageAt=Now;
 			}
 			else if (Stage==5 && Now-StageAt>8) {
 				Test->TestTrue(TEXT("downed state reaches client"),ClientCat->GetConditionComponent()->GetSnapshot().bDowned);
 				for (ACatCharacter* Cat : {ServerCat,ClientCat}) Test->TestEqual(TEXT("both consumers reach lying pose"),Cat->FindComponentByClass<UCatConditionPresentationComponent>()->GetObservedPosePhase(),FName(TEXT("DownedPose")));
 				Test->TestTrue(TEXT("retargeted lying pose visibly lowers the client head"),CV->GetVisualMesh()->GetBoneLocationByName(TEXT("Head_001"),EBoneSpaces::WorldSpace).Z<StandingHead-3);
-				Test->TestTrue(TEXT("real condition authority accepts recovery"),CatIsAcceptedDomainCommandResult(ServerCat->GetConditionComponent()->RequestFieldSelfRecovery(ServerCat->GetController(),FGuid::NewGuid())));
+				Test->TestTrue(TEXT("authority clears downed transition"),ServerCat->GetConditionComponent()->SetDownedFromAuthority(false));
 				Stage=6; StageAt=Now;
 			}
 			else if (Stage==6 && Now-StageAt>8) {

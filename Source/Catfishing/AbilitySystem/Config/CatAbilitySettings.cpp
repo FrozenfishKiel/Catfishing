@@ -10,16 +10,13 @@ bool UCatAbilitySettings::IsRuntimeEnabled() const
 	return bEnableCharacterAbilityRuntime && ReplicationPolicy == ECatAbilityReplicationPolicy::Full;
 }
 
-// 初始属性读取流程：先清两项输出；只有正式 runtime、显式 tuning、正力量和正体力上限全部有限时才整体返回，避免半套初值进入 ASC。
-// 墓碑（2026-09-12）：这里原本还输出一项 InitialPoison，随渐进中毒模型一并删除，黄色体力开局固定为 0、不由配置播种。
-bool UCatAbilitySettings::TryGetInitialAttributes(float& OutFishingStrength,
-	float& OutMaxFightStamina) const
+// 初始属性读取流程：先清力量和体力上限输出；只有正式 runtime、显式 tuning 与有限正数配置齐全时才整体返回，避免半套初值进入 ASC。
+bool UCatAbilitySettings::TryGetInitialAttributes(float& OutFishingStrength, float& OutMaxFightStamina) const
 {
 	OutFishingStrength = 0.0f;
 	OutMaxFightStamina = 0.0f;
-	if (!IsRuntimeEnabled() || !bEnableInitialAttributeTuning
-		|| !FMath::IsFinite(InitialFishingStrength) || !FMath::IsFinite(InitialFightStamina)
-		|| InitialFishingStrength <= 0.0f || InitialFightStamina <= 0.0f)
+	if (!IsRuntimeEnabled() || !bEnableInitialAttributeTuning || !FMath::IsFinite(InitialFishingStrength)
+		|| !FMath::IsFinite(InitialFightStamina) || InitialFishingStrength <= 0.0f || InitialFightStamina <= 0.0f)
 	{
 		return false;
 	}
@@ -31,7 +28,7 @@ bool UCatAbilitySettings::TryGetInitialAttributes(float& OutFishingStrength,
 bool UCatAbilitySettings::IsFishingRuntimeReady() const
 {
 	// 运行就绪检查流程：先要求 Ability runtime gate 与两份软引用存在，再同步加载 AbilitySet/InputConfig，
-	// 最后复用默认猫种解析后的两项初始身体属性校验；任何一环缺失都保持 fail-closed。
+	// 最后复用默认猫种解析后的力量和体力上限校验；任何一环缺失都保持 fail-closed。
 	if (!IsRuntimeEnabled() || DefaultAbilitySet.IsNull() || AbilityInputConfig.IsNull())
 	{
 		return false;

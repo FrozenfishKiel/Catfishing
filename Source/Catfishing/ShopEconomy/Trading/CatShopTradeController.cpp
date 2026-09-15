@@ -1,5 +1,6 @@
 #include "ShopEconomy/Trading/CatShopTradeController.h"
 
+#include "Inventory/CatInventorySettings.h"
 #include "Camp/CatCampHubActor.h"
 #include "Camp/CatCampInventoryActor.h"
 #include "Camp/CatCampSettings.h"
@@ -19,8 +20,6 @@
 #include "Inventory/CatFishInventoryItemInstance.h"
 #include "Inventory/CatInventoryAccessRules.h"
 #include "Inventory/CatInventoryComponent.h"
-#include "Inventory/CatInventorySettings.h"
-#include "Inventory/CatInventoryStatics.h"
 #include "Logging/CatLog.h"
 #include "ShopEconomy/CatShopCartCommandUtils.h"
 #include "ShopEconomy/CatShopEconomyService.h"
@@ -61,18 +60,19 @@ namespace
 	 */
 	struct FCatShopDeliveryTargets
 	{
+		/** 本车装备的公共架收货方；世界解析时按库存角色填写，商品分流读取，空值表示该角色未配置。 */
 		UCatInventoryComponent* EquipmentRack = nullptr;
+		/** 本车消耗品的公库收货方；世界解析时按库存角色填写，消耗品交付读取，空值表示缺少公库。 */
 		UCatInventoryComponent* SupplyStore = nullptr;
+		/** 未分角色关卡的唯一公共仓库候选；解析时填写并在多仓或已有角色时清空，分流只在专属目标缺失时读取。 */
 		UCatInventoryComponent* Fallback = nullptr;
+		/** 本车设施升级对应的共享鱼缸；世界解析填写，升级预检与提交读取，空值使设施商品无法交付。 */
 		ACatFishTankActor* FishTank = nullptr;
+		/** 本车是否已输出缺收货角色日志；商品分流首次遇到缺角色时置真，抑制后续行重复日志，不影响交付判据。 */
 		bool bLoggedRoleFallback = false;
+		/** 本车收货对象是否存在角色或共享鱼缸重复；世界解析发现重复时置真，订单协调器据此在交付前拒绝。 */
 		bool bAmbiguous = false;
 
-		/** 这一车至少要有一个能收货的去处，否则整单在扣钱之前就被拒。 */
-		bool HasAnyInventoryTarget() const
-		{
-			return EquipmentRack != nullptr || SupplyStore != nullptr || Fallback != nullptr;
-		}
 	};
 
 	/** 判定某个稳定 ID 是不是鱼缸容量升级这类设施商品；返回它对应的档位序号，不是升级商品时返回 INDEX_NONE。 */
@@ -216,9 +216,9 @@ FCatShopOrderResult UCatShopTradeController::SubmitCartFromKiosk(AController* Re
 {
 	// 摊位购物车提交流程：
 	// 1. 先重读服务器玩法 gate 和原始 RPC 载荷大小，拒绝无效局状态或异常购物车。
-	// 2. 再从请求 Controller 重建稳定玩家身份，并确认来源摊位属于当前 World。
+	// 2. 再从请求 Controller 重建稳定玩家身份，并要求摊位与玩家处于同一 World 且摊位仍启用；已打开页面不再限制下单距离。
 	// 3. 摊位只给来源货架库存，营地收货仓库由 ShopEconomy 在 World 中解析，Controller 只保留交易意图。
-	// 4. 所有前提成立后才构造购物车命令并进入订单链；任一前置失败都会带 Delivery 结果回到 UI。
+	// 4. 将来源与收货库存交经济服务统一成交；实物回执直接采用成交终态，所有前置失败也带结果回到 UI。
 	FCatShopOrderResult Result;
 	Result.CartTransaction.Command.RequestId = RequestId;
 	Result.Delivery.RequestId = RequestId;
@@ -244,13 +244,14 @@ FCatShopOrderResult UCatShopTradeController::SubmitCartFromKiosk(AController* Re
 	const APlayerState* CurrentPlayerState = RequestingController ? RequestingController->PlayerState : nullptr;
 	UCatShopInventoryComponent* ShopInventory = nullptr;
 	// 墓碑（2026-09-13）：下单不再二次检查摊位距离，货架仍从本 World 的来源摊位解析。
-	if (World && ShopKiosk && ShopKiosk->GetWorld() == World)
+	if (World && IsValid(ShopKiosk) && ShopKiosk->GetWorld() == World
+		&& ShopKiosk->CanServeOrderFromAuthority(RequestingController))
 	{
 		ShopInventory = ShopKiosk->GetShopInventory();
 	}
 	ACatCampInventoryActor* DeliveryInventory = ResolveDeliveryInventoryForShopOrder(World);
 	if (!CurrentPlayerState || !CurrentPlayerState->GetUniqueId().IsValid()
-		|| !ShopInventory || !ShopInventory->GetShopInventoryId().IsValid() || !DeliveryInventory)
+		|| !ShopInventory || !ShopInventory->GetShopInventoryId().IsValid())
 	{
 		Result.CartTransaction.Command.Error = ECatDomainCommandError::DependencyUnavailable;
 		Result.Delivery.Error = ECatDomainCommandError::DependencyUnavailable;
@@ -266,7 +267,16 @@ FCatShopOrderResult UCatShopTradeController::SubmitCartFromKiosk(AController* Re
 	Command.Context.StableNetId = CurrentPlayerState->GetUniqueId()->ToString();
 	Command.ShopInventoryId = ShopInventory->GetShopInventoryId();
 	Command.Lines = Lines;
-	Result = RunCartOrder(Command, ShopInventory, DeliveryInventory);
+	UCatShopEconomyService* Shop = World->GetSubsystem<UCatShopEconomyService>();
+	if (Shop)
+	{
+		Result = RunCartOrder(Command, ShopInventory, DeliveryInventory);
+	}
+	else
+	{
+		Result.CartTransaction.Command.Error = ECatDomainCommandError::DependencyUnavailable;
+	}
+	Result.Delivery = Result.CartTransaction.Command;
 	Result.Delivery.RequestId = RequestId;
 	// 成交行上带着当时的商店天序号，日志跟着写一份，Playtest 不用先把服务器账本导出来就能按天切「每日余额」。
 	// 一车里所有行的天序号必然相同，取第一行即可；整车被拒时没有可归日的成交，写 -1 表示不属于任何一天。

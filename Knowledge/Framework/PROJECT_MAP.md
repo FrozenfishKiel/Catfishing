@@ -2,6 +2,7 @@
 
 更新时间：2026-09-09
 文档状态：当前源码事实与 Frontend 实施中边界地图。
+> 2026-09-15 盘点：目录表缺 Growth／Input／Interaction／Items／Physics／Save／Settings／ShopEconomy 八个目录；FishContainers 与 Social 两行仍写「偷鱼 escrow」（09-11 起偷鱼不是机制，`Escrow` 源码零命中）；Frontend 段仍写「WBP 尚未生成」（九个 WBP 已在 `Content/UI/Frontend/`）；`UCatSurvivalWidget`、`UCatGE_PoisonDelta` 已不存在。待程序回写，逐条见 `Docs/Development/2026-09-15-文档盘点与处置.md`。
 范围：面向后续程序员和 AI 代码审查，说明当前框架从哪里读、运行时真相由谁持有、哪些资料只能作为背景来源。本文不替代 GDD、数值表或验收报告。
 
 ## 文档位置
@@ -11,10 +12,10 @@
 - 产品规则先读 `Knowledge/Design/`。
 - 当前架构先读本目录和真实源码；`Docs/Architecture/项目技术方案.md` 与接线溯源只作为背景材料，凡与当前源码冲突都以本目录为准。
 - 当前代码事实先读本文和本目录其他文件。
-- 构建、运行和验收证据看 `.codex/docs/testing-report.md`、`.codex/docs/acceptance-report.md`、`.codex/docs/review-report.md`。
-- `Knowledge/Design/` 是设计真值（2026-09-11 起）：正文直接改这里、走 git；内容表 CSV 仍在飞书填、定稿拉进来；`_feishu/` 是飞书非正式页的只读快照。动手前读该目录 README。
+- 构建、运行和验收证据看 `Docs/Development/` 最新一份交接说明（现为 `2026-09-15-批7改动交接给两位程序.md`）；早先写的 `.codex/docs/testing-report.md`、`acceptance-report.md`、`review-report.md` 三份不存在。
+- `Knowledge/Design/` 是设计真值（2026-09-11 起）：正文直接改这里、走 git；内容表 CSV 在飞书填、定稿拉进来。动手前读该目录 README。
 - 旧的 `Knowledge/GDD/` 快照与 `Knowledge/Feishu/` 镜像都已删除；遇到同名或改名文档以 `Knowledge/Design/README.md` 为准。
-- `Docs/gap-analysis/2026-09-09/` 是飞书镜像和代码的对表审计材料；总览看 `SUMMARY.md`，待讨论项看 `讨论清单.md`。在属主确认前，它不等同于产品需求、工程进度或代码修改指令。
+- `Docs/gap-analysis/` 是设计对代码的对表审计材料，最新基线 `2026-09-13/`；总览看 `SUMMARY.md`，待处置项看 `回填清单.md`。在属主确认前，它不等同于产品需求、工程进度或代码修改指令。
 
 交接文档中关于“空模板”的描述不能用于判断当前工程是否已实现框架。
 

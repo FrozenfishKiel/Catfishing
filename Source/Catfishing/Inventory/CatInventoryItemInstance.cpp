@@ -1,8 +1,85 @@
 #include "Inventory/CatInventoryItemInstance.h"
+#include "Character/CatCharacter.h"
+#include "Inventory/CatInventoryStatics.h"
+#include "Condition/CatConditionComponent.h"
 
 #include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatInventoryItemDefinition.h"
 #include "Net/UnrealNetwork.h"
+
+// 操作查询只读定义清单与当前角色；菜单和服务器共用此入口，但它不替代服务器的库存宿主与身份校验。
+bool UCatInventoryItemInstance::CanExecuteInventoryAction(const FGameplayTag& Action,
+	const FCatInventoryEntry& Entry, APawn* UserPawn, FText& OutReason) const
+{
+	OutReason = FText::GetEmpty();
+	const ACatCharacter* Character = Cast<ACatCharacter>(UserPawn);
+	if (!ItemDefinition || !Entry.Instance || Entry.Instance != this || Entry.StackCount <= 0
+		|| !ItemDefinition->InventoryActions.ContainsByPredicate([&](const FCatInventoryActionDefinition& Row) { return Row.Action == Action; }))
+	{
+		OutReason = NSLOCTEXT("CatInventory", "ActionUnsupported", "此物品不支持这项操作");
+		return false;
+	}
+	if (!Character || !Character->GetConditionComponent() || Character->GetConditionComponent()->GetSnapshot().bDowned)
+	{
+		OutReason = NSLOCTEXT("CatInventory", "ActionDowned", "当前身体状态无法操作");
+		return false;
+	}
+	if (Action == CatInventoryActionTags::Use)
+	{
+		if (CanUseFromInventory(Entry, UserPawn)) return true;
+		OutReason = NSLOCTEXT("CatInventory", "UseUnavailable", "当前无法使用此物品");
+		return false;
+	}
+	if (Action == CatInventoryActionTags::Drop || Action == CatInventoryActionTags::Place)
+	{
+		if (IsValid(GetWorldActor()) || !ItemDefinition->WorldActorClass.IsNull()) return true;
+		OutReason = NSLOCTEXT("CatInventory", "WorldActorUnavailable", "此物品尚无可用的地面载体");
+		return false;
+	}
+	OutReason = NSLOCTEXT("CatInventory", "ActionUnsupported", "此物品不支持这项操作");
+	return false;
+}
+
+// 通用分发先核对服务器与来源实例；特殊标识由子类重写，已声明的基础动作只进入各自虚函数，不在UI或RPC按物品类型分支。
+FCatDomainCommandResult UCatInventoryItemInstance::ExecuteInventoryActionFromAuthority(const FGameplayTag& Action,
+	const FCatInventoryEntry& Entry, const FCatInventoryItemUseContext& Context, const int32 Quantity)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = Context.RequestId;
+	if (!Context.UserPawn || !Context.UserPawn->HasAuthority() || !Context.SourceInventory || Entry.Instance != this)
+	{ Result.Error = ECatDomainCommandError::PermissionDenied; return Result; }
+	if (Action == CatInventoryActionTags::Use) return UseFromInventorySlotFromAuthority(Entry, Context);
+	if (Action == CatInventoryActionTags::Drop) return DropFromInventoryFromAuthority(Entry, Context, Quantity);
+	if (Action == CatInventoryActionTags::Place) return PlaceFromInventoryFromAuthority(Entry, Context, Quantity);
+	if (Action == CatInventoryActionTags::Carry) return CarryFromInventoryFromAuthority(Entry, Context);
+	Result.Error = ECatDomainCommandError::InvalidPayload;
+	return Result;
+}
+
+// 丢弃复用同一库存事务；这里只选择语义，数量扣减、载体准备和重试幂等仍由库存负责。
+FCatDomainCommandResult UCatInventoryItemInstance::DropFromInventoryFromAuthority(const FCatInventoryEntry& Entry,
+	const FCatInventoryItemUseContext& Context, const int32 Quantity)
+{
+	return Context.SourceInventory->ReleaseItemToWorldFromAuthority(Cast<ACatCharacter>(Context.UserPawn),
+		Context.RequestId, Context.InventorySlotIndex, GetItemInstanceId(), Quantity, ECatInventoryWorldAction::Drop);
+}
+
+// 放置复用既有空间求解和库存提交；保持所选数量的原有放置语义。
+FCatDomainCommandResult UCatInventoryItemInstance::PlaceFromInventoryFromAuthority(const FCatInventoryEntry& Entry,
+	const FCatInventoryItemUseContext& Context, const int32 Quantity)
+{
+	return Context.SourceInventory->ReleaseItemToWorldFromAuthority(Cast<ACatCharacter>(Context.UserPawn),
+		Context.RequestId, Context.InventorySlotIndex, GetItemInstanceId(), Quantity, ECatInventoryWorldAction::Place);
+}
+
+// 基类没有嘴部携带能力；拒绝而不创建世界物，鱼等具体实例按已有领域合同覆盖。
+FCatDomainCommandResult UCatInventoryItemInstance::CarryFromInventoryFromAuthority(const FCatInventoryEntry& Entry,
+	const FCatInventoryItemUseContext& Context)
+{
+	FCatDomainCommandResult Result; Result.RequestId = Context.RequestId;
+	Result.Error = ECatDomainCommandError::InvalidPayload;
+	return Result;
+}
 
 // 实例构造流程：实例先处于无定义状态，只有被库存组件正式接收后才绑定定义并参与复制。
 UCatInventoryItemInstance::UCatInventoryItemInstance(const FObjectInitializer& ObjectInitializer)
@@ -184,6 +261,30 @@ FCatDomainCommandResult UCatInventoryItemInstance::UseFromInventorySlotFromAutho
 	FCatDomainCommandResult Result;
 	Result.RequestId = UseContext.RequestId;
 
+	Result.Error = ECatDomainCommandError::InvalidPayload;
+	return Result;
+}
+
+// 持续输入声明流程：基础实例没有按住后的第二阶段效果，返回 false 让 Controller 不保留无意义的输入会话。
+bool UCatInventoryItemInstance::UsesContinuousInput() const
+{
+	return false;
+}
+
+// 本地连续表现流程：基础实例没有按住表现，保留空实现让 Controller 不认识具体物品类型也能对称通知子类。
+void UCatInventoryItemInstance::SetUseInputActiveLocally(APlayerController* RequestingController, const bool bActive)
+{
+	(void)RequestingController;
+	(void)bActive;
+}
+
+// 持续使用结束流程：基础实例没有 Begin 阶段状态可结束；返回明确失败，防止输入层把 Release 解释为另一种默认物品行为。
+FCatDomainCommandResult UCatInventoryItemInstance::EndUseFromInventorySlotFromAuthority(
+	const FCatInventoryItemUseContext& UseContext, const bool bCancelled)
+{
+	(void)bCancelled;
+	FCatDomainCommandResult Result;
+	Result.RequestId = UseContext.RequestId;
 	Result.Error = ECatDomainCommandError::InvalidPayload;
 	return Result;
 }

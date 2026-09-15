@@ -1,6 +1,7 @@
-#include "UI/InventorySlot/CatInventorySlotWidget.h"
+﻿#include "UI/InventorySlot/CatInventorySlotWidget.h"
 
 #include "Components/Image.h"
+#include "Components/Border.h"
 #include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
 #include "Engine/Texture2D.h"
@@ -12,6 +13,7 @@
 #include "Logging/CatLog.h"
 #include "Engine/LocalPlayer.h"
 #include "UI/CatLocalPlayerUISubsystem.h"
+#include "UI/Inventory/CatInventoryPageController.h"
 #include "UI/ItemTooltip/CatItemTooltipController.h"
 
 // 先撤销旧悬停来源并保存明确的库存和格位，再按条目更新图片与数量；空格或定义尚未到达时清掉旧图。
@@ -34,6 +36,13 @@ void UCatInventorySlotWidget::SetSlotContext(const int32 InSlotIndex, UCatInvent
 		QuantityTextBlock->SetText(FText::AsNumber(InventoryEntry.StackCount));
 		QuantityTextBlock->SetVisibility(InventoryEntry.StackCount > 1 ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	}
+	if (SlotKeyTextBlock)
+	{
+		// 只有物品栏专用 WBP 带数字提示；普通背包格没有这个可选控件。
+		SlotKeyTextBlock->SetText(FText::AsNumber(SlotIndex + 1));
+		SlotKeyTextBlock->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+	}
+	SetSelectedFromModel(false);
 }
 
 // 只暴露本格的显示副本；蓝图可据此渲染状态，但库存事实仍以服务器按 SourceInventory 和 SlotIndex 重读为准。
@@ -42,19 +51,37 @@ const FCatInventoryEntry& UCatInventorySlotWidget::GetInventoryEntry() const
 	return InventoryEntry;
 }
 
-// 本地格子只提交库存宿主和位置；不等待上一动作，也不拿 UI 数量作为操作前提，服务器统一复核权限和真实物品。
-void UCatInventorySlotWidget::RequestUseItem()
+// 来源读取流程：返回父库存页写入的正式组件；为空表示格子尚未完成绑定，调用者必须拒绝提交。
+UCatInventoryComponent* UCatInventorySlotWidget::GetSourceInventory() const
 {
-	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwningPlayer());
-	if (!Controller || !SourceInventory || SlotIndex == INDEX_NONE || !InventoryEntry.Instance || InventoryEntry.StackCount <= 0)
+	return SourceInventory;
+}
+
+// 下标读取流程：返回与来源库存配对的当前位置；不能单独用于跨库存定位。
+int32 UCatInventorySlotWidget::GetSlotIndex() const
+{
+	return SlotIndex;
+}
+
+// 外圈刷新流程：读取物品栏 View 转交的本地 Controller 选择结果，显示或折叠正式 WBP 的边框；本格不缓存选中下标，也不触发物品操作。
+void UCatInventorySlotWidget::SetSelectedFromModel(const bool bSelected)
+{
+	if (SelectedBorder)
 	{
-		return;
+		SelectedBorder->SetVisibility(bSelected ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);
 	}
-	const FGuid RequestId = FGuid::NewGuid();
-	UE_LOG(LogCatUI, Log, TEXT("Event=ui_inventory_use_submitted World=%s NetMode=%d Request=%s SourceHost=%s SourceIndex=%d"),
-		*GetPathNameSafe(GetWorld()), static_cast<int32>(Controller->GetNetMode()), *RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-		*GetNameSafe(SourceInventory->GetOwner()), SlotIndex);
-	Controller->ServerUseInventoryItemFromHost(RequestId, SourceInventory->GetOwner(), SlotIndex);
+}
+
+// 外圈可见性读取流程：没有正式边框合同的 WBP 返回 false；调用方只能用结果诊断资产接线，不能据此推导库存事实。
+bool UCatInventorySlotWidget::IsSelectedFromModel() const
+{
+	return SelectedBorder && SelectedBorder->GetVisibility() != ESlateVisibility::Collapsed;
+}
+
+// 输入能力写入流程：父 View 在创建时声明本格是库存页还是只读快捷栏；此标记只决定鼠标事件是否继续，不影响条目或选择事实。
+void UCatInventorySlotWidget::SetAcceptsSlotInput(const bool bInAcceptsSlotInput)
+{
+	bAcceptsSlotInput = bInAcceptsSlotInput;
 }
 
 // 允许格子接收鼠标和键盘；其他初始化继续使用 UUserWidget。
@@ -102,16 +129,25 @@ void UCatInventorySlotWidget::CancelTooltip()
 	if (UCatItemTooltipController* Tooltip = ResolveTooltipController()) Tooltip->HideTooltip(this);
 }
 
-// 左键只检测拖拽，避免按下时重建控件中断鼠标捕获；右键复用唯一使用入口。
+// 左键只检测拖拽，避免按下时重建控件中断鼠标捕获；右键把当前格与屏幕坐标交给唯一页面控制器建立菜单上下文。
 FReply UCatInventorySlotWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
 {
+	if (!bAcceptsSlotInput)
+	{
+		return Super::NativeOnMouseButtonDown(InGeometry, InMouseEvent);
+	}
 	if (InMouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
 	{
 		return FReply::Handled().DetectDrag(TakeWidget(), EKeys::LeftMouseButton);
 	}
 	if (InMouseEvent.GetEffectingButton() == EKeys::RightMouseButton)
 	{
-		RequestUseItem();
+		ULocalPlayer* LocalPlayer = GetOwningLocalPlayer();
+		UCatLocalPlayerUISubsystem* UI = LocalPlayer ? LocalPlayer->GetSubsystem<UCatLocalPlayerUISubsystem>() : nullptr;
+		if (UCatInventoryPageController* PageController = UI ? UI->GetInventoryPageController() : nullptr)
+		{
+			PageController->OpenInventoryContextMenu(this, InMouseEvent.GetScreenSpacePosition());
+		}
 		return FReply::Handled();
 	}
 	return Super::NativeOnMouseButtonDown(InGeometry, InMouseEvent);
@@ -120,6 +156,10 @@ FReply UCatInventorySlotWidget::NativeOnMouseButtonDown(const FGeometry& InGeome
 // 普通点击在松开时选择父页使用按钮所指的格位；拖拽由 Slate 的独立 Drop 事件结束。
 FReply UCatInventorySlotWidget::NativeOnMouseButtonUp(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
 {
+	if (!bAcceptsSlotInput)
+	{
+		return Super::NativeOnMouseButtonUp(InGeometry, InMouseEvent);
+	}
 	if (InMouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
 	{
 		OnSlotSelected.Broadcast(SlotIndex);
@@ -133,6 +173,10 @@ void UCatInventorySlotWidget::NativeOnDragDetected(const FGeometry& InGeometry, 
 	UDragDropOperation*& OutOperation)
 {
 	OutOperation = nullptr;
+	if (!bAcceptsSlotInput)
+	{
+		return;
+	}
 	CancelTooltip();
 	if (!SourceInventory || SlotIndex == INDEX_NONE || !InventoryEntry.Instance || InventoryEntry.StackCount <= 0)
 	{
@@ -164,6 +208,10 @@ void UCatInventorySlotWidget::NativeOnDragDetected(const FGeometry& InGeometry, 
 bool UCatInventorySlotWidget::NativeOnDragOver(const FGeometry& InGeometry, const FDragDropEvent& InDragDropEvent,
 	UDragDropOperation* InOperation)
 {
+	if (!bAcceptsSlotInput)
+	{
+		return Super::NativeOnDragOver(InGeometry, InDragDropEvent, InOperation);
+	}
 	const UCatInventoryDragDropOperation* Operation = Cast<UCatInventoryDragDropOperation>(InOperation);
 	if (Operation && Operation->SourceInventory && Operation->SourceSlotIndex != INDEX_NONE && SourceInventory && SlotIndex != INDEX_NONE)
 	{
@@ -177,6 +225,10 @@ bool UCatInventorySlotWidget::NativeOnDragOver(const FGeometry& InGeometry, cons
 bool UCatInventorySlotWidget::NativeOnDrop(const FGeometry& InGeometry, const FDragDropEvent& InDragDropEvent,
 	UDragDropOperation* InOperation)
 {
+	if (!bAcceptsSlotInput)
+	{
+		return Super::NativeOnDrop(InGeometry, InDragDropEvent, InOperation);
+	}
 	const UCatInventoryDragDropOperation* Operation = Cast<UCatInventoryDragDropOperation>(InOperation);
 	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwningPlayer());
 	if (!Operation || !Controller || !Operation->SourceInventory || !SourceInventory

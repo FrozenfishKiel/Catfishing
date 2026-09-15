@@ -21,7 +21,7 @@ struct FCatSavedRunInventorySlot
 	UPROPERTY(SaveGame)
 	FGuid ItemInstanceId;
 
-	/** 持久化格的堆叠数量；Inventory 导出会把合法 held 实例放回空格，未提交的容器事务不能保存。 */
+	/** 持久化格的堆叠数量；Inventory 导出会把合法 held 实例放回空格，保证加载后能重建持有物品。 */
 	UPROPERTY(SaveGame)
 	int32 Quantity = 0;
 

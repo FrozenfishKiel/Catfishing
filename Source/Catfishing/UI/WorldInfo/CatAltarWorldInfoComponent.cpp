@@ -40,9 +40,8 @@ void UCatAltarWorldInfoComponent::TickComponent(float DeltaTime, ELevelTick Tick
 
 // 信息构建：
 // 1. 清空输出并核对挂载者；非祭坛返回 false。本实现依赖控制器先判定观察者和层级，不再检查 Viewer 或 Detail。
-// 2. 读取本机 Run 公开快照，依次选择未就绪、结算中、拒绝原因、白天、开放夜晚或已关闭的状态说明。
-//    开放夜晚不再说「等待全员确认」：到场本身就是同意，没有第二道确认关（2026-09-11 裁决⑥）。
-// 3. 写入进度和目标，再沿显式营地关系取得鱼缸摘要；缸内储备与地面预览分别判定有效性，缺失显示不可用，到场分母仍取祭坛人数。
+// 2. 读取本机 Run 公开快照，依次选择未就绪、结算中、本祭坛或另一祭坛的确认阶段、白天、开放夜晚或已关闭的状态说明。
+// 3. 写入进度和目标，再沿显式营地关系取得鱼缸摘要；缸内储备与地面预览分别判定有效性，缺失显示不可用；确认人数由顶部窗口直接读取公开快照。
 // 4. 有有效的历史提交凭据才追加旧天结果及进度变化；客户端只消费服务器复制结果，不分类地面鱼或预测结算。
 bool UCatAltarWorldInfoComponent::BuildInfo_Implementation(APlayerController* Viewer, ECatWorldInfoDetail Detail, FCatWorldInfoViewData& OutData) const
 {
@@ -54,9 +53,15 @@ bool UCatAltarWorldInfoComponent::BuildInfo_Implementation(APlayerController* Vi
 	const ACatfishingGameState* State = GetWorld() ? GetWorld()->GetGameState<ACatfishingGameState>() : nullptr;
 	const FCatRunPublicState* Run = State && State->GetRunPublicState().Phase.RunId.IsValid() ? &State->GetRunPublicState() : nullptr;
 	const bool bReady = Run && Run->Phase.Phase != ECatRunPhase::NotStarted;
+	const FCatAltarConfirmationSnapshot* Confirmation = Run ? &Run->AltarConfirmation : nullptr;
+	const bool bThisAltarConfirmation = Confirmation && Confirmation->Altar.Get() == Altar;
 	OutData.Status = !bReady ? Unavailable
 		: Run->DayTransition.bActive ? NSLOCTEXT("CatWorldInfo", "AltarTransition", "献祭结算中")
-		: !Altar->GetOfferingError().IsEmpty() ? Altar->GetOfferingError()
+		: Confirmation && Confirmation->State == ECatAltarConfirmationState::Waiting
+			? (bThisAltarConfirmation ? NSLOCTEXT("CatWorldInfo", "AltarConfirmationWaiting", "全队确认中")
+				: NSLOCTEXT("CatWorldInfo", "OtherAltarConfirmationWaiting", "队伍正在另一座祭坛确认"))
+		: Confirmation && Confirmation->State == ECatAltarConfirmationState::Cancelled && bThisAltarConfirmation
+			&& !Confirmation->CancelReason.IsEmpty() ? Confirmation->CancelReason
 		: Run->Phase.Phase == ECatRunPhase::DayActive ? NSLOCTEXT("CatWorldInfo", "AltarDaytime", "仅夜晚可献祭")
 		: Run->Phase.Phase == ECatRunPhase::NormalNight && Run->Phase.bOfferingOpen ? NSLOCTEXT("CatWorldInfo", "AltarWaiting", "夜晚 · 人到齐就能发起献祭")
 		: NSLOCTEXT("CatWorldInfo", "AltarClosed", "献祭已关闭");
@@ -83,15 +88,6 @@ bool UCatAltarWorldInfoComponent::BuildInfo_Implementation(APlayerController* Vi
 		? FText::Format(NSLOCTEXT("CatWorldInfo", "Points", "{0} 点"), FText::AsNumber(StockPoints)) : Unavailable);
 	AddRow(TEXT("GroundOffering"), NSLOCTEXT("CatWorldInfo", "GroundOffering", "本次地面待献"), Altar->TryGetGroundOfferingPoints(GroundPoints)
 		? FText::Format(NSLOCTEXT("CatWorldInfo", "Points", "{0} 点"), FText::AsNumber(GroundPoints)) : Unavailable);
-	// 到场判定本身就是同意，代码不再维护第二份确认计数；这一行改成可打断的献祭倒计时（2026-09-11 裁决⑥）。
-	double CountdownRemainingSeconds = 0.0, CountdownTotalSeconds = 0.0;
-	const bool bCountingDown = Altar->TryGetOfferingCountdown(CountdownRemainingSeconds, CountdownTotalSeconds);
-	FNumberFormattingOptions CountdownFormat;
-	CountdownFormat.MinimumFractionalDigits = 1;
-	CountdownFormat.MaximumFractionalDigits = 1;
-	AddRow(TEXT("OfferingCountdown"), NSLOCTEXT("CatWorldInfo", "OfferingCountdown", "献祭倒计时"), bCountingDown
-		? FText::Format(NSLOCTEXT("CatWorldInfo", "Seconds", "{0} 秒"), FText::AsNumber(CountdownRemainingSeconds, &CountdownFormat)) : Unavailable,
-		bCountingDown ? static_cast<float>(CountdownRemainingSeconds / CountdownTotalSeconds) : -1.0f);
 	if (Run && Run->DayTransition.LastCommittedOffering.RequestId.IsValid())
 	{
 		const FCatOfferingResultSnapshot& Result = Run->DayTransition.LastCommittedOffering;

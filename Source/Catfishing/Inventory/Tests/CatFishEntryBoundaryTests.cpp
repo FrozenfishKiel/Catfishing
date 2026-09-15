@@ -61,7 +61,7 @@ namespace CatFishEntryTests
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishAllInventoryEntryTest,
-	"Catfishing.Unit.Inventory.FishTransferEntriesRequireGroundContainerAndMouth",
+	"Catfishing.Unit.Inventory.FishCarryValidatesGroundContainerAndPreservesIdentity",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 bool FCatFishAllInventoryEntryTest::RunTest(const FString& Parameters)
 {
@@ -70,10 +70,6 @@ bool FCatFishAllInventoryEntryTest::RunTest(const FString& Parameters)
 	auto* Source = F.Guard->GetFishInventoryComponent();
 	auto* Bag = F.Cat->GetInventoryComponent();
 	const FGuid Id = F.Fish->GetItemInstanceId();
-	TestFalse(TEXT("Blueprint AddItemInstance 不能把单鱼写进背包"), Bag->AddItemInstance(F.Fish, 1));
-	TestFalse(TEXT("Blueprint AddItemDefinition 不能发鱼进背包"), Bag->AddItemDefinition(F.Fish->GetItemDefinition(), 1));
-	auto* OtherGuard = F.Wrapper.GetTestWorld()->SpawnActor<ACatFishGuardActor>(FVector(100,-100,100), FRotator::ZeroRotator);
-	TestFalse(TEXT("同一鱼不能绕过嘴部直接加入另一护"), OtherGuard->GetFishInventoryComponent()->AddItemInstance(F.Fish, 1));
 	FTestWorldWrapper OtherWorld;
 	if (!OtherWorld.CreateTestWorld(EWorldType::Game)) return false;
 	auto* ForeignCat = OtherWorld.GetTestWorld()->SpawnActor<ACatCharacter>();
@@ -89,8 +85,6 @@ bool FCatFishAllInventoryEntryTest::RunTest(const FString& Parameters)
 		|| !FakeInventory->AddItemInstance(FakeFish, 1)) return false;
 	TestFalse(TEXT("任意Host即使有鱼库存也不能Carry"), FakeInventory->ReleaseItemToWorldFromAuthority(F.Cat, FGuid::NewGuid(), 0,
 		FakeFish->GetItemInstanceId(), 1, ECatInventoryWorldAction::Carry).bCommitted);
-	TestFalse(TEXT("任意Host鱼不能经通用Move转出"), UCatInventoryStatics::MoveItemBetweenInventoryHostsFromAuthority(
-		F.Cat, FGuid::NewGuid(), FakeHost, 0, F.Cat, 0).bCommitted);
 
 	const FVector Near = F.Guard->GetActorLocation();
 	F.Guard->SetActorLocation(FVector(10000, 0, 100));
@@ -99,17 +93,6 @@ bool FCatFishAllInventoryEntryTest::RunTest(const FString& Parameters)
 	F.Guard->SetInventoryOwnerFromAuthority(F.Cat);
 	TestFalse(TEXT("底层拒绝已入包鱼护 Carry"), F.Carry().bCommitted);
 	F.Guard->SetInventoryOwnerFromAuthority(nullptr);
-	TestFalse(TEXT("通用 Host Move 不把鱼直送背包"), UCatInventoryStatics::MoveItemBetweenInventoryHostsFromAuthority(
-		F.Cat, FGuid::NewGuid(), F.Guard, 0, F.Cat, 0).bCommitted);
-	TestFalse(TEXT("底层 Move 同样拒绝直转"), Source->MoveItemToInventoryFromAuthority(FGuid::NewGuid(), 0, Bag, 0, TEXT("Batch7D")).bCommitted);
-	TestFalse(TEXT("底层 Exchange 同样拒绝直转"), UCatInventoryComponent::ExecuteExchangeRequestOnAuthority(Source, 0, Bag, 0));
-	UCatInventoryItemDefinition* Ordinary = NewObject<UCatInventoryItemDefinition>();
-	Ordinary->InventoryDefinitionId = TEXT("Batch7DOrdinary");
-	Ordinary->InventoryMaxStackCount = 1;
-	if (!TestTrue(TEXT("普通物品进入背包"), Bag->AddItemDefinition(Ordinary, 1))) return false;
-	TestFalse(TEXT("反向交换不能把目标鱼换入背包"), UCatInventoryComponent::ExecuteExchangeRequestOnAuthority(Bag, 0, Source, 0));
-	for (auto Action : {ECatInventoryWorldAction::Drop, ECatInventoryWorldAction::Place})
-		TestFalse(TEXT("库存 Drop/Place 不能绕过嘴"), Source->ReleaseItemToWorldFromAuthority(F.Cat, FGuid::NewGuid(), 0, Id, 1, Action).bCommitted);
 	TestTrue(TEXT("原鱼身份与重量保留"), Source->GetInventoryEntryAtSlot(0)->Instance == F.Fish && F.Fish->GetFishWeightKilograms() == 2.5);
 	TestTrue(TEXT("同一容器整理保留"), UCatInventoryStatics::MoveItemBetweenInventoryHostsFromAuthority(
 		F.Cat, FGuid::NewGuid(), F.Guard, 0, F.Guard, 1).bCommitted);
@@ -117,9 +100,6 @@ bool FCatFishAllInventoryEntryTest::RunTest(const FString& Parameters)
 	auto* WorldFish = Cast<ACatFishPickupActor>(F.Cat->GetMouthCarriedActor());
 	if (!TestNotNull(TEXT("正式入口创建可见世界鱼"), WorldFish)) return false;
 	TestTrue(TEXT("嘴部附着保留原实例"), WorldFish->GetAttachParentActor() == F.Cat && !WorldFish->IsHidden() && F.Fish->GetWorldActor() == WorldFish);
-	TestFalse(TEXT("通用Add不能把嘴鱼直接写进另一容器"), OtherGuard->GetFishInventoryComponent()->AddItemInstance(F.Fish, 1));
-	TestTrue(TEXT("直接Add拒绝后仍是可见原嘴鱼"), F.Cat->GetMouthCarriedActor() == WorldFish && !WorldFish->IsHidden()
-		&& F.Fish->GetRuntimeOwnerActor() == WorldFish);
 	TestFalse(TEXT("任意 Host 入鱼拒绝"), WorldFish->StoreInFishGuardFromAuthority(F.Controller, FGuid::NewGuid(), F.Cat).Command.bCommitted);
 	F.Guard->SetActorLocation(FVector(10000, 0, 100));
 	TestFalse(TEXT("入护底层拒绝远距"), WorldFish->StoreInFishGuardFromAuthority(F.Controller, FGuid::NewGuid(), F.Guard).Command.bCommitted);
@@ -135,10 +115,10 @@ bool FCatFishAllInventoryEntryTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishGuardIndependentMouthTest,
-	"Catfishing.Unit.Inventory.SixSlotGuardPreservesContentsWithoutOccupyingMouth",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishGuardMouthOwnershipTest,
+	"Catfishing.Unit.Inventory.SixSlotGuardPreservesContentsAndClaimsMouth",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
-bool FCatFishGuardIndependentMouthTest::RunTest(const FString& Parameters)
+bool FCatFishGuardMouthOwnershipTest::RunTest(const FString& Parameters)
 {
 	CatFishEntryTests::FFixture F;
 	if (!TestTrue(TEXT("正式夹具"), F.Start())) return false;
@@ -153,24 +133,24 @@ bool FCatFishGuardIndependentMouthTest::RunTest(const FString& Parameters)
 	}
 	if (!TestTrue(TEXT("原鱼从鱼护进入嘴部"), F.Carry().bCommitted)) return false;
 	auto* FishActor = Cast<ACatFishPickupActor>(F.Cat->GetMouthCarriedActor());
-	// 叼鱼时拾起另含一鱼的原护，嘴部鱼和护内鱼必须各自保留。
+	// 先验证已有嘴鱼阻止鱼护认领，再清嘴并拾护；整个过程不改变护内实例。
 	auto* Inside = NewObject<UCatFishInventoryItemInstance>(F.Guard);
 	Inside->SetItemDefinition(F.Fish->GetItemDefinition());
 	if (!Inside->InitializeFishFromAuthority(FGuid::NewGuid(), FGuid::NewGuid(), TEXT("Batch7D"), 3.75)
 		|| !F.Guard->GetFishInventoryComponent()->AddItemInstance(Inside, 1)) return false;
-	if (!TestTrue(TEXT("叼鱼时仍能拾护"), F.Guard->PickUpFromAuthority(F.Controller, FGuid::NewGuid()))) return false;
-	TestTrue(TEXT("持护不替换嘴部鱼"), F.Cat->GetMouthCarriedActor() == FishActor);
-	TestTrue(TEXT("鱼护原Actor隐藏保管且不附着嘴"), F.Guard->IsHidden() && !F.Guard->GetAttachParentActor() && !F.Guard->IsGrounded());
-	TestEqual(TEXT("只占一个背包格"), F.Cat->GetInventoryComponent()->CountVisibleInventoryQuantityByDefinitionId(TEXT("FishGuard")), 1);
-	TestTrue(TEXT("护内鱼实例与重量保留"), F.Guard->GetFishInventoryComponent()->GetInventoryEntryAtSlot(0)->Instance == Inside && Inside->GetFishWeightKilograms() == 3.75);
+	TestFalse(TEXT("叼鱼时拒绝拾护"), F.Guard->PickUpFromAuthority(F.Controller, FGuid::NewGuid()));
+	TestTrue(TEXT("拾护拒绝保留嘴鱼"), F.Cat->GetMouthCarriedActor() == FishActor);
 	FishActor->Destroy();
-	TestNull(TEXT("清嘴后持护仍不占嘴"), F.Cat->GetMouthCarriedActor());
+	if (!TestTrue(TEXT("空嘴可拾护"), F.Guard->PickUpFromAuthority(F.Controller, FGuid::NewGuid()))) return false;
+	TestTrue(TEXT("原护可见并附着唯一嘴部"), F.Cat->GetMouthCarriedActor() == F.Guard && !F.Guard->IsHidden() && F.Guard->GetAttachParentActor() == F.Cat);
+	TestEqual(TEXT("鱼护仍占一背包格"), F.Cat->GetInventoryComponent()->CountVisibleInventoryQuantityByDefinitionId(TEXT("FishGuard")), 1);
+	TestTrue(TEXT("护内原实例和重量保留"), F.Guard->GetFishInventoryComponent()->GetInventoryEntryAtSlot(0)->Instance == Inside && Inside->GetFishWeightKilograms() == 3.75);
 	auto* Other = F.Wrapper.GetTestWorld()->SpawnActor<ACatFishGuardActor>(FVector(100, -100, 100), FRotator::ZeroRotator);
 	auto* Next = NewObject<UCatFishInventoryItemInstance>(Other);
 	Next->SetItemDefinition(F.Fish->GetItemDefinition());
 	if (!Next->InitializeFishFromAuthority(FGuid::NewGuid(), FGuid::NewGuid(), TEXT("Batch7D"), 1.5)
 		|| !Other->GetFishInventoryComponent()->AddItemInstance(Next, 1)) return false;
-	TestTrue(TEXT("持护时可从另一地面护叼鱼"), Other->GetFishInventoryComponent()->ReleaseItemToWorldFromAuthority(
+	TestFalse(TEXT("持护时不能再占嘴叼鱼"), Other->GetFishInventoryComponent()->ReleaseItemToWorldFromAuthority(
 		F.Cat, FGuid::NewGuid(), 0, Next->GetItemInstanceId(), 1, ECatInventoryWorldAction::Carry).bCommitted);
 	return !HasAnyErrors();
 }

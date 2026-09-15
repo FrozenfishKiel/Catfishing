@@ -5,7 +5,6 @@
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 
 #include "Misc/AutomationTest.h"
-#include "Equipment/CatEquipmentSettings.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/Integration/CatFishingPhysicalRodComponent.h"

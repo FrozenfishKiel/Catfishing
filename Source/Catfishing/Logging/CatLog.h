@@ -26,7 +26,7 @@ DECLARE_LOG_CATEGORY_EXTERN(LogCatProfile, Log, All);
 // LocalPlayer 页面、Widget 生命周期、输入意图和跨 World 重绑共享的日志分类，用于证明 View 没有持有领域写权。
 DECLARE_LOG_CATEGORY_EXTERN(LogCatUI, Log, All);
 
-// Social 求助、恶作剧与防骚扰牌共享的日志分类，用于核对权限、冷却和最大负面影响。
+// Social 求助、恶作剧与防护牌共享的日志分类，用于核对权限、冷却和保护范围。
 DECLARE_LOG_CATEGORY_EXTERN(LogCatSocial, Log, All);
 
 // Character 身体、装备与失能恢复共享的日志分类，用于证明表现状态和生存数值没有写成第二份真相。

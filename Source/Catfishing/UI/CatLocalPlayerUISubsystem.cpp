@@ -1,5 +1,6 @@
 #include "UI/CatLocalPlayerUISubsystem.h"
 #include "Framework/Game/CatfishingPlayerController.h"
+#include "UI/Run/CatAltarConfirmationWidget.h"
 #include "UI/Run/CatDayTransitionWidget.h"
 #include "UI/WorldInfo/CatWorldInfoController.h"
 
@@ -36,6 +37,8 @@
 #include "UI/Interaction/CatInteractionPageController.h"
 #include "UI/Interaction/CatInteractionPromptWidget.h"
 #include "UI/Inventory/CatInventoryPageController.h"
+#include "UI/Inventory/CatInventoryQuickbarWidget.h"
+#include "Inventory/CatBackPackComponent.h"
 #include "UI/Inventory/CatInventoryWidget.h"
 #include "UI/ItemTooltip/CatItemTooltipController.h"
 #include "UI/ItemTooltip/CatItemTooltipWidget.h"
@@ -525,7 +528,7 @@ void UCatLocalPlayerUISubsystem::RefreshDayTransition(APlayerController* Control
 		DayTransitionFailureUntilSeconds = Now + 2.0;
 		UE_LOG(LogCatUI, Warning,
 			TEXT("Event=day_transition_failure_feedback RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s Message=%s"),
-			*Transition.RequestId.ToString(), *GetNameSafe(Controller->GetWorld()), static_cast<int32>(Controller->GetNetMode()),
+			*Transition.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(Controller->GetWorld()), static_cast<int32>(Controller->GetNetMode()),
 			Controller->HasAuthority(), static_cast<int32>(Controller->GetLocalRole()), *GetNameSafe(Controller), *Transition.Message.ToString());
 	}
 	const bool bShowFailure = Transition.bFailed && Now < DayTransitionFailureUntilSeconds;
@@ -591,7 +594,7 @@ void UCatLocalPlayerUISubsystem::RefreshDayTransition(APlayerController* Control
 			UnavailableDayTransitionViewId = Transition.RequestId;
 			UE_LOG(LogCatUI, Error, TEXT("Event=DayTransitionWBPUnavailable World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s RequestId=%s Class=%s"),
 				*GetNameSafe(Controller->GetWorld()), static_cast<int32>(Controller->GetNetMode()), Controller->HasAuthority(),
-				static_cast<int32>(Controller->GetLocalRole()), *Controller->GetName(), *Transition.RequestId.ToString(), *Settings->DayTransitionWidgetClass.ToString());
+				static_cast<int32>(Controller->GetLocalRole()), *Controller->GetName(), *Transition.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *Settings->DayTransitionWidgetClass.ToString());
 			return;
 		}
 	}
@@ -605,7 +608,7 @@ void UCatLocalPlayerUISubsystem::RefreshDayTransition(APlayerController* Control
 		{
 			UE_LOG(LogCatUI, Warning,
 				TEXT("Event=day_transition_view_unavailable RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s"),
-				*Transition.RequestId.ToString(), *GetNameSafe(Controller->GetWorld()), static_cast<int32>(Controller->GetNetMode()),
+				*Transition.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(Controller->GetWorld()), static_cast<int32>(Controller->GetNetMode()),
 				Controller->HasAuthority(), static_cast<int32>(Controller->GetLocalRole()), *GetNameSafe(Controller));
 		}
 		return;
@@ -628,10 +631,107 @@ void UCatLocalPlayerUISubsystem::ClearDayTransition()
 	DayTransitionFailureUntilSeconds = 0.0;
 }
 
+// 祭坛确认表现流程：
+// 1. 只接收当前 LocalPlayer 的 Controller，并以 Waiting 快照显示窗口；等待期间不关闭背包、商店或菜单，也不改变焦点和输入模式。
+// 2. Cancelled 首次到达时以单调时间保留两秒原因；Accepted、Idle 或取消展示结束时移出窗口，正式翻天遮罩随后独立接管。
+// 3. 只加载 Settings 中的正式 WBP，失败按 RequestId 去重记录；所有文本与倒计时仍由 View 从公开快照和 GameState 服务器时间读取。
+void UCatLocalPlayerUISubsystem::RefreshAltarConfirmation(APlayerController* Controller,
+	const FCatAltarConfirmationSnapshot& Confirmation)
+{
+	ULocalPlayer* LocalPlayer = GetLocalPlayer();
+	if (!Controller || !LocalPlayer || Controller != LocalPlayer->GetPlayerController(GetWorld()))
+	{
+		return;
+	}
+	const bool bWaiting = Confirmation.State == ECatAltarConfirmationState::Waiting && Confirmation.RequestId.IsValid();
+	const double NowSeconds = FPlatformTime::Seconds();
+	if (Confirmation.State == ECatAltarConfirmationState::Cancelled && Confirmation.RequestId.IsValid()
+		&& Confirmation.RequestId != LastAltarConfirmationCancellationId)
+	{
+		LastAltarConfirmationCancellationId = Confirmation.RequestId;
+		AltarConfirmationCancellationUntilSeconds = NowSeconds + 2.0;
+		UE_LOG(LogCatUI, Warning,
+			TEXT("Event=altar_confirmation_cancelled_feedback RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s Reason=%s"),
+			*Confirmation.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(Controller->GetWorld()),
+			static_cast<int32>(Controller->GetNetMode()), Controller->HasAuthority(), static_cast<int32>(Controller->GetLocalRole()),
+			*GetNameSafe(Controller), *Confirmation.CancelReason.ToString());
+	}
+	const bool bShowCancellation = Confirmation.State == ECatAltarConfirmationState::Cancelled
+		&& Confirmation.RequestId == LastAltarConfirmationCancellationId && NowSeconds < AltarConfirmationCancellationUntilSeconds;
+	if (!bWaiting && !bShowCancellation)
+	{
+		if (AltarConfirmationWidget)
+		{
+			AltarConfirmationWidget->RemoveFromParent();
+			AltarConfirmationWidget = nullptr;
+		}
+		return;
+	}
+	const bool bCreatedThisFrame = !AltarConfirmationWidget;
+	if (bCreatedThisFrame)
+	{
+		if (UnavailableAltarConfirmationViewId == Confirmation.RequestId)
+		{
+			return;
+		}
+		const UCatUISettings* Settings = GetDefault<UCatUISettings>();
+		const TSubclassOf<UCatAltarConfirmationWidget> ViewClass = Settings ? Settings->LoadAltarConfirmationWidgetClass() : nullptr;
+		if (ViewClass)
+		{
+			AltarConfirmationWidget = CreateWidget<UCatAltarConfirmationWidget>(Controller, ViewClass);
+		}
+		if (!AltarConfirmationWidget)
+		{
+			UnavailableAltarConfirmationViewId = Confirmation.RequestId;
+			UE_LOG(LogCatUI, Error,
+				TEXT("Event=altar_confirmation_wbp_unavailable RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s Class=%s"),
+				*Confirmation.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(Controller->GetWorld()),
+				static_cast<int32>(Controller->GetNetMode()), Controller->HasAuthority(), static_cast<int32>(Controller->GetLocalRole()),
+				*GetNameSafe(Controller), Settings ? *Settings->AltarConfirmationWidgetClass.ToString() : TEXT("None"));
+			return;
+		}
+	}
+	if (!AltarConfirmationWidget->IsInViewport())
+	{
+		AltarConfirmationWidget->AddToViewport(8500);
+	}
+	if (!AltarConfirmationWidget->IsInViewport())
+	{
+		if (bCreatedThisFrame)
+		{
+			UE_LOG(LogCatUI, Warning,
+				TEXT("Event=altar_confirmation_view_unavailable RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s"),
+				*Confirmation.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(Controller->GetWorld()),
+				static_cast<int32>(Controller->GetNetMode()), Controller->HasAuthority(), static_cast<int32>(Controller->GetLocalRole()), *GetNameSafe(Controller));
+		}
+		return;
+	}
+	AltarConfirmationWidget->RenderConfirmation(Confirmation);
+}
+
+// 祭坛确认清理流程：只移除本 LocalPlayer 创建的窗口并清空展示去重与取消截止时间；不会发送撤回、取消服务器 Timer 或改写公开快照。
+void UCatLocalPlayerUISubsystem::ClearAltarConfirmation()
+{
+	if (AltarConfirmationWidget)
+	{
+		AltarConfirmationWidget->RemoveFromParent();
+		AltarConfirmationWidget = nullptr;
+	}
+	UnavailableAltarConfirmationViewId.Invalidate();
+	LastAltarConfirmationCancellationId.Invalidate();
+	AltarConfirmationCancellationUntilSeconds = 0.0;
+}
+
 // 页面只为关闭和输入读取这个控制器；每个库存 WBP 自己绑定所属库存的 Model。
 UCatInventoryPageController* UCatLocalPlayerUISubsystem::GetInventoryPageController() const
 {
-    return InventoryPageController;
+	return InventoryPageController;
+}
+
+// 快捷栏读取流程：返回 AttachPlayerLakeUI 已创建的正式 View；未装配、换 Pawn 或旅行清理期间返回空，不创建新控件。
+UCatInventoryQuickbarWidget* UCatLocalPlayerUISubsystem::GetInventoryQuickbarWidget() const
+{
+	return InventoryQuickbarWidget;
 }
 
 // 快照消费流程：Online 变更时按当前 World 调和正式 Frontend Root，并刷新局内 HUD；库存只听自己的数据源，不把会话状态当库存变化。
@@ -1548,10 +1648,11 @@ void UCatLocalPlayerUISubsystem::BindController(APlayerController* Controller)
 	HandleControllerPawnChanged(Controller->GetPawn());
 }
 
-// Controller 解绑流程：先移除仅属于旧 Controller 的翻天表现，再清理弱引用；Pawn 刷新继续由 Controller 生命周期推送。
+// Controller 解绑流程：先移除仅属于旧 Controller 的翻天与祭坛确认表现，再清理弱引用；Pawn 刷新继续由 Controller 生命周期推送。
 void UCatLocalPlayerUISubsystem::UnbindController()
 {
 	ClearDayTransition();
+	ClearAltarConfirmation();
 	BoundPlayerController.Reset();
 }
 
@@ -1603,7 +1704,7 @@ void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 
 // 本地玩家 UI 装配流程：
 // 1. 验证本地设置、当前 Controller/Pawn 和 World；核心页面 WBP 缺失时停止装配，物品提示缺失则只关闭该提示并记录原因，均不创建原生替身。
-// 2. 创建 HUD Model/View、库存、菜单和交互提示实例；任一必需实例缺失则统一解绑已创建部分，再结束本次装配。
+// 2. 创建 HUD、背包、独立物品栏、菜单和交互提示；背包与物品栏分别装入各自格子 WBP，物品栏只读同一库存；任一必需实例缺失则统一解绑。
 // 3. 绑定 HUD 动作与角色 Model，订阅 Model 更新后把 HUD 放入视口；Model 绑定失败同样统一清理。
 // 4. 创建物品悬停 View；成功加入全视口层后才绑定控制器，失败释放引用并记录，库存格只提交来源。
 // 5. 刷新 HUD，先创建图鉴页并绑定其页面控制器，再绑定库存和菜单控制器；页面都暂不入视口，仍由既有入口打开。
@@ -1626,18 +1727,22 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 
 	const TSubclassOf<UCatHUDWidget> HUDViewClass = Settings->LoadHUDWidgetClass();
 	const TSubclassOf<UCatInventoryWidget> InventoryViewClass = Settings->LoadInventoryWidgetClass();
+	const TSubclassOf<UCatInventoryQuickbarWidget> InventoryQuickbarViewClass = Settings->LoadInventoryQuickbarWidgetClass();
 	const TSubclassOf<UCatInventorySlotWidget> InventorySlotViewClass = Settings->LoadInventorySlotWidgetClass();
+	const TSubclassOf<UCatInventorySlotWidget> QuickbarSlotViewClass = Settings->LoadInventoryQuickbarSlotWidgetClass();
 	const TSubclassOf<UCatInteractionPromptWidget> InteractionPromptViewClass =
 		Settings->LoadInteractionPromptWidgetClass();
 	const TSubclassOf<UCatLakeMainMenuWidget> LakeMainMenuViewClass = Settings->LoadLakeMainMenuWidgetClass();
-	if (!HUDViewClass || !InventoryViewClass || !InventorySlotViewClass || !InteractionPromptViewClass
+	if (!HUDViewClass || !InventoryViewClass || !InventoryQuickbarViewClass || !InventorySlotViewClass || !QuickbarSlotViewClass || !InteractionPromptViewClass
 		|| !LakeMainMenuViewClass)
 	{
 		UE_LOG(LogCatUI, Warning,
-			TEXT("Event=ui_player_module_class_missing HUD=%s Inventory=%s Slot=%s Interaction=%s LakeMenu=%s"),
+			TEXT("Event=ui_player_module_class_missing HUD=%s Inventory=%s Quickbar=%s Slot=%s QuickbarSlot=%s Interaction=%s LakeMenu=%s"),
 			*Settings->HUDWidgetClass.ToSoftObjectPath().ToString(),
 			*Settings->InventoryWidgetClass.ToSoftObjectPath().ToString(),
+			*Settings->InventoryQuickbarWidgetClass.ToSoftObjectPath().ToString(),
 			*Settings->InventorySlotWidgetClass.ToSoftObjectPath().ToString(),
+			*Settings->InventoryQuickbarSlotWidgetClass.ToSoftObjectPath().ToString(),
 			*Settings->InteractionPromptWidgetClass.ToSoftObjectPath().ToString(),
 			*Settings->LakeMainMenuWidgetClass.ToSoftObjectPath().ToString());
 		return;
@@ -1647,11 +1752,12 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	HUDWidget = CreateWidget<UCatHUDWidget>(Controller, HUDViewClass);
 	InventoryPageController = NewObject<UCatInventoryPageController>(this);
 	InventoryWidget = CreateWidget<UCatInventoryWidget>(Controller, InventoryViewClass);
+	InventoryQuickbarWidget = CreateWidget<UCatInventoryQuickbarWidget>(Controller, InventoryQuickbarViewClass);
 	LakeMainMenuController = NewObject<UCatLakeMainMenuController>(this);
 	LakeMainMenuWidget = CreateWidget<UCatLakeMainMenuWidget>(Controller, LakeMainMenuViewClass);
 	InteractionPageController = NewObject<UCatInteractionPageController>(this);
 	InteractionPromptWidget = CreateWidget<UCatInteractionPromptWidget>(Controller, InteractionPromptViewClass);
-	if (!HUDModel || !HUDWidget || !InventoryPageController || !InventoryWidget
+	if (!HUDModel || !HUDWidget || !InventoryPageController || !InventoryWidget || !InventoryQuickbarWidget
 		|| !LakeMainMenuController || !LakeMainMenuWidget || !InteractionPageController || !InteractionPromptWidget)
 	{
 		DetachPlayerLakeUI();
@@ -1659,6 +1765,8 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	}
 	HUDActionHandle = HUDWidget->OnActionRequested.AddUObject(this, &ThisClass::HandleHUDActionRequested);
 	InventoryWidget->SetInventorySlotWidgetClass(InventorySlotViewClass);
+	InventoryQuickbarWidget->SetInventorySlotWidgetClass(QuickbarSlotViewClass);
+	InventoryQuickbarWidget->SetBackPackContext(Cast<UCatBackPackComponent>(Character->GetInventoryComponent()));
 	if (!HUDModel->Bind(GetLocalPlayer(), Controller, Character))
 	{
 		DetachPlayerLakeUI();
@@ -1667,6 +1775,7 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	HUDModelViewChangedHandle = HUDModel->OnViewStateChanged.AddUObject(
 		this, &ThisClass::HandleHUDModelViewStateChanged);
 	HUDWidget->AddToViewport(1);
+	InventoryQuickbarWidget->AddToViewport(2);
 	// 库存提示独立于页面但隶属于本玩家；类缺失只关闭提示并落盘，不影响既有库存操作。
 	if (const TSubclassOf<UCatItemTooltipWidget> TooltipClass = Settings->LoadItemTooltipWidgetClass())
 	{
@@ -1739,7 +1848,7 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	const UWorld* World = GetWorld();
 	const ULocalPlayer* LocalPlayer = GetLocalPlayer();
 	UE_LOG(LogCatUI, Log,
-		TEXT("Event=ui_player_modules_attached World=%s NetMode=%d LocalPlayerIndex=%d Controller=%s LocalController=%s HUD=%s HUDMode=minimal_main Inventory=%s Slot=%s LakeMenu=%s Interaction=%s Collection=%s ShopPrecreated=false"),
+		TEXT("Event=ui_player_modules_attached World=%s NetMode=%d LocalPlayerIndex=%d Controller=%s LocalController=%s HUD=%s HUDMode=minimal_main Inventory=%s Quickbar=%s Slot=%s QuickbarSlot=%s LakeMenu=%s Interaction=%s Collection=%s ShopPrecreated=false"),
 		World ? *World->GetName() : TEXT("None"),
 		World ? static_cast<int32>(World->GetNetMode()) : -1,
 		LocalPlayer ? LocalPlayer->GetLocalPlayerIndex() : INDEX_NONE,
@@ -1747,7 +1856,9 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 		Controller->IsLocalController() ? TEXT("true") : TEXT("false"),
 		*GetNameSafe(HUDWidget->GetClass()),
 		*GetNameSafe(InventoryWidget->GetClass()),
+		*GetNameSafe(InventoryQuickbarWidget->GetClass()),
 		*GetNameSafe(InventorySlotViewClass.Get()),
+		*GetNameSafe(QuickbarSlotViewClass.Get()),
 		*GetNameSafe(LakeMainMenuWidget ? LakeMainMenuWidget->GetClass() : nullptr),
 		*GetNameSafe(InteractionPromptWidget ? InteractionPromptWidget->GetClass() : nullptr),
 		*GetNameSafe(CollectionWidget ? CollectionWidget->GetClass() : nullptr));
@@ -1816,6 +1927,11 @@ void UCatLocalPlayerUISubsystem::DetachPlayerLakeUI()
 	{
 		InventoryWidget->RemoveFromParent();
 		InventoryWidget = nullptr;
+	}
+	if (InventoryQuickbarWidget)
+	{
+		InventoryQuickbarWidget->RemoveFromParent();
+		InventoryQuickbarWidget = nullptr;
 	}
 	if (HUDModel)
 	{

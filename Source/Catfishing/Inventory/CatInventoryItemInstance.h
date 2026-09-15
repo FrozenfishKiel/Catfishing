@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Framework/Core/CatDomainCommandTypes.h"
+#include "GameplayTagContainer.h"
 #include "UObject/Object.h"
 #include "CatInventoryItemInstance.generated.h"
 
@@ -28,6 +29,9 @@ struct FCatInventoryItemUseContext
 
 	/** 被使用物品所在的正式库存槽位；库存组件按它重读条目，实例不能信任 UI 传来的定义或类别。 */
 	int32 InventorySlotIndex = INDEX_NONE;
+
+	/** 本次 Use 是否由按住输入发起；物品据此决定 Begin 后等待 End，右键等一次性入口保持 false 并由物品立即收束。 */
+	bool bContinuousInput = false;
 };
 
 /** 运行期的一份物品身份；库存格保存数量，实例保存这件物品跨移动、使用和复制时不该丢的身份与行为入口。 */
@@ -37,6 +41,21 @@ class CATFISHING_API UCatInventoryItemInstance : public UObject
 	GENERATED_BODY()
 
 public:
+	/** 查询定义声明的操作当前是否可用；客户端只读生成置灰原因，服务器执行前用同一规则复核。 */
+	virtual bool CanExecuteInventoryAction(const FGameplayTag& Action, const FCatInventoryEntry& Entry,
+		APawn* UserPawn, FText& OutReason) const;
+	/** 已解析的服务器库存请求进入此虚函数；基类分发通用动作，特殊实例可扩展标识而无需修改菜单或RPC。 */
+	virtual FCatDomainCommandResult ExecuteInventoryActionFromAuthority(const FGameplayTag& Action,
+		const FCatInventoryEntry& Entry, const FCatInventoryItemUseContext& Context, int32 Quantity);
+	/** 通用丢弃实现；复用库存世界事务，子类只有丢弃语义不同才需重写。 */
+	virtual FCatDomainCommandResult DropFromInventoryFromAuthority(const FCatInventoryEntry& Entry,
+		const FCatInventoryItemUseContext& Context, int32 Quantity);
+	/** 通用放置实现；继续使用已有地面求解和库存提交，避免每种物品复制离库代码。 */
+	virtual FCatDomainCommandResult PlaceFromInventoryFromAuthority(const FCatInventoryEntry& Entry,
+		const FCatInventoryItemUseContext& Context, int32 Quantity);
+	/** 叼起扩展点；基础物品不支持，由具备相应语义的实例重写。 */
+	virtual FCatDomainCommandResult CarryFromInventoryFromAuthority(const FCatInventoryEntry& Entry,
+		const FCatInventoryItemUseContext& Context);
 	/** 构造一份空物品实例；定义资产会在正式入库前由库存组件写入。 */
 	UCatInventoryItemInstance(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 
@@ -91,6 +110,16 @@ public:
 	/** 正式库存 Use 的唯一实例扩展面；服务器命令入口用它传递 RequestId、槽位上下文和错误码，具体物品效果只通过结构化回包提交。 */
 	virtual FCatDomainCommandResult UseFromInventorySlotFromAuthority(
 		const FCatInventoryEntry& InventoryEntry, const FCatInventoryItemUseContext& UseContext);
+
+	/** 说明本实例的 Use 是否必须等待同一次输入结束；Controller 据此固定实例和请求 ID，避免松开时改用新选中物品。 */
+	virtual bool UsesContinuousInput() const;
+
+	/** 本地连续 Use 的表现边沿；Controller 对 Begin、Release、取消和拒绝都通知同一实例，基类不保存状态也不产生玩法效果。 */
+	virtual void SetUseInputActiveLocally(APlayerController* RequestingController, bool bActive);
+
+	/** 同一次持续 Use 的结束或取消入口；调用方只能传回 Begin 已固定的上下文，基类明确拒绝没有持续语义的物品。 */
+	virtual FCatDomainCommandResult EndUseFromInventorySlotFromAuthority(
+		const FCatInventoryItemUseContext& UseContext, bool bCancelled);
 
 protected:
 	/** 这份物品在当前世界中的原 Actor；拾取保存、落地复用，只有一个引用，不按堆叠数量保存多份。 */

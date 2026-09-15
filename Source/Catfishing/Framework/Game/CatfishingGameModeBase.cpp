@@ -57,6 +57,8 @@ namespace
 {
 	/** PIE 无会话身份的 UE 类型标签；服务器只在受限开发准入中创建，客户端提交同类型身份会被拒绝。 */
 	const FName CatPieNoSessionUniqueIdType(TEXT("CAT_PIE_NOSESSION"));
+	/** 祭坛确认允许的服务器秒数；只在 GameMode 设置一次截止，客户端用公开 deadline 本地推算而不接收逐秒复制。 */
+	constexpr double AltarConfirmationDurationSeconds = 30.0;
 
 	// 临时身份识别流程：先要求 FUniqueNetIdRepl 有效，再只比较服务器保留的类型标签；不会根据字符串前缀接受客户端伪造值。
 	bool IsPieNoSessionUniqueId(const FUniqueNetIdRepl& UniqueId)
@@ -299,10 +301,14 @@ void ACatfishingGameModeBase::HandlePersistenceCheckpoint()
 	}
 }
 
-// World 收口流程：先关闭 Run 命令并解除所有 Controller 的 Pawn 捕获通知，再清跳天、检查点、白天和 HostExit ACK 计时及等待集合。
+// World 收口流程：先取消祭坛确认，清除其 Timer 并重置公开快照，再关闭 Run 命令及正式过渡，解除 Controller 的 Pawn 捕获通知。
+// 随后清跳天、检查点、白天和 HostExit ACK 计时及等待集合，不把任何祭坛确认或取消提示带到下一个 World。
 // 随后解除商店订阅并停止 StateTree，最后调用父类；此处不发起异步保存，最终落盘必须已由 Online 离开前协议取得回执。
 void ACatfishingGameModeBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	CancelAltarConfirmation(NSLOCTEXT("Catfishing", "AltarConfirmationWorldClosing", "世界正在切换，确认已取消"));
+	GetWorldTimerManager().ClearTimer(AltarConfirmationTimer);
+	RunPublicState.AltarConfirmation = FCatAltarConfirmationSnapshot();
 	bRunCommandsOpen = false;
 	CancelAltarDayTransition(TransitionAltar.Get(), FText::GetEmpty());
 	for (TActorIterator<APlayerController> It(GetWorld()); It; ++It)
@@ -485,6 +491,10 @@ void ACatfishingGameModeBase::PostLogin(APlayerController* NewPlayer)
 	UE_LOG(LogCatOnline, Log, TEXT("Event=identity_activated StableNetId=%s PlayerState=%s Controller=%s"),
 		*MakeStableNetIdLogValue(PlayerState->GetUniqueId()), *PlayerState->GetClass()->GetName(), *NewPlayer->GetClass()->GetName());
 	Super::PostLogin(NewPlayer);
+	if (RunPublicState.AltarConfirmation.State == ECatAltarConfirmationState::Waiting)
+	{
+		CancelAltarConfirmation(NSLOCTEXT("Catfishing", "AltarConfirmationParticipantsChanged", "参与玩家发生变化，请重新确认"));
+	}
 	// 身份与 PlayerArray 已注册，重新检查启动时人数缺席的当日目标。
 	HandlePendingMorningTargetRefresh();
 	if (ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(NewPlayer))
@@ -657,8 +667,8 @@ APawn* ACatfishingGameModeBase::SpawnDefaultPawnFor_Implementation(AController* 
 
 // Character 不可用收口流程：
 // 1. 先拒绝非 authority、空 Character 或无 World，避免客户端和销毁尾声改写服务器领域服务。
-// 2. 在同一 authority World 内终止 Fishing 的半场会话；Social 已不持任何要回滚的实物事务，只做可用性记录。
-// 3. 最后记录两项服务是否存在，缺服务时保持幂等降级，不影响随后原有的条件化存档捕获。
+// 2. 在同一 authority World 内退出角色的钓鱼操作，再保全装备关闭前的钓鱼资源。
+// 3. 最后记录服务可用性和资源保全结果，缺服务时保持幂等降级，不影响随后原有的条件化存档捕获。
 void ACatfishingGameModeBase::HandleCharacterUnavailable(ACatCharacter* Character)
 {
 	UWorld* World = Character ? Character->GetWorld() : nullptr;
@@ -676,20 +686,21 @@ void ACatfishingGameModeBase::HandleCharacterUnavailable(ACatCharacter* Characte
 		Fishing->ReleaseFishingOperatorForCharacter(Character);
 		bResourcesPreserved = Fishing->PreserveFishingResourcesForEquipmentShutdown(Character->GetEquipmentComponent());
 	}
-	// Social 这里曾经要取消该角色名下的偷鱼协议并把鱼放回来源库存；偷鱼协议 2026-09-11 整条退役后，
-	// Social 不再从任何库存取走实物鱼，角色离开也就没有悬空的鱼要归还——拿鱼是一次就地完成的库存移动。
-	UCatSocialService* Social = World->GetSubsystem<UCatSocialService>();
 	UE_LOG(LogCatRun, Log,
-		TEXT("Event=character_unavailable_cleanup Character=%s PlayerId=%d World=%s NetMode=%d Authority=true LocalRole=%d FishingAvailable=%s SocialAvailable=%s ResourcesPreserved=%s Result=CleanupRequested"),
+		TEXT("Event=character_unavailable_cleanup Character=%s PlayerId=%d World=%s NetMode=%d Authority=true LocalRole=%d FishingAvailable=%s ResourcesPreserved=%s Result=CleanupRequested"),
 		*GetNameSafe(Character), DepartingPlayerId, *GetNameSafe(World), static_cast<int32>(World->GetNetMode()),
 		static_cast<int32>(Character->GetLocalRole()), Fishing ? TEXT("true") : TEXT("false"),
-		Social ? TEXT("true") : TEXT("false"), bResourcesPreserved ? TEXT("true") : TEXT("false"));
+		bResourcesPreserved ? TEXT("true") : TEXT("false"));
 }
 
 // Logout 流程：先对精确 Active 连接完成或复核末次持久化捕获，再移除准入记录与 Pawn 通知；失效连接不能覆盖新连接的存档，之后继续原有重连 TTL。
 void ACatfishingGameModeBase::Logout(AController* Exiting)
 {
 	bool bHostExitRemoteDeparted = false;
+	if (RunPublicState.AltarConfirmation.State == ECatAltarConfirmationState::Waiting && IsControllerActive(Exiting))
+	{
+		CancelAltarConfirmation(NSLOCTEXT("Catfishing", "AltarConfirmationParticipantsChanged", "参与玩家发生变化，请重新确认"));
+	}
 	const APlayerState* PlayerState = Exiting ? Exiting->PlayerState : nullptr;
 	if (PlayerState && PlayerState->GetUniqueId().IsValid())
 	{
@@ -1170,6 +1181,10 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 			RunPublicState.Phase.DayIndex, *UEnum::GetValueAsString(NewPhase));
 	}
 
+	if (RunPublicState.AltarConfirmation.State == ECatAltarConfirmationState::Waiting && NewPhase != ECatRunPhase::NormalNight)
+	{
+		CancelAltarConfirmation(NSLOCTEXT("Catfishing", "AltarConfirmationPhaseClosed", "献祭阶段已关闭，确认已取消"));
+	}
 	ClearDayDeadline();
 	RunPublicState.Phase.Phase = NewPhase;
 	RunPublicState.Phase.ServerTimeAnchorSeconds = GetWorld()->GetTimeSeconds();
@@ -1218,7 +1233,7 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 		RunPublicState.EndReason = ECatRunEndReason::None;
 		RunPublicState.Phase.bNewFishingBitesAllowed = true;
 		RunPublicState.Phase.bOfferingOpen = false;
-		// 翻天身体收口：倒地者自动救起回营地醒来，黄色体力过夜清空。放在这里是因为「新一天开始」
+		// 翻天资源收口：黄色体力过夜清空，倒地状态与角色位置保持原值。「新一天开始」
 		// 只有这一个入口，祭坛过场与首日启动都会经过它。
 		ApplyDayBreakBodyResetToCharacters();
 		if (RunPublicState.DayTransition.bActive)
@@ -1313,15 +1328,263 @@ bool ACatfishingGameModeBase::DoesLastRunFlowResultMatch(const ECatRunTransition
 		&& LastRunFlowResult.Reason == ExpectedReason;
 }
 
+// 确认发起流程：
+// 1. 先核对 authority、现场交互、开放夜晚、没有正式过场或其他等待请求，再只读取供品配置，不冻结或扣除地面鱼。
+// 2. 固定此刻全部 Active 玩家（倒地也保留）为公开 Participants，写入 30 秒服务器截止和发起者默认确认，并启动唯一超时计时器。
+// 3. 通过 SetAltarConfirmation 复用同一条更新路径；单人会立即 Accepted 并进入正式翻天，多人继续等待远程 F8/F9。
+bool ACatfishingGameModeBase::BeginAltarConfirmation(ACatAltarActor* Altar, AController* Initiator, FGuid RequestId)
+{
+	FText Error;
+	if (!HasAuthority() || !IsValid(Altar) || Altar->GetWorld() != GetWorld() || !RequestId.IsValid()
+		|| !CanAcceptGameplayCommand(Initiator) || !Altar->CanInteract_Implementation(Initiator)
+		|| RunPublicState.Phase.Phase != ECatRunPhase::NormalNight || !RunPublicState.Phase.bOfferingOpen
+		|| RunPublicState.DayTransition.bActive || RunPublicState.AltarConfirmation.State == ECatAltarConfirmationState::Waiting)
+	{
+		return false;
+	}
+	if (!Altar->CanPrepareOffering(Error))
+	{
+		FCatAltarConfirmationSnapshot& Snapshot = RunPublicState.AltarConfirmation;
+		Snapshot = FCatAltarConfirmationSnapshot();
+		Snapshot.RequestId = RequestId;
+		Snapshot.State = ECatAltarConfirmationState::Cancelled;
+		Snapshot.Altar = Altar;
+		Snapshot.Initiator = Initiator->PlayerState;
+		Snapshot.CancelReason = Error.IsEmpty()
+			? NSLOCTEXT("Catfishing", "AltarConfirmationPreflightFailed", "祭坛供品配置暂不可用") : Error;
+		GetWorldTimerManager().SetTimer(AltarConfirmationTimer, this, &ThisClass::HandleAltarConfirmationTimer, 2.0f, false);
+		++RunPublicState.Revision;
+		RefreshEnvironmentAndPublish();
+		UE_LOG(LogCatRun, Warning, TEXT("Event=AltarConfirmationCancelled World=%s NetMode=%d Authority=1 LocalRole=%d RequestId=%s Reason=%s"),
+			*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *Snapshot.CancelReason.ToString());
+		return false;
+	}
+
+	FCatAltarConfirmationSnapshot& Snapshot = RunPublicState.AltarConfirmation;
+	Snapshot = FCatAltarConfirmationSnapshot();
+	Snapshot.RequestId = RequestId;
+	Snapshot.State = ECatAltarConfirmationState::Waiting;
+	Snapshot.Altar = Altar;
+	Snapshot.Initiator = Initiator->PlayerState;
+	Snapshot.DeadlineServerTimeSeconds = GetWorld()->GetTimeSeconds() + AltarConfirmationDurationSeconds;
+	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+	{
+		APlayerController* Candidate = It->Get();
+		if (!IsControllerActive(Candidate) || !Candidate->PlayerState)
+		{
+			continue;
+		}
+		FCatAltarConfirmationParticipant& Participant = Snapshot.Participants.AddDefaulted_GetRef();
+		Participant.PlayerState = Candidate->PlayerState;
+	}
+	if (Snapshot.Participants.IsEmpty())
+	{
+		CancelAltarConfirmation(NSLOCTEXT("Catfishing", "AltarConfirmationNoParticipants", "没有可确认的玩家"));
+		return false;
+	}
+	GetWorldTimerManager().SetTimer(AltarConfirmationTimer, this, &ThisClass::HandleAltarConfirmationTimer,
+		static_cast<float>(AltarConfirmationDurationSeconds), false);
+	++RunPublicState.Revision;
+	RefreshEnvironmentAndPublish();
+	UE_LOG(LogCatRun, Display, TEXT("Event=AltarConfirmationStarted World=%s NetMode=%d Authority=1 LocalRole=%d Altar=%s Initiator=%s RequestId=%s Participants=%d Deadline=%.3f"),
+		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *GetNameSafe(Altar),
+		*GetNameSafe(Initiator), *RequestId.ToString(EGuidFormats::DigitsWithHyphens), Snapshot.Participants.Num(), Snapshot.DeadlineServerTimeSeconds);
+	SetAltarConfirmation(Initiator, RequestId, true);
+	return RunPublicState.AltarConfirmation.State != ECatAltarConfirmationState::Cancelled;
+}
+
+// 确认提交流程：
+// 1. 先核对等待状态、请求标识和服务器截止；迟到提交统一走超时取消，旧请求直接忽略。
+// 2. 再按 RPC 所属 Controller 找到同一 PlayerState 的固定名单项，倒地、距离和 Pawn 状态不参与资格重算。
+// 3. 发起者提交 false 代表终止整轮，立即清空公开请求；其余人的 false 只撤回本人确认。
+// 4. 同值重试不发布；真实变化写入一项确认值。全员完成时先标记 Accepted、清计时器，再唯一进入正式翻天。
+void ACatfishingGameModeBase::SetAltarConfirmation(AController* Player, FGuid RequestId, bool bConfirmed)
+{
+	FCatAltarConfirmationSnapshot& Snapshot = RunPublicState.AltarConfirmation;
+	if (!HasAuthority() || Snapshot.State != ECatAltarConfirmationState::Waiting || RequestId != Snapshot.RequestId)
+	{
+		UE_LOG(LogCatRun, Warning, TEXT("Event=AltarConfirmationRejected World=%s NetMode=%d Authority=%d RequestId=%s Player=%s Reason=StaleOrNotWaiting"),
+			*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetNetMode()) : INDEX_NONE, HasAuthority(),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(Player));
+		return;
+	}
+	if (!GetWorld() || GetWorld()->GetTimeSeconds() >= Snapshot.DeadlineServerTimeSeconds)
+	{
+		HandleAltarConfirmationTimer();
+		return;
+	}
+	if (!ValidateAltarConfirmationParticipants())
+	{
+		CancelAltarConfirmation(NSLOCTEXT("Catfishing", "AltarConfirmationParticipantsChanged", "参与玩家发生变化，请重新确认"));
+		return;
+	}
+	if (!IsControllerActive(Player) || !Player || !Player->PlayerState)
+	{
+		UE_LOG(LogCatRun, Warning, TEXT("Event=AltarConfirmationRejected World=%s NetMode=%d Authority=1 RequestId=%s Player=%s Reason=InactivePlayer"),
+			*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), *RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(Player));
+		return;
+	}
+	FCatAltarConfirmationParticipant* Participant = Snapshot.Participants.FindByPredicate(
+		[PlayerState = Player->PlayerState.Get()](const FCatAltarConfirmationParticipant& Entry)
+		{
+			return Entry.PlayerState == PlayerState;
+		});
+	if (Participant && !bConfirmed && Snapshot.Initiator == Player->PlayerState.Get())
+	{
+		CancelAltarConfirmation(NSLOCTEXT("Catfishing", "AltarConfirmationInitiatorCancelled", "发起者已取消本次献祭"), false);
+		return;
+	}
+	if (!Participant || Participant->bConfirmed == bConfirmed)
+	{
+		if (!Participant)
+		{
+			UE_LOG(LogCatRun, Warning, TEXT("Event=AltarConfirmationRejected World=%s NetMode=%d Authority=1 RequestId=%s Player=%s Reason=NotParticipant"),
+				*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), *RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(Player));
+		}
+		return;
+	}
+	Participant->bConfirmed = bConfirmed;
+	++RunPublicState.Revision;
+	RefreshEnvironmentAndPublish();
+	UE_LOG(LogCatRun, Display, TEXT("Event=AltarConfirmationChanged World=%s NetMode=%d Authority=1 LocalRole=%d RequestId=%s Player=%s Confirmed=%d"),
+		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()),
+		*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(Player), bConfirmed);
+	if (!AreAllAltarConfirmationParticipantsConfirmed())
+	{
+		return;
+	}
+
+	Snapshot.State = ECatAltarConfirmationState::Accepted;
+	GetWorldTimerManager().ClearTimer(AltarConfirmationTimer);
+	++RunPublicState.Revision;
+	RefreshEnvironmentAndPublish();
+	UE_LOG(LogCatRun, Display, TEXT("Event=AltarConfirmationAccepted World=%s NetMode=%d Authority=1 LocalRole=%d RequestId=%s Participants=%d"),
+		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()),
+		*RequestId.ToString(EGuidFormats::DigitsWithHyphens), Snapshot.Participants.Num());
+	AController* InitiatingController = ResolveActiveControllerByPlayerState(Snapshot.Initiator.Get());
+	if (!BeginAltarDayTransition(Snapshot.Altar.Get(), InitiatingController, RequestId))
+	{
+		CancelAltarConfirmation(NSLOCTEXT("Catfishing", "AltarConfirmationTransitionFailed", "献祭预检失败，请重新确认"));
+	}
+}
+
+// 取消流程：只处理尚未正式开始 DayTransition 的等待或接受请求，先停止服务器计时。
+// 超时等系统中止保留原因两秒；发起者主动取消直接清空快照与对象引用，让全队立即收起窗口，不再启动提示计时器。
+// 发布前保存关联 ID，清空状态后日志仍能还原同一轮取消；两种取消都不冻结、消费供品或翻天。
+void ACatfishingGameModeBase::CancelAltarConfirmation(const FText& Reason, const bool bShowReason)
+{
+	FCatAltarConfirmationSnapshot& Snapshot = RunPublicState.AltarConfirmation;
+	if (!HasAuthority() || (Snapshot.State != ECatAltarConfirmationState::Waiting
+		&& (Snapshot.State != ECatAltarConfirmationState::Accepted || RunPublicState.DayTransition.bActive)))
+	{
+		return;
+	}
+	const FGuid CancelledRequestId = Snapshot.RequestId;
+	GetWorldTimerManager().ClearTimer(AltarConfirmationTimer);
+	if (bShowReason)
+	{
+		Snapshot.State = ECatAltarConfirmationState::Cancelled;
+		Snapshot.DeadlineServerTimeSeconds = 0.0;
+		Snapshot.CancelReason = Reason;
+		GetWorldTimerManager().SetTimer(AltarConfirmationTimer, this, &ThisClass::HandleAltarConfirmationTimer, 2.0f, false);
+	}
+	else
+	{
+		Snapshot = FCatAltarConfirmationSnapshot();
+	}
+	++RunPublicState.Revision;
+	RefreshEnvironmentAndPublish();
+	UE_LOG(LogCatRun, Log, TEXT("Event=AltarConfirmationCancelled World=%s NetMode=%d Authority=1 LocalRole=%d RequestId=%s ShowReason=%d Reason=%s"),
+		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()),
+		*CancelledRequestId.ToString(EGuidFormats::DigitsWithHyphens), bShowReason, *Reason.ToString());
+}
+
+// 计时收口：取消提示保留两秒后清空终态和对象引用；等待中的回调或迟到输入复核名单与截止后取消。
+// 新一轮 Begin 会覆盖同一 Timer，接受会清除它，因此上一轮的提示清理不会重置新的确认。
+void ACatfishingGameModeBase::HandleAltarConfirmationTimer()
+{
+	FCatAltarConfirmationSnapshot& Snapshot = RunPublicState.AltarConfirmation;
+	if (!HasAuthority() || !GetWorld())
+	{
+		return;
+	}
+	if (Snapshot.State == ECatAltarConfirmationState::Cancelled)
+	{
+		UE_LOG(LogCatRun, Log, TEXT("Event=AltarConfirmationCleared World=%s NetMode=%d Authority=1 LocalRole=%d RequestId=%s"),
+			*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()),
+			*Snapshot.RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+		Snapshot = FCatAltarConfirmationSnapshot();
+		++RunPublicState.Revision;
+		RefreshEnvironmentAndPublish();
+		return;
+	}
+	if (Snapshot.State != ECatAltarConfirmationState::Waiting) return;
+	if (!ValidateAltarConfirmationParticipants())
+	{
+		CancelAltarConfirmation(NSLOCTEXT("Catfishing", "AltarConfirmationParticipantsChanged", "参与玩家发生变化，请重新确认"));
+		return;
+	}
+	if (GetWorld()->GetTimeSeconds() < Snapshot.DeadlineServerTimeSeconds)
+	{
+		// World 与 TimerManager 的帧内推进次序可能产生很小的提前量；按剩余时间补排，不能让一次性回调耗尽后永远停在等待。
+		GetWorldTimerManager().SetTimer(AltarConfirmationTimer, this, &ThisClass::HandleAltarConfirmationTimer,
+			FMath::Max(0.001f, static_cast<float>(Snapshot.DeadlineServerTimeSeconds - GetWorld()->GetTimeSeconds())), false);
+		return;
+	}
+	CancelAltarConfirmation(NSLOCTEXT("Catfishing", "AltarConfirmationTimedOut", "全队确认超时，已取消"));
+}
+
+// 全员读取流程：只扫描公开 Participants；空名单永不通过，避免缺失 Active 身份时把请求错误推进到结算。
+bool ACatfishingGameModeBase::AreAllAltarConfirmationParticipantsConfirmed() const
+{
+	const TArray<FCatAltarConfirmationParticipant>& Participants = RunPublicState.AltarConfirmation.Participants;
+	return !Participants.IsEmpty() && Participants.FindByPredicate(
+		[](const FCatAltarConfirmationParticipant& Participant) { return !Participant.bConfirmed; }) == nullptr;
+}
+
+// 名单复核流程：遍历当前 World 的 Active Controller，收集其 PlayerState 后与快照逐项比较。
+// 不使用人数相等作为替代，因为同人数的离开、加入或身份替换也必须取消正在等待的确认。
+bool ACatfishingGameModeBase::ValidateAltarConfirmationParticipants() const
+{
+	if (!GetWorld())
+	{
+		return false;
+	}
+	const TArray<FCatAltarConfirmationParticipant>& Participants = RunPublicState.AltarConfirmation.Participants;
+	TSet<const APlayerState*> ActivePlayerStates;
+	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+	{
+		const APlayerController* Candidate = It->Get();
+		if (IsControllerActive(Candidate) && Candidate->PlayerState)
+		{
+			ActivePlayerStates.Add(Candidate->PlayerState.Get());
+		}
+	}
+	if (Participants.Num() != ActivePlayerStates.Num())
+	{
+		return false;
+	}
+	for (const FCatAltarConfirmationParticipant& Participant : Participants)
+	{
+		if (!Participant.PlayerState || !ActivePlayerStates.Contains(Participant.PlayerState.Get()))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
 // 过渡开始：
-// 1. 核对同世界祭坛、请求者资格及开放夜晚；再检查过场时长、StateTree、冻结供品、服务器身份和 GAS 预演，失败清理祭坛确认并记录原因，不扣鱼。
+// 1. 核对同世界祭坛、已接受的同一确认请求、请求者资格及开放夜晚；再检查过场时长、StateTree、冻结供品、服务器身份和 GAS 预演，失败取消确认并记录原因，不扣鱼。
 // 2. 保存本轮祭坛、请求者和命令，重建时间轴但保留上次成功凭据；冻结过场时长和预期天数，置为活动态并提升 Run 修订。
 // 3. 发布公开状态与操作门，分别安排遮黑提交和过场结束计时器，记录开始事件；之后由提交或取消入口收口本轮事务。
 bool ACatfishingGameModeBase::BeginAltarDayTransition(ACatAltarActor* Altar, AController* Controller, FGuid RequestId)
 {
 	if (!IsValid(Altar) || Altar->GetWorld() != GetWorld() || !RequestId.IsValid()
 		|| !CanAcceptGameplayCommand(Controller) || RunPublicState.Phase.Phase != ECatRunPhase::NormalNight
-		|| !RunPublicState.Phase.bOfferingOpen) return false;
+		|| !RunPublicState.Phase.bOfferingOpen || RunPublicState.AltarConfirmation.State != ECatAltarConfirmationState::Accepted
+		|| RunPublicState.AltarConfirmation.RequestId != RequestId || RunPublicState.AltarConfirmation.Altar.Get() != Altar) return false;
 	FText Error;
 	FCatOfferingSettlementCommand Command;
 	int32 Points = 0, Delta = 0, Progress = 0;
@@ -1336,9 +1599,10 @@ bool ACatfishingGameModeBase::BeginAltarDayTransition(ACatAltarActor* Altar, ACo
 		|| PreviewRunOfferingSettlement(Command, Points, Delta, Progress, bMetTarget) != ECatRunCommandError::None)
 	{
 		if (Error.IsEmpty()) Error = NSLOCTEXT("Catfishing", "AltarPreflightFailed", "献祭条件或过场配置无效，请稍后重试");
-		Altar->ResetOffering(Error);
+		Altar->ResetOffering();
+		CancelAltarConfirmation(Error);
 		UE_LOG(LogCatRun, Warning, TEXT("Event=AltarTransitionRejected World=%s NetMode=%d Authority=1 LocalRole=%d RequestId=%s Reason=%s"),
-			*GetWorld()->GetName(), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *RequestId.ToString(), *Error.ToString());
+			*GetWorld()->GetName(), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *RequestId.ToString(EGuidFormats::DigitsWithHyphens), *Error.ToString());
 		return false;
 	}
 	TransitionAltar = Altar;
@@ -1365,7 +1629,7 @@ bool ACatfishingGameModeBase::BeginAltarDayTransition(ACatAltarActor* Altar, ACo
 		Transition.FadeOutSeconds + Transition.HoldSeconds + Transition.FadeInSeconds, false);
 	UE_LOG(LogCatRun, Display, TEXT("Event=AltarTransitionStarted World=%s NetMode=%d Authority=1 LocalRole=%d Altar=%s Player=%s RunId=%s RequestId=%s Day=%d TargetDay=%d"),
 		*GetWorld()->GetName(), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *Altar->GetName(), *GetNameSafe(Controller),
-		*RunPublicState.Phase.RunId.ToString(), *RequestId.ToString(), RunPublicState.Phase.DayIndex, Transition.TargetDayIndex);
+		*RunPublicState.Phase.RunId.ToString(), *RequestId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Phase.DayIndex, Transition.TargetDayIndex);
 	return true;
 }
 
@@ -1422,7 +1686,7 @@ void ACatfishingGameModeBase::CommitAltarDayTransition()
 	++RunPublicState.Revision;
 	RefreshEnvironmentAndPublish();
 	UE_LOG(LogCatRun, Display, TEXT("Event=AltarTransitionCommitted World=%s NetMode=%d Authority=1 LocalRole=%d RequestId=%s Offered=%d Delta=%d WorldProgress=%d TargetDay=%d"),
-		*GetWorld()->GetName(), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *Transition.RequestId.ToString(), Result.OfferedPoints,
+		*GetWorld()->GetName(), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *Transition.RequestId.ToString(EGuidFormats::DigitsWithHyphens), Result.OfferedPoints,
 		Result.AppliedWorldProgressDelta, Result.NewWorldProgress, Transition.TargetDayIndex);
 }
 
@@ -1439,6 +1703,7 @@ void ACatfishingGameModeBase::FinishAltarDayTransition()
 		RunPublicState.DayTransition.Message = NSLOCTEXT("Catfishing", "AltarPhaseNotAdvanced", "阶段未正常推进，请检查服务器日志");
 	}
 	RunPublicState.DayTransition.bActive = false;
+	RunPublicState.AltarConfirmation = FCatAltarConfirmationSnapshot();
 	TransitionAltar.Reset();
 	TransitionController.Reset();
 	if (bRunCommandsOpen && RunPublicState.Phase.Phase == ECatRunPhase::DayActive)
@@ -1461,7 +1726,7 @@ void ACatfishingGameModeBase::FinishAltarDayTransition()
 		Fishing->RefreshBiteAvailabilityFromAuthority();
 	}
 	UE_LOG(LogCatRun, Display, TEXT("Event=AltarTransitionFinished World=%s NetMode=%d Authority=1 LocalRole=%d RequestId=%s Day=%d Phase=%s Deadline=%.3f"),
-		*GetWorld()->GetName(), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *RunPublicState.DayTransition.RequestId.ToString(),
+		*GetWorld()->GetName(), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *RunPublicState.DayTransition.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
 		RunPublicState.Phase.DayIndex, *UEnum::GetValueAsString(RunPublicState.Phase.Phase), RunPublicState.Phase.DeadlineServerTimeSeconds);
 }
 
@@ -1471,27 +1736,11 @@ void ACatfishingGameModeBase::CancelAltarDayTransition(ACatAltarActor* Altar, co
 	if (!RunPublicState.DayTransition.bActive || TransitionAltar.Get() != Altar) return;
 	RunPublicState.DayTransition.bFailed = !Error.IsEmpty();
 	RunPublicState.DayTransition.Message = Error;
-	if (Altar) Altar->ResetOffering(Error);
+	if (Altar) Altar->ResetOffering();
 	FinishAltarDayTransition();
 	UE_LOG(LogCatRun, Warning, TEXT("Event=AltarTransitionCancelled World=%s NetMode=%d Authority=1 LocalRole=%d RequestId=%s Committed=%d Reason=%s"),
-		*GetWorld()->GetName(), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *RunPublicState.DayTransition.RequestId.ToString(),
+		*GetWorld()->GetName(), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *RunPublicState.DayTransition.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
 		RunPublicState.DayTransition.bCommitted, *Error.ToString());
-}
-
-// 玩家供品结算提交流程：过场期间拒绝外部提交；否则服务器重建身份并汇入唯一 Run 写口。
-FCatRunCommandResult ACatfishingGameModeBase::SubmitOfferingSettlement(AController* RequestingController,
-	const FCatOfferingSettlementCommand& Command)
-{
-	if (RunPublicState.DayTransition.bActive)
-	{
-		return MakeRunCommandResult(Command.Context.RequestId, false, ECatRunCommandError::CommandsClosed);
-	}
-	FCatOfferingSettlementCommand ServerCommand = Command;
-	if (!FillServerCommandIdentity(RequestingController, ServerCommand.Context))
-	{
-		return MakeRunCommandResult(Command.Context.RequestId, false, ECatRunCommandError::InvalidIdentity);
-	}
-	return SubmitOfferingSettlementInternal(ServerCommand);
 }
 
 // 供品结算内部流程：先查完整幂等缓存，再校验 gate/Phase/Revision；首次写入前通过 Run ASC 预演供品点、世界进度变化和事件依赖，通过后应用夜晚结算 GE 并把 AttributeSet 结果投影到 RunPublicState。结算后关闭本夜供品窗口，并按世界进度归零或继续推进发送 StateTree 事件。
@@ -1972,52 +2221,16 @@ void ACatfishingGameModeBase::ApplyWeatherWetnessToCharacters()
 	}
 }
 
-// 翻天身体收口流程（进入新一天时调用一次）：
-// 1. 仍在倒地的猫自动救起——先传送回营地固定救援落点，再解除倒地，让它「清晨在营地醒来」。
-// 2. 每只猫的黄色体力整段清零：它是当天的储备，今天吃了今天用，攒不过夜。
-// 没有营地落点时不假造坐标：原地救起仍比留在倒地强，但会留一条诊断。
+// 翻天资源清理流程：仅服务器遍历本世界角色，取得可用 ASC 后清空当天黄色储备；缺少 ASC 的角色跳过，不改变倒地状态与位置。
 void ACatfishingGameModeBase::ApplyDayBreakBodyResetToCharacters()
 {
-	UWorld* World = GetWorld();
-	if (!HasAuthority() || !World)
+	if (!HasAuthority() || !GetWorld()) return;
+	for (TActorIterator<ACatCharacter> It(GetWorld()); It; ++It)
 	{
-		return;
-	}
-	FTransform RescueTransform;
-	bool bHasRescuePoint = false;
-	for (TActorIterator<ACatCampHubActor> CampIt(World); CampIt; ++CampIt)
-	{
-		if (CampIt->TryGetRescuePointTransform(RescueTransform))
-		{
-			bHasRescuePoint = true;
-			break;
-		}
-	}
-	for (TActorIterator<ACatCharacter> It(World); It; ++It)
-	{
-		ACatCharacter* Character = *It;
-		if (UCatAbilitySystemComponent* ASC = Character->GetCatAbilitySystemComponent())
+		if (UCatAbilitySystemComponent* ASC = It->GetCatAbilitySystemComponent())
 		{
 			ASC->ClearYellowFightStaminaFromAuthority();
 		}
-		UCatConditionComponent* Conditions = Character->GetConditionComponent();
-		if (!Conditions || !Conditions->GetSnapshot().bDowned)
-		{
-			continue;
-		}
-		if (bHasRescuePoint)
-		{
-			Character->TeleportTo(RescueTransform.GetLocation(), RescueTransform.Rotator(), false, false);
-		}
-		else
-		{
-			UE_LOG(LogCatRun, Warning,
-				TEXT("Event=day_break_rescue_without_camp Character=%s Day=%d Result=RecoveredInPlace"),
-				*Character->GetName(), RunPublicState.Phase.DayIndex);
-		}
-		Conditions->CompleteDayBreakRescueFromAuthority();
-		UE_LOG(LogCatRun, Log, TEXT("Event=day_break_auto_rescue Character=%s Day=%d Teleported=%d"),
-			*Character->GetName(), RunPublicState.Phase.DayIndex, bHasRescuePoint);
 	}
 }
 
@@ -2129,6 +2342,7 @@ void ACatfishingGameModeBase::FailRunStartup(const TCHAR* Reason)
 	{
 		Fishing->SuspendFishingAndReleaseOperators();
 	}
+	CancelAltarConfirmation(NSLOCTEXT("Catfishing", "AltarConfirmationWorldClosing", "本局正在结束，确认已取消"));
 	bRunCommandsOpen = false;
 	ClearDayDeadline();
 	if (RunStateTreeComponent && RunStateTreeComponent->IsRunning())
@@ -2195,11 +2409,11 @@ FCatRunTeardownResult ACatfishingGameModeBase::RequestRunTeardown(const FCatRunT
 		return Result;
 	}
 	Fishing->CloseCommandsAndTerminateAll();
-	// Social 只持权限、冷却和防骚扰牌，关门之后没有待收口的实物事务，因此它不再有「未全部收口」这个失败分支。
 	Social->CloseCommands();
 	// 先完成最终 Grant 重投，再发送远端退出 RPC；同一 Controller 上的 Reliable RPC 顺序保证 Grant 在 Destroy 通知之前到达。
 	const bool bGrantAcksComplete = ImprintService->PrepareForRunTeardown();
 
+	CancelAltarConfirmation(NSLOCTEXT("Catfishing", "AltarConfirmationWorldClosing", "本局正在结束，确认已取消"));
 	bRunCommandsOpen = false;
 	if (UCatChumFieldSubsystem* Fields = GetWorld()->GetSubsystem<UCatChumFieldSubsystem>())
 		Fields->ClearFieldsForRunTransition();
@@ -2422,7 +2636,7 @@ bool ACatfishingGameModeBase::SubmitDebugDayEndForCurrentDay(const TCHAR* Trigge
 // 开发期夜晚结算流程：
 // 1. 先要求当前已经是普通夜晚且供品窗口仍打开；其他阶段返回 false，不把白天或结算伪装成供品窗口。
 // 2. 然后选择一名真实 Active Controller 作为正式命令发起者；没有玩家时拒绝，不伪造系统身份。
-// 3. 按当前每日目标构造足额且无臭鱼的调试供品计数，走正式 SubmitOfferingSettlement 写口和夜晚结算 GE。
+// 3. 按当前每日目标构造足额且无臭鱼的调试供品计数，填入服务器身份后走私有正式写口和夜晚结算 GE。
 // 4. 成功后只接受 AllEligibleReady 或 WorldProgressDepleted 这类正式事件结果，不直接写 Phase 或天数。
 bool ACatfishingGameModeBase::SubmitDebugOfferingSettlementForCurrentDay(const TCHAR* Trigger)
 {
@@ -2459,7 +2673,11 @@ bool ACatfishingGameModeBase::SubmitDebugOfferingSettlementForCurrentDay(const T
 	Command.MediumFishCount = RemainingPoints / 2;
 	RemainingPoints %= 2;
 	Command.SmallFishCount = RemainingPoints;
-	const FCatRunCommandResult Result = SubmitOfferingSettlement(Controller, Command);
+	if (!FillServerCommandIdentity(Controller, Command.Context))
+	{
+		return false;
+	}
+	const FCatRunCommandResult Result = SubmitOfferingSettlementInternal(Command);
 	UE_LOG(LogCatRun, Display,
 		TEXT("Event=run_environment_social_debug_skip_to_next_day_offering_submitted Trigger=%s Controller=%s RequestId=%s Small=%d Medium=%d Large=%d Giant=%d Committed=%s Error=%s ResultRevision=%lld ResultPhase=%s TransitionReason=%s OfferedPoints=%d WorldDelta=%d NewWorldProgress=%d"),
 		TriggerText, *GetNameSafe(Controller),
@@ -2900,4 +3118,24 @@ APlayerState* ACatfishingGameModeBase::ResolvePlayerStateByStableNetId(const FSt
 	const FAdmissionRecord* Record = StableNetId.IsEmpty() ? nullptr : AdmissionRecords.Find(StableNetId);
 	return Record && Record->Phase == EAdmissionPhase::Active && Record->Controller.IsValid()
 		? Record->Controller->PlayerState : nullptr;
+}
+
+AController* ACatfishingGameModeBase::ResolveActiveControllerByPlayerState(const APlayerState* PlayerState) const
+{
+	// 发起者解析流程：先拒绝空 PlayerState，再只遍历当前 Active 准入记录；匹配到同一 PlayerState 才返回 Controller。
+	// 这样最后一名远程确认者只负责补齐本人状态，正式冻结、日志和消费仍绑定现场发起者；发起者离线时返回空，让过场预检失败并取消本轮。
+	if (!PlayerState)
+	{
+		return nullptr;
+	}
+	for (const TPair<FString, FAdmissionRecord>& Entry : AdmissionRecords)
+	{
+		const FAdmissionRecord& Record = Entry.Value;
+		AController* Controller = Record.Controller.Get();
+		if (Record.Phase == EAdmissionPhase::Active && Controller && Controller->PlayerState == PlayerState)
+		{
+			return Controller;
+		}
+	}
+	return nullptr;
 }

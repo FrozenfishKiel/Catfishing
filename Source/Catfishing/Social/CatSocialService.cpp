@@ -1,27 +1,25 @@
 #include "Social/CatSocialService.h"
 
 #include "Character/CatCharacter.h"
-#include "Condition/CatConditionComponent.h"
-#include "Engine/World.h"
-#include "EngineUtils.h"
 #include "Framework/Game/CatfishingGameState.h"
+#include "Logging/CatLog.h"
+#include "Condition/CatConditionComponent.h"
+#include "EngineUtils.h"
+#include "Engine/World.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerState.h"
-#include "Logging/CatLog.h"
 #include "Social/CatProtectionSignActor.h"
 #include "Social/CatSocialSettings.h"
 
-// 创建条件流程：只允许 authority Game World 持有恶作剧权限、冷却与防骚扰牌索引；客户端没有平行 Social 写状态。
+// 创建条件流程：只允许 authority Game World 持有 Social 命令终态和保护牌索引；客户端没有平行写状态。
 bool UCatSocialService::ShouldCreateSubsystem(UObject* Outer) const
 {
 	const UWorld* World = Cast<UWorld>(Outer);
 	return World && World->IsGameWorld() && World->GetNetMode() != NM_Client;
 }
 
-// 反初始化流程：先永久关门，再清一局冷却、终态缓存与牌子索引。
-// 这里没有「返还」这一步：偷鱼协议在 2026-09-11 整条退役后，Social 不再从任何库存里取走过实物鱼，
-// 因此 World 销毁时也没有悬空的鱼要放回去——拿鱼是一次就地完成的库存移动，不留可逆窗口。
+// 反初始化流程：先关闭新命令，再清一局冷却、终态和保护牌索引；具体 Actor 随 World 生命周期释放。
 void UCatSocialService::Deinitialize()
 {
 	CloseCommands();
@@ -31,14 +29,13 @@ void UCatSocialService::Deinitialize()
 	Super::Deinitialize();
 }
 
-// Teardown 关门流程：永久拒绝新 Social 命令。Social 只持权限、冷却和牌子，关门之后没有待收口的实物事务，
-// 所以它不再有失败分支，调用方也不需要为 Social 单独判一次「是否全部收口」。
+// Teardown 关门流程：将本局命令开关关闭，后续请求只可重放已完成结果，不能再提交新的社交行为。
 void UCatSocialService::CloseCommands()
 {
 	bCommandsOpen = false;
 }
 
-// 恶作剧权限流程：先按身份/操作/RequestId 重放，再忽略客户端位置并从双方权威 Pawn 验证状态、距离、目标臭气与目标保护牌；通过后才写允许终态。
+// 恶作剧权限流程：先按身份/操作/RequestId 重放，再忽略客户端位置并从双方权威 Pawn 验证状态、距离与目标保护牌；通过后才写允许终态。
 // 没有冷却这一步了（09-12）：设计不设系统级频率上限与时机限制，熟人自治。
 FCatDomainCommandResult UCatSocialService::RequestMischief(AController* InstigatorController,
 	AController* TargetController, const FGuid RequestId, const FVector InteractionLocation)
@@ -79,15 +76,6 @@ FCatDomainCommandResult UCatSocialService::RequestMischief(AController* Instigat
 			> FMath::Square(Settings->MischiefInteractionRangeCentimeters))
 	{
 		Result.Error = ECatDomainCommandError::PolicyUndecided;
-		return Finish(Result);
-	}
-	// 臭臭鱼的「请勿靠近」（联机社交 §3.1.4／猫册子页「吃鱼效果」）：吃下后 90 秒无法被恶作剧选中。
-	// 只挡「被选中」这一侧——臭着的猫自己照样能去整别人，而且扑倒反制明确不算恶作剧（2026-08-21 裁定），
-	// 走的是通用猫抓猫动作、不经过本入口，所以臭着的小偷照样被扑。
-	if (const UCatConditionComponent* TargetConditions = TargetCharacter->GetConditionComponent();
-		TargetConditions && TargetConditions->IsStench())
-	{
-		Result.Error = ECatDomainCommandError::PermissionDenied;
 		return Finish(Result);
 	}
 	for (TActorIterator<ACatProtectionSignActor> It(GetWorld()); It; ++It)
@@ -258,7 +246,7 @@ FString UCatSocialService::MakeTerminalKey(const FString& StableNetId, const TCH
 		*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 }
 
-// 身份解析流程：只读取 Controller PlayerState 的继承 UniqueId；原始值只存在 Social 私有冷却与牌子索引键。
+// 身份解析流程：只读取 Controller PlayerState 的继承 UniqueId；原始值只存在 Social 私有命令缓存和冷却键。
 FString UCatSocialService::ResolveStableNetId(const AController* Controller)
 {
 	const APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;

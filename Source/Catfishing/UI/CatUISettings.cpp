@@ -6,10 +6,13 @@
 #include "UI/Collection/CatCollectionWidget.h"
 #include "UI/Collection/CatFishRevealWidget.h"
 #include "UI/HUD/CatHUDWidget.h"
+#include "UI/Run/CatAltarConfirmationWidget.h"
 #include "UI/Run/CatDayTransitionWidget.h"
 #include "UI/Frontend/CatFrontendRootWidget.h"
 #include "UI/Interaction/CatInteractionPromptWidget.h"
 #include "UI/Inventory/CatInventoryWidget.h"
+#include "UI/Inventory/CatInventoryQuickbarWidget.h"
+#include "UI/Inventory/CatInventoryContextMenuWidget.h"
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
 #include "UI/ItemTooltip/CatItemTooltipWidget.h"
 #include "UI/Save/CatLakeMainMenuWidget.h"
@@ -20,6 +23,8 @@ UCatUISettings::UCatUISettings()
 {
 	DayTransitionWidgetClass = TSoftClassPtr<UCatDayTransitionWidget>(
 		FSoftClassPath(TEXT("/Game/UI/Run/WBP_CatDayTransition.WBP_CatDayTransition_C")));
+	AltarConfirmationWidgetClass = TSoftClassPtr<UCatAltarConfirmationWidget>(
+		FSoftClassPath(TEXT("/Game/UI/Run/WBP_CatAltarConfirmation.WBP_CatAltarConfirmation_C")));
 	ItemTooltipWidgetClass = TSoftClassPtr<UCatItemTooltipWidget>(
 		FSoftClassPath(TEXT("/Game/UI/Inventory/WBP_CatItemTooltip.WBP_CatItemTooltip_C")));
 	HUDWidgetClass = TSoftClassPtr<UCatHUDWidget>(
@@ -28,8 +33,14 @@ UCatUISettings::UCatUISettings()
 		FSoftClassPath(TEXT("/Game/UI/Frontend/WBP_CatFrontendRoot.WBP_CatFrontendRoot_C")));
 	InventoryWidgetClass = TSoftClassPtr<UCatInventoryWidget>(
 		FSoftClassPath(TEXT("/Game/UI/Inventory/WBP_CatInventory.WBP_CatInventory_C")));
+	InventoryQuickbarWidgetClass = TSoftClassPtr<UCatInventoryQuickbarWidget>(
+		FSoftClassPath(TEXT("/Game/UI/Inventory/WBP_CatInventoryQuickbar.WBP_CatInventoryQuickbar_C")));
 	InventorySlotWidgetClass = TSoftClassPtr<UCatInventorySlotWidget>(
 		FSoftClassPath(TEXT("/Game/UI/InventorySlot/WBP_CatInventorySlot.WBP_CatInventorySlot_C")));
+	InventoryQuickbarSlotWidgetClass = TSoftClassPtr<UCatInventorySlotWidget>(
+		FSoftClassPath(TEXT("/Game/UI/InventorySlot/WBP_CatInventoryQuickbarSlot.WBP_CatInventoryQuickbarSlot_C")));
+	InventoryContextMenuWidgetClass = TSoftClassPtr<UCatInventoryContextMenuWidget>(
+		FSoftClassPath(TEXT("/Game/UI/Inventory/WBP_CatInventoryContextMenu.WBP_CatInventoryContextMenu_C")));
 	InteractionPromptWidgetClass = TSoftClassPtr<UCatInteractionPromptWidget>(
 		FSoftClassPath(TEXT("/Game/UI/Interaction/WBP_CatInteractionPrompt.WBP_CatInteractionPrompt_C")));
 	LakeMainMenuWidgetClass = TSoftClassPtr<UCatLakeMainMenuWidget>(
@@ -116,6 +127,28 @@ TSubclassOf<UCatDayTransitionWidget> UCatUISettings::LoadDayTransitionWidgetClas
 {
 	UClass* LoadedClass = DayTransitionWidgetClass.LoadSynchronous();
 	return LoadedClass && LoadedClass->IsChildOf(UCatDayTransitionWidget::StaticClass())
+		&& LoadedClass->HasAnyClassFlags(CLASS_CompiledFromBlueprint) ? LoadedClass : nullptr;
+}
+
+// 快捷栏 WBP 类加载流程：同步解析默认或项目覆盖的软类并核对原生父类；失败返回空，由 LocalPlayer 拒绝创建不完整 HUD。
+TSubclassOf<UCatInventoryQuickbarWidget> UCatUISettings::LoadInventoryQuickbarWidgetClass() const
+{
+	UClass* LoadedClass = InventoryQuickbarWidgetClass.LoadSynchronous();
+	return LoadedClass && LoadedClass->IsChildOf(UCatInventoryQuickbarWidget::StaticClass()) ? LoadedClass : nullptr;
+}
+
+// 右键菜单类加载流程：同步解析配置软类并核对统一原生父类；失败返回空，让页面控制器拒绝展示没有正式布局的操作入口。
+TSubclassOf<UCatInventoryContextMenuWidget> UCatUISettings::LoadInventoryContextMenuWidgetClass() const
+{
+	UClass* LoadedClass = InventoryContextMenuWidgetClass.LoadSynchronous();
+	return LoadedClass && LoadedClass->IsChildOf(UCatInventoryContextMenuWidget::StaticClass()) ? LoadedClass : nullptr;
+}
+
+// 正式祭坛确认视图加载流程：同步解析配置软类并核对正式 UMG 父类；失败返回空，不创建无法反映正式版式的原生替身。
+TSubclassOf<UCatAltarConfirmationWidget> UCatUISettings::LoadAltarConfirmationWidgetClass() const
+{
+	UClass* LoadedClass = AltarConfirmationWidgetClass.LoadSynchronous();
+	return LoadedClass && LoadedClass->IsChildOf(UCatAltarConfirmationWidget::StaticClass())
 		&& LoadedClass->HasAnyClassFlags(CLASS_CompiledFromBlueprint) ? LoadedClass : nullptr;
 }
 
@@ -267,6 +300,13 @@ FName UCatUISettings::ResolveInteractionConfirmKeyName() const
 		}
 	}
 	return NAME_None;
+}
+
+// 物品栏格子加载流程：解析独立软类并验证格子父类；失败返回空，由装配入口记录缺失，不回退到背包布局。
+TSubclassOf<UCatInventorySlotWidget> UCatUISettings::LoadInventoryQuickbarSlotWidgetClass() const
+{
+	UClass* LoadedClass = InventoryQuickbarSlotWidgetClass.LoadSynchronous();
+	return LoadedClass && LoadedClass->IsChildOf(UCatInventorySlotWidget::StaticClass()) ? LoadedClass : nullptr;
 }
 
 // 图鉴键名解析流程：

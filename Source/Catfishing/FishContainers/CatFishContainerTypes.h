@@ -160,10 +160,6 @@ struct FCatFishTransferCommand
 
 };
 
-// FCatFishTheftCommand / FCatFishTheftResult 两个 escrow DTO 于 2026-09-11 随偷鱼协议整条删除。
-// 拿鱼是一次普通的库存移动：鱼从一个容器到另一个容器（或到猫嘴里），成了就是成了，
-// 没有「先移出、可在窗口内放回原槽」的中间态，因此鱼容器不再需要 escrow 这一层。
-
 /** 直接吃鱼的命令；地面鱼护要求捕获者本人，共享鱼缸允许当前 Active 玩家但仍由服务器身份写入。 */
 USTRUCT(BlueprintType)
 struct FCatFishConsumeCommand

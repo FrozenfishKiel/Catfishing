@@ -4,13 +4,16 @@
 #include "Inventory/CatFishInventoryItemInstance.h"
 #include "Logging/CatLog.h"
 
-// 鱼定义构造流程：父类仍初始化库存定义通用字段；鱼类覆盖方法会把正式口径收束到 FishDefinitionId 等鱼表字段。
+// 鱼定义构造流程：在通用落地动作之外声明食用、叼起与单鱼出售；是否可执行仍按实例、容器和买家当前状态判断。
 UCatFishDefinition::UCatFishDefinition(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
+	InventoryActions.Insert({CatInventoryActionTags::Use, NSLOCTEXT("CatInventory", "EatFish", "食用"), ECatInventoryActionQuantityMode::Single}, 0);
+	InventoryActions.Add({CatInventoryActionTags::Carry, NSLOCTEXT("CatInventory", "CarryFish", "叼起"), ECatInventoryActionQuantityMode::Single});
+	InventoryActions.Add({CatInventoryActionTags::Sell, NSLOCTEXT("CatInventory", "SellFish", "出售"), ECatInventoryActionQuantityMode::Single});
 }
 
-// 定义可用性检查流程：验证显式 gate、身份、独立稀有/体型轴、基础水域分布、权重/重量、协作人数、性格与食用结论；
+// 定义可用性检查流程：验证显式 gate、身份、独立稀有/体型轴、基础水域分布、权重/重量、协作人数、性格与食用成长数值；
 // 时段/天气数组由可独立启用的候选过滤门消费，测试期为空不会阻断基础选鱼链。可选成像事件不属于实物鱼可用性的前置条件。
 bool UCatFishDefinition::IsRuntimeDefinitionReady() const
 {
@@ -30,28 +33,8 @@ bool UCatFishDefinition::IsRuntimeDefinitionReady() const
 		}
 		SeenBaitIds.Add(Entry.BaitDefinitionId);
 	}
-	// 三档食用结论各有自己的完整条件；Inedible 是「已裁为不能吃」而不是「还没填」，
-	// 所以它要求经验系数与护盾都恰好为 0——那才是咸鱼与湖心巨影在鱼表里的真实取值，
-	// 不再逼数据侧把它们伪装成 Safe ＋ 编一个正经验（2026-09-08 晚间九条⑨）。
-	// Safe 与 SevereToxic 的可用性条件相同：都能吃、都按系数出经验，差别只在吃下去的后果。
-	const bool bEdibleReady = FMath::IsFinite(EatingExperiencePerKilogram) && EatingExperiencePerKilogram > 0.0
-		&& FMath::IsFinite(YellowStaminaGrant) && YellowStaminaGrant >= 0.0;
-	bool bFoodReady = false;
-	switch (FoodSafety)
-	{
-	case ECatFishFoodSafety::Safe:
-	case ECatFishFoodSafety::SevereToxic:
-		bFoodReady = bEdibleReady;
-		break;
-	case ECatFishFoodSafety::Inedible:
-		bFoodReady = FMath::IsNearlyZero(EatingExperiencePerKilogram) && FMath::IsNearlyZero(YellowStaminaGrant);
-		break;
-	default:
-		bFoodReady = false;
-		break;
-	}
-	// 行为四列（食性／发力段长／休息段长／游速系数）刻意不进就绪校验：2026-09-09 晚把四套性格模板降为测试用，
-	// 但没有裁「鱼表没填就不许出鱼」。未填的列由 FCatFishBehaviorProfileResolver 退回测试模板并记一次日志。
+	// 成长系数只需有限非负；零收益鱼仍可正常出鱼，食用资格由成长入口另行裁决。
+	const bool bFoodReady = FMath::IsFinite(EatingExperiencePerKilogram) && EatingExperiencePerKilogram >= 0.0;
 	return bEnableRuntimeDefinition && !FishDefinitionId.IsNone() && !RarityTierId.IsNone()
 		&& LoadRuntimePresentationDefinition() != nullptr
 		&& BodyClass != ECatFishBodyClass::Unknown
@@ -62,15 +45,13 @@ bool UCatFishDefinition::IsRuntimeDefinitionReady() const
 		&& FMath::IsFinite(FishFightStaminaPerKilogram) && FishFightStaminaPerKilogram > 0.0
 		&& !FightPersonalityId.IsNone() && bFoodReady
 		&& ThrowEffect.IsRuntimeEffectReady()
-		&& bChumPreferenceValid && bBaitMultipliersValid
-		&& FMath::IsFinite(YellowStaminaGrant) && YellowStaminaGrant >= 0.0
-		&& YellowStaminaGrant <= TNumericLimits<float>::Max();
+		&& bChumPreferenceValid && bBaitMultipliersValid;
 }
 
-// 可食用判断流程：只认已裁的两档；Inedible 与 Unset 一律拒绝，调用方不得靠「经验是不是 0」反推能不能吃。
+// 当前食用入口只提供成长；先要求有效正收益，零收益或缺配的鱼不进入消耗事务。
 bool UCatFishDefinition::IsEdible() const
 {
-	return FoodSafety == ECatFishFoodSafety::Safe || FoodSafety == ECatFishFoodSafety::SevereToxic;
+	return FMath::IsFinite(EatingExperiencePerKilogram) && EatingExperiencePerKilogram > 0.0;
 }
 
 // 吃鱼经验换算流程：不可食用或输入非法直接 0；其余按「经验系数 × 实际重量」出连续值，取整留给成长槽那一侧。

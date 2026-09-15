@@ -1,5 +1,7 @@
 # Items / Inventory 收敛审查报告
 
+> 2026-09-14 历史说明：本文记录先前库存改造。商店两段交付及确认回执已由即时成交链替代；下文有关确认入口、交付状态的说明不再代表当前实现。现行入口是 `UCatShopEconomyService::PurchaseCatalogCart`，见商店购物车技术方案。
+
 ## 1. 文档状态
 
 待程序员审查。本文不是验收报告，也不声明模块端到端完成或已提交。
@@ -498,6 +500,16 @@ Source/Catfishing/Inventory/Tests/CatInventoryInstanceTests.cpp 新增 Entry/Ins
 
 ## 8. 建议阅读顺序
 
+### 2026-09-15 合并复核导航
+
+以下导航依据当前源码符号补充，未运行测试；上文 CP 卡片与历史日志仍只说明旧改造，不是当前合并的验证证据。
+
+1. 物品可显示的操作先读 `Source/Catfishing/Inventory/CatInventoryItemDefinition.h:129` 的 `InventoryActions`，再读 `CatInventoryItemInstance.h:45` 的 `CanExecuteInventoryAction` 与 `ExecuteInventoryActionFromAuthority`；定义负责有序声明，实例负责条件与权威行为。
+2. 右键入口读 `Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.cpp:149` → `UI/Inventory/CatInventoryPageController.cpp` 的 `OpenInventoryContextMenu` / `SubmitInventoryContextAction` → `Framework/Game/CatfishingPlayerController.cpp` 的 `ServerExecuteInventoryAction_Implementation` → `Inventory/CatInventoryComponent.cpp` 的 `ExecuteItemActionFromAuthority`。核对宿主、槽位、实例 GUID、操作、数量与 RequestId 在该链中保持对应；不要按旧 `RequestUseItem` 或固定按钮导航寻找现行入口。
+3. 菜单关闭与 Tooltip 恢复先读同一 PageController 的清理逻辑，再检查正式菜单与格子 WBP；重点检查右键换格、数量改变、物品移走、关闭页面后不会展示旧实例。鱼护搬运的自动化入口另见技术方案的 `FormalTwoEndpointGuardCarryPlaceDrop`，原身份与嘴部附件应同时核对。
+
+以下列表保留历史 CP 阅读顺序；对接口差异以上述现行符号为准。
+
 1. CP-01/CP-02：先确认 Entry、复制、幂等和 held 所有权。
 2. CP-09：确认 v5 磁盘边界没有改格式。
 3. CP-04/CP-05/CP-06：确认资产片段和鱼竿实例状态完整。
@@ -567,6 +579,5 @@ Entry+Instance 复用 AO 的“格子只存实例与数量、实例拥有可用�
 6. 原综合测试中 StarterRod 旧 150 期望与资产 500 的冲突不在本轮改资产解决；最终 review 以保留基线资产值为边界。
 7. 未验证范围：未做 packaged 双端联机实跑，未做 UI 实玩路径验证，未证明新 `ACatItem/ACatEquipmentItem` 已成为正式世界资产/BP 父类，未证明五个旧 DA 的项目外引用可删除。
 8. Review 结论：本文可作为程序员代码审查入口；不作为验收完成或上线证明。
-
 
 

@@ -19,8 +19,9 @@
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "Camp/CatCampInventoryActor.h"
 
+// 合并保留本地库存规则：旧存档鱼的原格、数量与身份均恢复，玩家身体恢复仍只提交一次。
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatLegacyBackpackFishRestoreTest,
-	"Catfishing.Unit.Save.LegacyV6BackpackFishSkipsOnlyFishAndRestoresPlayer",
+	"Catfishing.Unit.Save.LegacyV6BackpackFishPreservesInventoryAndRestoresPlayer",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FCatLegacyBackpackFishRestoreTest::RunTest(const FString& Parameters)
@@ -104,13 +105,13 @@ bool FCatLegacyBackpackFishRestoreTest::RunTest(const FString& Parameters)
 	const TArray<FCatInventoryEntry> After = CatFishingTest::Entries(Equipment);
 	TestEqual(TEXT("other item identity survives"), CatFishingTest::InstanceId(After[0]), BaitId);
 	TestEqual(TEXT("other item quantity survives"), After[0].StackCount, 2);
-	TestEqual(TEXT("legacy fish slot cleared without shifting other slots"), After[FishSlotIndex].StackCount, 0);
-	TestEqual(TEXT("legacy fish identity absent"), Cat->GetInventoryComponent()->FindInventorySlotIndexFromInstanceId(FishId), INDEX_NONE);
+	TestEqual(TEXT("legacy fish quantity preserved in original slot"), After[FishSlotIndex].StackCount, 1);
+	TestEqual(TEXT("legacy fish identity preserved"), Cat->GetInventoryComponent()->FindInventorySlotIndexFromInstanceId(FishId), FishSlotIndex);
 	auto* Fish = NewObject<UCatFishInventoryItemInstance>(Cat);
 	Fish->SetItemDefinition(GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(TEXT("LittleSilverFish")));
 	if (!Fish->InitializeFishFromAuthority(FGuid::NewGuid(), FGuid::NewGuid(), TEXT("LegacyFixture"), 1.0)) return false;
-	TestFalse(TEXT("T24 normal backpack intake still rejects fish"), Cat->GetInventoryComponent()->AddItemInstance(Fish, 1));
-	AddInfo(FString::Printf(TEXT("Event=blocker_legacy_backpack_verified FishDefinitionId=LittleSilverFish ItemInstanceId=%s SlotIndex=%d Result=PlayerRestoredFishSkipped"), *FishId.ToString(), FishSlotIndex));
+	TestTrue(TEXT("local backpack intake continues accepting fish"), Cat->GetInventoryComponent()->AddItemInstance(Fish, 1));
+	AddInfo(FString::Printf(TEXT("Event=blocker_legacy_backpack_verified FishDefinitionId=LittleSilverFish ItemInstanceId=%s SlotIndex=%d Result=PlayerRestoredFishPreserved"), *FishId.ToString(), FishSlotIndex));
 	const FTransform Later(FVector(700, 100, 20));
 	if (!Physical->TeleportBodyFromAuthority(Later, TEXT("AfterRestoreMovement"))) return false;
 	const uint32 RestoredEpoch = Physical->GetResetEpoch();

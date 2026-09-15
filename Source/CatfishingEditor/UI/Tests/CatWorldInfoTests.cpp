@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "Inventory/CatInventoryItemDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 #include "Blueprint/WidgetTree.h"
@@ -61,8 +62,8 @@ static FAutoConsoleCommandWithWorldAndArgs GCatWorldInfoProbeFish(
 				UCatInventoryStatics::AppendInventoryComponentsFromActor(Host.Get(), Inventories);
 				const FCatInventoryEntry* Entry = Inventories.IsEmpty() ? nullptr : Inventories[0]->GetInventoryEntryAtSlot(Slot);
 				if (Entry && Entry->Instance)
-					Player->ServerReleaseInventoryItemToWorld(FGuid::NewGuid(), Host.Get(), Slot,
-						Entry->Instance->GetItemInstanceId(), 1, ECatInventoryWorldAction::Carry);
+					Player->ServerExecuteInventoryAction(FGuid::NewGuid(), Host.Get(), Slot,
+						Entry->Instance->GetItemInstanceId(), CatInventoryActionTags::Carry, 1);
 			}));
 	}));
 

@@ -6,6 +6,7 @@
 #include "CatShopEconomyService.generated.h"
 
 class UCatShopInventoryComponent;
+class UCatInventoryComponent;
 class UDataTable;
 
 /**
@@ -79,15 +80,15 @@ public:
 	TArray<FCatShopTransactionRecord> GetTransactionLedgerSnapshot() const;
 
 	/**
-	 * 声明：只读解析一整车商品，计算服务器总价、每行交付数量和库存前提，给商店交易入口做扣款前的公共仓库预检。
-	 * 实现：合并重复 EntryId，重新读取来源摊位当前目录和库存，再按当前余额、库存数量、价格和溢出边界整体验证。
+	 * 声明：只读解析整车商品，供购买写口在入库前取得服务器总价、每行物品数量和货架前提；本方法不检查收货仓库。
+	 * 实现：合并重复 EntryId，重新读取来源摊位当前目录和库存，再按服务器当前余额、库存数量、价格和溢出边界整体验证，不要求客户端钱包版本匹配。
 	 * 边界：它不写幂等缓存、不扣钱、不扣库存；同一购物车真正提交时 PurchaseCatalogCart 会再走同一套判据。
 	 */
 	bool ResolveCatalogCartForAuthority(const FCatShopCartCommand& Command,
 		const UCatShopInventoryComponent* ShopInventory, FCatShopResolvedCart& OutResolved,
 		ECatDomainCommandError& OutError) const;
 
-	/** 玩家支付购物车时提交一整车指定摊位目录项；返回整单公款终态、库存快照和每个 EntryId 对应的成交账本。 */
+	/** 玩家支付购物车时提交整单指定摊位商品；协调回调先准备交付再调用付款闭包，失败须回滚交付。经济服务返回公款终态、库存快照和逐项账本。 */
 	FCatShopCartTransactionResult PurchaseCatalogCart(const FCatShopCartCommand& Command,
 		UCatShopInventoryComponent* ShopInventory,
 		TFunctionRef<bool(TFunctionRef<bool()>)> CommitDeliveryAndPayment);
@@ -183,8 +184,8 @@ private:
 	/** 解析当前默认收购表；软引用尚未加载或资产不存在时返回空，让售鱼按策略缺失拒绝。 */
 	UDataTable* GetFishSalePriceTable() const;
 
-	/** 回放购物车终态时重读当前账本和库存，让客户端拿到与公开货架同版本的事实，而不是首次缓存里的旧库存数字。 */
-	void RefreshCartReplayResultFromLedger(FCatShopCartTransactionResult& Result) const;
+	/** 重放购物车终态时刷新当前货架与公款快照；已成交记录直接使用首次缓存，不再改变。 */
+	void RefreshCartReplaySnapshots(FCatShopCartTransactionResult& Result) const;
 
 	/**
 	 * 为「某摊位在第 N 天清晨换货架」拼一个确定性刷新 RequestId；同一摊位同一天算出来的是同一个号，
@@ -221,10 +222,10 @@ private:
 	void CacheCartTerminalResult(const FString& CacheKey, const FString& PayloadSignature,
 		const FCatShopCartTransactionResult& Result);
 
-	/** 团队余额变更后的只读事务版本；余额由 GameState ASC 持有，版本只用于购买兼容和账本排序。 */
+	/** 团队余额的事务版本；本服务初始化并在成交改变余额后递增，快照、命令回执和账本读取它记录余额版本，购买裁决与重放签名不依赖客户端版本。 */
 	int64 WalletRevision = 0;
 
-	/** 本局交易账本；价格/公款/库存事实写下即不可重算，购买行在写入那一刻物品已经进公库，没有第二个交付阶段。 */
+	/** 本局已完成交易的审计记录；购买仅在实物入库与扣款成功后写入，服务查询和公开流水读取它。 */
 	TArray<FCatShopTransactionRecord> TransactionLedger;
 
 	/** RequestId 幂等终态缓存；重放返回首次账本记录但不重复扣款或入账。 */

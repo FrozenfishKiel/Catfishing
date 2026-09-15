@@ -13,6 +13,8 @@ class CATFISHING_API UCatBackPackComponent : public UCatInventoryComponent
 public:
 	/** 角色随身物品的默认接收者；构造时设置收货优先级，确保拾取和奖励优先进入背包而非角色上的附属容器。 */
 	UCatBackPackComponent(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
+	/** 组件初始化前收束蓝图遗留的正数槽位默认值；只在尚未生成任何格子时改写，存档和运行物品永不截断。 */
+	virtual void InitializeComponent() override;
 	/** authority 在角色被占有后调用，按 InventorySettings 写入玩家背包容量并建立空槽位。 */
 	void InitializePlayerInventorySlotCapacityFromAuthority();
 
@@ -21,4 +23,8 @@ public:
 	 * 营地公库、鱼护、鱼缸和商店货架都不受它管——那几条限制各自另有容量口径。
 	 */
 	virtual bool EnforcesCarryLimits() const override { return true; }
+
+private:
+	/** 读取项目基础格数与角色成长容量之和；缺失项按零处理，初始化和成长扩容据此替代蓝图遗留容量。 */
+	int32 GetConfiguredPlayerSlotCapacity() const;
 };

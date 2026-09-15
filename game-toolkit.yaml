@@ -23,7 +23,7 @@ project_root: .
 tech_stack: C++ / Blueprint（模块：Catfishing、CatfishingEditor）
 
 # 源码范围：目录与排除项；写目录和排除规则，别写会过期的文件计数
-source_scope: Source/ 下 .cpp/.h 为源码；Config/ 与 Scripts/ 可文本检查；Content/ 为资产不计入文本扫描；设计 SSOT 在 Knowledge/Design/（2026-09-11 迁入，Markdown ＋ CSV，是设计真值不是导出物；其 _feishu/ 子目录是飞书非正式页的只读快照）
+source_scope: Source/ 下 .cpp/.h 为源码；Config/ 与 Scripts/ 可文本检查；Content/ 为资产不计入文本扫描；设计 SSOT 在 Knowledge/Design/（2026-09-11 迁入，Markdown ＋ CSV，是设计真值不是导出物；飞书非正式页不入仓库）
 
 # 可检查程度：按「检查动作」分档，不要只按扩展名一刀切
 inspectability: 按检查动作分档：① 文件存在、路径与命名 —— 可直接检查；② C++、Config、Scripts/ 下的项目脚本 —— 可做静态文本检查；③ 资产的属性、类与引用 —— 需走引擎入口（见 verify_entry），按任务决定要不要做；④ Blueprint 图逻辑与运行时行为 —— 文本搜索证明不了，不得据此判定「未实现」，需专项证据。注意 .uasset/.umap 属于 ③④，能 Glob 到不等于读得懂

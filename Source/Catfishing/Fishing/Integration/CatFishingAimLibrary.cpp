@@ -178,7 +178,21 @@ bool UCatFishingAimLibrary::TryResolveScoopReach(const UCatEquipmentComponent* E
 		OutReachCentimeters = 0.0;
 		return false;
 	}
-	// 墓碑（2026-09-14，T15；钓鱼规则 §5.1）：删除逐网射程第二上限，装备只提供有网资格。
+	return TryResolveScoopReach(ScoopDefinition, OutReachCentimeters);
+}
+
+// 精确实例沿用统一抄网距离；定义只证明该物品具备抄网能力，不恢复已退役的逐网距离上限。
+bool UCatFishingAimLibrary::TryResolveScoopReach(const UCatEquipmentDefinition* ScoopDefinition,
+	double& OutReachCentimeters)
+{
+	OutReachCentimeters = 0.0;
+	const UCatFishingSettings* FishingSettings = GetDefault<UCatFishingSettings>();
+	if (!FishingSettings || !ScoopDefinition || !ScoopDefinition->CanServeScoopNet()
+		|| !ScoopDefinition->IsRuntimeDefinitionReady()
+		|| !FishingSettings->TryGetScoopReach(OutReachCentimeters))
+	{
+		return false;
+	}
 	return FMath::IsFinite(OutReachCentimeters) && OutReachCentimeters > 0.0;
 }
 

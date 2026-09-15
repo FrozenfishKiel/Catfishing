@@ -20,7 +20,6 @@
 #include "Character/CatCharacter.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
-#include "Equipment/CatEquipmentSettings.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Framework/Game/CatfishingPlayerState.h"
 
@@ -36,17 +35,14 @@ bool FCatBorrowedRodReservationAudit::RunTest(const FString& Parameters)
 	{
 		UCatInventorySettings* Settings = GetMutableDefault<UCatInventorySettings>();
 		TArray<FCatInventoryCatalogDefinition> Definitions = Settings->Definitions;
-		ECatDomainPolicy Trust = GetMutableDefault<UCatEquipmentSettings>()->ProfileLoadoutTrustPolicy;
 		int32 Capacity = Settings->PlayerInventorySlotCapacity;
 		~FRestoreSettings()
 		{
 			Settings->Definitions = Definitions;
-			GetMutableDefault<UCatEquipmentSettings>()->ProfileLoadoutTrustPolicy = Trust;
 			Settings->PlayerInventorySlotCapacity = Capacity;
 		}
 	} Restore;
 	Restore.Settings->Definitions.Reset();
-	GetMutableDefault<UCatEquipmentSettings>()->ProfileLoadoutTrustPolicy = ECatDomainPolicy::Enabled;
 	Restore.Settings->PlayerInventorySlotCapacity = 12;
 	TArray<TStrongObjectPtr<UCatEquipmentDefinition>> Definitions;
 	const auto AddDefinition = [&](const FName Id, const CatFishingTest::EFixtureKind Kind)

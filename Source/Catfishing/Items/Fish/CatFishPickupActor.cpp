@@ -38,7 +38,6 @@
 #include "Logging/CatLog.h"
 #include "Net/UnrealNetwork.h"
 #include "PhysicsEngine/BodySetup.h"
-#include "TimerManager.h"
 
 // 构造流程：创建支持场景碰撞的复制根并忽略Pawn，鱼体仅负责冻结姿态与缩放；不在CDO阶段读取定义或创建捕获事实。
 ACatFishPickupActor::ACatFishPickupActor()
@@ -86,36 +85,7 @@ void ACatFishPickupActor::BeginPlay()
 		}
 	}
 	RefreshFishPresentation();
-	if (PresentationState.State == ECatFishPickupState::Carried)
-	{
-		ApplyCarriedVisualTransform();
-		ReconcileAttachmentFromPresentation(TEXT("BeginPlay"));
-	}
-	else
-	{
-		ApplyLandedVisualTransform();
-	}
-}
-
-// 非物理态先按原鱼当前世界尺寸修正待应用的附着缩放，再让引擎处理附件并收敛表现。
-// 不用量化后的缩放覆盖原鱼；物理态仍跳过旧附件，避免丢弃后被迟到消息拉回嘴部。
-void ACatFishPickupActor::OnRep_AttachmentReplication()
-{
-	if (!GetReplicatedMovement().bRepPhysics)
-	{
-		if (RootComponent && AttachmentReplication.AttachParent)
-		{
-			USceneComponent* Parent = AttachmentReplication.AttachComponent ? AttachmentReplication.AttachComponent.Get()
-				: AttachmentReplication.AttachParent->GetRootComponent();
-			if (Parent)
-			{
-				AttachmentReplication.RelativeScale3D = RootComponent->IsUsingAbsoluteScale() ? GetActorScale3D()
-					: GetActorTransform().GetRelativeTransform(Parent->GetSocketTransform(AttachmentReplication.AttachSocket)).GetScale3D();
-			}
-		}
-		Super::OnRep_AttachmentReplication();
-	}
-	ReconcileAttachmentFromPresentation(TEXT("AttachmentReplication"));
+	RefreshCarryPresentation(true);
 }
 
 // 销毁收口流程：若本鱼仍是角色嘴部的唯一引用，先按本 Actor 清除；随后才交给父类释放组件，避免售鱼或容器析构留下失效复制指针。
@@ -126,18 +96,6 @@ void ACatFishPickupActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		if (ACatCharacter* Character = AuthorityCarrier.Get()) Character->ReleaseMouthCarriedActorFromAuthority(this);
 	}
 	Super::EndPlay(EndPlayReason);
-}
-
-// 先由引擎同步刚体和位置，再处理可能晚于表现到达的物理标志；统一收敛负责取消嘴部重试。
-void ACatFishPickupActor::OnRep_ReplicatedMovement()
-{
-	Super::OnRep_ReplicatedMovement();
-	// 正常地面物理更新只走引擎；旧 Carried 遇到首个物理包时以尚关闭的碰撞识别一次纠错，不每包重建几何。
-	if (GetAttachParentActor() || (PresentationState.State == ECatFishPickupState::Carried
-		&& (!GetReplicatedMovement().bRepPhysics || WorldCollision->GetCollisionEnabled() == ECollisionEnabled::NoCollision)))
-	{
-		ReconcileAttachmentFromPresentation(TEXT("ReplicatedMovement"));
-	}
 }
 
 void ACatFishPickupActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -209,6 +167,11 @@ namespace CatFishPickupPresentationPrivate
 	}
 }
 
+// 鱼种资源刷新流程：
+// 1. 没有网格组件、没有鱼种身份或已应用同一鱼种时直接返回，避免复制位置包反复加载资产。
+// 2. Dedicated Server 只记录已应用的鱼种身份，不加载表现资产。
+// 3. 客户端或 Listen Server 从鱼种表解析表现定义，校验 Mesh、落地动画和 Skeleton 兼容性；失败时清空表现并记录可排查日志。
+// 4. 成功后保存落地/嘴叼两套基础相对姿态，冻结落地动画到最后一帧并刷新骨骼；后续只由 RefreshCarryPresentation 选择落地或嘴叼姿态。
 void ACatFishPickupActor::RefreshFishPresentation()
 {
 	if (!FishMesh || PresentationState.FishDefinitionId.IsNone()
@@ -306,21 +269,9 @@ void ACatFishPickupActor::ApplyCarriedVisualTransform()
 		return;
 	}
 	FishMesh->SetRelativeTransform(CarriedMeshBaseTransform);
-	ApplyVisualScale();
-}
-
-// 视觉缩放流程：落地与嘴叼共用服务器冻结的鱼体比例；只缩放 FishMesh，不缩放交互根、附着关系或碰撞半径。
-void ACatFishPickupActor::ApplyVisualScale()
-{
-	if (!FishMesh)
-	{
-		return;
-	}
-	const FVector BaseScale = PresentationState.State == ECatFishPickupState::Carried
-		? CarriedMeshBaseTransform.GetScale3D() : LandedMeshBaseTransform.GetScale3D();
 	const double Scale = FMath::IsFinite(PresentationState.VisualScale) && PresentationState.VisualScale > 0.0
 		? PresentationState.VisualScale : 1.0;
-	FishMesh->SetRelativeScale3D(BaseScale * Scale);
+	FishMesh->SetRelativeScale3D(CarriedMeshBaseTransform.GetScale3D() * Scale);
 }
 
 // 嘴部鱼查询流程：只把角色唯一复制引用转换为鱼类型；附着层仅负责表现，不能再被当作占用事实扫描。
@@ -354,7 +305,7 @@ bool ACatFishPickupActor::BeginMouthCarryFromAuthority(ACatCharacter* Character,
 	WorldCollision->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	InteractionSphere->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	ApplyLocalFocus(false);
-	if (!AttachCarriedRootToMouth(Character, TEXT("AuthorityCommit"), false))
+	if (!AttachCarriedRootToMouth(Character))
 	{
 		DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
 		Character->OnDestroyed.RemoveDynamic(this, &ThisClass::HandleAuthorityCarrierDestroyed);
@@ -409,168 +360,38 @@ void ACatFishPickupActor::RestoreInventoryRetentionFromAuthority(UCatFishInvento
 	ForceNetUpdate();
 }
 
-// 嘴部附着流程：先检查角色、根和客户端骨架，再按保留世界尺寸的规则连接目标Socket；只应用配置位置与旋转。
-// 复制纠正也只比较这两项，不把为抵消父级缩放而产生的局部缩放误判为错误；最后刷新嘴叼姿态并按需记录纠正结果。
-bool ACatFishPickupActor::AttachCarriedRootToMouth(ACatCharacter* Character, const TCHAR* Source,
-	const bool bLogCorrection)
+// 服务器附着流程：检查目标 Mesh 和配置，停止物理由上游携带事务完成；保持实物世界尺寸，仅写鱼专用的位置与朝向。
+// 附件失败由调用方回滚单嘴占用和归属，客户端不会调用此方法或从 PlayerState 推导第二个附着目标。
+bool ACatFishPickupActor::AttachCarriedRootToMouth(ACatCharacter* Character)
 {
-	USkeletalMeshComponent* CharacterMesh = Character ? Character->GetMesh() : nullptr;
-	USceneComponent* Root = GetRootComponent();
-	if (!Character || !CharacterMesh || !Root)
-	{
-		return false;
-	}
+	USkeletalMeshComponent* Mesh = Character ? Character->GetMesh() : nullptr;
+	if (!HasAuthority() || !Mesh || !GetRootComponent()) return false;
 	const UCatFishPickupSettings* Settings = GetDefault<UCatFishPickupSettings>();
-	const bool bCharacterMeshReady = CharacterMesh->GetSkeletalMeshAsset() != nullptr;
-	if (!HasAuthority() && !bCharacterMeshReady)
-	{
-		return false;
-	}
-	const FName SocketName = Settings && bCharacterMeshReady ? Settings->MouthCarrySocketName : NAME_None;
-	const FTransform RelativeTransform = Settings ? Settings->MouthCarryRelativeTransform : FTransform::Identity;
-	USceneComponent* PreviousParent = Root->GetAttachParent();
-	const FName PreviousSocket = Root->GetAttachSocketName();
-	const FTransform PreviousRelative = Root->GetRelativeTransform();
-	const bool bNeedsCorrection = PreviousParent != CharacterMesh || PreviousSocket != SocketName
-		|| !PreviousRelative.EqualsNoScale(RelativeTransform, UE_KINDA_SMALL_NUMBER);
-	if ((PreviousParent != CharacterMesh || PreviousSocket != SocketName)
-		&& !AttachToComponent(CharacterMesh, FAttachmentTransformRules::SnapToTargetNotIncludingScale, SocketName))
-	{
-		return false;
-	}
-	Root->SetRelativeLocationAndRotation(RelativeTransform.GetLocation(), RelativeTransform.GetRotation());
+	const FName Socket = Settings && Mesh->GetSkeletalMeshAsset() ? Settings->MouthCarrySocketName : NAME_None;
+	const FTransform Relative = Settings ? Settings->MouthCarryRelativeTransform : FTransform::Identity;
+	if (!AttachToComponent(Mesh, FAttachmentTransformRules::SnapToTargetNotIncludingScale, Socket)) return false;
+	GetRootComponent()->SetRelativeLocationAndRotation(Relative.GetLocation(), Relative.GetRotation());
 	ApplyCarriedVisualTransform();
-	const bool bExact = Root->GetAttachParent() == CharacterMesh && Root->GetAttachSocketName() == SocketName
-		&& Root->GetRelativeTransform().EqualsNoScale(RelativeTransform, UE_KINDA_SMALL_NUMBER);
-	if (bLogCorrection && bNeedsCorrection)
-	{
-		if (bExact)
-		{
-			UE_LOG(LogCatFishContainers, Log,
-				TEXT("Event=fish_pickup_attachment_reconciled Result=Corrected Source=%s SessionId=%s FishInstanceId=%s Pickup=%s Carrier=%s PreviousParent=%s PreviousSocket=%s DesiredParent=%s DesiredSocket=%s PreviousRelative=%s FinalRelative=%s NetMode=%d"),
-				Source ? Source : TEXT("Unknown"),
-				*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-				*PresentationState.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(this),
-				*GetNameSafe(Character), *GetNameSafe(PreviousParent), *PreviousSocket.ToString(),
-				*GetNameSafe(CharacterMesh), *SocketName.ToString(), *PreviousRelative.ToHumanReadableString(),
-				*Root->GetRelativeTransform().ToHumanReadableString(), static_cast<int32>(GetNetMode()));
-		}
-		else
-		{
-			UE_LOG(LogCatFishContainers, Warning,
-				TEXT("Event=fish_pickup_attachment_reconciled Result=Failed Source=%s SessionId=%s FishInstanceId=%s Pickup=%s Carrier=%s PreviousParent=%s PreviousSocket=%s DesiredParent=%s DesiredSocket=%s NetMode=%d"),
-				Source ? Source : TEXT("Unknown"),
-				*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-				*PresentationState.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(this),
-				*GetNameSafe(Character), *GetNameSafe(PreviousParent), *PreviousSocket.ToString(),
-				*GetNameSafe(CharacterMesh), *SocketName.ToString(), static_cast<int32>(GetNetMode()));
-		}
-	}
-	return bExact;
+	return GetRootComponent()->GetAttachParent() == Mesh && GetRootComponent()->GetAttachSocketName() == Socket
+		&& GetRootComponent()->GetRelativeTransform().EqualsNoScale(Relative, UE_KINDA_SMALL_NUMBER);
 }
 
-// 客户端先排除权威执行；地面或已收到物理复制时取消嘴部重试并脱离附件、恢复落地外观。
-// 只有非物理携带态才解析角色并精确附着；角色未就绪进入原有有限重试，成功则清空重试计数。
-void ACatFishPickupActor::ReconcileAttachmentFromPresentation(const TCHAR* Source)
+// 鱼体表现流程：
+// 1. 读取共同基类已经应用到根组件上的附件和服务器物理状态，推导当前是否处于嘴叼表现。
+// 2. 鱼种资源刚更新时强制重算网格姿态；普通复制包若碰撞模式未变化则快速返回，避免每包重算鱼体包围盒。
+// 3. 根据推导结果切换嘴叼或落地网格姿态，并同步物理根与准星碰撞；嘴叼时清掉本地描边焦点。
+// 4. 此处不修改根附件或物理模拟，迟到的 Carried/Available 不能将共同入口已落地的鱼重新挂回猫嘴。
+void ACatFishPickupActor::RefreshCarryPresentation(const bool bForceRefresh)
 {
-	if (HasAuthority())
-	{
-		return;
-	}
-	if (PresentationState.State != ECatFishPickupState::Carried || GetReplicatedMovement().bRepPhysics)
-	{
-		if (UWorld* World = GetWorld())
-		{
-			World->GetTimerManager().ClearTimer(AttachmentReconcileTimer);
-		}
-		AttachmentReconcileAttemptCount = 0;
-		bAttachmentReconcileRetryExhausted = false;
-		if (GetAttachParentActor())
-		{
-			DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
-		}
-		ApplyLandedVisualTransform();
-		WorldCollision->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-		InteractionSphere->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-		// RepNotify 顺序不固定：表现回调曾关闭模拟时，不能等 bRepPhysics 再次变化才恢复。
-		SyncReplicatedPhysicsSimulation();
-		return;
-	}
-
-	// 重新叼起时 bRepPhysics=false 可能最后到达；在附着前关闭旧刚体并恢复嘴部碰撞约束。
-	WorldCollision->SetSimulatePhysics(false);
-	WorldCollision->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	InteractionSphere->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	ACatCharacter* Character = PresentationState.CarriedByPlayerState
-		? Cast<ACatCharacter>(PresentationState.CarriedByPlayerState->GetPawn()) : nullptr;
-	if (!Character)
-	{
-		Character = Cast<ACatCharacter>(GetAttachmentReplication().AttachParent.Get());
-	}
-	if (!Character)
-	{
-		Character = Cast<ACatCharacter>(GetAttachParentActor());
-	}
-	if (!Character || !AttachCarriedRootToMouth(Character, Source, true))
-	{
-		if (AttachmentReconcileAttemptCount == 0)
-		{
-			UE_LOG(LogCatFishContainers, Log,
-				TEXT("Event=fish_pickup_attachment_reconcile_deferred Reason=CarrierOrMeshUnavailable Source=%s SessionId=%s FishInstanceId=%s Pickup=%s CarrierPlayerState=%s RepAttachParent=%s CurrentAttachParent=%s NetMode=%d"),
-				Source ? Source : TEXT("Unknown"),
-				*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-				*PresentationState.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(this),
-				*GetNameSafe(PresentationState.CarriedByPlayerState),
-				*GetNameSafe(GetAttachmentReplication().AttachParent.Get()), *GetNameSafe(GetAttachParentActor()),
-				static_cast<int32>(GetNetMode()));
-		}
-		ScheduleAttachmentReconcileRetry();
-		return;
-	}
-	if (UWorld* World = GetWorld())
-	{
-		World->GetTimerManager().ClearTimer(AttachmentReconcileTimer);
-	}
-	AttachmentReconcileAttemptCount = 0;
-	bAttachmentReconcileRetryExhausted = false;
-}
-
-void ACatFishPickupActor::ScheduleAttachmentReconcileRetry()
-{
-	UWorld* World = GetWorld();
-	if (!World || HasAuthority() || PresentationState.State != ECatFishPickupState::Carried
-		|| World->GetTimerManager().IsTimerActive(AttachmentReconcileTimer))
-	{
-		return;
-	}
-	constexpr int32 MaximumAttempts = 40;
-	if (AttachmentReconcileAttemptCount >= MaximumAttempts)
-	{
-		if (!bAttachmentReconcileRetryExhausted)
-		{
-			bAttachmentReconcileRetryExhausted = true;
-			UE_LOG(LogCatFishContainers, Warning,
-				TEXT("Event=fish_pickup_attachment_reconcile_failed Reason=RetryExhausted Attempts=%d SessionId=%s FishInstanceId=%s Pickup=%s CarrierPlayerState=%s RepAttachParent=%s NetMode=%d"),
-				AttachmentReconcileAttemptCount,
-				*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-				*PresentationState.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(this),
-				*GetNameSafe(PresentationState.CarriedByPlayerState),
-				*GetNameSafe(GetAttachmentReplication().AttachParent.Get()), static_cast<int32>(GetNetMode()));
-		}
-		return;
-	}
-	World->GetTimerManager().SetTimer(AttachmentReconcileTimer, this,
-		&ThisClass::RetryAttachmentReconcile, 0.05f, false);
-}
-
-void ACatFishPickupActor::RetryAttachmentReconcile()
-{
-	if (UWorld* World = GetWorld())
-	{
-		World->GetTimerManager().ClearTimer(AttachmentReconcileTimer);
-	}
-	++AttachmentReconcileAttemptCount;
-	ReconcileAttachmentFromPresentation(TEXT("DeferredRetry"));
+	const bool bCarried = GetAttachParentActor() != nullptr
+		&& !(HasAuthority() ? WorldCollision->IsSimulatingPhysics() : GetReplicatedMovement().bRepPhysics);
+	const ECollisionEnabled::Type Collision = bCarried ? ECollisionEnabled::NoCollision : ECollisionEnabled::QueryAndPhysics;
+	if (!bForceRefresh && WorldCollision->GetCollisionEnabled() == Collision) return;
+	if (bCarried) ApplyCarriedVisualTransform();
+	else ApplyLandedVisualTransform();
+	WorldCollision->SetCollisionEnabled(Collision);
+	InteractionSphere->SetCollisionEnabled(bCarried ? ECollisionEnabled::NoCollision : ECollisionEnabled::QueryOnly);
+	if (bCarried) ApplyLocalFocus(false);
 }
 
 // 结束携带流程：移除配对宿主回调，清空服务器携带者，再保留世界变换解绑并清除所有者和表现归属。
@@ -1242,31 +1063,12 @@ void ACatFishPickupActor::ArchiveCommittedCapture(const FCatCaptureCommittedResu
 	}
 }
 
-// 表现复制流程：先解析正式鱼种网格；仅非物理携带态停止刚体并收敛嘴部附着，地面或物理态恢复碰撞。
-// 最后通知蓝图并仅对身份或状态变化落盘；物理复制已到达时忽略旧 Carried 的附着要求，防止把丢弃鱼再次挂嘴。
+// 鱼身份复制流程：先解析鱼种网格，再按共同基类当前已经应用的根附件刷新鱼体姿态与碰撞。
+// 之后通知蓝图并记录身份或携带状态变化；本回调不操作根组件物理和附着，也不会用表现状态重新推导携带者。
 void ACatFishPickupActor::OnRep_PresentationState(const FCatFishPickupPresentationState& Previous)
 {
 	RefreshFishPresentation();
-	if (PresentationState.State == ECatFishPickupState::Carried && !GetReplicatedMovement().bRepPhysics)
-	{
-		if (InteractionSphere)
-		{
-			WorldCollision->SetSimulatePhysics(false);
-			WorldCollision->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-			InteractionSphere->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		}
-		ApplyLocalFocus(false);
-		ReconcileAttachmentFromPresentation(TEXT("PresentationState"));
-	}
-	else
-	{
-		ReconcileAttachmentFromPresentation(TEXT("PresentationState"));
-		if (InteractionSphere)
-		{
-			InteractionSphere->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-			WorldCollision->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-		}
-	}
+	RefreshCarryPresentation(true);
 	BP_OnPickupPresentationChanged(Previous, PresentationState);
 	if (Previous.FishInstanceId != PresentationState.FishInstanceId || Previous.State != PresentationState.State)
 	{

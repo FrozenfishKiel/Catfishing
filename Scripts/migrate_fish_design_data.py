@@ -39,6 +39,12 @@ def serial(value):
         return value
     if isinstance(value, unreal.Vector2D):
         return [value.x, value.y]
+    if isinstance(value, unreal.Vector):
+        return [value.x, value.y, value.z]
+    if isinstance(value, unreal.CatFishBodyGeometry):
+        return {field: serial(value.get_editor_property(field)) for field in (
+            'mouth_local_position_centimeters', 'center_of_mass_local_position_centimeters',
+            'scale_origin_local_centimeters', 'yaw_radius_of_gyration_centimeters')}
     if isinstance(value, unreal.CatChumVector):
         return [value.fishy, value.fragrant, value.fermented]
     if isinstance(value, (unreal.Array, list, tuple)):
@@ -89,8 +95,6 @@ def run():
         for field, category in [('fishy','腥'),('fragrant','香'),('fermented','酵')]:
             chum.set_editor_property(field, 1.0 if axis == category else 0.0)
         edible = name not in ('Fish_Salted','Fish_LakeGiantShadow')
-        food = unreal.CatFishFoodSafety.INEDIBLE if not edible else (
-            unreal.CatFishFoodSafety.SEVERE_TOXIC if name == 'Fish_Puffer' else unreal.CatFishFoodSafety.SAFE)
         values = {
             'minimum_weight_kilograms': weights.x,
             'maximum_weight_kilograms': weights.y,
@@ -105,7 +109,6 @@ def run():
             'scoop_target_radius_centimeters': number(column(row,'可捞圈半径'),name,zero=True),
             'probe_duration_seconds': number(column(row,'试探期'),name),
             'true_bite_window_seconds': number(column(row,'真咬响应窗'),name),
-            'food_safety': food,
             'chum_preference': chum,
         }
         if not 8 <= values['true_bite_window_seconds'] <= 15:
@@ -116,12 +119,8 @@ def run():
                                                multiplier=number(bait_rows[name][bait_name],name))
             bait_values.append(item)
         values['bait_weight_multipliers']=bait_values
-        # 没有效果是已明确结论；其余效果仍等正式 GE，不用空效果掩盖欠账。
-        if not edible or row['限时Buff'].strip().startswith('无'):
-            values['eating_timed_effect_configured'] = True
-            values['eating_timed_effect'] = None
-            values['eating_timed_effect_duration_seconds'] = 0.0
-        reference_fields=['fish_definition_id','presentation_definition','thumbnail','fight_personality_id','bite_personality_id','region_ids']
+        # 食用效果已退役；仅迁移成长系数，保留鱼体标定和表现引用。
+        reference_fields=['fish_definition_id','presentation_definition','thumbnail','fight_personality_id','bite_personality_id','region_ids','fight_body_geometry']
         before={k: serial(fish.get_editor_property(k)) for k in values}
         refs={k: serial(fish.get_editor_property(k)) for k in reference_fields}
         target={k: serial(v) for k,v in values.items()}

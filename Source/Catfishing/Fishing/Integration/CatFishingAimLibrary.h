@@ -9,6 +9,7 @@ class ACatCharacter;
 class AController;
 class APlayerController;
 class UCatEquipmentComponent;
+class UCatEquipmentDefinition;
 
 /** 抛竿/打窝瞄准的公共数学；服务器裁决和客户端预览调用同一组函数，保证预览线与真实落点一致。 */
 UCLASS()
@@ -29,7 +30,7 @@ public:
 
 	/**
 	 * 抛竿瞄准（规格 3.1：点哪落哪，无蓄力）：视线射线与水面求交，再经水域校验/修正。
-	 * 返回 false 表示准星没落在水里或不在任何水域内。
+	 * 失败时调用方必须保持未瞄准状态，不能沿用上一帧水域或落点继续提交抛竿。
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Fishing|Aim", meta = (WorldContext = "WorldContextObject"))
 	static bool ResolveCastAimPoint(UObject* WorldContextObject, FVector ViewLocation, FRotator ViewRotation,
@@ -59,6 +60,8 @@ public:
 	 * 服务器裁决与 debug 显示共用此入口，避免无装备时仍显示绿色范围。
 	 */
 	static bool TryResolveScoopReach(const UCatEquipmentComponent* Equipment, double& OutReachCentimeters);
+	/** 用已验证的抄网定义计算同一条范围公式；统一 Use 不依赖 Equipment 快照选择另一件抄网。 */
+	static bool TryResolveScoopReach(const UCatEquipmentDefinition* ScoopDefinition, double& OutReachCentimeters);
 
 	/**
 	 * 解析抄网唯一有效朝向：只使用 Character Actor 的水平前向，不读取 Controller/Camera 朝向。

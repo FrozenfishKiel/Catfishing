@@ -53,26 +53,27 @@ bool FCatYellowStaminaBalanceTest::RunTest(const FString&)
 	TestEqual(TEXT("waiting with a rod can recover while moving"), ASC->GetTotalFightStamina(), 30.0);
 	const auto* Fish = LoadObject<UCatFishDefinition>(nullptr, TEXT("/Game/Catfishing/Data/Fish/Fish_LittleColor.Fish_LittleColor"));
 	if (!TestNotNull(TEXT("formal fish definition loads"), Fish)) return false;
-	TestEqual(TEXT("formal fish grant comes from table"), Fish->YellowStaminaGrant, 20.0);
 	for (const TCHAR* Path : {TEXT("/Game/Catfishing/Data/Fish/Fish_Windbell.Fish_Windbell"), TEXT("/Game/Catfishing/Data/Fish/Fish_Blackfish.Fish_Blackfish")})
 	{
 		const auto* Definition = LoadObject<UCatFishDefinition>(nullptr, Path);
 		if (!TestNotNull(TEXT("every migrated fish loads"), Definition)) return false;
 		TestTrue(TEXT("migrated fish preserves native readiness"), Definition->IsRuntimeDefinitionReady());
-		TestEqual(TEXT("each formal grant matches fish table"), Definition->YellowStaminaGrant, 20.0);
 	}
+	// 吃鱼目前只提交成长；确认独立黄色体力既不增加，也不被重放覆盖。
+	const float ReserveBeforeEating = ASC->GetYellowFightStamina();
+	const double TotalBeforeEating = ASC->GetTotalFightStamina();
 	const auto Request = FGuid::NewGuid();
 	const auto Result = Cat->GetConditionComponent()->ConsumeCommittedFish(Request, Fish, 0.5);
 	TestTrue(TEXT("formal food chain commits"), Result.bCommitted);
-	TestEqual(TEXT("food grants reserve once"), ASC->GetYellowFightStamina(), 40.0f);
+	TestEqual(TEXT("food leaves reserve unchanged"), ASC->GetYellowFightStamina(), ReserveBeforeEating);
 	const auto Replay = Cat->GetConditionComponent()->ConsumeCommittedFish(Request, Fish, 0.5);
 	TestTrue(TEXT("food request replay is recognized"), Replay.bTerminalReplay);
-	TestEqual(TEXT("replay cannot double-grant reserve"), ASC->GetYellowFightStamina(), 40.0f);
+	TestEqual(TEXT("replay leaves reserve unchanged"), ASC->GetYellowFightStamina(), ReserveBeforeEating);
 	ASC->ClearActorInfo();
 	TestFalse(TEXT("grant with no authority avatar is rejected"), ASC->ApplyYellowFightStaminaDelta(1));
 	TestFalse(TEXT("day cleanup also requires authority avatar"), ASC->ClearYellowFightStaminaFromAuthority());
 	ASC->InitAbilityActorInfo(Cat, Cat);
-	TestEqual(TEXT("repossessing does not fill green or clear yellow"), ASC->GetTotalFightStamina(), 50.0);
+	TestEqual(TEXT("repossessing does not fill green or clear yellow"), ASC->GetTotalFightStamina(), TotalBeforeEating);
 	return !HasAnyErrors();
 }
 #endif

@@ -125,9 +125,7 @@ bool FCatUprightCMCConditionPoseTest::RunTest(const FString& Parameters)
 	if (!Visual || !Visual->GetVisualMesh() || !Presentation) return false;
 	const double StandingHead=Visual->GetVisualMesh()->GetBoneLocationByName(TEXT("RigHead"),EBoneSpaces::WorldSpace).Z;
 	const double CapsuleHeight=Cat->GetActorLocation().Z;
-	AddExpectedMessage(TEXT("Event=character_downed"),ELogVerbosity::Warning);
-	// 2026-09-12：倒地不再由「Poison 累加到阈值」推出，而是单条重毒鱼的结论直接裁决，所以这里走唯一的倒地入口。
-	TestTrue(TEXT("severe toxicity downs the cat through the only downed entry"),Cat->GetConditionComponent()->ApplySevereToxicityFromAuthority());
+	TestTrue(TEXT("authority sets downed condition"),Cat->GetConditionComponent()->SetDownedFromAuthority(true));
 	Scene.Step(600);
 	TestTrue(TEXT("authoritative condition remains downed"),Cat->GetConditionComponent()->GetSnapshot().bDowned);
 	TestTrue(TEXT("a downed cat can still crawl: locomotion stays on, only slowed and jump-locked"),
@@ -136,7 +134,7 @@ bool FCatUprightCMCConditionPoseTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("authored transition reaches its lying pose"),Presentation->GetObservedPosePhase(),FName(TEXT("DownedPose")));
 	const double LyingHead=Visual->GetVisualMesh()->GetBoneLocationByName(TEXT("RigHead"),EBoneSpaces::WorldSpace).Z;
 	TestTrue(TEXT("actual formal mesh lies down while the collision stays supported"),LyingHead<StandingHead-3 && FMath::Abs(Cat->GetActorLocation().Z-CapsuleHeight)<.5);
-	TestTrue(TEXT("real recovery command clears downed state"),CatIsAcceptedDomainCommandResult(Cat->GetConditionComponent()->RequestFieldSelfRecovery(Controller,FGuid::NewGuid())));
+	TestTrue(TEXT("authority clears downed condition"),Cat->GetConditionComponent()->SetDownedFromAuthority(false));
 	Scene.Step(600);
 	TestEqual(TEXT("authored get-up returns to locomotion"),Presentation->GetObservedPosePhase(),FName(TEXT("Locomotion")));
 	TestTrue(TEXT("recovery restores full-speed walking without a physical flip"),Cat->GetPhysicalBodyComponent()->IsLocomotionEnabled()

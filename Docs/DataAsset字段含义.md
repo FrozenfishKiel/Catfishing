@@ -1,6 +1,6 @@
 # DataAsset 字段说明手册
 
-对应代码状态：2026-09-04；2026-09-11 更新身体意图耗体及相关搏斗字段。给配数值/建资产的人看：每个 DataAsset 类型的字段含义、校验规则、注册方法。
+对应代码状态：2026-09-04；2026-09-11 更新身体意图耗体及相关搏斗字段；2026-09-14 按用户裁决移除偷鱼协议、草药恢复、渐进中毒和功能装备解锁门口径。给配数值/建资产的人看：每个 DataAsset 类型的字段含义、校验规则、注册方法。
 
 ## 0. 所有 DataAsset 共同的规矩
 
@@ -32,7 +32,6 @@
 |---|---|---|
 | CatDefinitionId | 种类稳定 ID，角色用它选种类 | 必填、清单内唯一 |
 | DisplayName | 表现用显示名 | 不参与数值裁决 |
-| InitialPoison | 初始中毒值 | ≥0 |
 | FishingStrength | **猫力量**（正体力期间完整生效，归零停止主动出力；不按剩余体力比例衰减） | >0 |
 | FightStaminaMaximum | **猫搏斗体力上限**（规格 4.3 消耗与松线喘息回复的基线） | >0 |
 | bEnableRuntimeDefinition | 显式启用 gate | 必须 True |
@@ -96,7 +95,7 @@
 
 `Equip_*` 资产可复用为库存定义。通用身份仍由 `UCatEquipmentDefinition` 保存，五组专属静态能力改由 Fragments 表达：鱼竿用 `UCatEquipmentFragment_Rod`，鱼饵用 `..._Bait`，鱼漂用 `..._Float`，抄网用 `..._Scoop`，窝料用 `..._Chum`。运行入口只查自己需要的片段并校验其 `IsRuntimeReady()`，不再通过其他领域字段的零值推测物品用途。
 
-**共同字段**：`EquipmentDefinitionId`(唯一 ID，也是库存目录 ID) · `LoadoutSlotId`(Rod/Bait/Float/ScoopNet 四个钓具选择槽位物品必填，非选择型道具不填) · `RequiredUnlockId`(解锁门槛,None=不设) · `UseActorClass`(部署型物品 Use 到世界时生成的 Actor 类；鱼竿填 BP_CatFishingRodActor，其他部署物品填自己的 Actor) · `bRunConsumable`(是否一局内数量物：普通/特殊鱼饵、窝料和片段型耗材为 True，工具和部署型物品为 False) · `FunctionalRouteId`(装备运行目录必填,常规填 Route_Standard；只进入库存目录的片段型物品不靠它表达用途) · `bEnableRuntimeDefinition`(gate) · `PreferredInstanceType`（可显式指定 `UCatEquipmentInventoryItemInstance` 的子类；不填时使用默认装备实例，填入非装备实例子类会使定义不就绪）。
+**共同字段**：`EquipmentDefinitionId`(唯一 ID，也是库存目录 ID) · `LoadoutSlotId`(Rod/Bait/Float/ScoopNet 四个钓具选择槽位物品必填，非选择型道具不填) · `UseActorClass`(部署型物品 Use 到世界时生成的 Actor 类；鱼竿填 BP_CatFishingRodActor，其他部署物品填自己的 Actor) · `bRunConsumable`(是否一局内数量物：普通/特殊鱼饵、窝料和片段型耗材为 True，工具和部署型物品为 False) · `FunctionalRouteId`(装备运行目录必填,常规填 Route_Standard；只进入库存目录的片段型物品不靠它表达用途) · `bEnableRuntimeDefinition`(gate) · `PreferredInstanceType`（可显式指定 `UCatEquipmentInventoryItemInstance` 的子类；不填时使用默认装备实例，填入非装备实例子类会使定义不就绪）。功能装备 Demo 不做解锁门；不要在竿、饵、漂、抄网、鱼护等运行装备上继续配置 `RequiredUnlockId`。通用 `FProfileGrant`/`UnlockIds` 和皮肤定义上的外观解锁口径仍由 Profile/Collection 维护。
 
 **Rod（鱼竿）Fragment：`UCatEquipmentFragment_Rod`**：
 | 字段 | 含义 | 规格对应 |
@@ -123,7 +122,7 @@
 | MaximumQuantityPerPlacement | 单次投放最多消耗份数 | >0 |
 | PresentationId / PresentationClass | 表现语义 ID / 表现 Actor 类 | 可空 |
 
-**Herb（草药恢复）**：草药属于 `CatInventorySettings` 正式库存目录，并在定义 `Fragments` 里添加 `UCatHerbRecoveryItemFragment`；施药入口由目标 `UCatConditionComponent::UseHerbOnCharacterFromAuthority` 执行，它只按正式库存实例和这个片段复核能否扣量，恢复数值与距离来自 `CatConditionSettings`。
+**已删除口径**：草药恢复不再是当前 DataAsset 体系的一部分；不要新建 Herb 定义、不要添加 `UCatHerbRecoveryItemFragment`，也不要把施药入口或清毒数值写进 `CatConditionSettings`。
 
 ## 3. 鱼种：`UCatFishDefinition`（DA_Fish_*）
 
@@ -142,11 +141,10 @@
 | 抄网 | **ScoopTargetRadiusCentimeters** | **这条鱼的可捞圆圈半径 cm**,圆心随鱼移动;抄手向正前方发射长度=抄网 ScoopReach 的水平线段,与圆相交即够得着。语义="这条鱼有多好捞"；巨影正式值0，不能抄。**必须 >0,为 0 时服务器一律拒绝抢抄** |
 | 性格 | BitePersonalityId / FightPersonalityId | Bite ID 仅保留旧资产反射兼容；Fight ID 仍接现有搏斗模板，未审鱼行为页本轮不切换 |
 | 咬钩 | ProbeDurationSeconds / TrueBiteWindowSeconds | 两个独立逐鱼秒数，16鱼已迁为1.5/9、2/11、2.5/13、3/15四档（巨影2.5/13）。缺字段时仍有配置/旧保险供预览与未知外部资产使用，正式16鱼不走保险。完美基础 1 秒另加成长，与二者不混用 |
-| 食用限时效果 | bEatingTimedEffectConfigured / EatingTimedEffect / EatingTimedEffectDurationSeconds | False 表示正式绑定未迁移并 Warning；True 且空 GE 表示属主确认无效果。有 GE 时用基础秒数乘成长时长倍率，同鱼刷新、异鱼并存，不作用于祝福 |
 | 投掷 | ThrowEffect.Kind / EffectRadiusCentimeters / DurationSeconds / ReactionMontage | 轻抛后的第一次权威命中接惊鱼反应或限时驱散区域；厘米、秒及正式反应 Montage 缺配时拒绝该效果，不填占位数 |
 | 偏好 | ChumPreference (三轴) | 类别标记：正式鱼命中轴1、其余0；先按采样窝料三轴占比抽类，再在该类选鱼 |
 | 偏好 | BaitWeightMultipliers | 饵权重.csv五种正式饵→类内抽取倍率；未列旧饵默认1，不改变先选类别的概率 |
-| 食用 | FoodSafety / EatingExperiencePerKilogram / YellowStaminaGrant | Safe与SevereToxic可吃，经验按系数×重量；重毒直接倒地，轻毒由逐鱼GE；Inedible不能吃且经验/黄体力为0，无累积毒量字段 |
+| 食用 | EatingExperiencePerKilogram | 当前仅保留成长：经验=系数×实际重量（千克）；系数有限且为正才可吃，零收益鱼不可吃。不再配置食用安全、中毒、限时 GE 或黄色体力赠送字段 |
 | 其他 | CaptureImprintEventId / bTankDisplayEligible | 捕获成像旧接缝 / 可否入展示鱼缸；供奉点数由实际重量分档，鱼种不另配定额 |
 | gate | bEnableRuntimeDefinition | 必须 True |
 

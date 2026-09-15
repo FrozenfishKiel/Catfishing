@@ -181,14 +181,6 @@ bool FCatFishingTrueBiteBaitTest::RunTest(const FString& Parameters)
 	if (!NewBait || !NewBait->Instance) return false;
 	const FGuid NewBaitId = NewBait->Instance->GetItemInstanceId();
 	FCatInventoryItemUseContext Selection;
-	TArray<FName> AuthorizedUnlocks;
-	for (const FName Id : {FName(TEXT("StarterRodT1")), FName(TEXT("NectarBait")), FName(TEXT("FeatherFloat"))})
-	{
-		const auto* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(Id);
-		if (!Definition) return false;
-		if (!Definition->RequiredUnlockId.IsNone()) AuthorizedUnlocks.AddUnique(Definition->RequiredUnlockId);
-	}
-	if (!Fixture.Character->GetPlayerState<ACatfishingPlayerState>()->SetAuthorizedEquipmentUnlocksFromAuthority(AuthorizedUnlocks)) return false;
 	Selection.RequestId = FGuid::NewGuid();
 	Selection.SourceInventory = Inventory;
 	Selection.InventorySlotIndex = Inventory->FindInventorySlotIndexFromInstanceId(NewBaitId);

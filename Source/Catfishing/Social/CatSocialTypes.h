@@ -4,8 +4,6 @@
 #include "Framework/Core/CatDomainCommandTypes.h"
 #include "CatSocialTypes.generated.h"
 
-class AActor;
-
 /** 手动/系统求助信号类型；普通帮助必须手动，只有巨鱼搏斗允许系统全体提示。 */
 UENUM(BlueprintType)
 enum class ECatHelpSignalKind : uint8
@@ -50,9 +48,3 @@ struct FCatHelpSignalSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	int64 Revision = 0;
 };
-
-// 这里曾经有 FCatTheftCommand / FCatTheftResult 两个偷鱼协议 DTO，2026-09-11 整条退役。
-// 「偷」是玩家玩的时候才产生的主观意识，不是机制；机制层只有客观的拿鱼，不问动机也不问归属，
-// 因此追回窗口、物归原主、扑倒反制三个概念一并消失，没有协议 ID 也没有阶段可暴露。
-// 拿鱼走的是通用库存移动（ACatfishingPlayerController::ServerMoveInventoryItemBetweenHosts），
-// 规则＝够得着、鱼护在地面、一嘴一条，见联机社交册 §3.1.5。

@@ -24,13 +24,13 @@ systems:
     code: ["Source/Catfishing/Equipment/", "Source/Catfishing/Items/**", "Content/Catfishing/Data/Equipment/", "Scripts/configure_starter_rod_line_tuning.py", "Scripts/configure_formal_rod_anchor_baseline.py", "Config/DefaultGame.ini"]
   - name: 商店
     docs: ["GDD 系统分册/商店.md", "GDD 系统分册/商店.embedded/DeiSFL.csv", "GDD 系统分册/商店.embedded/GaHeFr.csv"]
-    refs: ["_feishu/裁决同步/裁决同步 · 道具与商店（王甜甜）.md"]
+    refs: []
     scope: "全篇。"
     code: ["Source/Catfishing/ShopEconomy/", "Source/Catfishing/UI/Shop/", "Source/Catfishing/Camp/", "Scripts/verify_equipment_shop.ps1", "Scripts/verify_equipment_shop_runtime.py"]
   - name: 鱼
-    docs: ["GDD 系统分册/鱼/鱼.md", "GDD 系统分册/鱼/鱼表格/第一版.csv", "GDD 系统分册/鱼/鱼表格/饵权重.csv", "GDD 系统分册/鱼/鱼表格/基础池.csv", "GDD 系统分册/鱼/鱼表格/旧版-已废弃-勿引（饥饿口径）.csv"]
-    refs: ["_feishu/裁决同步/裁决同步 · 鱼／营地／UI 与交互（张佳）.md", "GDD 系统分册/鱼/鱼的行为.md"]
-    scope: "全篇；旧版-已废弃-勿引（饥饿口径）.csv 排除；鱼的行为.md 页头声明「实现不读本页」只作参考。入侵物种页无三行头、未挂号，按候选稿对待：列一行说明不评。"
+    docs: ["GDD 系统分册/鱼/鱼.md", "GDD 系统分册/鱼/鱼表格/第一版.csv", "GDD 系统分册/鱼/鱼表格/饵权重.csv", "GDD 系统分册/鱼/鱼表格/基础池.csv"]
+    refs: ["GDD 系统分册/鱼/鱼的行为.md"]
+    scope: "全篇；鱼的行为.md 页头声明「实现不读本页」只作参考，鱼体力扣减规则 2026-09-15 起在钓鱼规则 §4.4。入侵物种页状态「点子库」（09-10 裁），不实装：列一行说明不评。旧版鱼表格（饥饿口径）2026-09-15 已删。"
     code: ["Source/Catfishing/Data/", "Source/Catfishing/Fishing/Behavior/", "Source/Catfishing/Fishing/Simulation/", "Source/Catfishing/Fishing/StateTree/", "Content/Catfishing/Data/Fish/", "Scripts/verify_showcase_formal_fish_region.py", "Scripts/create_fish_behavior_state_tree.py"]
   - name: 猫咪与状态
     docs: ["GDD 系统分册/猫咪与状态/猫咪与状态.md", "GDD 系统分册/猫咪与状态/升级效果.md", "GDD 系统分册/猫咪与状态/吃鱼效果.md", "GDD 系统分册/猫咪与状态/数值成长.md"]
@@ -39,13 +39,13 @@ systems:
     code: ["Source/Catfishing/Character/", "Source/Catfishing/Condition/", "Source/Catfishing/Growth/", "Source/Catfishing/AbilitySystem/**", "Scripts/verify_character_growth_condition.ps1", "Config/DefaultGame.ini"]
   - name: 营地与局进程
     docs: ["GDD 系统分册/营地.md", "GDD 系统分册/局与进程.md"]
-    refs: ["_feishu/裁决同步/裁决同步 · 鱼／营地／UI 与交互（张佳）.md"]
+    refs: []
     scope: "全篇。"
     code: ["Source/Catfishing/Camp/", "Source/Catfishing/Run/", "Source/Catfishing/Items/**", "Source/Catfishing/Framework/Game/", "Scripts/verify_items_tank_sacrifice_camp.ps1", "Scripts/verify_items_tank_sacrifice_camp_map.py", "Config/DefaultGame.ini"]
   - name: 环境与氛围
     docs: ["GDD 系统分册/环境与氛围.md"]
     refs: []
-    scope: "全篇。该册 §5 仍写聚鱼两源，09-07 已裁单源（环境自然触发归完整版），按裁决评，不按该册字面评。"
+    scope: "全篇。§5 已按 09-07 单源裁决改写（Demo 只有玩家触发，自然触发归完整版），按册评。"
     code: ["Source/Catfishing/Environment/**", "Source/Catfishing/Run/", "Scripts/verify_run_environment_social.ps1", "Scripts/verify_run_environment_social_runtime.py", "Config/DefaultGame.ini"]
   - name: 联机社交
     docs: ["GDD 系统分册/联机社交.md"]

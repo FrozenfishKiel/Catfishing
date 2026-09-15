@@ -6,6 +6,7 @@
 #include "Components/TextBlock.h"
 #include "Components/Widget.h"
 #include "Engine/Texture2D.h"
+#include "Framework/Game/CatfishingPlayerController.h"
 #include "Input/Events.h"
 #include "InputCoreTypes.h"
 #include "Logging/CatLog.h"
@@ -456,9 +457,14 @@ void UCatShopWidget::NativeDestruct()
 	Super::NativeDestruct();
 }
 
-// 预览键盘流程：先于商品按钮消费关闭键；命中后仍只广播关闭意图，让 PageController 和交互组件成对恢复输入与销毁页面。
+// 预览键盘流程：先把 F8/F9 转交 Controller 的唯一祭坛确认入口；入口已受理时返回 Handled 阻止商品按钮和游戏视口重复路由，其余键才按既有关闭规则广播意图。
 FReply UCatShopWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
+	if (ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwningPlayer());
+		Controller && Controller->TrySetAltarConfirmationFromKey(InKeyEvent.GetKey()))
+	{
+		return FReply::Handled();
+	}
 	if (ShouldCloseShopFromKey(InKeyEvent))
 	{
 		RequestCloseShop();
@@ -467,9 +473,14 @@ FReply UCatShopWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometry, const
 	return Super::NativeOnPreviewKeyDown(InGeometry, InKeyEvent);
 }
 
-// 键盘流程：商店根页拿到焦点时复用同一关闭键判断；预览未命中的按键继续交给父类。
+// 根键盘流程：商店根页拿到焦点时同样优先转交 F8/F9，已受理则停止继续路由；预览未命中的按键再复用既有关闭判断或交给父类。
 FReply UCatShopWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
+	if (ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwningPlayer());
+		Controller && Controller->TrySetAltarConfirmationFromKey(InKeyEvent.GetKey()))
+	{
+		return FReply::Handled();
+	}
 	if (ShouldCloseShopFromKey(InKeyEvent))
 	{
 		RequestCloseShop();

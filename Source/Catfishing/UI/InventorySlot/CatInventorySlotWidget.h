@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Blueprint/DragDropOperation.h"
@@ -7,6 +7,7 @@
 #include "CatInventorySlotWidget.generated.h"
 
 class UImage;
+class UBorder;
 class UTextBlock;
 class UCatItemTooltipController;
 
@@ -41,9 +42,20 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Inventory")
 	const FCatInventoryEntry& GetInventoryEntry() const;
 
-	/** 请求使用当前格；右键与父页使用按钮共用此入口，效果和扣量由服务器决定。 */
-	UFUNCTION(BlueprintCallable, Category = "Catfishing|Inventory")
-	void RequestUseItem();
+	/** 读取本格当前绑定的库存来源；页面控制器只用它在提交前回到正式库存重读，不把显示副本当事实。 */
+	UCatInventoryComponent* GetSourceInventory() const;
+
+	/** 读取本格在来源库存中的当前下标；重绑后会变化，菜单提交前必须和实例身份一起复核。 */
+	int32 GetSlotIndex() const;
+
+	/** 按本地 Controller 的物品栏选择投影刷新外圈；仅改变表现，不保存另一份选择状态。 */
+	void SetSelectedFromModel(bool bSelected);
+
+	/** 返回正式选中外圈当前是否显示；Quickbar 自动化读取它核对 View 与 Controller 焦点，没有写入副作用。 */
+	bool IsSelectedFromModel() const;
+
+	/** 设置本格是否承接鼠标操作；快捷栏关闭交互以避免展示 View 旁路背包窗口的拖放和右键菜单。 */
+	void SetAcceptsSlotInput(bool bInAcceptsSlotInput);
 
 	/** 普通左键点击时通知父页本库存内的下标；拖拽不会提前触发选择。 */
 	FCatInventorySlotSelected OnSlotSelected;
@@ -64,7 +76,7 @@ protected:
 	/** 控件销毁时兜底撤销悬停，覆盖格子重建或页面被移除但未收到 Leave 的情形。 */
 	virtual void NativeDestruct() override;
 
-	/** 左键开始检测拖拽，右键提交使用；其他输入交回父类。 */
+	/** 左键开始检测拖拽，右键交给页面控制器打开统一菜单；其他输入交回父类。 */
 	virtual FReply NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
 
 	/** 普通左键松开时通知父页选择本格；已经进入拖拽的输入由 Drop 路径处理。 */
@@ -105,4 +117,15 @@ private:
 	/** 正式格子 WBP 的数量角标；仅在数量大于 1 时显示。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> QuantityTextBlock;
+
+	/** 物品栏专用 WBP 的可选数字提示；绑定格位时写入 1 起始编号，背包与外部容器的格子不包含它。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> SlotKeyTextBlock;
+
+	/** 物品栏专用 WBP 的可选外圈；只根据 Controller 本地选择显隐，空格也允许显示被选中状态。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UBorder> SelectedBorder;
+
+	/** 本格是否是可操作库存页的一部分；库存窗口保持 true，常驻快捷栏写 false 后只承担只读显示。 */
+	bool bAcceptsSlotInput = true;
 };

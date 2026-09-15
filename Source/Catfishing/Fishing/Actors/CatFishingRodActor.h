@@ -4,7 +4,9 @@
 #include "GameFramework/Actor.h"
 #include "Fishing/Actors/CatFishingActorTypes.h"
 #include "Fishing/Integration/CatFishingRodAimState.h"
+#include "Fishing/Integration/CatFishingCommandTypes.h"
 #include "Fishing/Simulation/CatFishingRodResistanceModel.h"
+#include "Interaction/CatInteractable.h"
 #include "CatFishingRodActor.generated.h"
 
 class APlayerState;
@@ -79,7 +81,7 @@ struct CATFISHING_API FCatFishingCarrierConstraintState
 
 /** 场景中已经部署出来的鱼竿表现 Actor；它复制可见状态和操作位，但真实物品实例仍由 Equipment 的 Use/UnUse 记录持有。 */
 UCLASS(Blueprintable, meta=(ChildCannotTick))
-class CATFISHING_API ACatFishingRodActor : public AActor
+class CATFISHING_API ACatFishingRodActor : public AActor, public ICatInteractable
 {
 	GENERATED_BODY()
 	friend class UCatFishingPhysicalRodComponent;
@@ -114,6 +116,14 @@ class CATFISHING_API ACatFishingRodActor : public AActor
 public:
 	/** 创建鱼竿表现 Actor 的组件和默认复制姿态；身份和锚点仍要等服务器初始化后才可信。 */
 	ACatFishingRodActor();
+	/** 准星和服务器交互都检查这根已部署鱼竿及请求者到握持点的距离；不按背包或附近其它鱼竿回退。 */
+	virtual bool CanInteract_Implementation(AController* RequestingController) const override;
+	/** 已部署鱼竿的统一 E 提示文本；未部署或断裂时不产生提示。 */
+	virtual FText GetInteractionPrompt_Implementation() const override;
+	/** 目标鱼竿的交互距离，单位厘米；扫描与服务器同用这一固定半径。 */
+	virtual double GetInteractionRadius_Implementation() const override;
+	/** 本地 E 转发既有服务器交互链，服务器按本 Actor 的 RodActorId 调用 Operate/Leave。 */
+	virtual bool Interact_Implementation(AController* RequestingController, FGuid RequestId) override;
 	UBoxComponent* GetPhysicalRodBody() const { return PhysicsBody; }
 	UCatFishingPhysicalRodComponent* GetPhysicalRodComponent() const { return PhysicalRod; }
 	bool IsUsingPhysicalRod() const;
@@ -196,6 +206,9 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	/** 同一玩家对这根竿发出的交互请求首次终态；服务器写入一次，网络重放只返回原结果，避免当前操作位变化后反向执行。 */
+	TMap<FString, FCatFishingCommandResult> InteractionTerminalByPlayerAndRequest;
+
 	/** The Service alone commits a roster projected from authority grip connectivity. */
 	bool SetPrimaryOperatorFromAuthority(APlayerState* PlayerOrNull, int64 ExpectedRevision);
 	/** 客户端收到表现状态复制后的入口；Previous 由引擎提供，用来让蓝图比较前后变化。 */

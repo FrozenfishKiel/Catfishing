@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Tickable.h"
@@ -25,6 +25,8 @@ public:
 	void HideTooltip(const UCatInventorySlotWidget* Source);
 	/** 库存页关闭时强制清除当前提示，立即隐藏避免跨页残留。 */
 	void ForceHideTooltip();
+	/** 设置右键菜单的持续显示抑制；打开时立即隐藏，页面控制器在关闭后的 Slate 命中更新后解除。 */
+	void SetContextMenuSuppressed(bool bSuppressed);
 	/** 仅活动来源参与 Tick；默认对象和未绑定状态不参与。 */
 	virtual bool IsTickable() const override;
 	/** 暂停菜单中仍允许更新本地提示；不推进任何玩法时间。 */
@@ -44,4 +46,6 @@ private:
 	/** 此玩家的正式提示 View；Subsystem 创建并注入，Controller 只发显示命令。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatItemTooltipWidget> View;
+	/** 右键菜单是否仍在显示；为真时任何格子的 ShowTooltip 都不能解除恢复门或显示 Tooltip。 */
+	bool bContextMenuSuppressed = false;
 };

@@ -258,7 +258,7 @@ namespace
 		}
 	}
 
-	// 这里曾有 FormatDomainCommandErrorForPanel：面板上唯一的使用者是偷鱼两行，随偷鱼协议 2026-09-11 退役一并删除，留着会是无人调用的静态函数。
+
 
 	// 调试控制器选择流程：优先取当前 World 的第一个本地 Controller；没有本地 Controller 时回退第一个 Controller，保证服务器命令行也能输出 GameState 快照。
 	APlayerController* FindDebugController(UWorld* World)
@@ -439,8 +439,6 @@ namespace
 			AuthoritySnapshotPtr = AuthoritySnapshot.bHasAuthorityGameMode ? &AuthoritySnapshot : nullptr;
 		}
 
-		// 面板曾有「偷鱼结果／偷鱼状态」两行，随偷鱼协议在 2026-09-11 整条退役一并删除；
-		// 拿鱼是一次普通库存移动，没有协议 ID、窗口或阶段可看，本机也就没有对应读模型。
 		Lines.Add({ TEXT("—— 时间 / 昼夜 ——"), SectionColor });
 		Lines.Add({ FString::Printf(TEXT("服务器时间：当前 %.2f 秒 ｜ 白天锚点 %.2f ｜ 白天截止 %.2f"),
 			ServerNow, RunState.Phase.ServerTimeAnchorSeconds, RunState.Phase.DeadlineServerTimeSeconds), TextColor });

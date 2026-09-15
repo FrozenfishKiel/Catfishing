@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Engine/DeveloperSettings.h"
@@ -7,12 +7,15 @@
 class UCatCollectionWidget;
 class UCatFishRevealWidget;
 class UCatHUDWidget;
+class UCatAltarConfirmationWidget;
 class UCatDayTransitionWidget;
 class UCatItemTooltipWidget;
 class UCatFrontendRootWidget;
 class UCatInteractionPromptWidget;
 class UCatInventorySlotWidget;
+class UCatInventoryContextMenuWidget;
 class UCatInventoryWidget;
+class UCatInventoryQuickbarWidget;
 class UCatLakeMainMenuWidget;
 class UInputAction;
 class UInputMappingContext;
@@ -36,14 +39,26 @@ public:
 	/** 读取正式翻天 WBP；缺失、原生类或错误父类都返回空，调用方必须隐藏并记录而非创建替身。 */
 	TSubclassOf<UCatDayTransitionWidget> LoadDayTransitionWidgetClass() const;
 
+	/** 读取正式祭坛确认 WBP；缺失、原生类或错误父类都返回空，等待确认仍由 GameMode 的超时规则收口。 */
+	TSubclassOf<UCatAltarConfirmationWidget> LoadAltarConfirmationWidgetClass() const;
+
 	/** 返回正式 Frontend Root WBP 类；缺失时 LocalPlayer fail-closed，不创建原生替身。 */
 	TSubclassOf<UCatFrontendRootWidget> LoadFrontendRootWidgetClass() const;
 
 	/** 返回正式背包主界面 WBP 类；缺失时调用方 fail-closed，不创建原生白盒替身。 */
 	TSubclassOf<UCatInventoryWidget> LoadInventoryWidgetClass() const;
 
+	/** 读取常驻快捷栏的正式 WBP 类；缺失时局内 UI fail-closed，不以原生占位替代底部布局。 */
+	TSubclassOf<UCatInventoryQuickbarWidget> LoadInventoryQuickbarWidgetClass() const;
+
 	/** 读取正式背包格子 WBP 类；缺失时背包只能显示主界面文本，不创建原生格子替身。 */
 	TSubclassOf<UCatInventorySlotWidget> LoadInventorySlotWidgetClass() const;
+
+	/** 读取物品栏专用格子布局；数字和选中外圈只属于这个视图，不装入背包窗口。 */
+	TSubclassOf<UCatInventorySlotWidget> LoadInventoryQuickbarSlotWidgetClass() const;
+
+	/** 读取所有库存共用的正式右键菜单 WBP；缺失时页面拒绝打开操作菜单，不创建白盒替代布局。 */
+	TSubclassOf<UCatInventoryContextMenuWidget> LoadInventoryContextMenuWidgetClass() const;
 
 	/** 读取迁移后的正式物品提示 WBP；资源或父类不符时返回空，不生成替代布局。 */
 	TSubclassOf<UCatItemTooltipWidget> LoadItemTooltipWidgetClass() const;
@@ -105,6 +120,10 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Lake|Run")
 	TSoftClassPtr<UCatDayTransitionWidget> DayTransitionWidgetClass;
 
+	/** 祭坛全员确认窗口的正式 WBP 软类引用；LocalPlayer 在等待或系统取消反馈时加载同一资产，具体操作提示由 Widget 按发起者身份渲染。 */
+	UPROPERTY(Config, EditAnywhere, Category="Lake|Run")
+	TSoftClassPtr<UCatAltarConfirmationWidget> AltarConfirmationWidgetClass;
+
 	/** 正式 Frontend 根 WBP 类；只在 Frontend World 为本地玩家创建，Root 内只装配主菜单、存档、房间和设置页面。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Frontend")
 	TSoftClassPtr<UCatFrontendRootWidget> FrontendRootWidgetClass;
@@ -113,9 +132,21 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Inventory")
 	TSoftClassPtr<UCatInventoryWidget> InventoryWidgetClass;
 
+	/** 常驻快捷栏的正式 WBP 软类引用；LocalPlayer 在玩家 Pawn 有效后创建，它只观察随身背包 Model。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Lake|Inventory")
+	TSoftClassPtr<UCatInventoryQuickbarWidget> InventoryQuickbarWidgetClass;
+
 	/** 正式背包格子 WBP 类；每个格子是独立 UserWidget，不是 Button。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Inventory")
 	TSoftClassPtr<UCatInventorySlotWidget> InventorySlotWidgetClass;
+
+	/** 物品栏专用格子软类；LocalPlayer 装配物品栏时读取，使背包格子的布局保持独立。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Lake|Inventory")
+	TSoftClassPtr<UCatInventorySlotWidget> InventoryQuickbarSlotWidgetClass;
+
+	/** 所有库存右键操作共用的正式菜单 WBP；页面控制器只创建一份并在不同来源间复用。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Lake|Inventory")
+	TSoftClassPtr<UCatInventoryContextMenuWidget> InventoryContextMenuWidgetClass;
 
 	/** 玩家唯一物品悬停框的正式 WBP；LocalPlayer 装配时读取，资产位于已有库存 Cook 目录。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Inventory")

@@ -3,42 +3,25 @@
 #include "Framework/Game/CatfishingGameState.h"
 
 #include "Components/SceneComponent.h"
-#include "Components/SphereComponent.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/PlayerController.h"
-#include "Interaction/CatInteractionSettings.h"
 #include "UI/Shop/CatShopInteractionComponent.h"
 #include "ShopEconomy/CatShopInventoryComponent.h"
 
-// 构造流程：摊位不参与逐帧逻辑，先关闭 Tick 并开启复制，再建立空间根、查询碰撞、页面打开组件和货架库存组件；营地绑定仍不保存在摊位上。
+// 构造流程：摊位不参与逐帧逻辑，先关闭 Tick 并开启复制，再建立空间根、页面打开组件和货架库存组件。
+// 准星命中由正式蓝图的可见模型承担，避免无模型的球体把空白空间误判为可交互目标；营地绑定仍不保存在摊位上。
 ACatShopKioskActor::ACatShopKioskActor()
 {
 	PrimaryActorTick.bCanEverTick = false;
 	bReplicates = true;
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
-	InteractionCollision = CreateDefaultSubobject<USphereComponent>(TEXT("InteractionCollision"));
-	InteractionCollision->SetupAttachment(SceneRoot);
-	InteractionCollision->SetSphereRadius(75.0f);
-	InteractionCollision->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-	InteractionCollision->SetCollisionResponseToAllChannels(ECR_Ignore);
-	InteractionCollision->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
-	InteractionCollision->SetGenerateOverlapEvents(false);
 	ShopInteraction = CreateDefaultSubobject<UCatShopInteractionComponent>(TEXT("ShopInteraction"));
 	ShopInventory = CreateDefaultSubobject<UCatShopInventoryComponent>(TEXT("ShopInventory"));
 	InteractionPrompt = NSLOCTEXT("Catfishing", "ShopKioskInteractionPrompt", "打开商店");
 }
 
-void ACatShopKioskActor::BeginPlay()
-{
-	Super::BeginPlay();
-	// 启动流程：读取项目交互 Trace Channel 并只更新查询碰撞响应；摊位位置和仓库归属仍由关卡 Actor 与服务器订单链路裁决。
-	if (const UCatInteractionSettings* Settings = GetDefault<UCatInteractionSettings>(); Settings && InteractionCollision)
-	{
-		InteractionCollision->SetCollisionResponseToChannel(Settings->TargetingTraceChannel, ECR_Block);
-	}
-}
-
+// 营业状态读取：服务器读取交易服务，客户端读取复制快照；世界或依赖尚未就绪时拒绝开店。
 bool ACatShopKioskActor::IsShopTradingOpen() const
 {
 	if (!GetWorld()) return false;
@@ -66,13 +49,6 @@ FText ACatShopKioskActor::GetInteractionPrompt_Implementation() const
 		? InteractionPrompt : FText::GetEmpty();
 }
 
-double ACatShopKioskActor::GetInteractionRadius_Implementation() const
-{
-	// 半径读取流程：把编辑器配置裁到非负有限值；本地准星提示与交互检测继续使用同一边界。
-	return FMath::IsFinite(InteractionRadiusCentimeters)
-		? FMath::Max(0.0, InteractionRadiusCentimeters) : 0.0;
-}
-
 bool ACatShopKioskActor::Interact_Implementation(AController* RequestingController, const FGuid RequestId)
 {
 	// 交互执行流程：先确认请求与本地 gate 有效，再只打开商店 UI；购买、扣款和发货必须走后续服务器 RPC。
@@ -93,4 +69,20 @@ UCatShopInventoryComponent* ACatShopKioskActor::GetShopInventory() const
 	return ShopInventory;
 }
 
-// 墓碑（2026-09-13，09-09 裁决）：删除下单时的摊位距离二次证明；交互半径与开页入口保留。
+// 下单资格流程：
+// 1. 服务器只让启用中的摊位接受订单，客户端不能拿本地 UI 里的 Actor 指针直接绕过校验。
+// 2. 再要求服务器侧 Pawn 仍属于当前 World，拒绝旅行后、销毁后或跨世界的过期请求；不再以另一套半径推翻已经打开的页面。
+// 3. 本函数不查营地、不查公共仓库；发货目标由 PlayerController 在当前 World 全图寻找营地后再询问营地接口。
+bool ACatShopKioskActor::CanServeOrderFromAuthority(AController* RequestingController) const
+{
+	if (!HasAuthority() || !bInteractionEnabled || !RequestingController)
+	{
+		return false;
+	}
+	APawn* RequestingPawn = RequestingController->GetPawn();
+	if (!RequestingPawn || RequestingPawn->GetWorld() != GetWorld())
+	{
+		return false;
+	}
+	return true;
+}

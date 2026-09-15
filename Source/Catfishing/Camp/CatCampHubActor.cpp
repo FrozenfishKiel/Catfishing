@@ -62,7 +62,7 @@ namespace
 	}
 }
 
-// 构造流程：先保留 APlayerStart 从 ANavigationObjectBase 建立的胶囊根，再把项目营地根挂在它下面；随后创建救援子节点、开启复制并关闭 Tick。PlayerStartTag 只表达营地出生点身份，不参与客户端自选 Portal。
+// 构造流程：先保留 APlayerStart 从 ANavigationObjectBase 建立的胶囊根，再把项目营地根挂在它下面；随后开启复制并关闭 Tick。PlayerStartTag 只表达营地出生点身份，不参与客户端自选 Portal。
 ACatCampHubActor::ACatCampHubActor(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
@@ -71,8 +71,6 @@ ACatCampHubActor::ACatCampHubActor(const FObjectInitializer& ObjectInitializer)
 	PlayerStartTag = TEXT("Camp");
 	CampRoot = CreateDefaultSubobject<USceneComponent>(TEXT("CampRoot"));
 	CampRoot->SetupAttachment(GetRootComponent());
-	RescuePoint = CreateDefaultSubobject<USceneComponent>(TEXT("RescuePoint"));
-	RescuePoint->SetupAttachment(CampRoot);
 }
 
 // 玩家出生 Transform 解析流程：
@@ -162,78 +160,6 @@ bool ACatCampHubActor::TryResolvePlayerEntryTransform(const int32 PreferredEntry
 		*GetNameSafe(this), PreferredEntryIndex, CatGameplayPlayerLimits::MaxCampSpawnPlayers,
 		*GetNameSafe(World), static_cast<int32>(World->GetNetMode()), static_cast<int32>(GetLocalRole()));
 	return false;
-}
-
-// 休息流程：现取本人 Character 并验证固定范围；随后只调用 Condition 的 CampRest 写口，营地不保存第二份身体数值。
-FCatDomainCommandResult ACatCampHubActor::RequestRest(AController* RequestingController, const FGuid RequestId)
-{
-	ACatCharacter* Character = ResolveCharacterInCamp(RequestingController);
-	UCatConditionComponent* Conditions = Character ? Character->GetConditionComponent() : nullptr;
-	if (Conditions)
-	{
-		return Conditions->RequestCampRest(RequestingController, RequestId, true);
-	}
-	FCatDomainCommandResult Result;
-	Result.RequestId = RequestId;
-	Result.Error = ECatDomainCommandError::PolicyUndecided;
-	return Result;
-}
-
-// 救援流程：先用救援者身份与 RequestId 重放成功终态，再从两个 Character 读服务器位置并要求救援者可行动、目标已倒地、距离不超营地显式交互范围；TeleportTo 成功后才提交 CarriedToCamp。
-FCatDomainCommandResult ACatCampHubActor::RescueToCamp(AController* HelpingController, ACatCharacter* TargetCharacter,
-	const FGuid RequestId)
-{
-	FCatDomainCommandResult Result;
-	Result.RequestId = RequestId;
-	const APlayerState* HelpingPlayerState = HelpingController ? HelpingController->PlayerState : nullptr;
-	ACatCharacter* HelpingCharacter = HelpingController ? Cast<ACatCharacter>(HelpingController->GetPawn()) : nullptr;
-	UCatConditionComponent* HelpingConditions = HelpingCharacter ? HelpingCharacter->GetConditionComponent() : nullptr;
-	const UCatCampSettings* Settings = GetDefault<UCatCampSettings>();
-	if (!HasAuthority() || !HelpingPlayerState || !HelpingPlayerState->GetUniqueId().IsValid()
-		|| !HelpingCharacter || !HelpingConditions || HelpingConditions->GetSnapshot().bDowned
-		|| !TargetCharacter || TargetCharacter->GetWorld() != GetWorld() || !RequestId.IsValid()
-		|| !RescuePoint || !TargetCharacter->GetConditionComponent() || !Settings || !Settings->IsRuntimeReady())
-	{
-		Result.Error = ECatDomainCommandError::InvalidPayload;
-		return Result;
-	}
-	const FString CacheKey = FString::Printf(TEXT("%s|Rescue|%s"),
-		*HelpingPlayerState->GetUniqueId()->ToString(), *RequestId.ToString(EGuidFormats::DigitsWithHyphens));
-	if (const FCatDomainCommandResult* Cached = RescueTerminalCache.Find(CacheKey))
-	{
-		Result = *Cached;
-		MarkCommandReplayed(Result);
-		return Result;
-	}
-	if (!TargetCharacter->GetConditionComponent()->GetSnapshot().bDowned
-		|| FVector::DistSquared(HelpingCharacter->GetActorLocation(), TargetCharacter->GetActorLocation())
-			> FMath::Square(Settings->InteractionRadiusCentimeters))
-	{
-		Result.Error = ECatDomainCommandError::InvalidPhase;
-		return Result;
-	}
-	if (!TargetCharacter->TeleportTo(RescuePoint->GetComponentLocation(), RescuePoint->GetComponentRotation(), false, false))
-	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-		return Result;
-	}
-	Result = TargetCharacter->GetConditionComponent()->CompleteCarryToCamp(HelpingController, RequestId, true);
-	if (Result.bCommitted)
-	{
-		RescueTerminalCache.Add(CacheKey, Result);
-	}
-	return Result;
-}
-
-// 救援落点读取流程：只回答关卡显式配置的 RescuePoint；没有配置时返回 false，调用方保持 fail-closed 而不是就地猜一个坐标。
-bool ACatCampHubActor::TryGetRescuePointTransform(FTransform& OutTransform) const
-{
-	if (!RescuePoint)
-	{
-		return false;
-	}
-	OutTransform = FTransform(RescuePoint->GetComponentRotation(), RescuePoint->GetComponentLocation());
-	return true;
 }
 
 // 鱼缸归属判断流程：只比较关卡显式引用，不按位置或标签猜测；鱼缸交互因此不会误投到另一座营地。

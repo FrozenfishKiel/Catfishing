@@ -16,8 +16,7 @@ class ACatFishGuardActor;
 
 /**
  * 一次购买交付或整批售鱼的完整结果，分别呈现经济记录与实物提交回执。
- * 购买在同一次调用里付款并入库，没有「已付款待取」这一档；售鱼在独占实物期间统一入账，
- * 失败保留实物，两条链都不存在先记账再补实物的中间状态。
+ * 购买成功即已入库，经济与实物字段呈现同一成交终态；售鱼在独占实物期间统一入账，失败保留实物。
  */
 USTRUCT(BlueprintType)
 struct FCatShopOrderResult
@@ -33,8 +32,8 @@ struct FCatShopOrderResult
 	FCatShopCartTransactionResult CartTransaction;
 
 	/**
-	 * 交付或实物提交的终态。购物车发货来自营地公共仓库；售鱼来自鱼护批量移除或嘴叼鱼消费。
-	 * 它的 Revision 指向的聚合随来源不同而变化，读它时要先看调用链和 Error。
+	 * 实物操作的最终结果。购物车与成交结果一致；售鱼来自鱼护批量移除或嘴叼鱼消费。
+	 * 购买的 Revision 为公款版本；该字段供既有 RPC/UI 判断整单结果，不代表独立交付阶段。
 	 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatDomainCommandResult Delivery;
@@ -42,7 +41,7 @@ struct FCatShopOrderResult
 
 /**
  * 商店交易控制器负责串起付款、交付、售鱼和入账的服务器链路。
- * PlayerController 只把 owning client 的请求送进来；公款、摊位库存、公共仓库和玩家库存都在这里按顺序协调。
+ * PlayerController 只把 owning client 的请求送进来；购买的钱货提交由经济服务统一完成，售鱼实物与入账由本控制器协调。
  */
 UCLASS()
 class CATFISHING_API UCatShopTradeController : public UWorldSubsystem
@@ -53,7 +52,7 @@ public:
 	/** 只在服务器 Game World 创建；客户端没有这条链，也不能本地推进订单。 */
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
 
-	/** 玩家在指定摊位提交购物车；本控制器重建玩家身份、摊位库存和营地收货仓库，PlayerController 不参与订单业务。 */
+	/** 服务器接收玩家摊位购物车请求，复核玩法门与服务距离并重建身份、货架和营地收货仓库；交经济服务成交后返回统一钱货终态，前置失败直接返回拒绝。 */
 	FCatShopOrderResult SubmitCartFromKiosk(AController* RequestingController, ACatShopKioskActor* ShopKiosk,
 		const TArray<FCatShopCartLineCommand>& Lines, FGuid RequestId);
 

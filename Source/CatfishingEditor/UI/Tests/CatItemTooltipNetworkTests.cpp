@@ -17,8 +17,12 @@
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Blueprint/WidgetLayoutLibrary.h"
 #include "Components/Border.h"
+#include "Components/Button.h"
 #include "Components/TextBlock.h"
 #include "Components/WrapBox.h"
+#include "Components/VerticalBox.h"
+#include "Components/SpinBox.h"
+#include "UI/Inventory/CatInventoryContextMenuWidget.h"
 #include "Blueprint/WidgetTree.h"
 #include "Camp/CatCampInventoryActor.h"
 #include "Character/CatCharacter.h"
@@ -113,8 +117,9 @@ namespace CatItemTooltipNetwork
 			if (Stage == 0) return PrepareEndpointsAndSeedAuthority();
 			if (Stage == 1) return OpenFormalInventories();
 			if (Stage == 2 || Stage == 3) return ObserveFishOnBothLocalPlayers();
-			if (Stage == 4) return SwitchToRodThenMutateAuthority();
-			if (Stage == 5) return ObserveReplicatedRodThenClose();
+			if (Stage == 4 || Stage == 5 || Stage == 6) return VerifyContextMenuTooltipLifecycle();
+			if (Stage == 7) return SwitchToRodThenMutateAuthority();
+			if (Stage == 8) return ObserveReplicatedRodThenClose();
 			Test->AddError(TEXT("Formal item-tooltip network test reached an unknown stage."));
 			return true;
 		}
@@ -241,6 +246,61 @@ namespace CatItemTooltipNetwork
 			return false;
 		}
 
+		/** 真实右键菜单生命周期：先由鱼格打开菜单并确认 Tooltip 立即隐藏，再右键鱼竿替换来源且不回闪，最后通过 Escape 关闭并等待 Slate 命中恢复鱼竿 Tooltip。 */
+		bool VerifyContextMenuTooltipLifecycle()
+		{
+			if (!FishSlot.IsValid() || !RodSlot.IsValid() || !Tooltip.IsValid()) return false;
+			if (Stage == 4)
+			{
+				const FVector2D Center = FishSlot->GetCachedGeometry().LocalToAbsolute(FishSlot->GetCachedGeometry().GetLocalSize() * 0.5f);
+				const FPointerEvent RightClick(0, Center, Center, TSet<FKey>{EKeys::RightMouseButton}, EKeys::RightMouseButton, 0.0f, FModifierKeysState());
+				FishSlot->TakeWidget()->OnMouseButtonDown(FishSlot->GetCachedGeometry(), RightClick);
+				Stage = 5;
+				return false;
+			}
+			UCatInventoryContextMenuWidget* Menu = FindContextMenu(*ClientController);
+			if (!Menu || !Menu->IsMenuOpen()) return false;
+			if (!Test->TestEqual(TEXT("右键菜单打开时 Tooltip 立即隐藏"), Tooltip->GetVisibility(), ESlateVisibility::Collapsed)) return true;
+			if (Stage == 5)
+			{
+				const FVector2D Center = RodSlot->GetCachedGeometry().LocalToAbsolute(RodSlot->GetCachedGeometry().GetLocalSize() * 0.5f);
+				const FPointerEvent RightClick(0, Center, Center, TSet<FKey>{EKeys::RightMouseButton}, EKeys::RightMouseButton, 0.0f, FModifierKeysState());
+				RodSlot->TakeWidget()->OnMouseButtonDown(RodSlot->GetCachedGeometry(), RightClick);
+				Stage = 6;
+				return false;
+			}
+			const TArray<FCatInventoryActionDefinition> Actions{{CatInventoryActionTags::Drop, NSLOCTEXT("CatInventory", "TooltipMenuDrop", "丢弃"), ECatInventoryActionQuantityMode::Select}};
+			Menu->PresentActions(Actions, {FText::GetEmpty()}, 3, FVector2D(20.0f, 20.0f));
+			UVerticalBox* ActionList = Cast<UVerticalBox>(Menu->GetWidgetFromName(TEXT("ActionList")));
+			UCatInventoryContextActionButton* DropAction = ActionList && ActionList->GetChildrenCount() == 1 ? Cast<UCatInventoryContextActionButton>(ActionList->GetChildAt(0)) : nullptr;
+			UWidget* QuantityPanel = Menu->GetWidgetFromName(TEXT("QuantityPanel"));
+			USpinBox* QuantitySpinBox = Cast<USpinBox>(Menu->GetWidgetFromName(TEXT("QuantitySpinBox")));
+			UButton* QuantityCancel = Cast<UButton>(Menu->GetWidgetFromName(TEXT("QuantityCancelButton")));
+			if (!DropAction || !QuantityPanel || !QuantitySpinBox || !QuantityCancel) return false;
+			DropAction->OnClicked.Broadcast();
+			if (!Test->TestTrue(TEXT("动态 Select 动作点击进入数量页"), QuantityPanel->IsVisible())
+				|| !Test->TestEqual(TEXT("数量页默认数量为一"), QuantitySpinBox->GetValue(), 1.0f)) return true;
+			QuantitySpinBox->SetValue(3.0f);
+			Menu->PresentActions(Actions, {FText::GetEmpty()}, 2, FVector2D(20.0f, 20.0f));
+			if (!Test->TestTrue(TEXT("数量上限刷新后仍保留数量页"), QuantityPanel->IsVisible())
+				|| !Test->TestEqual(TEXT("数量上限刷新裁剪当前值"), QuantitySpinBox->GetValue(), 2.0f)) return true;
+			// 保留页面控制器的正式取消委托，验证数量取消能真正清理菜单和提示抑制，不用测试回调替代它。
+			QuantityCancel->OnClicked.Broadcast();
+			if (!Test->TestFalse(TEXT("数量取消后正式菜单关闭"), Menu->IsMenuOpen())) return true;
+			// 数量控件契约检查后重新走正式格子入口，使用真实光标和 Escape 验证页面控制器恢复当前命中。
+			const FVector2D Center = RodSlot->GetCachedGeometry().LocalToAbsolute(RodSlot->GetCachedGeometry().GetLocalSize() * 0.5f);
+			const FVector2D Previous = FSlateApplication::Get().GetCursorPos();
+			const FPointerEvent Pointer(0, Center, Previous, TSet<FKey>(), EKeys::Invalid, 0.0f, FModifierKeysState());
+			FSlateApplication::Get().SetCursorPos(Center);
+			FSlateApplication::Get().ProcessMouseMoveEvent(Pointer);
+			const FPointerEvent RightClick(0, Center, Center, TSet<FKey>{EKeys::RightMouseButton}, EKeys::RightMouseButton, 0.0f, FModifierKeysState());
+			RodSlot->TakeWidget()->OnMouseButtonDown(RodSlot->GetCachedGeometry(), RightClick);
+			Menu->TakeWidget()->OnKeyDown(Menu->GetCachedGeometry(), FKeyEvent(EKeys::Escape, FModifierKeysState(), 0, false, 0, 0));
+			if (!Test->TestFalse(TEXT("Escape 关闭正式菜单"), Menu->IsMenuOpen())) return true;
+			Stage = 7;
+			return false;
+		}
+
 		/** 从同一客户端的嵌套背包 Slot 切到初始 75 耐久鱼竿，让旧鱼格 Leave 验证来源保护后才写服务器耐久。 */
 		bool SwitchToRodThenMutateAuthority()
 		{
@@ -261,7 +321,7 @@ namespace CatItemTooltipNetwork
 			ClientRodListChanges = 0;
 			ClientRodListChangedHandle = ClientCharacter->GetInventoryComponent()->GetInventoryModel()->OnInventoryListChanged.AddLambda([this]() { ++ClientRodListChanges; });
 			ServerRod->SetRodRuntimeStateFromAuthority(37.25, false);
-			Stage = 5;
+			Stage = 8;
 			return false;
 		}
 
@@ -344,6 +404,19 @@ namespace CatItemTooltipNetwork
 			TArray<UUserWidget*> Widgets;
 			UWidgetBlueprintLibrary::GetAllWidgetsOfClass(&Controller, Widgets, UCatItemTooltipWidget::StaticClass(), false);
 			for (UUserWidget* Widget : Widgets) if (Widget->GetOwningPlayer() == &Controller) return Cast<UCatItemTooltipWidget>(Widget);
+			return nullptr;
+		}
+
+		/** 在当前玩家视口中找到唯一打开的正式菜单；测试只读已入视口实例，不创建替代菜单。 */
+		static UCatInventoryContextMenuWidget* FindContextMenu(APlayerController& Controller)
+		{
+			TArray<UUserWidget*> Widgets;
+			UWidgetBlueprintLibrary::GetAllWidgetsOfClass(&Controller, Widgets, UCatInventoryContextMenuWidget::StaticClass(), true);
+			for (UUserWidget* Widget : Widgets)
+			{
+				UCatInventoryContextMenuWidget* Menu = Cast<UCatInventoryContextMenuWidget>(Widget);
+				if (Menu && Menu->GetOwningPlayer() == &Controller && Menu->IsInViewport()) return Menu;
+			}
 			return nullptr;
 		}
 

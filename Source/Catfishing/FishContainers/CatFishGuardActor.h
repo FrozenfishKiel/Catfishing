@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/Actor.h"
+#include "Interaction/Carry/CatCarryableActor.h"
 #include "Interaction/CatInteractable.h"
 #include "Inventory/CatInventoryWorldItem.h"
 #include "CatFishGuardActor.generated.h"
@@ -17,7 +17,7 @@ class UCatFishGuardInventoryItemInstance;
 
 /** 持有唯一鱼库存的鱼护 Actor；地面时允许开护，入包后保留原库存并按服务器归属附着嘴部或隐藏，不把内鱼搬到角色。 */
 UCLASS(BlueprintType, Blueprintable)
-class CATFISHING_API ACatFishGuardActor : public AActor, public ICatInteractable, public ICatInventoryWorldItem
+class CATFISHING_API ACatFishGuardActor : public ACatCarryableActor, public ICatInteractable, public ICatInventoryWorldItem
 {
 	GENERATED_BODY()
 
@@ -25,23 +25,27 @@ public:
 	/** 创建鱼护的场景根、容器复制出口和交互入口；容量和容器 ID 等到服务器 BeginPlay 时写入。 */
 	ACatFishGuardActor();
 
-	/** 复制库存归属；地面交互与库存保管使用同一归属，不依赖背包子对象的网络到达顺序。 */
+	/** 复制库存归属；地面交互与嘴边表现使用同一归属，不依赖背包子对象的网络到达顺序。 */
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	/** 从物品定义首次生成空鱼护时绑定库存身份；已有鱼护放下直接复用 Actor，不调用此初始化。 */
 	virtual bool InitializeFromInventoryFromAuthority(UCatInventoryItemInstance* Item, int32 Quantity) override;
 
-	/** 拾取入口；背包完整收货后隐藏保管原鱼护，内部鱼不迁移，嘴部鱼不受影响。 */
+	/** 长按拾取入口；只在嘴空且背包完整收货后把原鱼护附着到嘴部，内部鱼不做复制或重建。 */
 	bool PickUpFromAuthority(AController* RequestingController, FGuid RequestId);
 
-	/** 库存实例迁移时更新载体宿主；空表示地面，库存宿主隐藏保管原Actor。 */
+	/** 库存实例迁移时更新载体宿主；空表示地面，角色宿主可叼起，仓库宿主只隐藏表现。 */
 	void SetInventoryOwnerFromAuthority(AActor* NewInventoryOwner);
 
 	/** 鱼护是否仍是可直接打开的地面容器；出售和通用库存触达校验都必须先检查它。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|FishContainers")
 	bool IsGrounded() const;
 
+	/** 查找嘴部正在携带的鱼护；与既有叼鱼检测共同维持单嘴占用，未叼任何鱼护时返回空。 */
+	static ACatFishGuardActor* FindCarriedGuard(const ACatCharacter* Character);
 
+	/** 角色倒地、失去占有或销毁时把同一鱼护放回地面；仅释放仍指向本鱼护的嘴部引用。 */
+	void ReleaseMouthCarryFromAuthority(const FVector& DropLocation);
 
 	/** 蓝图读取鱼护持有的正式鱼库存组件；拖拽、吃鱼、售鱼和复制共用这份事实，避免鱼护再维护一套鱼数组。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|FishContainers")
@@ -60,7 +64,6 @@ public:
 	virtual bool Interact_Implementation(AController* RequestingController, FGuid RequestId) override;
 
 protected:
-
 	/** authority 进入 World 时按配置补齐正式鱼库存槽位；客户端只等待 InventoryComponent 复制。 */
 	virtual void BeginPlay() override;
 
@@ -69,11 +72,11 @@ protected:
 
 private:
 	friend class UCatShopEconomyService;
-	/** 归属复制后同步碰撞；只有服务器裁决隐藏，客户端保留引擎收到的附着结果，避免复制顺序改变表现。 */
+	/** 按库存归属同步交互碰撞；服务器立即裁决携带和隐藏，客户端物理及附件统一留到 PostRepNotifies 应用。 */
 	UFUNCTION()
 	void OnRep_InventoryOwner();
 
-	/** 库存宿主销毁时在宿主当前位置释放保管的鱼护；解除回调并保留内部鱼，不跟随猫 Actor 一起丢失。 */
+	/** 库存宿主销毁时把保管的鱼护留在原地；解除回调并保留内部鱼，不跟随猫 Actor 一起丢失。 */
 	UFUNCTION()
 	void HandleInventoryOwnerDestroyed(AActor* DestroyedActor);
 
@@ -89,7 +92,7 @@ private:
 	UPROPERTY(EditDefaultsOnly, Category = "Catfishing|Inventory")
 	TSoftObjectPtr<UCatInventoryItemDefinition> GuardDefinition;
 
-	/** 旧嘴部变换兼容字段；道具:64 已改为背包保管，运行不消费，待二进制引用迁移后删除。 */
+	/** 鱼护挂到嘴部后的局部位置与朝向；服务器读取这两项，缩放分量不参与附着，以保留场景中原鱼护尺寸。 */
 	UPROPERTY(EditDefaultsOnly, Category = "Catfishing|Inventory")
 	FTransform MouthCarryTransform = FTransform::Identity;
 	/** authority 复核请求角色与本鱼护的距离/视线；客户端准星命中不能代替服务器空间校验。 */
@@ -114,9 +117,9 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|FishContainers", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatFishOnlyInventoryComponent> FishInventory;
 
-	/** 旧资产容量兼容字段；运行不消费，BeginPlay 唯一读取 FishContainerSettings.FishGuardCapacity。待资产引用迁移后删除。 */
+	/** 旧资产容量兼容字段；服务器 BeginPlay 改读 FishContainerSettings.FishGuardCapacity，保留此字段供未迁移资产核查。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Catfishing|FishContainers", meta = (AllowPrivateAccess = "true", ClampMin = "0"))
-	int32 FishInventorySlotCapacity = 6;
+	int32 FishInventorySlotCapacity = 8;
 
 	/** 鱼护交互打开时使用的库存 WBP 类，表示这个世界容器希望呈现的页面形态。 */
 	/** 蓝图或配置写入它，交互时读取它；值无效会让本次打开失败，不会影响容器内真实鱼数组。 */

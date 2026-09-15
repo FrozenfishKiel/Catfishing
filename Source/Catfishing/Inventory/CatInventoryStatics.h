@@ -82,9 +82,13 @@ class CATFISHING_API UCatInventoryStatics : public UBlueprintFunctionLibrary
 	GENERATED_BODY()
 
 public:
-	/** 只读求解已有世界物的丢弃或放置变换；库存落地与嘴叼鱼共用碰撞和空间规则，失败不移动物体或改变所有权。 */
+	/** 统一菜单请求的服务器入口；解析可访问库存后由库存重读实例并执行，成功同步既有装备读模型。 */
+	static FCatDomainCommandResult ExecuteInventoryActionFromAuthority(ACatCharacter* Character, FGuid RequestId,
+		AActor* SourceHost, int32 SourceSlot, FGuid ItemInstanceId, FGameplayTag Action, int32 Quantity);
+	/** 只读求解已有世界物的丢弃或放置变换；Drop 可附加世界坐标偏移来预检批量载体的分散落点，Place 始终忽略偏移以保持既有调用语义。 */
 	static bool FindWorldReleaseTransform(ACatCharacter* Character, AActor* ItemActor,
-		ECatInventoryWorldAction Action, const UCatInventorySettings& Settings, FTransform& OutTransform);
+		ECatInventoryWorldAction Action, const UCatInventorySettings& Settings, FTransform& OutTransform,
+		FVector DropOffset = FVector::ZeroVector);
 
 	/** 判断目标 Actor 身上的某个库存组件能否完整接收这一批物品；它只做预检，不改变库存状态。 */
 	static bool CanActorFullyAcceptInventoryBatch(const AActor* TargetActor,
@@ -97,10 +101,6 @@ public:
 	/** 在两个可触达 Actor 的正式库存之间移动物品；外部只提交宿主和槽位，组件负责正式格子事务。 */
 	static FCatDomainCommandResult MoveItemBetweenInventoryHostsFromAuthority(ACatCharacter* ControlledCharacter,
 		FGuid RequestId, AActor* SourceInventoryHost, int32 SourceSlotIndex, AActor* TargetInventoryHost, int32 TargetSlotIndex);
-
-	/** 使用某个可触达 Actor 正式库存中的一格物品；鱼与装备类效果都由物品实例自己裁决。 */
-	static FCatDomainCommandResult UseItemFromInventoryHostFromAuthority(ACatCharacter* ControlledCharacter,
-		FGuid RequestId, AActor* SourceInventoryHost, int32 SourceSlotIndex);
 
 	/** 从可触达库存丢弃、放置或 Carry 指定实例；Carry 只接受鱼容器中的数量一，先复核宿主与容器交互资格，具体移格和重放仍由来源库存裁决。 */
 	static FCatDomainCommandResult ReleaseItemToWorldFromAuthority(ACatCharacter* ControlledCharacter,

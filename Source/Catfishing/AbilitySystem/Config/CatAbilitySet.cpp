@@ -8,18 +8,17 @@
 
 bool UCatAbilitySet::IsRuntimeReady() const
 {
-	// 默认 AbilitySet 门禁流程：六个 Fishing 输入 Ability 与六个保留 BodyAction Ability 必须完整出现；
-	// BodyAction 只承担 Camp/Social 表现和可取消前摇，库存、供品结算、偷鱼事务和 Wet 反馈不能通过 Ability 授予进入运行时。
-	if (GrantedAbilities.Num() != 12)
+	// 默认 AbilitySet 门禁流程：四个仍由正式按键驱动的 Fishing 输入 Ability 与当前保留的 BodyAction Ability 必须完整出现；
+	// BodyAction 只承担 Camp/Social 表现和可取消前摇，库存、供品结算和 Wet 反馈不能通过 Ability 授予进入运行时。
+	if (GrantedAbilities.Num() != 8)
 	{
 		return false;
 	}
-	// 这些集合只在就绪门禁内做局部校验：能力类和输入 Tag 去重，BodyAction 还要精确命中六个专用事件 Ability。
+	// 这些集合只在就绪门禁内做局部校验：能力类和输入 Tag 去重，BodyAction 还要精确命中当前专用事件 Ability。
 	TSet<TSubclassOf<UGameplayAbility>> SeenAbilities;
 	TSet<FGameplayTag> SeenInputTags;
 	TSet<TSubclassOf<UGameplayAbility>> ExpectedBodyActionAbilities = {
-		UCatGA_BodyActionCampRest::StaticClass(), UCatGA_BodyActionCampfirePlayback::StaticClass(),
-		UCatGA_BodyActionRescueCharacterToCamp::StaticClass(),
+		UCatGA_BodyActionCampfirePlayback::StaticClass(),
 		UCatGA_BodyActionRequestManualHelp::StaticClass(), UCatGA_BodyActionRequestMischief::StaticClass(),
 		UCatGA_BodyActionPlaceProtectionSign::StaticClass() };
 	TSet<TSubclassOf<UGameplayAbility>> SeenBodyActionAbilities;
@@ -42,10 +41,9 @@ bool UCatAbilitySet::IsRuntimeReady() const
 		}
 		if (Entry.InputTag.IsValid())
 		{
-			// 按住型输入（收线 / 松开线杯 / 打窝蓄力）必须 WhileInputActive，其余离散输入必须 OnInputTriggered。
+			// 按住型输入仅剩收线和松开线杯；窝料蓄力由库存 Use 自己维护，不能再要求旧 GAS 输入 Ability。
 			const bool bHeldInput = Entry.InputTag == CatFishingAbilityTags::Input_Fishing_Primary
-				|| Entry.InputTag == CatFishingAbilityTags::Input_Fishing_Slack
-				|| Entry.InputTag == CatFishingAbilityTags::Input_Fishing_Chum;
+				|| Entry.InputTag == CatFishingAbilityTags::Input_Fishing_Slack;
 			const ECatAbilityActivationPolicy ExpectedPolicy = bHeldInput
 				? ECatAbilityActivationPolicy::WhileInputActive : ECatAbilityActivationPolicy::OnInputTriggered;
 			if (Entry.ActivationPolicy != ExpectedPolicy)
@@ -59,8 +57,6 @@ bool UCatAbilitySet::IsRuntimeReady() const
 		&& SeenInputTags.Contains(CatFishingAbilityTags::Input_Fishing_Primary)
 		&& SeenInputTags.Contains(CatFishingAbilityTags::Input_Fishing_Slack)
 		&& SeenInputTags.Contains(CatFishingAbilityTags::Input_Fishing_Cancel)
-		&& SeenInputTags.Contains(CatFishingAbilityTags::Input_Fishing_Scoop)
-		&& SeenInputTags.Contains(CatFishingAbilityTags::Input_Fishing_Chum)
 		&& SeenBodyActionAbilities.Num() == ExpectedBodyActionAbilities.Num();
 }
 

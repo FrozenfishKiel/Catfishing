@@ -22,29 +22,6 @@ enum class ECatFishBodyClass : uint8
 	Giant
 };
 
-/** FishDefinition 的食用安全结论；猫状态只消费该结论，不按名字猜有毒鱼。 */
-UENUM(BlueprintType)
-enum class ECatFishFoodSafety : uint8
-{
-	/** 食用结论或数值尚未配置，进食命令必须 fail-closed。 */
-	Unset,
-	/** 可直接食用且不会增加 Poison。 */
-	Safe,
-	/**
-	 * 最重一档毒鱼：吃下即倒地，没有数值刻度、不累加（猫册 §3.1.4，2026-09-12 收口）。
-	 * 墓碑（2026-09-12）：本档原名 Toxic，配套字段 PoisonIncrease 与阈值 100 的渐进中毒模型一并删除——
-	 * 那套会让「连吃两条轻毒鱼」也倒地，正是设计 2026-08-21 砍掉的渐进加重。轻毒不再是食用结论的一档，
-	 * 它就是这条鱼的限时 buff，落在鱼表「限时Buff」列。旧资产的 Toxic 由 DefaultEngine.ini 的 EnumRedirects 接过来。
-	 */
-	SevereToxic,
-	/**
-	 * 这条鱼根本不能吃：经验系数必须为 0、Poison 必须为 0，进食链一律拒绝（2026-09-08 晚间九条⑨）。
-	 * 它与 Unset 的区别是「已裁决为不可食用」而不是「还没填」，所以可以通过就绪校验、可以正常出鱼；
-	 * 咸鱼与湖心巨影走这一档，此前只能伪装成 Safe ＋ 编一个正经验。
-	 */
-	Inedible
-};
-
 /** 鱼的食性；决定这条鱼往外冲的基础倾向（鱼表格「食性」列，2026-09-09 晚裁定逐鱼配、不再走性格模板）。 */
 UENUM(BlueprintType)
 enum class ECatFishDiet : uint8
@@ -116,15 +93,6 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fight|Body")
 	FCatFishBodyGeometry FightBodyGeometry;
 
-	/** 食用限时效果是否已由属主确认；true + 空 GE 明确表示无该效果，false 为迁移缺口。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Use|TimedEffect")
-	bool bEatingTimedEffectConfigured = false;
-	/** 每种鱼独立的一份限时 GE；要求 HasDuration、无跨鱼堆叠。数值及 GameplayCue 由正式资产提供。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Use|TimedEffect")
-	TSubclassOf<class UGameplayEffect> EatingTimedEffect;
-	/** 基础时长（秒），不是成长后时长；0 为未配。祝福不走食用链。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Use|TimedEffect", meta=(ClampMin="0", Units="s"))
-	double EatingTimedEffectDurationSeconds = 0.0;
 	/** 鱼表「试探期」，秒；0 先取鱼目录档位默认，仍缺配才随机兜底；非法值拒绝。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Bite", meta=(ClampMin="0", Units="s"))
 	double ProbeDurationSeconds = 0.0;
@@ -140,7 +108,7 @@ public:
 	bool IsRuntimeDefinitionReady() const;
 	double FindBaitMultiplierOrNeutral(FName BaitDefinitionId) const;
 
-	/** 这条鱼能不能吃：只有 Safe 与 SevereToxic 可以，Inedible 与 Unset 都不行。进食链在扣鱼之前必须先问它。 */
+	/** 判断该鱼是否具备有限且为正的食用成长系数；进食链在扣鱼前查询，实际重量与运行定义仍由后续预检验证。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Fish")
 	bool IsEdible() const;
 
@@ -337,29 +305,9 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Preference")
 	TArray<FCatBaitWeightMultiplier> BaitWeightMultipliers;
 
-	/** 食用安全结论；Unset 时不能通过吃鱼链修改身体状态。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use")
-	ECatFishFoodSafety FoodSafety = ECatFishFoodSafety::Unset;
-
-	/**
-	 * 经验系数：吃掉这条鱼得到的局内成长经验 ＝ 该系数 × 实际重量（鱼表格「经验系数」列）。
-	 * 单位是「经验点/千克」，不是经验点本身——2026-09-07 已把「经验按体重档取定额」整条作废，
-	 * 旧注释「值来自当前鱼表体重档」同批改正。
-	 * FoodSafety 为 Inedible 时必须为 0；Safe/SevereToxic 时必须为正，否则鱼定义不就绪。
-	 */
+	/** 每千克鱼肉提供的成长经验；服务器按实例实际重量计算，零表示该鱼不提供食用成长。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use", meta = (ClampMin = "0.0", DisplayName = "经验系数"))
 	double EatingExperiencePerKilogram = 0.0;
-
-	/**
-	 * 直接食用后一次性获得的黄色体力护盾点数（鱼表格「限时Buff」列，小彩鱼与风铃鱼占位 +20）。
-	 * 0 表示这条鱼不给护盾；不可食用的鱼必须为 0。护盾本身的上限与消耗归猫册，本字段只提供逐鱼数值。
-	 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use", meta = (ClampMin = "0.0"))
-	double YellowStaminaGrant = 0.0;
-
-	// 墓碑（2026-09-12）：这里原有 `double PoisonIncrease`，配 ECatFishFoodSafety::Toxic 用阈值 100 累加裁决倒地。
-	// 猫册 §3.1.4 收口「中毒按鱼各配、无渐进升级，最重一档＝吃下即倒地」之后它没有任何消费者，随 ApplyPoisonDelta 一并删除。
-	// 要按 grep 找旧口径：PoisonIncrease / ApplyPoisonDelta / PoisonDownedThreshold。
 
 	/**
 	 * 投掷这条鱼命中后的效果（鱼表格「吃鱼效果」列里写成投掷规格的那两条：咸鱼击退炸毛、臭臭鱼驱散并短时屏蔽靠近）。

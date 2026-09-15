@@ -19,10 +19,8 @@ enum class ECatGrowthOptionId : uint8
 	MaxFightStamina,
 	/** 放线回体速度：搏斗内放线回体速率（基础 0，选了才有）。 */
 	SlackStaminaRegen,
-	/** buff 持续时长：所有限时 buff 的持续时间；不作用于猫神的祝福。 */
-	BuffDuration,
-	/** 移动速度：世界移动速度。 */
-	MoveSpeed,
+	/** 移动速度：世界移动速度；保留原数值 5，避免删除食用增益项后重解释已有成长记录。 */
+	MoveSpeed = 5,
 	/** 背包格数：格数制携带的背包格。 */
 	InventorySlots,
 	/** 完美窗加宽：完美提竿判定窗。 */

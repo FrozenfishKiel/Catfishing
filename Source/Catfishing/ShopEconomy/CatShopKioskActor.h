@@ -6,7 +6,6 @@
 #include "CatShopKioskActor.generated.h"
 
 class USceneComponent;
-class USphereComponent;
 class UCatShopInteractionComponent;
 class UCatShopInventoryComponent;
 
@@ -26,8 +25,6 @@ public:
 	virtual bool CanInteract_Implementation(AController* RequestingController) const override;
 	/** 返回当前摊位提示文本；不可交互或页面已打开时返回空文本，避免 UI 继续显示失效提示。 */
 	virtual FText GetInteractionPrompt_Implementation() const override;
-	/** 返回准星提示与交互检测使用的半径；非法或负数配置会收口为 0。 */
-	virtual double GetInteractionRadius_Implementation() const override;
 	/** 执行本地确认交互；RequestId 和交互 gate 都有效时只打开商店页面，不触发购买或仓库解析。 */
 	virtual bool Interact_Implementation(AController* RequestingController, FGuid RequestId) override;
 
@@ -39,20 +36,13 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Shop")
 	UCatShopInventoryComponent* GetShopInventory() const;
 
-	// 墓碑（2026-09-13）：下单距离二次证明已按裁决删除，保留交互接口。
-
-protected:
-	/** 按项目交互设置对准星 Trace Channel 启用摊位查询碰撞。 */
-	virtual void BeginPlay() override;
+	/** 服务端下单前验证请求来自同一世界且摊位仍启用；接近与可见性已由开启页面时的准星射线证明，订单不再重复使用另一套距离口径。 */
+	bool CanServeOrderFromAuthority(AController* RequestingController) const;
 
 private:
 	/** 摊位在关卡中的空间锚点；只决定交互目标位置，不承载商店经济状态。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Shop", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<USceneComponent> SceneRoot;
-
-	/** 摊位查询碰撞体，表示没有额外网格碰撞时仍可被准星命中的交互范围；只参与查询，不产生重叠事件。 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Interaction", meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<USphereComponent> InteractionCollision;
 
 	/** 摊位拥有的页面打开能力；LocalPlayer 扫描到它后按确认键会进入正式 Shop UI。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Shop", meta = (AllowPrivateAccess = "true"))
@@ -62,13 +52,9 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Shop", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatShopInventoryComponent> ShopInventory;
 
-	/** 摊位交互开关，表示当前摆放物是否允许打开商店；蓝图写入后会同时影响提示和打开页面。 */
+	/** 摊位交互开关，表示当前摆放物是否允许打开商店；蓝图写入后会同时影响提示、打开页面和服务端订单资格。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Catfishing|Interaction", meta = (AllowPrivateAccess = "true"))
 	bool bInteractionEnabled = true;
-
-	/** 摊位交互半径，表示玩家必须离摊位多近才算仍在旁边；本地准星提示和交互检测读取它。 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Catfishing|Interaction", meta = (AllowPrivateAccess = "true", ClampMin = "0.0", Units = "cm"))
-	double InteractionRadiusCentimeters = 300.0;
 
 	/** 摊位可用时显示给本地玩家的交互文案；交互关闭或页面已打开时不会继续暴露给提示 UI。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Catfishing|Interaction", meta = (AllowPrivateAccess = "true"))

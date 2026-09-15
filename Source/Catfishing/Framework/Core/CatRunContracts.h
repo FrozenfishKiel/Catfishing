@@ -4,6 +4,9 @@
 #include "UObject/Interface.h"
 #include "CatRunContracts.generated.h"
 
+class ACatAltarActor;
+class APlayerState;
+
 /** 一局公开阶段的稳定语义；状态之间如何转移只由 ST_RunFlow 资产编排，C++ 不维护平行转换表。 */
 UENUM(BlueprintType)
 enum class ECatRunPhase : uint8
@@ -207,6 +210,70 @@ struct FCatRunDayTransition
 	FCatOfferingResultSnapshot LastCommittedOffering;
 };
 
+/** 祭坛确认阶段的公开状态；GameMode 在正式翻天前独占写入，客户端只据此显示全队确认窗口。 */
+UENUM(BlueprintType)
+enum class ECatAltarConfirmationState : uint8
+{
+	/** 当前没有可显示的祭坛确认请求。 */
+	Idle,
+	/** 一名玩家已在祭坛发起请求，名单中的 Active 玩家仍可远程确认或撤回。 */
+	Waiting,
+	/** 请求没有进入翻天，取消说明会短暂保留给客户端展示。 */
+	Cancelled,
+	/** 全部参与者已确认，服务器正把该请求交给既有翻天流程。 */
+	Accepted
+};
+
+/** 单名祭坛确认参与者的公开事实；以 PlayerState 绑定本局身份，确认位由服务器按该玩家自己的 RPC 改写。 */
+USTRUCT(BlueprintType)
+struct FCatAltarConfirmationParticipant
+{
+	GENERATED_BODY()
+
+	/** 本轮必须参与确认的 Active 玩家；GameMode 创建请求时写入，客户端用它显示名单而不重新推导资格。 */
+	UPROPERTY(BlueprintReadOnly)
+	TObjectPtr<APlayerState> PlayerState;
+
+	/** 该参与者当前是否同意翻天；服务器只接受其自身 Controller 提交的值，重复同值不会形成第二次确认。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bConfirmed = false;
+};
+
+/** 一次祭坛全队确认的完整公开快照；它既是服务器权威名单，也是 GameState 复制给 UI 的唯一确认事实。 */
+USTRUCT(BlueprintType)
+struct FCatAltarConfirmationSnapshot
+{
+	GENERATED_BODY()
+
+	/** 本轮确认的随机关联标识；Controller 提交时必须匹配，旧请求不能影响新一轮。 */
+	UPROPERTY(BlueprintReadOnly)
+	FGuid RequestId;
+
+	/** 本轮确认处于等待、取消或已接受的哪个阶段；Idle 表示没有可操作请求。 */
+	UPROPERTY(BlueprintReadOnly)
+	ECatAltarConfirmationState State = ECatAltarConfirmationState::Idle;
+
+	/** 发起本轮请求的祭坛；GameMode 用它确保确认只会进入同一座祭坛的正式翻天。 */
+	UPROPERTY(BlueprintReadOnly)
+	TObjectPtr<ACatAltarActor> Altar;
+
+	/** 现场发起交互的玩家；客户端用于展示，服务器在接受后据此解析正式结算发起者，确认资格仍以 Participants 为准。 */
+	UPROPERTY(BlueprintReadOnly)
+	TObjectPtr<APlayerState> Initiator;
+
+	/** 服务器世界时间的确认截止点，单位秒；客户端应和同步的服务器时钟相减得到本地倒计时。 */
+	UPROPERTY(BlueprintReadOnly)
+	double DeadlineServerTimeSeconds = 0.0;
+
+	/** 本轮固定的 Active 玩家名单及各自确认值；GameMode 不维护并行集合或人数计数。 */
+	UPROPERTY(BlueprintReadOnly)
+	TArray<FCatAltarConfirmationParticipant> Participants;
+
+	/** 取消原因；只由服务器写入，客户端在取消后的短暂展示期读取。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText CancelReason;
+};
+
 /** Run 唯一写入的阶段与时钟快照；Environment、Fishing 和 UI 只能消费，不得反向修改。 */
 USTRUCT(BlueprintType)
 struct FCatRunPhaseSnapshot
@@ -313,6 +380,10 @@ struct FCatRunPublicState
 	/** 当前或最近一次翻天过渡事实；GameMode 唯一写入，UI 与 Controller 只消费复制值控制遮罩和操作锁。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatRunDayTransition DayTransition;
+
+	/** 当前或最近一次祭坛确认事实；等待期间不触发 DayTransition 的操作锁，正式接受后才交给翻天流程。 */
+	UPROPERTY(BlueprintReadOnly)
+	FCatAltarConfirmationSnapshot AltarConfirmation;
 
 	/** 与当前 Run Revision 对齐的环境结果；不重复保存 Phase。 */
 	UPROPERTY(BlueprintReadOnly)

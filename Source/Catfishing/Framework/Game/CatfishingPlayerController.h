@@ -30,10 +30,14 @@ class ACatfishingGameState;
 class ACatShopKioskActor;
 class ACatFishBuyerActor;
 class ACatFishGuardActor;
+class UCatBackPackComponent;
+class UCatInventoryItemInstance;
 struct FInputActionValue;
 
 /** owning client 收到公共领域命令结果后的本机通知；UI Model 只用它关联 RequestId，不重新执行领域动作。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatCampCommandResultReceived, const FCatDomainCommandResult&);
+/** 本机物品栏焦点变化通知；只有独立物品栏订阅，背包列表不包含也不消费选择状态。 */
+DECLARE_MULTICAST_DELEGATE_OneParam(FCatQuickbarSelectionChanged, int32);
 
 /** Lake owning-client 的网络适配器；将 Run、Fishing、Camp、Inventory、Condition、Shop、Social 意图转给 authority，并承接 Profile Grant/CapturePlan/HostExit 回执，不自存领域真相。 */
 UCLASS()
@@ -43,6 +47,30 @@ class CATFISHING_API ACatfishingPlayerController : public APlayerController
 	friend class FCatFishingSlackAimCommandRoutingTest;
 	friend class FCatPhysicalInputRouteTest;
 public:
+	/** 本人提交物品操作意图；服务器按宿主、槽位和实例身份重读物品，不接受客户端定义或效果。 */
+	UFUNCTION(Server, Reliable)
+	void ServerExecuteInventoryAction(FGuid RequestId, AActor* SourceInventoryHost, int32 SourceSlotIndex,
+		FGuid ItemInstanceId, FGameplayTag Action, int32 Quantity);
+	/** 本机物品栏输入选择一个实际库存槽位；只写 Controller 的物品栏焦点，背包窗口不能触发它。 */
+	bool RequestSelectQuickbarSlotFromInput(int32 RequestedSlotIndex);
+	/** 读取物品栏当前焦点；只读背包容量来排除无效槽位，不在背包组件或库存 Model 中保存选择。 */
+	int32 GetSelectedQuickbarSlotIndex() const;
+	/** 本机物品栏焦点已变化；独立 View 刷新外圈，普通背包窗口不订阅此通知。 */
+	FCatQuickbarSelectionChanged OnQuickbarSelectionChanged;
+	/** owning client 按实际背包格数循环选择；Direction 小于零向前、大于零向后，空格同样属于可选目标。 */
+	bool RequestCycleQuickbarSlotFromInput(int32 Direction);
+	/** G 的按下入口；只在当前本地选择槽位已解析实例时提交统一 Use，请求不会猜测或替换槽位。 */
+	void BeginSelectedItemUseFromInput();
+	/** G 松开时结束同一持续使用请求；普通瞬时物品没有活动请求时无副作用，取消和旅行也复用它清理。 */
+	void EndSelectedItemUseFromInput(bool bCancelled);
+	/** 查询当前输入是否可以使用一个本地选中且有有效实例的背包槽位；不做服务器权限裁决。 */
+	bool CanUseSelectedBackpackItemFromInput() const;
+	/** 服务器复核当前本人背包槽位和实例身份后执行统一 Use；客户端本地选中不作为服务器状态或权限依据。 */
+	UFUNCTION(Server, Reliable)
+	void ServerUseSelectedBackpackItem(FGuid RequestId, int32 ExpectedSelectedSlot, FGuid ItemInstanceId);
+	/** 服务器结束同一个持续使用实例；只接受 Begin 已记录的 RequestId 和实例身份，换格后也不会把结束事件投给新物品。 */
+	UFUNCTION(Server, Reliable)
+	void ServerEndSelectedBackpackItem(FGuid RequestId, FGuid ItemInstanceId, bool bCancelled);
 	/** Ordinary/sprint speed from this controller and the pawn class, in cm/s. Used by CMC flags. */
 	float GetConfiguredMovementSpeed(const APawn* TargetPawn, bool bSprinting) const;
 	/** 每帧先对齐公开翻天快照与锁，再交给引擎处理输入；同时覆盖 GameState 晚到与复制延迟。 */
@@ -76,10 +104,6 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerAcknowledgeProfileGrant(FGuid GrantId);
 
-	/** owning client 把 durable Profile 中的装备解锁摘要提交给服务器；服务器只把它作为本 PlayerState 的本局授权投影。 */
-	UFUNCTION(Server, Reliable)
-	void ServerPublishEquipmentUnlocks(const TArray<FName>& UnlockIds);
-
 	/** 服务器向 owning client 投递独立 CapturePlan；本 RPC 不表示图片或 Grant 已成功。 */
 	UFUNCTION(Client, Reliable)
 	void ClientReceiveImprintCapturePlan(const FCatCapturePlan& Plan);
@@ -108,17 +132,16 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerRequestInteraction(AActor* Target, FGuid RequestId);
 
-	/** 由 owning client 发起固定营地休息请求；把位置和身体裁决交给 Camp/Condition，完成后通过 ClientReceiveCampCommandResult 回送领域结果。 */
+	/** 客户端只提交本人意图；false 对发起者表示取消整轮，对其他人表示撤回。服务器按 RPC 所属 Controller 识别身份并复核。 */
 	UFUNCTION(Server, Reliable)
-	void ServerRequestCampRest(ACatCampHubActor* Camp, FGuid RequestId);
+	void ServerSetAltarConfirmation(FGuid RequestId, bool bConfirmed);
+
+	/** 把 F8/F9 或已获键盘焦点页面转交的按键转换为当前公开请求的一次确认意图；找到可提交请求时返回 true 供 UI 消费该键。 */
+	bool TrySetAltarConfirmationFromKey(const FKey& Key);
 
 	/** 由 owning client 发起固定营地篝火回看请求；Camp 在结算夜全员在场且 CapturePlan 建立成功后触发表现 multicast，并通过 ClientReceiveCampCommandResult 回送领域结果。 */
 	UFUNCTION(Server, Reliable)
 	void ServerRequestCampfirePlayback(ACatCampHubActor* Camp, FGuid RequestId);
-
-	/** 由 owning client 发起伙伴救援请求；把倒地目标送往固定营地 RescuePoint 并交给 Camp/Condition 裁决，完成后通过 ClientReceiveCampCommandResult 回送领域结果，不进入死亡或重生旁路。 */
-	UFUNCTION(Server, Reliable)
-	void ServerRescueCharacterToCamp(ACatCampHubActor* Camp, ACatCharacter* TargetCharacter, FGuid RequestId);
 
 	/** 服务器把公共领域命令结果可靠发给 owning client；所有路径都保留原 RequestId，客户端不重算 Revision 或领域错误。 */
 	UFUNCTION(Client, Reliable)
@@ -151,15 +174,6 @@ public:
 		FGuid RodItemInstanceId, FGuid BaitItemInstanceId, FGuid FloatItemInstanceId,
 		FGuid ScoopNetItemInstanceId);
 
-	/** 使用本人正式随身库存格中的物品；Controller 只做服务器 gate 和回执，物品效果由正式库存实例裁决。 */
-	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Inventory")
-	void ServerUseInventoryItem(FGuid RequestId, int32 InventorySlotIndex);
-
-	/** 使用指定正式库存宿主中的物品；鱼护、鱼缸和营地仓库都通过 Actor 宿主回到同一条库存 Use 链。 */
-	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Inventory")
-	void ServerUseInventoryItemFromHost(FGuid RequestId, AActor* SourceInventoryHost,
-		int32 InventorySlotIndex);
-
 	/** 从指定商店摊位支付整车商品项；服务器先限制购物车载荷，再复核摊位和营地公共仓库。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")
 	void ServerSubmitShopCartAtKiosk(ACatShopKioskActor* ShopKiosk,
@@ -170,12 +184,7 @@ public:
 	void ServerSellFishBatch(FGuid RequestId, ACatFishBuyerActor* Buyer, ACatFishGuardActor* Guard,
 		const TArray<FGuid>& FishInstanceIds);
 
-	/** 将指定库存实例的部分或全部数量丢弃或放置；服务器重新确定位置，失败保留库存。 */
-	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Inventory")
-	void ServerReleaseInventoryItemToWorld(FGuid RequestId, AActor* SourceHost, int32 Slot,
-		FGuid ItemInstanceId, int32 Quantity, ECatInventoryWorldAction Action);
-
-	/** 长按交互提交拾起鱼护意图；鱼护自己复核距离、身体与库存容量，不占嘴部鱼槽。 */
+	/** 长按交互提交拾起鱼护意图；鱼护自己复核距离、身体、嘴部空闲与库存容量。 */
 	UFUNCTION(Server, Reliable)
 	void ServerPickUpFishGuard(ACatFishGuardActor* Guard, FGuid RequestId);
 
@@ -183,22 +192,9 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerDropCarriedItem();
 
-	// ServerUseHerbOnCharacter 于 2026-09-12 删除。草药机制 2026-08-13 已由设计删掉（猫册 v1.3），
-	// 09-09「代码超前项逐个过」明确裁「删代码一条——草药恢复链」，本次连同 Fragment、枚举项与 ini 两行一并清掉。
-	// 倒地解除现在只有救援与休息：搬运走 ServerRequestRescueCharacterToCamp，休息走 ServerRequestCampRest
-	// 与下面的 ServerRequestFieldSelfRecovery。
-
-	/** 野外原地休息自救；单人局也走得通，服务器按当前 Character 事实裁决，不要求其他玩家在场。 */
-	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Condition")
-	void ServerRequestFieldSelfRecovery(FGuid RequestId);
-
 	/** 从当前这组三选一里选中一项；OfferSerial 用来拒绝过期面板，服务器只认自己发出的那一组。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Growth")
 	void ServerChooseGrowthOption(FGuid RequestId, ECatGrowthOptionId OptionId, int32 OfferSerial);
-
-	// ServerBeginTheft／ClientReceiveTheftResult／GetLastTheftResult／ServerCatchTheft 四条偷鱼 RPC 于 2026-09-11 整条删除。
-	// 偷是玩家玩的时候才有的主观意识，不写进规格；机制层只有客观的拿鱼，走上面的 ServerMoveInventoryItemBetweenHosts。
-	// 一并消失的还有物归原主、追回窗口和扑倒反制——它们都是为「偷」这个判断造的概念，没有客观事实可挂。
 
 	/** 手动发布普通钓鱼或倒地求助；普通信号不会升级为全局任务。 */
 	UFUNCTION(Server, Reliable)
@@ -292,6 +288,10 @@ private:
 	void SetDayTransitionLocked(bool bLocked);
 	/** 结束或旅行时解绑快照并清理本功能持有的输入、移动和 UI；不触碰 Run 权威状态。 */
 	void ClearDayTransition();
+	/** 游戏视口直接收到 F8 时复用统一确认提交入口，避免没有模态页面时缺少快捷键。 */
+	void ConfirmAltarConfirmationFromInput();
+	/** 游戏视口收到 F9 时提交 false；服务器裁决发起者取消整轮或其他人撤回本人，重复按键不会恢复旧请求。 */
+	void RevokeAltarConfirmationFromInput();
 
 	/** 当前快照通知来源；调和时写入，清理时配对解绑，不强持有旧 World 的 GameState。 */
 	TWeakObjectPtr<ACatfishingGameState> DayTransitionGameState;
@@ -313,8 +313,6 @@ private:
 
 	/** 幂等安装当前配置的玩法 Mapping Context；BeginPlay/输入初始化均可安全调用。 */
 	void ApplyInputMappingContext();
-	/** owning client 读取本地 durable Profile 的 UnlockIds 并提交服务器投影；本方法不生成或修改任何永久 Grant。 */
-	void PublishProfileEquipmentUnlocksIfAvailable();
 	/** 移除本 Controller 安装的玩法 Mapping Context，并清空弱绑定记录。 */
 	void RemoveInputMappingContext();
 	/** 翻天期间拒绝视角操作；其他时候把二维输入写入 Controller 的 Yaw/Pitch。 */
@@ -339,6 +337,10 @@ private:
 	void NativeInputTagReleased(FGameplayTag InputTag);
 	/** 输入被取消时清理长按候选，不把失焦或输入层移除当作短按。 */
 	void NativeInputTagCanceled(FGameplayTag InputTag);
+	/** 从当前 Pawn 解析正式个人背包；只接受 Character 构造的 BackPack，不把鱼护、鱼缸或商店库存误当快捷栏来源。 */
+	UCatBackPackComponent* GetControlledBackPack() const;
+	/** 结束本机和服务器同一持续 Use 事务的记录；换 Pawn、旅行和按键取消调用它，选择变更不得调用它。 */
+	void ClearSelectedItemUseInput(bool bCancelled);
 	/** 当 Pawn 或输入组件在 owning client 就绪时通知 LocalPlayer UI；服务器远端 Controller 和非 Cat UI World 安全跳过。 */
 	void NotifyLocalPlayerUISubsystemPawnChanged();
 	/** 把公共领域命令终态投给 owning client；本地 authority 没有网络回环时直接写本机读模型，远端玩家继续走可靠 RPC。 */
@@ -375,6 +377,25 @@ private:
 	/** NativeInputActions 已绑定的输入组件；只防止交互这类非 Ability 标签在 SetupInputComponent 重入时重复注册。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UEnhancedInputComponent> NativeInputBoundComponent;
+
+	/** 本机持续使用事务的请求 ID；G 开始后只用它匹配松开或取消，避免选择变化改写结束目标。 */
+	FGuid ActiveSelectedItemUseRequestId;
+	/** 独立物品栏的本地焦点，初始第一格；仅本机输入修改，换 Pawn 重置，不复制、不持久化、不写入背包 Model。 */
+	int32 SelectedQuickbarSlotIndex = 0;
+	/** 本机持续使用事务锁定的实例身份；服务器和客户端都据此拒绝把结束输入转给另一个同定义物品。 */
+	FGuid ActiveSelectedItemUseItemId;
+	/** 本机持续使用事务开始时的背包槽位；它与固定实例共同提供诊断上下文，结束不会改读之后的新选中格。 */
+	int32 ActiveSelectedItemUseSlotIndex = INDEX_NONE;
+	/** 当前持续使用所属的正式背包；Begin 成功时冻结，换格后 End 仍只回到这份原背包而非新焦点。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatBackPackComponent> ActiveSelectedItemUseBackPack = nullptr;
+	/** 当前持续使用的原始实例；服务器用强引用保留它直到 End/Cancel，即使槽位已换物也能取消原来的持续效果。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatInventoryItemInstance> ActiveSelectedItemUseInstance = nullptr;
+
+	/** 已安装 F8/F9 绑定的输入组件；输入组件重建后重新绑定一次，避免 SetupInputComponent 重入累积同一确认请求。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UInputComponent> AltarConfirmationInputBoundComponent;
 
 	/** 统一向 authority GameMode 查询运行内玩法命令 gate；缺少 GameMode、非 Active 或 teardown 关门时返回 false。 */
 	bool CanForwardGameplayCommand() const;

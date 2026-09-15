@@ -272,7 +272,7 @@ bool UCatAbilitySystemComponent::InitializeCharacterAttributesFromDefinition(con
 	}
 
 	SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), FishingStrength);
-	// 黄色体力是吃鱼/祝福授予的储备，新身体开局一律为 0：它不来自品种模板，也不随播种赠送。
+	// 黄色体力是当天的额外储备，新身体开局一律为 0；不从品种模板播种，也不由当前吃鱼入口授予。
 	SetNumericAttributeBase(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute(), 0.0f);
 	SetNumericAttributeBase(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute(), MaxFightStamina);
 	if (!SeedFightStaminaToMaximumFromAuthority())
@@ -394,6 +394,7 @@ bool UCatAbilitySystemComponent::ApplyFishingStaminaDelta(const float Delta)
 	return ApplyGameplayEffectSpecToSelf(*Spec.Data.Get()).WasSuccessfullyApplied();
 }
 
+// 黄色储备修改流程：校验服务器与有限数值，负向调整限制到零；同值直接成功，其余通过即时 GE 写入并记录结果。
 bool UCatAbilitySystemComponent::ApplyYellowFightStaminaDelta(const float Delta)
 {
 	if (!FMath::IsFinite(Delta) || !GetOwnerActor() || !GetAvatarActor() || !IsOwnerActorAuthoritative()) return false;
@@ -411,17 +412,20 @@ bool UCatAbilitySystemComponent::ApplyYellowFightStaminaDelta(const float Delta)
 	return Applied;
 }
 
+// 清晨清空流程：读取当前黄色储备，以相反增量复用唯一写口；权限和非法值仍由写口拒绝。
 bool UCatAbilitySystemComponent::ClearYellowFightStaminaFromAuthority()
 {
 	return ApplyYellowFightStaminaDelta(-GetNumericAttribute(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute()));
 }
 
+// 当前可用体力读取流程：将绿色和黄色属性转为 double 后相加，供支付与显示读取，不在查询时改属性。
 double UCatAbilitySystemComponent::GetTotalFightStamina() const
 {
 	return double(GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()))
 		+ double(GetNumericAttribute(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute()));
 }
 
+// 容量读取流程：先读取绿色上限；非法或非正值原样交给调用方判断，其余加当前黄色储备形成总容量。
 double UCatAbilitySystemComponent::GetTotalFightStaminaCapacity() const
 {
 	const double Maximum = GetNumericAttribute(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
@@ -429,56 +433,8 @@ double UCatAbilitySystemComponent::GetTotalFightStaminaCapacity() const
 		: Maximum + double(GetNumericAttribute(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute()));
 }
 
+// 储备读取流程：返回 ASC 当前黄色属性快照，查询不修正数值也不产生玩法副作用。
 float UCatAbilitySystemComponent::GetYellowFightStamina() const
 {
 	return GetNumericAttribute(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute());
-}
-
-double UCatAbilitySystemComponent::ResolveEatingEffectDuration(const double BaseSeconds) const
-{
-	const auto* Growth = GetAvatarActor() ? GetAvatarActor()->FindComponentByClass<UCatGrowthComponent>() : nullptr;
-	const double Bonus = Growth ? Growth->GetTotalMagnitude(ECatGrowthOptionId::BuffDuration) : 0.0;
-	return BaseSeconds * (1.0 + Bonus);
-}
-
-bool UCatAbilitySystemComponent::ApplyFishTimedEffectFromAuthority(const UCatFishDefinition* Fish, const FGuid RequestId)
-{
-	if (!IsOwnerActorAuthoritative() || !GetAvatarActor() || !Fish || !RequestId.IsValid()) return false;
-	auto Reject = [&](const TCHAR* Reason)
-	{
-		UE_LOG(LogCatCharacter, Warning, TEXT("Event=fish_timed_effect_unavailable Fish=%s RequestId=%s Actor=%s World=%s NetMode=%d Authority=1 LocalRole=%d Reason=%s"),
-			*Fish->FishDefinitionId.ToString(), *RequestId.ToString(), *GetNameSafe(GetAvatarActor()), *GetNameSafe(GetWorld()), GetWorld()->GetNetMode(), GetAvatarActor()->GetLocalRole(), Reason);
-		return false;
-	};
-	if (!Fish->bEatingTimedEffectConfigured) return Reject(TEXT("OwnerBindingUnset"));
-	if (!Fish->EatingTimedEffect) return true; // 已确认无效果，与缺配不同。
-	const UGameplayEffect* Definition = Fish->EatingTimedEffect->GetDefaultObject<UGameplayEffect>();
-	const double Duration = ResolveEatingEffectDuration(Fish->EatingTimedEffectDurationSeconds);
-	if (!FMath::IsFinite(Duration) || Duration <= 0.0 || Duration > MAX_flt
-		|| Definition->DurationPolicy != EGameplayEffectDurationType::HasDuration
-		|| Definition->GetStackingType() != EGameplayEffectStackingType::None)
-		return Reject(TEXT("InvalidDurationOrCrossFishStacking"));
-	if (const FActiveGameplayEffectHandle* Handle = FishTimedEffectHandles.Find(Fish->FishDefinitionId))
-	{
-		if (FActiveGameplayEffect* Active = ActiveGameplayEffects.GetActiveGameplayEffect(*Handle))
-		{
-			if (Active->Spec.Def != Definition) return Reject(TEXT("LiveFishBindingChanged"));
-			// 原 GE 就地刷新，不重新执行数值、不瞬时叠双份；引擎接口同步计时器、复制及 OnTimeChanged。
-			Active->Spec.Duration = static_cast<float>(Duration);
-			ModifyActiveEffectStartTime(*Handle, GetWorld()->GetTimeSeconds() - Active->StartWorldTime);
-			UE_LOG(LogCatCharacter, Log, TEXT("Event=fish_timed_effect_refreshed Fish=%s RequestId=%s Actor=%s DurationSeconds=%.3f World=%s NetMode=%d Authority=1 LocalRole=%d"),
-				*Fish->FishDefinitionId.ToString(), *RequestId.ToString(), *GetNameSafe(GetAvatarActor()), Duration,
-				*GetNameSafe(GetWorld()), GetWorld()->GetNetMode(), GetAvatarActor()->GetLocalRole());
-			return true;
-		}
-	}
-	FGameplayEffectSpec Spec(Definition, MakeEffectContext(), 1.0f);
-	Spec.SetDuration(static_cast<float>(Duration), true);
-	const FActiveGameplayEffectHandle Handle = ApplyGameplayEffectSpecToSelf(Spec);
-	if (!Handle.IsValid()) return Reject(TEXT("GameplayEffectRejected"));
-	FishTimedEffectHandles.Add(Fish->FishDefinitionId, Handle);
-	UE_LOG(LogCatCharacter, Log, TEXT("Event=fish_timed_effect_applied Fish=%s RequestId=%s Actor=%s DurationSeconds=%.3f World=%s NetMode=%d Authority=1 LocalRole=%d"),
-		*Fish->FishDefinitionId.ToString(), *RequestId.ToString(), *GetNameSafe(GetAvatarActor()), Duration,
-		*GetNameSafe(GetWorld()), GetWorld()->GetNetMode(), GetAvatarActor()->GetLocalRole());
-	return true;
 }

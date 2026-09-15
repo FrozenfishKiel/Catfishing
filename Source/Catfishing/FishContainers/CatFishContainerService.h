@@ -9,8 +9,7 @@ class UCatContainerReplicationComponent;
 class AController;
 class ACatCharacter;
 
-/** 一局服务器鱼容器模块；它是鱼容器数组、捕获创建、转移与消费的唯一写入口。
- *  没有「偷取」这条支线：拿鱼就是转移，机制层不问动机也不问归属（2026-09-11 拍）。 */
+/** 一局服务器鱼容器模块；它是鱼容器数组、捕获创建、转移与消费的唯一写入口。 */
 UCLASS()
 class CATFISHING_API UCatFishContainerService : public UWorldSubsystem
 {
@@ -59,11 +58,11 @@ public:
 	/** 只读查询直接吃鱼请求是否已有鱼容器终态；命中前校验鱼实例签名，不命中时不读取或修改容器。 */
 	bool TryReplayFishConsumeTerminal(const FCatFishConsumeCommand& Command, FCatFishConsumeResult& OutResult) const;
 
-	/** Host teardown 关闭容器写口；容器里没有可逆的中间态事务，关门之后没有要收口的东西。 */
+	/** Host teardown 关闭容器写口。 */
 	void CloseCommandsFromAuthority();
 
 private:
-	/** 单容器服务器记录；公开快照含容量和槽位事实。 */
+	/** 单容器服务器记录；公开快照包含容量和槽位事实。 */
 	struct FContainerRecord
 	{
 		/** 当前提交后的公开鱼槽数组、容量与快照序号。 */

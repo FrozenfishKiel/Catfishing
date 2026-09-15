@@ -1,6 +1,6 @@
 #include "Character/CatCharacterDefinition.h"
 
-// 就绪校验流程：与全局 CatAbilitySettings 初值同一套约束（搏斗两项为正），保证 DA 与回退路径语义一致。
+// 就绪校验流程：与全局 CatAbilitySettings 初值同一套搏斗约束，保证 DA 与回退路径语义一致。
 bool UCatCharacterDefinition::IsRuntimeDefinitionReady() const
 {
 	return bEnableRuntimeDefinition && !CatDefinitionId.IsNone()

@@ -11,11 +11,6 @@ class CATFISHING_API UCatAbilitySystemComponent : public UAbilitySystemComponent
 	GENERATED_BODY()
 
 public:
-	/** 食用提交后的限时效果接收端：同鱼种刷新同一 GE，异鱼并存。 */
-	bool ApplyFishTimedEffectFromAuthority(const class UCatFishDefinition* Fish, FGuid RequestId);
-	/** 只有食用调用方使用成长倍率；祝福保留其独立入口与时长。 */
-	double ResolveEatingEffectDuration(double BaseSeconds) const;
-
 	/** 从任意 Actor 解析项目 ASC；调用方只拿到 Cat ASC 能力面，不需要知道当前身体类如何实现 AbilitySystemInterface。 */
 	static UCatAbilitySystemComponent* FindCatAbilitySystemFromActor(AActor* Actor);
 
@@ -83,23 +78,18 @@ public:
 	/** authority 增减黄色体力护盾段；负向扣盾夹到 0，正向无上限（数值成长页 §4）。 */
 	bool ApplyYellowFightStaminaDelta(float Delta);
 
-	/** 翻天时把黄色体力整段清零；过夜清空是这段护盾的唯一自然终点。 */
+
+	/** authority 清空当天黄色体力；清晨流程调用，不改变绿色体力。 */
 	bool ClearYellowFightStaminaFromAuthority();
 
-	/** 读取当前黄色体力存量；主动查看面板与体力条黄段渲染都读这一份。 */
+	/** 读取当前黄色储备；HUD 与搏斗结算共用属性快照。 */
 	float GetYellowFightStamina() const;
 
-	/** 可出力、可扣费的总体力（点）＝绿段＋黄段；不改变两段的属性或写入契约。 */
+	/** 返回绿色与黄色当前体力之和，供搏斗判断实际可支付额度。 */
 	double GetTotalFightStamina() const;
-	/** 当前总容量（点）＝绿段恢复上限＋当前黄段；黄色不会自然恢复，不是新的持久化上限。 */
-	double GetTotalFightStaminaCapacity() const;
 
-	/*
-	 * 墓碑（2026-09-12）：这里原有 ApplyPoisonDelta / IsPoisonAtLeast 两个写读口，
-	 * 服务的是「跨鱼累加 Poison、到阈值倒地、休息/草药按点数清毒」的渐进中毒模型。
-	 * 09-12 裁决把中毒改成按鱼各配、无渐进升级（最重一档＝吃下即倒地），倒地与解除都变成布尔事实，
-	 * 由 CatConditionComponent 直接裁决，这两个口连同 Poison 属性一起删除。
-	 */
+	/** 返回绿色上限加当前黄色储备，供 HUD 展示当前总容量。 */
+	double GetTotalFightStaminaCapacity() const;
 
 	/** 清理 ActorInfo 前先清输入状态；防止无占有期间失效输入句柄继续激活 Ability。 */
 	virtual void ClearActorInfo() override;
@@ -112,9 +102,6 @@ protected:
 	virtual void OnRemoveAbility(FGameplayAbilitySpec& AbilitySpec) override;
 
 private:
-	// 仅 authority 的鱼种到活跃 GE 索引；时长、复制、到期由 GAS 唯一持有，不跨局保存。
-	TMap<FName, FActiveGameplayEffectHandle> FishTimedEffectHandles;
-
 	/** 输入标签到 Ability Spec 的索引；PlayerController 只提交标签，具体 Ability 由此处解析。 */
 	TMap<FGameplayTag, TArray<FGameplayAbilitySpecHandle>> SpecHandlesByInputTag;
 

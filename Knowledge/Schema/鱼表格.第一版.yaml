@@ -52,7 +52,7 @@ field_groups:
     owner: Interface（张佳）
     columns: [特点, 图鉴描述, 吃鱼效果, 限时Buff, 持续时间, 鱼刚咬饵时鱼漂的变化, 鱼刚咬饵时水面的变化, 与猫搏斗时鱼的动作变化, 与猫搏斗时水面的变化]
     reads: [{source: feishu-sheet, locator: 第一版!各列, version: sheet-revision}]
-    resolution: 自由文本，程序不解析；其中 吃鱼效果/限时Buff/持续时间 三列当前是「人翻译成 FoodSafety 与 buff 资产」，这是缺口，见 columns 里的 gap
+    resolution: 自由文本，程序不解析；当前运行版仅接经验系数对应的成长，食用中毒和限时效果已退役；投掷效果另由 ThrowEffect 承接
   - id: bindings
     owner: 工程（技术维护者）
     columns: []                       # 表里没有这些列，全在资产里
@@ -82,8 +82,7 @@ columns:
     owner: Framework
     type: text
     publish: excluded
-    gap: 代码用 FoodSafety（Unset/Safe/SevereToxic/Inedible）+ EatingTimedEffect + EatingExperiencePerKilogram 表达，全靠人从这列翻译；
-      不可食用档 2026-09-12 已加（咸鱼、巨影走 Inedible，经验系数与 YellowStaminaGrant 都必须为 0）；本列里的投掷规格另落 ThrowEffect，两者是两件事
+    note_runtime: 当前运行版仅保留 EatingExperiencePerKilogram 成长，正收益才允许食用；食用安全、中毒与限时效果不发布。本列投掷规格另落 ThrowEffect
   - name: 出现地点
     classification: declarative
     type: enum
@@ -144,7 +143,7 @@ columns:
     owner: Framework
     type: text
     publish: excluded
-    gap: buff 定义在吃鱼效果页与代码 buff 资产，本列只是快照文案；缺一列 buff_id
+    note_runtime: 当前运行版不接食用限时效果；保留设计列原文，不生成 buff 资产
   - name: 持续时间
     classification: declarative
     type: number
@@ -152,7 +151,7 @@ columns:
     format: "N秒"
     optional: true                    # 一次性 buff 与无 buff 的鱼留空；写「无」算填错，统一留空
     publish: excluded
-    gap: 与 限时Buff 同一缺口，随 buff_id 一起发布
+    note_runtime: 食用限时效果已退出当前运行版，此列不发布
   - name: 经验系数
     classification: declarative
     type: number
@@ -234,16 +233,9 @@ columns:
 # 代码有、表里没有的字段：谁定值、要不要在表里加列
 code_only_fields:
   FightBodyGeometry: 鱼体几何，独立于数值表；Scripts/calibrate_fish_body_geometry.py 沿 PresentationDefinition 的参考 Mesh 与 EncounterTransform 标定静态嘴点、近似质心、缩放原点和偏航回转半径，Actor 局部厘米、VisualScale=1，运行时按本场比例缩放；数值表迁移不写本字段
-  YellowStaminaGrant: 逐鱼食用的一次性黄色体力赠送，单位点；不可食用鱼必须为0，现有四鱼赠送资产保持，本轮不重复迁移
   FishDefinitionId: 资产内部稳定 ID（RiverPatternFish／Loach／StinkyFish…），代码一律按它查表，配置里的 BasePool 等清单也用它。表里 fish_id 列装的是资产文件名（Fish_RiverPattern），两者不同名，迁移脚本必须做映射。2026-09-14 发现：往 BasePool 填包名会抽不出鱼。2026-09-15 按用户保留建议固定保留内部ID，迁移报告输出文件名映射
-  bEatingTimedEffectConfigured: 属主确认食用限时 GE 绑定的显式标记；False 为迁移缺口，True 且空 GE 表示确认无效果
-  EatingTimedEffect: T02 每鱼独立限时 GameplayEffect 类，Condition 进食提交后由 ASC 应用；同鱼刷新、异鱼并存；正式 GE/GameplayCue 绑定待钱成澔与张佳
-  EatingTimedEffectDurationSeconds: T02 食用 GE 基础秒数，应用时乘成长时长倍率；不覆盖猫神祝福，正式绑定未迁移
-  FishStrength: 已 Deprecated；输入包仍列为必填字段，说明输入包晚于 D-20/D-21 的改动，重生成时要去掉
-  FoodSafety: Unset/Safe/Toxic/Inedible 四档，由 吃鱼效果 文案人工翻译；不可食用档 2026-09-12 已加
   ThrowEffect: 逐鱼投掷效果（Kind/半径/时长/ReactionMontage），由 吃鱼效果 列里写成投掷规格的那两行人工翻译（咸鱼击退炸毛、臭臭鱼驱散）；半径与时长未裁、正式猫反应 Montage 未绑定；CatFishPickupActor 命中后接 CatFishThrowEffectActor，缺配拒绝并 Warning
   BodyClass: 由 名字 是否为湖心巨影推出（Standard/Giant）；可不加列
-  SacrificeContribution: 设计按实际体重档取（参数页供奉值行），不该是定额字段；对表已列为待办
   CaptureImprintEventId: 印记触发清单归印记册，不进鱼表
   SpawnWeight: 仅保留旧反射载荷，2026-09-15 已退出选择器和就绪门；二进制外部引用未穷举，暂不删字段
   TimeOfDay: T23 逐鱼时段数据待张佳；开关 D-31 保持关闭，开启后空数组拒绝并 Warning，基础池同样遵循
@@ -251,7 +243,6 @@ code_only_fields:
   MinimumFightParticipants: 设计「单人局不出需要多人的鱼」，巨影=多人；可由 BodyClass 推出
   BitePersonalityId: T10 退为旧资产反射兼容；生产三窗口不再读取 Bite 模板，正式资产待终版统一迁移
   FightPersonalityId: 四套 Fight_* 仍作为现有搏斗链及未填行为字段的测试兜底；D-30 与未审鱼行为页本轮不切换
-  PoisonIncrease: 从 吃鱼效果 文案人工翻译；缺结构化列
   bTankDisplayEligible: 工程开关
   bEnableRuntimeDefinition: 工程开关
   Thumbnail: 资产绑定
@@ -270,4 +261,4 @@ runtime_migration_receiver:
   applied: 两步选类/饵倍率抽鱼、16鱼K/体力/经验/行为数值/窗口/四档稀有度已迁移
   data_migrator: Scripts/migrate_fish_design_data.py
   verification: Saved/FishAlignment/fish-data-verified.json
-  deferred: D-31 时段天气开启节点、未审鱼行为、正式GE和投掷资源仍待交付
+  deferred: D-31 时段天气开启节点、未审鱼行为和投掷资源仍待交付；食用限时GE不属于当前运行版

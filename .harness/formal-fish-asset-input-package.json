@@ -67,8 +67,8 @@
       "doc_token": "KH9bdBX6QoOMxRxo23KcyMQFnxb",
       "revision": 43,
       "updated_at_utc": "2026-08-21T07:52:17Z",
-      "available_fact": "Effect families, yellow stamina, poison, no-effect fish, giant sacrifice blessing, and reconciliation notes are documented.",
-      "agent_decision": "Codex mapped puffer, electric eel, and pike to Toxic fish definitions with positive PoisonIncrease, and kept non-toxic rows Safe with midpoint experience values. Special buff presentation/effect execution remains owned by the non-fish content package."
+      "available_fact": "Effect families, yellow stamina, poison, no-effect fish, giant sacrifice blessing, and reconciliation notes were documented in the historical source read.",
+      "agent_decision": "Historical 2026-08-25 asset generation mapped puffer, electric eel, and pike to Toxic fish definitions with positive PoisonIncrease, and kept non-toxic rows Safe with midpoint experience values. The 2026-09-14 user decision supersedes that poison/FoodSafety requirement for current gates: fish assets now only need EatingExperience for the retained growth path; special buff presentation/effect execution remains owned by the non-fish content package."
     },
     "art_resource_sheet": {
       "kind": "lark_sheet",
@@ -96,7 +96,6 @@
     "FightPersonalityId",
     "ChumPreference",
     "BaitWeightMultipliers",
-    "FoodSafety",
     "EatingExperiencePerKilogram",
     "bTankDisplayEligible",
     "bEnableRuntimeDefinition",
@@ -139,7 +138,7 @@
     "FishStrength uses the fish table's maximum weight multiplied by strength coefficient K.",
     "TimeOfDay and Weather are intentionally broad for this provisional table so the current lake runtime can select every fish in normal daytime weather states.",
     "StinkyFish uses SacrificeContribution=1 instead of the design note -1 because UCatFishDefinition::IsRuntimeDefinitionReady currently rejects non-positive sacrifice values.",
-    "LakeGiantShadow uses Safe/EatingExperience=1 with bTankDisplayEligible=false because the current FoodSafety enum has no NonEdible value; its actual giant blessing/effect remains a later presentation/effect-content concern.",
+    "Historical generated assets used Safe/EatingExperience=1 for LakeGiantShadow because the then-current FoodSafety enum had no NonEdible value. After the 2026-09-14 user decision, FoodSafety and poison fields are not current required fields; its actual giant blessing/effect remains a later presentation/effect-content concern.",
     "CaptureImprintEventId stays None for all generated fish so data readiness does not invent missing imprint event assets."
   ],
   "evidence": {
@@ -271,6 +270,49 @@
         "Content/Catfishing/Data/Fish/Fish_ElectricEel.uasset": "f9ee8f5c6d5c147eb8fd838af02a91f44bf623f39c4e2473a8af4eca02c9d041",
         "Content/Catfishing/Data/Fish/Fish_Pike.uasset": "064df34bfdea4a2e0ed539434302cb95f22dfc1504c8570430056abf346960d0"
       }
+    },
+    {
+      "date": "2026-09-15",
+      "scope": "Merge remote retired fish fields while preserving every existing reflected property, formal numeric data, body geometry and references",
+      "script": "Scripts/migrate_fish_retired_fields.py",
+      "verification": "Saved/FishRetiredFields/reloaded/report.json",
+      "before_asset_sha256": {
+        "Content/Catfishing/Data/Fish/Fish_RiverPattern.uasset": "6ab62e6898092512c05b1f7187d6e90f7e5ecf5d95e9d59f095535391162fa16",
+        "Content/Catfishing/Data/Fish/Fish_LittleSilver.uasset": "91e924a2e725609ddbbbbd3c773e9fdd5a92fe59802d17db066e8c59d37ee796",
+        "Content/Catfishing/Data/Fish/Fish_LittleColor.uasset": "998308308367e0eaff4c762a10b4d456d8364b6300593b2cfde3bb7dbd247d0c",
+        "Content/Catfishing/Data/Fish/Fish_ForestLongtail.uasset": "6428a2260194c1fbc54eedf8370b248098e157391c5ac9adadbf39c0a6ee9281",
+        "Content/Catfishing/Data/Fish/Fish_SilvermoonTrout.uasset": "dbe9e63ca341cd36b8e7944f7706c44ce5b22a0bdd7a62a6c917405d7ebc9f3f",
+        "Content/Catfishing/Data/Fish/Fish_LakeGiantShadow.uasset": "cd93ffee98d120280e4bfde7fdddaf8c561d799b6fa2f9ef96e09d5aaa97444e",
+        "Content/Catfishing/Data/Fish/Fish_Petal.uasset": "88ef16ef9fd9833a33449be70e31634f40a578f6a36736d8001e5d43961e0b71",
+        "Content/Catfishing/Data/Fish/Fish_Windbell.uasset": "b52338207c6012578d1c03bff548072b498f460d3cf1e91d8c85c794f54f6c7e",
+        "Content/Catfishing/Data/Fish/Fish_Salted.uasset": "86cd08610c41b85a1fbf548906521523009e7fde79f07f9ebb6e88cee5f26232",
+        "Content/Catfishing/Data/Fish/Fish_Stinky.uasset": "ee46f0159dd8622cc551b65395a94504b89ae85fb287e25f5939bc2df385d1ed",
+        "Content/Catfishing/Data/Fish/Fish_Blackfish.uasset": "13030cccb704a3c8f6c3bcc87c02f0ac0da4cdd5f45a1aa14c4e0acf52cc9029",
+        "Content/Catfishing/Data/Fish/Fish_Loach.uasset": "87f57b5a9211b14941268697efbc6a4d7b9e53950e9e571af99b9559469be927",
+        "Content/Catfishing/Data/Fish/Fish_EstuaryBass.uasset": "f62f3988c739fec438f7b7c3fe7223de6a9d7c48a988adf6d437dbee4ffc3f81",
+        "Content/Catfishing/Data/Fish/Fish_Puffer.uasset": "bd0e09db5193eef2de3431b7129663aeca702976499e7161d80d9f5ba07456a1",
+        "Content/Catfishing/Data/Fish/Fish_ElectricEel.uasset": "f9ee8f5c6d5c147eb8fd838af02a91f44bf623f39c4e2473a8af4eca02c9d041",
+        "Content/Catfishing/Data/Fish/Fish_Pike.uasset": "064df34bfdea4a2e0ed539434302cb95f22dfc1504c8570430056abf346960d0"
+      },
+      "asset_sha256": {
+        "Content/Catfishing/Data/Fish/Fish_RiverPattern.uasset": "6dc15faaa8d8b59cde641db6251834ac2639cfd25e5e953322ce107aa9c8354e",
+        "Content/Catfishing/Data/Fish/Fish_LittleSilver.uasset": "1417e2a15486ee5c1a7fd7f806932bba68dd0501e40be59bf90088351bdd1fa5",
+        "Content/Catfishing/Data/Fish/Fish_LittleColor.uasset": "00a291056fc43d64d203e13c1acbbf35fe235a905f3aa9f2216137aa54ba5953",
+        "Content/Catfishing/Data/Fish/Fish_ForestLongtail.uasset": "2216d3a7873924ed2964df57d1de04d8f9067d29dc73d170204c023c624a72f3",
+        "Content/Catfishing/Data/Fish/Fish_SilvermoonTrout.uasset": "0d801dc34c38eab1ae6bbe73d5e6229c6776f0b583520f0b68d2028eeaafd49e",
+        "Content/Catfishing/Data/Fish/Fish_LakeGiantShadow.uasset": "fb15cc8fcef7c0f726aa5fcb123e5c2446cf033edfcb18ad957a7a10a0621a82",
+        "Content/Catfishing/Data/Fish/Fish_Petal.uasset": "b12eb5e15a61d983baff7223a44cdceed255e672c2214bd3089032ef425e3432",
+        "Content/Catfishing/Data/Fish/Fish_Windbell.uasset": "ae17b7c1e3c42e2d4767c77708d6d103a13dde44ac8ec597437f1555d9a817c3",
+        "Content/Catfishing/Data/Fish/Fish_Salted.uasset": "c321a7875db93e81fcb2215c41c228dc047129d3a2269293c89904199de46526",
+        "Content/Catfishing/Data/Fish/Fish_Stinky.uasset": "aa1ad0b0de02a91665ad496bdaaba0fa36d89d4e0f17efbb1e16720dc0dabb73",
+        "Content/Catfishing/Data/Fish/Fish_Blackfish.uasset": "c5e71ca65fd0fdb9cb9e23e44954efadfd332c45a75dfc3a49d038e8e2d0643b",
+        "Content/Catfishing/Data/Fish/Fish_Loach.uasset": "299b1f0edbd2c221eb873653d8382b49aa32b3f3bf5c900da7c1c2cb53dec6ac",
+        "Content/Catfishing/Data/Fish/Fish_EstuaryBass.uasset": "6e21fb312b1b3dc764e6f484b6a7cf48a11f65410a8d37c4da71d19ae4c5cedb",
+        "Content/Catfishing/Data/Fish/Fish_Puffer.uasset": "d94e56f4eb1d594643f1ef00c5e46d594e0bd890459935fa7133a2b1633d675e",
+        "Content/Catfishing/Data/Fish/Fish_ElectricEel.uasset": "d401184550a85b3e618bd7152f0a2224b27d42671a02fd3bd9dd7ef0569ac5d9",
+        "Content/Catfishing/Data/Fish/Fish_Pike.uasset": "ef776c72b7ae5fbfd237e8a6b90ebc79e47a517738939eaf6c06c36b4b0c748d"
+      }
     }
-  ]
+  ],
+  "merge_contract_notice": "2026-09-15: preserve the numeric and body-geometry migration snapshots; merge the remote retirement of food safety, poison, timed eating effects and yellow-stamina grants. EatingExperiencePerKilogram is retained. Historical source notes are not current authoring requirements."
 }

@@ -6,13 +6,13 @@
 #include "ShopEconomy/Catalog/CatShopCatalogTypes.h"
 #include "CatShopTradingTypes.generated.h"
 
-/** 团队公款复制/查询快照；当前只在服务器服务内维护，UI 接线后可用它做只读展示。 */
+/** 团队公款的只读查询快照；经济服务从权威余额和事务版本构造，供交易回执和公开经济投影读取。 */
 USTRUCT(BlueprintType)
 struct FCatShopWalletSnapshot
 {
 	GENERATED_BODY()
 
-	/** 公款聚合版本；每次余额改变递增，购买和售鱼命令以它做并发前提。 */
+	/** 团队余额的事务版本；经济服务在余额改变后递增，回执和公开投影读取它标识余额快照，不作为购买或售鱼的并发前提。 */
 	UPROPERTY(BlueprintReadOnly)
 	int64 Revision = 0;
 
@@ -82,7 +82,7 @@ struct FCatShopTransactionRecord
 	UPROPERTY(BlueprintReadOnly)
 	FString StableNetId;
 
-	/** 这条记录是否来自购物车购买；交付确认只接受购买记录，由交易来源判断业务分支。 */
+	/** 这条记录是否来自已入库的购物车购买；公开流水据此选择购买展示，不用于再次发货。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bPurchase = false;
 
@@ -98,11 +98,11 @@ struct FCatShopTransactionRecord
 	UPROPERTY(BlueprintReadOnly)
 	FGuid ShopInventoryId;
 
-	/** 订单要交付的下游定义；售鱼可保持 None。 */
+	/** 本次购买实际入库的物品定义；经济服务写入供查询，售鱼保持 None。 */
 	UPROPERTY(BlueprintReadOnly)
 	FName DefinitionId = NAME_None;
 
-	/** 本订单成功后应发放给目标库存的数量；货架库存只扣一单，目标库存按这个数量接收入库。 */
+	/** 本次购买实际入库的物品件数；服务按单份数量乘以选购次数写入，展示和审计读取它。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 PurchaseQuantity = 0;
 

@@ -17,7 +17,6 @@
 #include "Fishing/Simulation/CatFishingFightRunner.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
-#include "GameplayEffect.h"
 #include "TimerManager.h"
 #include "UI/CatFishingViewTypes.h"
 
@@ -160,65 +159,9 @@ bool FCatGrowthRuntimeConsumersTest::RunTest(const FString&)
 	const auto ReducedWear = FCatFishingFightSimulator::Step(Runner->Config, WearState, Constraint, FVector::ForwardVector);
 	TestTrue(TEXT("连续磨损两次模拟都实际发生磨损"), OriginalWear.bSucceeded && ReducedWear.bSucceeded && OriginalWear.RodWearDelta > 0.0);
 	TestTrue(TEXT("成长减免真正改变连续扣费量"), FMath::IsNearlyEqual(ReducedWear.RodWearDelta, OriginalWear.RodWearDelta * 0.9, 0.000001));
-	Pick(ECatGrowthOptionId::BuffDuration);
-	TestEqual(TEXT("时长读取已叠账本"), ASC->ResolveEatingEffectDuration(60.0), 90.0);
-	Pick(ECatGrowthOptionId::BuffDuration);
-	TestEqual(TEXT("时长加算封顶两倍"), ASC->ResolveEatingEffectDuration(60.0), 120.0);
-	// 将正式选择产生的两档时长实际交给 GAS，核对活动效果秒数，不只检查倍率函数。
-	UGameplayEffect* GE = GetMutableDefault<UGameplayEffect>();
-	TGuardValue<EGameplayEffectDurationType> Policy(GE->DurationPolicy, EGameplayEffectDurationType::HasDuration);
-	TGuardValue<FGameplayEffectModifierMagnitude> Duration(GE->DurationMagnitude, FGameplayEffectModifierMagnitude(FScalableFloat(60.0f)));
-	auto* BuffFish = NewObject<UCatFishDefinition>();
-	BuffFish->FishDefinitionId = TEXT("TestGrowthBuffFish");
-	BuffFish->bEatingTimedEffectConfigured = true;
-	BuffFish->EatingTimedEffect = UGameplayEffect::StaticClass();
-	BuffFish->EatingTimedEffectDurationSeconds = 60.0;
-	TestTrue(TEXT("成长后食用效果实际进入 GAS"), ASC->ApplyFishTimedEffectFromAuthority(BuffFish, FGuid::NewGuid()));
-	int32 AppliedFishEffects = 0;
-	for (const auto Handle : ASC->GetActiveEffects(FGameplayEffectQuery()))
-	{
-		const auto* Active = ASC->GetActiveGameplayEffect(Handle);
-		if (Active && Active->Spec.Def == GE)
-		{
-			++AppliedFishEffects;
-			TestEqual(TEXT("活动 GE 消费成长后持续 120 秒"), Active->GetDuration(), 120.0f);
-		}
-	}
-	TestEqual(TEXT("实际时长消费者只产生一个实例"), AppliedFishEffects, 1);
 	World->GetTimerManager().ClearTimer(Session->ProbeTimerHandle);
 	World->GetTimerManager().ClearAllTimersForObject(Session);
 	return !HasAnyErrors();
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishTimedEffectRuntimeTest,
-	"Catfishing.Unit.AbilitySystem.FishDurationRefreshesWithoutStackingAndLeavesOtherEffects",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
-
-bool FCatFishTimedEffectRuntimeTest::RunTest(const FString&)
-{
-	FTestWorldWrapper Wrapper;
-	if (!Wrapper.CreateTestWorld(EWorldType::Game)) return false;
-	auto* Cat = Wrapper.GetTestWorld()->SpawnActor<ACatCharacter>();
-	auto* ASC = Cat->GetCatAbilitySystemComponent();
-	ASC->InitAbilityActorInfo(Cat, Cat);
-	UGameplayEffect* GE = GetMutableDefault<UGameplayEffect>();
-	TGuardValue<EGameplayEffectDurationType> Policy(GE->DurationPolicy, EGameplayEffectDurationType::HasDuration);
-	TGuardValue<FGameplayEffectModifierMagnitude> Duration(GE->DurationMagnitude, FGameplayEffectModifierMagnitude(FScalableFloat(60.0f)));
-	FGameplayEffectSpec Blessing(GE, ASC->MakeEffectContext(), 1.0f);
-	Blessing.SetDuration(600.0f, true);
-	const auto BlessingHandle = ASC->ApplyGameplayEffectSpecToSelf(Blessing);
-	auto* Fish = NewObject<UCatFishDefinition>();
-	Fish->FishDefinitionId = TEXT("TestFishA");
-	Fish->bEatingTimedEffectConfigured = true;
-	Fish->EatingTimedEffect = UGameplayEffect::StaticClass();
-	Fish->EatingTimedEffectDurationSeconds = 60.0;
-	TestTrue(TEXT("食用 GE 实际施加"), ASC->ApplyFishTimedEffectFromAuthority(Fish, FGuid::NewGuid()));
-	TestTrue(TEXT("同种刷新成功"), ASC->ApplyFishTimedEffectFromAuthority(Fish, FGuid::NewGuid()));
-	TestEqual(TEXT("同种刷新不叠数值实例"), ASC->GetActiveEffects(FGameplayEffectQuery()).Num(), 2);
-	Fish->FishDefinitionId = TEXT("TestFishB");
-	TestTrue(TEXT("异种效果独立并存"), ASC->ApplyFishTimedEffectFromAuthority(Fish, FGuid::NewGuid()));
-	TestEqual(TEXT("两条鱼和祝福共三份效果"), ASC->GetActiveEffects(FGameplayEffectQuery()).Num(), 3);
-	TestEqual(TEXT("食用刷新未延长祝福"), ASC->GetActiveGameplayEffect(BlessingHandle)->GetDuration(), 600.0f);
-	return !HasAnyErrors();
-}
 #endif

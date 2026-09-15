@@ -278,8 +278,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatInventoryReleaseStackTest,
 	"Catfishing.Runtime.Inventory.WorldActions.DropPlaceStackIdentityAndReplay",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-// 堆叠落地回归：给真实背包五件普通物，丢两件后读取世界载荷的新GUID，再把剩余三件整体放置并核对原GUID。
-// 同时读取真实刚体状态与请求重放；拾回后检查原 Actor 引用和尺寸，再验证数量合并、部分丢弃和原物再次拾取。
+// 堆叠落地回归：给真实背包五件普通物，批量丢两件后读取两个 qty=1 载体的独立 GUID 和分散位置，再把剩余三件整体放置并核对原 GUID。
+// 同时读取真实刚体状态与请求重放；拾回后检查原 Actor 引用和尺寸，再验证数量合并、部分丢弃、整堆 Drop 保留首件身份及原物再次拾取。
 bool FCatInventoryReleaseStackTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -303,32 +303,42 @@ bool FCatInventoryReleaseStackTest::RunTest(const FString& Parameters)
 		Character, DropRequest, Character, Slot, OriginalId, 2, ECatInventoryWorldAction::Drop).bCommitted)) return false;
 	TestEqual(TEXT("原堆剩余三件"), Inventory->GetInventoryEntryAtSlot(Slot)->StackCount, 3);
 	TestTrue(TEXT("部分扣量保留原库存实例"), Inventory->GetInventoryEntryAtSlot(Slot)->Instance == Original);
-	ACatItem* Dropped = nullptr;
-	int32 PickupCount = 0;
+	TArray<ACatItem*> DroppedActors;
 	for (TActorIterator<ACatItem> It(World); It; ++It)
 	{
-		if (!It->IsActorBeingDestroyed()) { Dropped = *It; ++PickupCount; }
+		if (!It->IsActorBeingDestroyed()) DroppedActors.Add(*It);
 	}
-	if (!TestEqual(TEXT("仅生成一个世界载体"), PickupCount, 1) || !Dropped) return false;
-	const FCatInventoryReceiveBatch DroppedBatch = Dropped->GetPickupInventory();
-	if (!TestEqual(TEXT("落地保持实例批次"), DroppedBatch.InstanceEntries.Num(), 1)) return false;
-	UCatInventoryItemInstance* Split = DroppedBatch.InstanceEntries[0].ItemInstance;
-	if (!TestNotNull(TEXT("世界堆叠持有运行实例"), Split)) return false;
-	TestEqual(TEXT("世界载荷两件"), DroppedBatch.InstanceEntries[0].Count, 2);
-	TestTrue(TEXT("部分堆叠获得新有效GUID"), Split->GetItemInstanceId().IsValid() && Split->GetItemInstanceId() != OriginalId);
-	TestTrue(TEXT("拆分保留定义和世界归属"), Split->GetItemDefinition() == Definition.Get() && Split->GetRuntimeOwnerActor() == Dropped);
-	UPrimitiveComponent* DropBody = Cast<UPrimitiveComponent>(Dropped->GetRootComponent());
-	TestTrue(TEXT("Drop开启真实模拟"), DropBody && DropBody->IsSimulatingPhysics());
+	if (!TestEqual(TEXT("批量Drop生成两个世界载体"), DroppedActors.Num(), 2)) return false;
+	TSet<FGuid> DroppedIds;
+	FVector FirstDropLocation = FVector::ZeroVector;
+	for (int32 Index = 0; Index < DroppedActors.Num(); ++Index)
+	{
+		ACatItem* Dropped = DroppedActors[Index];
+		const FCatInventoryReceiveBatch DroppedBatch = Dropped->GetPickupInventory();
+		if (!TestEqual(TEXT("每个世界载体只保留一项实例批次"), DroppedBatch.InstanceEntries.Num(), 1)) return false;
+		UCatInventoryItemInstance* Split = DroppedBatch.InstanceEntries[0].ItemInstance;
+		if (!TestNotNull(TEXT("每个世界载体持有运行实例"), Split)) return false;
+		TestEqual(TEXT("每个批量Drop载体数量为一"), DroppedBatch.InstanceEntries[0].Count, 1);
+		TestTrue(TEXT("部分堆叠的每个落地件获得新有效GUID"), Split->GetItemInstanceId().IsValid() && Split->GetItemInstanceId() != OriginalId);
+		DroppedIds.Add(Split->GetItemInstanceId());
+		TestTrue(TEXT("拆分保留定义和世界归属"), Split->GetItemDefinition() == Definition.Get() && Split->GetRuntimeOwnerActor() == Dropped);
+		UPrimitiveComponent* DropBody = Cast<UPrimitiveComponent>(Dropped->GetRootComponent());
+		TestTrue(TEXT("每个Drop开启真实模拟"), DropBody && DropBody->IsSimulatingPhysics());
+		if (Index == 0) FirstDropLocation = Dropped->GetActorLocation();
+		else TestFalse(TEXT("批量Drop的载体有分散位置"), Dropped->GetActorLocation().Equals(FirstDropLocation, 1.0));
+	}
+	TestEqual(TEXT("批量Drop的两件具有独立实例GUID"), DroppedIds.Num(), 2);
 	TestTrue(TEXT("同请求重放返回首次成功"), UCatInventoryStatics::ReleaseItemToWorldFromAuthority(
-		Character, DropRequest, Character, Slot, OriginalId, 2, ECatInventoryWorldAction::Drop).bCommitted);
+		Character, DropRequest, Character, Slot, OriginalId, 2, ECatInventoryWorldAction::Drop).bReplayedTerminalCommitted);
 	TestEqual(TEXT("重放不再扣量"), Inventory->GetInventoryEntryAtSlot(Slot)->StackCount, 3);
 	TestEqual(TEXT("同RequestId改变数量拒绝"), UCatInventoryStatics::ReleaseItemToWorldFromAuthority(
 		Character, DropRequest, Character, Slot, OriginalId, 1, ECatInventoryWorldAction::Drop).Error, ECatDomainCommandError::InvalidPayload);
-	PickupCount = 0;
+	int32 PickupCount = 0;
 	for (TActorIterator<ACatItem> It(World); It; ++It) if (!It->IsActorBeingDestroyed()) ++PickupCount;
-	TestEqual(TEXT("重放和换载荷没有额外生成载体"), PickupCount, 1);
+	TestEqual(TEXT("重放和换载荷没有额外生成载体"), PickupCount, 2);
 	// 将已验证的丢弃物移出放置查询区，避免另一件合法世界物阻挡本用例的地面支撑。
-	Dropped->SetActorLocation(FVector(1000, 1000, 300), false, nullptr, ETeleportType::TeleportPhysics);
+	for (ACatItem* Dropped : DroppedActors)
+		Dropped->SetActorLocation(FVector(1000, 1000, 300), false, nullptr, ETeleportType::TeleportPhysics);
 	const FGuid PlaceRequest = FGuid::NewGuid();
 	if (!TestTrue(TEXT("剩余整堆放置成功"), UCatInventoryStatics::ReleaseItemToWorldFromAuthority(
 		Character, PlaceRequest, Character, Slot, OriginalId, 3, ECatInventoryWorldAction::Place).bCommitted)) return false;
@@ -342,7 +352,7 @@ bool FCatInventoryReleaseStackTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Place固定而不模拟物理"), PlaceBody && !PlaceBody->IsSimulatingPhysics());
 	TestFalse(TEXT("放置不误入Use的held区"), Inventory->HasActiveHeldInventoryEntriesFromAuthority());
 	TestTrue(TEXT("整堆放置后空格仍可重放原请求"), UCatInventoryStatics::ReleaseItemToWorldFromAuthority(
-		Character, PlaceRequest, Character, Slot, OriginalId, 3, ECatInventoryWorldAction::Place).bCommitted);
+		Character, PlaceRequest, Character, Slot, OriginalId, 3, ECatInventoryWorldAction::Place).bReplayedTerminalCommitted);
 	const FVector OriginalScale(1.3, 1.1, 0.8);
 	Placed->SetActorScale3D(OriginalScale);
 	if (!TestTrue(TEXT("真实交互拾回整堆"), Placed->Interact_Implementation(Controller, FGuid::NewGuid()))) return false;
@@ -367,6 +377,31 @@ bool FCatInventoryReleaseStackTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("原Actor载荷更新为当前数量"), Placed->GetPickupInventory().InstanceEntries[0].Count, 4);
 	TestTrue(TEXT("原Actor重新开放拾取"), Placed->Interact_Implementation(Controller, FGuid::NewGuid()));
 	TestEqual(TEXT("再次拾取不恢复旧数量"), Inventory->CountVisibleInventoryQuantityByDefinitionId(Definition->GetInventoryDefinitionId()), 4);
+	const int32 WholeDropSlot = Inventory->FindInventorySlotIndexFromInstanceId(OriginalId);
+	if (!TestTrue(TEXT("整堆Drop前可从原GUID定位库存来源"), WholeDropSlot != INDEX_NONE)) return false;
+	const FGuid WholeDropRequest = FGuid::NewGuid();
+	if (!TestTrue(TEXT("四件整堆Drop成功"), Inventory->ReleaseItemToWorldFromAuthority(Character,
+		WholeDropRequest, WholeDropSlot, OriginalId, 4, ECatInventoryWorldAction::Drop).bCommitted)) return false;
+	TestFalse(TEXT("整堆Drop后原格为空"), Inventory->HasItemAtSlot(WholeDropSlot));
+	ACatItem* WholeDropOriginalCarrier = FindPickup(*World, OriginalId);
+	if (!TestTrue(TEXT("整堆Drop首件保留原GUID"), WholeDropOriginalCarrier && WholeDropOriginalCarrier != Placed)) return false;
+	const FCatInventoryReceiveBatch WholeDropOriginalBatch = WholeDropOriginalCarrier->GetPickupInventory();
+	TestTrue(TEXT("整堆Drop首件载体只承接一件"), WholeDropOriginalBatch.InstanceEntries.Num() == 1
+		&& WholeDropOriginalBatch.InstanceEntries[0].Count == 1);
+	TestTrue(TEXT("整堆Drop成功后旧保管Actor已销毁"), Placed->IsActorBeingDestroyed());
+	int32 SingleQuantityWorldItems = 0;
+	for (TActorIterator<ACatItem> It(World); It; ++It)
+	{
+		if (It->IsActorBeingDestroyed()) continue;
+		const FCatInventoryReceiveBatch PickupBatch = It->GetPickupInventory();
+		if (PickupBatch.InstanceEntries.Num() == 1 && PickupBatch.InstanceEntries[0].ItemInstance
+			&& PickupBatch.InstanceEntries[0].ItemInstance->GetItemDefinition() == Definition.Get()
+			&& PickupBatch.InstanceEntries[0].Count == 1)
+		{
+			++SingleQuantityWorldItems;
+		}
+	}
+	TestEqual(TEXT("连续批量Drop的每个世界物均为单件载体"), SingleQuantityWorldItems, 7);
 	return !HasAnyErrors();
 }
 
@@ -403,6 +438,36 @@ bool FCatInventoryReleaseFailureTest::RunTest(const FString& Parameters)
 		Slot, FGuid::NewGuid(), 1, ECatInventoryWorldAction::Drop).Error, ECatDomainCommandError::InvalidPayload);
 	TestEqual(TEXT("非法动作拒绝"), Inventory->ReleaseItemToWorldFromAuthority(Character, FGuid::NewGuid(),
 		Slot, Id, 1, static_cast<ECatInventoryWorldAction>(255)).Error, ECatDomainCommandError::InvalidPayload);
+	// 先用同一生产求解器读取正常 Drop 的候选中心，再放置真实阻挡盒；批量请求必须在第一个候选失败时清理已准备载体且一次也不扣原堆。
+	ACatItem* DropProbe = World->SpawnActor<ACatItem>();
+	FTransform DropTransform;
+	if (!TestTrue(TEXT("批量回滚夹具能求出正常Drop候选"), DropProbe && UCatInventoryStatics::FindWorldReleaseTransform(
+		Character, DropProbe, ECatInventoryWorldAction::Drop, *GetDefault<UCatInventorySettings>(), DropTransform))) return false;
+	DropProbe->Destroy();
+	AActor* DropBlocker = World->SpawnActor<AActor>();
+	UBoxComponent* DropBlockerBody = DropBlocker ? NewObject<UBoxComponent>(DropBlocker) : nullptr;
+	if (!TestTrue(TEXT("创建批量Drop阻挡体"), DropBlocker && DropBlockerBody)) return false;
+	DropBlocker->SetRootComponent(DropBlockerBody);
+	DropBlocker->AddInstanceComponent(DropBlockerBody);
+	DropBlockerBody->SetBoxExtent(FVector(100.0, 100.0, 100.0));
+	DropBlockerBody->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	DropBlockerBody->SetCollisionObjectType(ECC_WorldDynamic);
+	DropBlockerBody->SetCollisionResponseToAllChannels(ECR_Block);
+	DropBlockerBody->SetWorldLocation(DropTransform.GetLocation());
+	DropBlockerBody->RegisterComponent();
+	const FGuid BlockedDropRequest = FGuid::NewGuid();
+	TestEqual(TEXT("被占用的批量Drop整单拒绝"), Inventory->ReleaseItemToWorldFromAuthority(Character, BlockedDropRequest,
+		Slot, Id, 2, ECatInventoryWorldAction::Drop).Error, ECatDomainCommandError::PermissionDenied);
+	TestEqual(TEXT("批量Drop预检失败不扣原堆"), Inventory->GetInventoryEntryAtSlot(Slot)->StackCount, 5);
+	int32 BatchFailurePickups = 0;
+	for (TActorIterator<ACatItem> It(World); It; ++It) if (!It->IsActorBeingDestroyed()) ++BatchFailurePickups;
+	TestEqual(TEXT("批量Drop预检失败清理全部新载体"), BatchFailurePickups, 0);
+	TestEqual(TEXT("失败请求重放复用原拒绝结果"), Inventory->ReleaseItemToWorldFromAuthority(Character, BlockedDropRequest,
+		Slot, Id, 2, ECatInventoryWorldAction::Drop).Error, ECatDomainCommandError::PermissionDenied);
+	int32 ReplayedFailurePickups = 0;
+	for (TActorIterator<ACatItem> It(World); It; ++It) if (!It->IsActorBeingDestroyed()) ++ReplayedFailurePickups;
+	TestEqual(TEXT("失败请求重放不再生成载体"), ReplayedFailurePickups, 0);
+	DropBlocker->Destroy();
 	TestEqual(TEXT("无地面无法放置"), Inventory->ReleaseItemToWorldFromAuthority(Character, FGuid::NewGuid(),
 		Slot, Id, 2, ECatInventoryWorldAction::Place).Error, ECatDomainCommandError::PermissionDenied);
 	TestTrue(TEXT("失败保留原对象与GUID"), Inventory->GetInventoryEntryAtSlot(Slot)->Instance == Original && Original->GetItemInstanceId() == Id);
@@ -476,12 +541,6 @@ bool FCatInventoryFishGuardRoundTripTest::RunTest(const FString& Parameters)
 	ACatfishingPlayerController* Controller = World->SpawnActor<ACatfishingPlayerController>();
 	ACatFishGuardActor* Guard = World->SpawnActor<ACatFishGuardActor>(FVector(100, 0, 100), FRotator::ZeroRotator);
 	if (!TestTrue(TEXT("鱼护及角色宿主就绪"), Character && Controller && Guard)) return false;
-	ACatfishingPlayerState* GuardPlayerState = World->SpawnActor<ACatfishingPlayerState>();
-	if (!TestNotNull(TEXT("持护并叼鱼所需正式玩家身份"), GuardPlayerState)) return false;
-	const FUniqueNetIdRef GuardPlayerId = FUniqueNetIdString::Create(TEXT("GuardWorldActions"), FName(TEXT("CAT_TEST")));
-	GuardPlayerState->SetUniqueId(FUniqueNetIdRepl(GuardPlayerId));
-	Controller->PlayerState = GuardPlayerState;
-	Character->SetPlayerState(GuardPlayerState);
 	Controller->Possess(Character);
 	const USkeletalMeshComponent* FormalMesh = CatClass->GetDefaultObject<ACatCharacter>()->GetMesh();
 	Character->GetMesh()->SetSkeletalMeshAsset(FormalMesh->GetSkeletalMeshAsset());
@@ -511,14 +570,11 @@ bool FCatInventoryFishGuardRoundTripTest::RunTest(const FString& Parameters)
 	}
 	const int32 Capacity = Inventory->GetInventorySlotCount();
 	if (!TestTrue(TEXT("正式背包有容量"), Capacity > 0)) return false;
-	// 墓碑（T24/T25，道具:64）：旧夹具以单鱼填背包；单鱼现只走嘴部，改用一格一道具填满，满包与内鱼保留断言不变。
-	UCatInventoryItemDefinition* Filler = NewObject<UCatInventoryItemDefinition>();
-	Filler->InventoryDefinitionId = TEXT("GuardBagFiller");
-	Filler->InventoryMaxStackCount = 1;
-	if (!TestTrue(TEXT("填满背包以验证失败"), Inventory->AddItemDefinition(Filler, Capacity))) return false;
+	// 用正式的一格一鱼填满背包，避免临时改小全局容量；拒绝后清掉这些填充物，内鱼库存完全不动。
+	if (!TestTrue(TEXT("填满背包以验证失败"), Inventory->AddItemDefinition(FishDefinition, Capacity))) return false;
 	TestFalse(TEXT("满包拾取鱼护失败"), Guard->PickUpFromAuthority(Controller, FGuid::NewGuid()));
 	TestTrue(TEXT("满包失败仍在地面"), Guard->IsGrounded());
-	TestEqual(TEXT("满包失败不扣背包数量"), Inventory->CountVisibleInventoryQuantityByDefinitionId(Filler->GetInventoryDefinitionId()), Capacity);
+	TestEqual(TEXT("满包失败不扣背包数量"), Inventory->CountVisibleInventoryQuantityByDefinitionId(FishDefinition->GetInventoryDefinitionId()), Capacity);
 	for (int32 Index = 0; Index < FishIds.Num(); ++Index)
 	{
 		const FCatInventoryEntry* Entry = FishInventory->GetInventoryEntryAtSlot(FishInventory->FindInventorySlotIndexFromInstanceId(FishIds[Index]));
@@ -533,9 +589,8 @@ bool FCatInventoryFishGuardRoundTripTest::RunTest(const FString& Parameters)
 	{
 		if (!TestTrue(TEXT("公开入口拾取原鱼护"), Guard->PickUpFromAuthority(Controller, FGuid::NewGuid()))) return false;
 		TestTrue(TEXT("叼起鱼护保留场景世界尺寸"), Guard->GetActorScale3D().Equals(GuardWorldScale, 0.001));
-		// 墓碑（T25，道具:64）：旧断言要求鱼护占嘴，现核对原 Actor 隐藏保管。
-		TestTrue(TEXT("库存保管原Actor且不附着嘴"), Guard->IsHidden() && !Guard->GetAttachParentActor());
-		TestNull(TEXT("持护不占嘴部鱼槽"), Character->GetMouthCarriedActor());
+		TestTrue(TEXT("嘴上携带的是原Actor"), ACatFishGuardActor::FindCarriedGuard(Character) == Guard);
+		TestTrue(TEXT("角色公开嘴部引用携带同一原鱼护"), Character->GetMouthCarriedActor() == Guard);
 		TestFalse(TEXT("携带后不可再作为地面鱼护"), Guard->IsGrounded());
 		TestTrue(TEXT("拾起瞬间仍持有原FishInventory"), Guard->GetFishInventoryComponent() == FishInventory);
 		for (int32 Index = 0; Index < FishIds.Num(); ++Index)
@@ -569,8 +624,7 @@ bool FCatInventoryFishGuardRoundTripTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("内鱼重量未重置"), FishInstances[Index]->GetFishWeightKilograms(), Index == 0 ? 2.5 : 3.75);
 		}
 	}
-	// 墓碑（2026-09-14，T25；道具:64）：旧断言要求 UnPossess 释放嘴部鱼护。
-	// 鱼护现属背包，失去占有仍保管原实例；正式 Drop 才落地。旧护销毁不得影响随后叼起的鱼。
+	// 无主生命周期流程：旧鱼护在 UnPossess 时必须先从原背包注销并落地；随后另一只鱼护取得嘴部后，销毁旧 Actor 只能按 expected actor 清理，不能误清新认领。
 	if (!TestTrue(TEXT("退出前再次拾取原鱼护"), Guard->PickUpFromAuthority(Controller, FGuid::NewGuid()))) return false;
 	const int32 HeldGuardSlot = Inventory->FindFirstInventorySlotIndexByDefinitionId(GuardDefinition->GetInventoryDefinitionId());
 	const FCatInventoryEntry* HeldGuardEntry = Inventory->GetInventoryEntryAtSlot(HeldGuardSlot);
@@ -578,25 +632,15 @@ bool FCatInventoryFishGuardRoundTripTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("退出前背包持有原鱼护实例"), HeldGuardItem && HeldGuardItem->GetWorldActor() == Guard)) return false;
 	Controller->UnPossess();
 	TestNull(TEXT("UnPossess 后旧角色嘴部引用为空"), Character->GetMouthCarriedActor());
-	TestTrue(TEXT("UnPossess 后背包继续隐藏保管原鱼护"), IsValid(Guard) && !Guard->IsGrounded() && Guard->IsHidden());
-	TestEqual(TEXT("UnPossess 后背包保留原鱼护实例格"),
-		Inventory->FindInventorySlotIndexFromInstanceId(HeldGuardItem->GetItemInstanceId()), HeldGuardSlot);
+	TestTrue(TEXT("UnPossess 后原鱼护回到地面"), IsValid(Guard) && Guard->IsGrounded());
+	TestEqual(TEXT("UnPossess 后旧角色背包不再保留鱼护实例"),
+		Inventory->FindInventorySlotIndexFromInstanceId(HeldGuardItem->GetItemInstanceId()), INDEX_NONE);
 	Controller->Possess(Character);
-	if (!TestTrue(TEXT("正式背包释放原鱼护"), UCatInventoryStatics::ReleaseItemToWorldFromAuthority(Character,
-		FGuid::NewGuid(), Character, HeldGuardSlot, HeldGuardItem->GetItemInstanceId(), 1, ECatInventoryWorldAction::Drop).bCommitted)) return false;
-	TestTrue(TEXT("正式释放后原鱼护回地面"), Guard->IsGrounded() && !Guard->IsHidden());
-	TestEqual(TEXT("正式释放后背包注销原鱼护实例"), Inventory->FindInventorySlotIndexFromInstanceId(HeldGuardItem->GetItemInstanceId()), INDEX_NONE);
-	// 先确认真实Drop，再把两个地面容器夹具分放两侧，避免旧护75cm准星球覆盖请求者视点或遮住新护。
-	Guard->SetActorLocation(FVector(100, 140, 100), false, nullptr, ETeleportType::TeleportPhysics);
-	ACatFishGuardActor* NewGuard = World->SpawnActor<ACatFishGuardActor>(FVector(100, -140, 100), FRotator::ZeroRotator);
+	ACatFishGuardActor* NewGuard = World->SpawnActor<ACatFishGuardActor>(FVector(180, 0, 100), FRotator::ZeroRotator);
 	if (!TestTrue(TEXT("创建新认领的鱼护"), NewGuard && NewGuard->PickUpFromAuthority(Controller, FGuid::NewGuid()))) return false;
-	TestNull(TEXT("新鱼护入背包仍不认领嘴部"), Character->GetMouthCarriedActor());
-	if (!TestTrue(TEXT("持护时从旧地面护叼出一鱼"), UCatInventoryStatics::ReleaseItemToWorldFromAuthority(Character,
-		FGuid::NewGuid(), Guard, FishInventory->FindInventorySlotIndexFromInstanceId(FishIds[0]), FishIds[0], 1, ECatInventoryWorldAction::Carry).bCommitted)) return false;
-	AActor* MouthFish = Character->GetMouthCarriedActor();
-	TestNotNull(TEXT("原护内鱼成为唯一嘴部认领"), MouthFish);
+	TestTrue(TEXT("新鱼护成为当前唯一嘴部认领"), Character->GetMouthCarriedActor() == NewGuard);
 	Guard->Destroy();
-	TestTrue(TEXT("销毁已释放旧鱼护不清除当前嘴鱼"), IsValid(MouthFish) && Character->GetMouthCarriedActor() == MouthFish);
+	TestTrue(TEXT("销毁已释放旧鱼护不清除新嘴部认领"), Character->GetMouthCarriedActor() == NewGuard);
 	return !HasAnyErrors();
 }
 
@@ -834,7 +878,7 @@ bool FCatWorldFishMouthDropTest::RunTest(const FString& Parameters)
 			OtherCharacter->SetActorLocation(FVector(0, 1000, 100));
 		}
 		TestTrue(TEXT("同请求重放返回首次成功"), UCatInventoryStatics::ReleaseItemToWorldFromAuthority(
-			Character, CarryRequest, Container, Slot, FishId, 1, ECatInventoryWorldAction::Carry).bCommitted);
+			Character, CarryRequest, Container, Slot, FishId, 1, ECatInventoryWorldAction::Carry).bReplayedTerminalCommitted);
 		TestFalse(TEXT("取回后源格已移除"), Source->HasItemAtSlot(Slot));
 		TestTrue(TEXT("往返后原鱼占据唯一嘴部"), Character->GetMouthCarriedActor() == Fish);
 		CheckIdentity(TEXT("容器往返"));

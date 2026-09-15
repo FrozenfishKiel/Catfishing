@@ -46,7 +46,7 @@ class CATFISHING_API UCatInventorySettings : public UDeveloperSettings
 
 public:
 	/** 玩家随身库存的项目默认格数；角色初始化、保存预检和 UI 空格渲染都读取同一个值。 */
-	static constexpr int32 ProjectDefaultPlayerInventorySlotCapacity = 24;
+	static constexpr int32 ProjectDefaultPlayerInventorySlotCapacity = 4;
 
 	/** 数量型库存物品的项目默认单格容量；0 的语义是不限量堆叠。 */
 	static constexpr int32 ProjectDefaultQuantityStackCapacity = 5;
@@ -54,7 +54,7 @@ public:
 	/** 按稳定 ID 查找唯一可运行的库存定义资产；重复、缺失或定义配置不一致时返回空。 */
 	UCatInventoryItemDefinition* FindRuntimeDefinition(FName DefinitionId) const;
 
-	/** 按稳定 ID 查找指定定义类型；装备等上层系统用它从正式库存目录窄化自己认识的定义。 */
+	/** 按稳定 ID 查找指定定义类型；装备、鱼等上层系统用它从正式库存目录窄化自己认识的定义。 */
 	template <typename DefinitionType>
 	DefinitionType* FindRuntimeDefinition(FName DefinitionId) const
 	{

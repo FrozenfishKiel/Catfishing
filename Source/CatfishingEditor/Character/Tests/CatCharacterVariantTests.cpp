@@ -38,6 +38,8 @@
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatCharacterVariantContract,
 	"Catfishing.CharacterVariants.Contract.TemplateAndSkeletonBindings",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+// 绑定回归流程：加载共享模板与两种角色，逐项核对继承、骨架、步态、嘴部挂点和现行身体动作映射；缺少基础资产时提前失败。
+// CuteCat 仅检查仍被玩法使用的 Montage 与倒地片段，不再要求已删除的营地救援动画；本用例不保存资产。
 bool FCatCharacterVariantContract::RunTest(const FString& Parameters)
 {
 	UAnimBlueprint* Template = LoadObject<UAnimBlueprint>(nullptr, TEXT("/Game/Character/Animation/ABPT_CatCharacterBase"));
@@ -71,11 +73,9 @@ bool FCatCharacterVariantContract::RunTest(const FString& Parameters)
 				TEXT("/Game/Animalia/Cat/AM_Hit_ChestL_Heavy-IP_Montage"), TEXT("/Game/Animalia/Cat/AM_Death_01-IP_Montage"),
 				TEXT("/Game/Animalia/Cat/AM_Action_Scratching-IP_Montage"),
 				TEXT("/Game/Animalia/Cat/AM_Attack_Left-IP_Montage"),
-				TEXT("/Game/Catfishing/Animation/BodyAction/AM_BodyAction_CampRest"),
 				TEXT("/Game/Catfishing/Animation/BodyAction/AM_BodyAction_CampfirePlayback"),
 				TEXT("/Game/Catfishing/Animation/BodyAction/AM_BodyAction_RequestManualHelp"),
 				TEXT("/Game/Catfishing/Animation/BodyAction/AM_BodyAction_RequestMischief"),
-				TEXT("/Game/Catfishing/Animation/BodyAction/AM_BodyAction_RescueCharacterToCamp"),
 				TEXT("/Game/Catfishing/Animation/BodyAction/AM_BodyAction_PlaceProtectionSign")})
 			{
 				UAnimationAsset* Original = LoadObject<UAnimationAsset>(nullptr, Montage);

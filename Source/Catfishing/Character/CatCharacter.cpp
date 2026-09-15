@@ -24,7 +24,6 @@
 #include "Condition/CatConditionSettings.h"
 #include "Condition/CatConditionPresentationComponent.h"
 #include "Equipment/CatEquipmentComponent.h"
-#include "Equipment/CatEquipmentSettings.h"
 #include "Growth/CatGrowthComponent.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Fishing/Presentation/CatFishingCameraComponent.h"
@@ -32,6 +31,7 @@
 #include "Inventory/CatBackPackComponent.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "Items/Fish/CatFishPickupActor.h"
+#include "FishContainers/CatFishGuardActor.h"
 #include "Net/UnrealNetwork.h"
 
 // 构造流程：一次创建 Character-owned ASC/AttributeSet、离散身体状态、吃鱼成长、正式随身库存和局内装备组件；只开启组件复制，ActorInfo、属性初值与 Ability 仍由显式 runtime gate 启动。
@@ -387,6 +387,7 @@ void ACatCharacter::UnPossessed()
 {
 	// 生命周期释放流程：失去控制不能让嘴叼物跟随一个无主 Pawn 停留；对象自己的释放方法负责恢复地面状态，随后按 expected actor 清空引用。
 	if (ACatFishPickupActor* Fish = Cast<ACatFishPickupActor>(MouthCarriedActor)) Fish->ReleaseMouthCarryFromAuthority(GetActorLocation());
+	else if (ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(MouthCarriedActor)) Guard->ReleaseMouthCarryFromAuthority(GetActorLocation());
 	PhysicalBodyComponent->ReleaseConnectionsFromAuthority(TEXT("Unpossessed"));
 	PhysicalBodyComponent->BeginControlEpochFromAuthority();
 	ACatfishingGameModeBase::HandleCharacterUnavailable(this);
@@ -406,6 +407,7 @@ void ACatCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	// 销毁路径复用同一 expected-actor 释放，覆盖直接 Destroy 而没有先走 UnPossessed 的服务器清理。
 	if (ACatFishPickupActor* Fish = Cast<ACatFishPickupActor>(MouthCarriedActor)) Fish->ReleaseMouthCarryFromAuthority(GetActorLocation());
+	else if (ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(MouthCarriedActor)) Guard->ReleaseMouthCarryFromAuthority(GetActorLocation());
 	ConditionComponent->OnSnapshotChanged.RemoveAll(this);
 	PhysicalBodyComponent->ReleaseConnectionsFromAuthority(TEXT("EndPlay"));
 	ACatfishingGameModeBase::HandleCharacterUnavailable(this);
@@ -466,6 +468,7 @@ void ACatCharacter::RefreshPhysicalCondition()
 		if (ConditionComponent->GetSnapshot().bDowned)
 		{
 			if (ACatFishPickupActor* Fish = Cast<ACatFishPickupActor>(MouthCarriedActor)) Fish->ReleaseMouthCarryFromAuthority(GetActorLocation());
+			else if (ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(MouthCarriedActor)) Guard->ReleaseMouthCarryFromAuthority(GetActorLocation());
 		}
 	}
 }

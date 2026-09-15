@@ -273,8 +273,15 @@ public:
 	/** 整批收货必须先做容量预演；失败时不触碰正式库存，避免半批成功。 */
 	bool CanFullyAcceptInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch) const;
 
-	/** 先预检整批载荷，再把它写入当前库存组件；成功后只由这一份组件成为事实源。 */
-	bool TryAddInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch);
+	/**
+	 * authority 调用整批收货；带 CommitTransaction 时只接受非空定义批次，拒绝任何 InstanceEntries。
+	 * 回调在全部物品入库后同步执行一次；返回 false 会恢复库存条目，回调自身的外部写入必须由调用方恢复。
+	 * 回调不得重入修改本库存或提前通知观察者；本入口不缓存终态，业务调用方负责去重。
+	 * bBroadcastChange 默认开启，成功变更或写入后的回滚都会通知；关闭时成功后的通知由调用方在业务提交完整后发出。
+	 * 无回调的空批次在 authority 上返回 true；带回调的空批次返回 false，且不会执行回调。
+	 */
+	bool TryAddInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch,
+		const TFunction<bool()>& CommitTransaction = nullptr, bool bBroadcastChange = true);
 
 	/** 只读预检稳定物品 ID 能否进入当前正式库存；商店、奖励和初始化发货用它在提交前确认目录、authority 和容量。 */
 	ECatDomainCommandError ValidateInventoryDefinitionGrantFromAuthority(FGuid RequestId, FName DefinitionId,
@@ -290,16 +297,6 @@ public:
 	/** authority 按已经解析出的物品定义发货；调用方只提供业务载荷，库存按当前条目、容量和幂等缓存裁决。 */
 	FCatDomainCommandResult GrantResolvedInventoryDefinitionFromAuthority(FGuid RequestId,
 		UCatInventoryItemDefinition* ItemDefinition, int32 Count);
-
-	/** 只读预检一批已解析定义能否完整进入当前正式库存；调用方用它在扣款、奖励结算等不可逆动作前确认容量。 */
-	ECatDomainCommandError ValidateInventoryDefinitionBatchGrantFromAuthority(FGuid RequestId,
-		const FString& IdempotencyPayloadContext,
-		const FCatInventoryReceiveBatch& ReceiveBatch) const;
-
-	/** authority 按一批已解析定义发货；正式库存先物化实例批次，再负责幂等、容量预演、变化广播和成功重放。 */
-	FCatDomainCommandResult GrantInventoryDefinitionBatchFromAuthority(FGuid RequestId,
-		const FString& IdempotencyPayloadContext,
-		const FCatInventoryReceiveBatch& ReceiveBatch);
 
 	/** Actor 级收货用这个开关区分公共入口和专用容器；避免外部系统误把所有库存都当默认背包。 */
 	bool CanReceiveUnifiedInventoryIntake() const;
@@ -378,6 +375,11 @@ public:
 	bool ConsumeItemAtSlot(int32 SlotIndex, int32 ConsumeCount);
 
 	/** 丢弃、放置或 Carry 当前槽位的指定实例；Carry 只从鱼护或鱼缸移出数量一到嘴部且不做地面查询，其余动作生成或复用世界物并在空间检查成功后扣量，沿本库存终态缓存防止重复提交。 */
+	/** 菜单操作唯一库存提交；复核请求载荷、槽位身份及定义清单，再调用实例虚函数，终态缓存防止换格后重复作用于新物品。 */
+	FCatDomainCommandResult ExecuteItemActionFromAuthority(const FCatInventoryItemUseContext& Context,
+		FGuid ItemInstanceId, FGameplayTag Action, int32 Quantity);
+
+	/** 丢弃、放置或 Carry 指定实例；物品虚函数复用此事务，成功后才扣库存并公开地面或嘴部载体。 */
 	FCatDomainCommandResult ReleaseItemToWorldFromAuthority(ACatCharacter* Character, FGuid RequestId,
 		int32 SlotIndex, FGuid ItemInstanceId, int32 Quantity, ECatInventoryWorldAction Action);
 
@@ -465,7 +467,9 @@ protected:
 	bool ConsumeItemAtSlotInternal(int32 SlotIndex, int32 ConsumeCount, bool bBroadcastChange);
 	/** 真咬换饵：扣当前一份并退旧预留；失败恢复原实例／格子，成功由 Equipment 发布。 */
 	bool ExchangeReservedBaitInternal(int32 CurrentSlot, UCatInventoryItemDefinition* ReturnedBait);
-	bool TryAddInventoryBatchInternal(const FCatInventoryReceiveBatch& ReceiveBatch, bool bBroadcastChange);
+	/** 收货、转移和购买共用的内部入口；沿用公开接口的定义批次回调约束，失败恢复原格及记录的运行宿主，按开关通知。 */
+	bool TryAddInventoryBatchInternal(const FCatInventoryReceiveBatch& ReceiveBatch, bool bBroadcastChange,
+		const TFunction<bool()>& CommitTransaction = nullptr);
 	/** 本库存独立的显示 Model；组件按需创建并持有，服务器本地提交或客户端复制后更新，其他库存不会写入它。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryModel> InventoryModel;
