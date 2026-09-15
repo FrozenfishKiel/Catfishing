@@ -118,7 +118,7 @@ Root 会在五个子 WBP 的 WidgetTree 内按名称解析以下关键控件：�
 
 ### 当前实施边界
 
-当前源码事实：Root、PageController、三个 Model、LocalPlayer 全局 Loading 遮罩接线已落 `.h/.cpp`；`UCatSaveSubsystem` 已实现槽目录、异步创建/读写及删除入口，库存与角色位置恢复已接领域接口。Frontend Root 承载加载遮罩，局内菜单只提交退出主菜单请求。`CatUISettings` 软类指向 `/Game/UI/Frontend/WBP_CatFrontendRoot.WBP_CatFrontendRoot_C`，`Config/DefaultGame.ini` 已精确 Cook `/Game/UI/Frontend` 和 `/Game/Audio/Settings`。
+当前源码事实：Root、PageController、三个 Model、LocalPlayer 全局 Loading 遮罩接线已落 `.h/.cpp`；`UCatSaveSubsystem` 已实现槽目录、异步创建/读写及删除入口，库存与角色位置恢复已接领域接口。LocalPlayer UI 独立创建加载遮罩，旅行时可释放 Frontend Root；局内菜单只提交退出主菜单请求。`CatUISettings` 软类指向 `/Game/UI/Frontend/WBP_CatFrontendRoot.WBP_CatFrontendRoot_C`，`Config/DefaultGame.ini` 已精确 Cook `/Game/UI/Frontend` 和 `/Game/Audio/Settings`。
 
 `Source/CatfishingEditor/UI/CatFrontendWidgetAuthoringLibrary.h/.cpp` 与 `Scripts/generate_frontend_widgets.py` 提供当前前端 WBP 生成及样式入口。作者库另提供 `/Game/Audio/Settings` 下 1 个 SoundMix（`SMX_CatFrontendSettings`）和 5 个 SoundClass（`SC_CatMaster`、`SC_CatMusic`、`SC_CatSFX`、`SC_CatAmbience`、`SC_CatVoice`）的创建方法。2026-09-08 已重建 `WBP_CatFrontendLoading`、`WBP_CatFrontendRoot` 和 `WBP_CatLakeMainMenu`，局部 LoadingPage 与局内等待面板已从资产树移出。
 

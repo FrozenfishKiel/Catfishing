@@ -15,6 +15,7 @@ runpy.run_path(str(Path(__file__).with_name("style_frontend_menu.py")), run_name
 runpy.run_path(str(Path(__file__).with_name("style_frontend_save.py")), run_name="__main__")
 runpy.run_path(str(Path(__file__).with_name("style_frontend_pages.py")), run_name="__main__")
 runpy.run_path(str(Path(__file__).with_name("style_frontend_room.py")), run_name="__main__")
+runpy.run_path(str(Path(__file__).with_name("style_frontend_backdrops.py")), run_name="__main__")
 runpy.run_path(str(Path(__file__).with_name("style_lake_party.py")), run_name="__main__")
 if not unreal.CatFrontendWidgetAuthoringLibrary.validate_frontend_widget_blueprint_fonts():
     raise RuntimeError("正式前端字体验证失败")

@@ -19,3 +19,5 @@
 生成提示摘要：编辑参考营地为干净的 16:9 游戏大厅背景；去除全部 UI、文字、猫和背包，保留雪山、湖泊、月亮、帐篷、篝火、吊锅与灯笼；篝火周围留四个低木座，约位于画面宽度 34%、48%、63%、77%，脚部区域约在高度 78%；左侧四分之一留出安静暗色区域供实时 UI 使用；不要动物、文字或水印。
 
 导入入口 `Scripts/style_frontend_room.py::camp_texture`；布局入口通过 `style_frontend_room_dialogs.py` 调用 `style_frontend_room_scene.py`。贴图使用 UI 纹理组、sRGB、无 mip、NeverStream。重复执行复用已导入资源；原稿有意更换时通过编辑器 Reimport 后检查。角色仍由现有 CuteCat 正面 idle 实时捕获，不属于本背景资产。
+
+2026-09-15 加入及加载页复用：加入页透明外层继续露出 Root 的 LakeNight，公开房间、好友房间、邀请码三栏各用半透明表面。独立 `/Game/UI/Frontend/WBP_CatFrontendLoading` 的 `LoadingBackgroundImage` 硬引用 CampNight，`LoadingBackgroundScale` 使用 ScaleToFill 覆盖完整视口，状态内容独立以 1280×720 ScaleToFit 缩放。未生成或修改原图。入口为 `Scripts/style_frontend_backdrops.py`，全量生成器及公开房间迁移脚本均接入；修改原稿仍需 Reimport。

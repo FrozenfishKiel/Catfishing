@@ -133,6 +133,8 @@ def main():
             widget(bp,'SettingsDescriptionTextBlock').set_editor_property('wrap_text_at',230.0)
             for name in ('GameSettingsCategoryButton','GraphicsSettingsCategoryButton','AudioSettingsCategoryButton','ControlsSettingsCategoryButton'):
                 widget(bp,name).get_editor_property('slot').set_padding(unreal.Margin(0,0,12,0))
+        if bp.get_name()=='WBP_CatFrontendJoin':
+            runpy.run_path(str(Path(__file__).with_name('style_frontend_backdrops.py')))['style_join'](bp)
         after={o.get_name():o.get_class() for o in controls(bp)}
         if any(after.get(n)!=cls for n,cls in before.items()):
             raise RuntimeError('Original control contract changed: '+bp.get_name())
