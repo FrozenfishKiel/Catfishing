@@ -1,5 +1,85 @@
 # 鱼运动与遛鱼逻辑：设计与实现
 
+## 2026-09-15：鱼与钓鱼按保留建议收口（当前交付与保留边界）
+
+授权：用户在当前任务批准按“建议保留”实现，同时记录与策划案冲突的部分、推荐版本及临时原因。本节是技术交付材料，不是第二份进度清单；模块状态仍由 [需求对齐差距清单](Development/需求对齐差距清单.md) 管理。下方旧日期段落是历史证据，不覆盖本节的当前决策。
+
+基线为 `acb40b82`。修改前已有 `Source/Catfishing/Fishing/Simulation/CatFishingFightSimulator.cpp` 一处行末 `ky` 的未提交变更，首次隔离构建只在副本去掉该笔误；随后正式工作区该笔误已被并行撤回，本轮未修改或提交 Simulator。另有根目录《裁决同步 · 程序（工程待办）.md》用户新增文件，保留未纳入提交。编辑器读回当前地图为 Frontend，无脏内容包。首次命令行基线启动因 DDC 无可写节点失败，测试未开始；后续采用内存 DDC。旧二进制选鱼基线8项为5 clean、1 warning、2失败（正式基础池与旧K回退夹具），记录于 `Saved/FishAlignment/BaselineReport/index.json`；下方仅以本轮新证据说明结果。
+
+### 当前选择、冲突和临时边界
+
+| 环节 | 采用版本与原因 | 与策划案/旧实现的差异 | 临时范围与退出条件 |
+| --- | --- | --- | --- |
+| 抽鱼 | 采用设计两步：按采样窝料腥/香/酵占比选类，再按该类每鱼的饵倍率选鱼。准备哪类窝料应能排除其他类 | 退出挑战硬上限和基础 SpawnWeight 乘权；保留区域、人数及显式启用的时段/天气条件。类内没合法鱼走基础池，不重抽类别 | SpawnWeight仅留反射载荷，外部二进制消费者未穷举，不作为生产概率；旧饱和曲线经UE全引用审计为空后已删除，距离/时间衰减曲线仍供5个窝料资产使用 |
+| 基础池 | 保留已批准四成员和概率（0.4/0.3/0.2/0.1）及三个回退入口 | 不恢复空窝参与全水域乘权。基础池仍遵守人数和生态门 | 正式暂定值可用于生产，不再写“未批准”；改变概率先改设计表 |
+| 力量/体力/经验 | 逐鱼系数乘本条冻结重量；保留当前计算 API | 不把旧经验定额改名当系数；逐鱼 K 与猫方计价/等效质量的全局系数不是同一个概念 | 16鱼已迁并新进程重载，旧全局K回退与定额体力折算已撤；当前表系数仍待正式试玩校准，不把已填表称为最终平衡 |
+| 身份与稀有度 | 保留运行 ID，显式建立资产文件名→内部 ID 映射；采用四档，巨影归稀有 | 最新 CSV fish_id 是文件名，不是存档 ID。旧 Rare 对应珍稀；禁止按英文直译批量改旧档 | 已同步VeryRare完美档清单；四种珍稀按0.85/0.9，其余含巨影按0.8/0.85。显示/UI正式视觉待验，运行ID不随改名变化 |
+| 行为 | 保留当前 StateTree 与连续运动求解，逐鱼覆盖已明确列。发力/休息作为玩法节拍，外冲/横切作为运动方式是建议方向 | 旧《鱼的行为》仍声明实现不读，不能把旧两态、垂死挣扎/石头概率整体恢复。模板基速、横切参数和食性概率仍缺最终规格 | 现有16鱼行为数值可取3/4列（食性概率仍未裁）；暂留实际引用的Fight模板。最终基速/横切/食性规格确认且表资产接入后移除模板依赖，不用虚构参数冒充设计 |
+| 主控与阈值 | 采用09-15单主控：阈值只看持竿猫，队友抓猫只改位移 | 不恢复加算合力或主辅倍率；开场/换人检查，删除逐帧“合力变化”检查。普通伸手不能抓竿，内部显式持竿保留 | 瞬断报废必须有提竿前鱼影作为玩家知情前置；此表现需正式地图验证 |
+| 贴岸 | 保留逐鱼最近冲岸距离的设计方向 | 活鱼自主游向的边界与强制拉入浅水、力竭拖岸、碾压落地必须分开，不能投影鱼位置导致凭空反推猫 | 强制拉入下限后的行为尚未定；暂不在连续约束上硬夹位置。明确该边界后实现并做物理回归，当前未完成 |
+| 进食/图鉴/容器 | 保留既有权威事务、重放去重、真实重量、三层图鉴与上钩者归属 | 不恢复累积毒量阈值；轻毒以逐鱼效果，重毒直接倒地。已接入口不等于正式效果资产齐全 | GE绑定、投掷半径/时长及ReactionMontage按设计记录仍缺；不制造占位效果报完成 |
+| 表现与内容 | 保留当前Mesh/AnimBP共享引用；逐鱼尾流/漂讯、鱼缸游动及剩余4种鱼为内容缺口 | 基础动画或16个文件不能替代20种正式内容及视觉验收 | 待鱼种内容与正式资源交付；本轮不凭空编写四种鱼的正式设定 |
+
+### 影响对照与验证
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 抽鱼入口/计算 | `Source/Catfishing/Fishing/CatFishingSession.cpp`选鱼→`Data/CatFishCatalogSettings.cpp::SelectRuntimeDefinition` | 乘权和挑战门→两步、冻结实际重量不变 | 同一服务器入口替换；结果增加类别诊断 | 数据分类→选择器→原Session | 混合/单类、猫零体力、种子重放、基础池、异常数据 | 选鱼8项通过；2000种子1:3选类、纯类排他、基础池与缺K拒绝 |
+| 配置/资源/Cook | `Config/DefaultGame.ini`鱼目录；`Online/CatOnlineSubsystem.cpp`预加载旧曲线 | 旧概率曲线不再消费 | 删除旧配置、预加载入口和无引用饱和曲线包；距离/时间曲线保持 | 选择器退出→删预加载 | Cook不新增鱼路径；资产引用审计 | 目录入口不变，UE确认旧曲线0引用并删除；新Cook未运行 |
+| 数据/脚本/持久化 | `Data/CatFishDefinition`、`Scripts/prepare_fish_runtime_migration.py`、`Knowledge/Schema/鱼表格.第一版.yaml` | 文件名误充ID、旧值和新系数混用 | 显式读回映射；迁指定字段、保留存档ID/表现引用 | 预览→保存→新进程重载→撤回退 | 16鱼前后值、幂等、真实Asset/库存读取 | 16/16保存与新进程重载匹配；ID/表现引用不变；5项脚本单测、发布映射0问题 |
+| 权威/复制/失败清理 | `Session`开场/换人/逐帧；`Interaction/Grab/CatPhysicsGrabComponent`伸手/显式持竿 | 队友伸手能抓竿；逐帧阈值会引入额外终局 | 收窄普通目标；仅开场/换人裁决；复制/费用仍原链 | 保留显式持竿→限制伸手 | 抓猫、拒竿、开场/换人、原费用和退出 | 真实接触拒普通抓竿、显式持握成功，正式Runner属性变化不重复裁决；开场/换主调用仍在原链，新真人双端未验 |
+| UI/动画/正式资产 | `/Game/Catfishing/Data/Fish`→PresentationDefinition→Encounter/Pickup/库存 | 资源引用保持；正式表现仍欠验收 | 不另建按ID查询的表现表 | 数据后重载原消费者 | 引用不变、默认日志、正式地图双端 | 未运行presentation_delivery |
+| 文档/测试 | 本节、唯一差距清单、Data/Fishing测试 | 旧公式测试须改，但保留既定行为 | 更新模型测试并加生产资产/链路证据 | 基线→阶段回归→最终核对 | contract/runtime_behavior/presentation_delivery分列 | 前两层证据见下；表现层未关闭 |
+| 力竭兜线消费者 | `Fishing/Simulation/CatFishingFightRunner.cpp`→`Session::TryResolvePrimaryStrength` | 原本已只读主控，函数旧称 Combined | 同步 native 名称，兜线判断与单位不变 | Session→Runner | 正式 Runner 八秒/帧率回归 | 19项组合回归通过 |
+| 旧发布资料 | `Docs/DataAsset字段含义.md`、`.harness/formal-fish-asset-input-package.json`→`Scripts/check_fish_table_vs_definition.py` | 手册仍讲旧挑战分带；检查器用八月版本直接断言资产没迁 | 更正当前字段说明；既有输入包补本轮定向迁移哈希，旧八月信息标为历史 | 已迁资产→证据元数据→检查器 | CSV与16包哈希，字段映射；不改变Harness模块状态 | 输入包追加当前迁移哈希，旧八月资料明确标历史；检查器0问题 |
+
+
+### 验证结果与尚未完成的内容
+
+`contract`：正式工程 Editor 与 Game Win64 Development 均构建成功，日志为 `Saved/FishAlignment/BuildFinalEditor.log`、`BuildFinalGame.log`；其后仅加16鱼全体就绪断言的 Editor/Game 重编见 `BuildAcceptanceEditor.log`、`BuildAcceptanceGame.log`。Python迁移接收器5项单测通过；`Saved/FishAlignment/FieldMapping.md` 发布映射0问题，并核对当前CSV、饵矩阵和16包哈希。UE资产保存/重载分别见 `fish-data-applied.json`、`fish-data-verified.json`，后者16/16匹配。核验不证明正式美术或完整模块已完成。
+
+`runtime_behavior`：隔离新源码19项（13 clean、6 warning）通过，报告 `Saved/FishAlignment/Report/index.json`；正式工程24项（18 clean、6 warning）通过，报告 `MainReport/index.json`。两批有重叠，不能相加成43个不同用例。覆盖两步选择、冻结重量和逐鱼K、四档完美削减、正式StateTree/浮漂窗口、真实竿/CMC/费用链、8秒与60/120Hz及120ms卡顿、抓竿限制、力量变化不重复瞬断、库存转移与进食重放。正式取竿回归保留首拿/放下/拾回及回滚契约。收购价格16/16与新鱼表相同，本轮不改既有售鱼权威链（`consumer-audit.json`）。
+
+最终复验：删除旧饱和曲线、补诊断字段后，`Saved/FishAlignment/FinalReport/index.json` 10/10通过（8 clean、2 warning），包含16鱼全部运行就绪、正式取竿和真实接触拒竿；日志为 `FinalTests.log`。各轮用例有重叠，不累计为独立测试数量。
+
+`presentation_delivery`：本轮未运行新Cook、正式地图真人手感、独立Development包的房主/客户端联机及无`-log`双端落盘验收。现有Mesh、动画、PresentationDefinition引用未变，并不代表新数值下表现已经验收。Fishing/Delivery及相关内容模块仍未关闭。
+
+默认诊断：`LogCatFishing` 的 `fishing_fish_selection_resolved` 记录 SessionId、Region、RandomSeed、ChumClass/ClassProbability、冻结重量和鱼力量，`CatConversionPerKg`明确是猫方换算而非鱼K；基础池失败看 `fish_selection_base_pool_*`，缺K看 `fish_selection_strength_coefficient_unset`。阈值看 `fishing_rod_strength_snapped` / `fishing_fish_overpowered` 的 Trigger 与 PrimaryStrength；正式入口只允许 FightStart / PrimaryHandover。`LogCatPhysicsGrab/physics_reach_surface` 在原状态变化限频日志追加 RejectedRodSurfaces，不在Tick无条件刷屏。包端应在 `<打包根目录>/Catfishing/Saved/Logs` 分别核对两端；本轮真实日志是 `Saved/FishAlignment/Tests.log`、`MainTests.log`，不能冒充包端证据。
+
+仍需保留的临时路径：
+
+- `Fight_*` 模板仍被 `CatFishBehaviorProfileResolver` 和正式行为树消费：当前表没有确定的模板替代基速、横切规格和食性概率，因此保留，待这些规格落表且运行回归通过后再撤。
+- `BitePersonalityId`、`SpawnWeight`、`GetWeightMidpointKilograms` 为旧反射身份/接口；外部Blueprint引用未穷举，不据C++零调用删除。前两者不决定正式窗口或抽鱼概率，中点接口不再折算体力。旧饱和曲线不同：源码/配置和UE硬软引用已核对为空，已清理；编辑器删除对象后仍残留同哈希磁盘文件，按备份哈希复核后精确删除，见 `retired-curve.json`。
+- `BiteTimingOverridesByFishDefinitionId` 正式配置已清空；档位默认与未知档旧保险保留给缺字段的预览/外部资产，并有兼容回归。16鱼正式链全部来源为Asset，不再用旧档位折中或全局3秒。外部消费者审计完成后可进一步删除兼容接口。
+- 时段/天气门仍关闭：表中对应列尚缺且启用时点未裁；保持已有数组，未来显式启用仍按缺配拒绝。当前任务没有改窝料实体归属/数量模型。
+- 最近冲岸距离尚未实现；缺少强拉进入下限后的规则，不能硬夹鱼位置反推猫。缺4种正式鱼、逐鱼特有水面/漂讯、鱼缸游动、GE及投掷半径/时长/ReactionMontage，均继续为未完成内容。咸鱼/巨影不可食用、河豚重毒已按表迁；其余限时效果仅对表明“无”的鱼确认无效果，不给缺资源鱼伪造GE。
+- `CaptureImprintEventId`旧触发接缝仍保留；本轮未改印记系统，也未穷举外部事件消费者。图鉴/库存原权威、重放和上钩者归属保持；参与合影名单对“抓猫间接出力”尚无接收规则，不能随禁普通抓竿直接改成整组登记。
+
+功能检查点：`fcb80110`（鱼数据与两步抽鱼）、`5f3e8ecd`（普通抓竿和阈值时机）。均为本地提交，未推送。
+
+### 当前16鱼迁移快照
+
+来源：[第一版鱼表](../Knowledge/Design/GDD%20系统分册/鱼/鱼表格/第一版.csv)、[饵权重](../Knowledge/Design/GDD%20系统分册/鱼/鱼表格/饵权重.csv)、[基础池](../Knowledge/Design/GDD%20系统分册/鱼/鱼表格/基础池.csv)。这些是当前接受的数值快照，临时平衡状态以上表为准；迁移命令在UE Python commandlet执行 `Scripts/migrate_fish_design_data.py`，默认预览，`-FishDesignApply`保存，`-FishDesignVerify`只读重载核验。
+
+| 资产名 / 内部ID | 稀有度ID | K | 体力点/kg | 经验点/kg | 窝料类 | 试探/响应秒 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Fish_RiverPattern / RiverPatternFish | Common | 6 | 18 | 8 | 酵 | 1.5/9 |
+| Fish_LittleSilver / LittleSilverFish | Uncommon | 4 | 67 | 10 | 酵 | 2/11 |
+| Fish_LittleColor / LittleColorFish | Uncommon | 5 | 114 | 10 | 香 | 2/11 |
+| Fish_ForestLongtail / ForestLongtailFish | VeryRare | 10 | 16 | 15 | 香 | 3/15 |
+| Fish_SilvermoonTrout / SilvermoonTrout | VeryRare | 10.5 | 18 | 15 | 腥 | 3/15 |
+| Fish_LakeGiantShadow / LakeGiantShadow | Rare | 5 | 9.5 | 0 | 腥 | 2.5/13 |
+| Fish_Petal / PetalFish | Rare | 4.5 | 89 | 12 | 香 | 2.5/13 |
+| Fish_Windbell / WindbellFish | Rare | 4.5 | 89 | 12 | 香 | 2.5/13 |
+| Fish_Salted / SaltedFish | Rare | 7.5 | 53 | 0 | 腥 | 2.5/13 |
+| Fish_Stinky / StinkyFish | Uncommon | 9 | 250 | 3 | 酵 | 2/11 |
+| Fish_Blackfish / Blackfish | VeryRare | 11.5 | 18 | 15 | 腥 | 3/15 |
+| Fish_Loach / Loach | Common | 3.5 | 55 | 8 | 酵 | 1.5/9 |
+| Fish_EstuaryBass / EstuaryBass | Rare | 9 | 27 | 12 | 腥 | 2.5/13 |
+| Fish_Puffer / PufferFish | Rare | 5 | 61 | 12 | 腥 | 2.5/13 |
+| Fish_ElectricEel / ElectricEel | Rare | 10 | 34 | 12 | 腥 | 2.5/13 |
+| Fish_Pike / Pike | VeryRare | 12 | 22 | 15 | 腥 | 3/15 |
+
 ## 2026-09-14：体力账单按构成校验
 
 Runner 在采样时分别冻结绿色体力、黄色体力和绿色上限，支付前逐项比较。相同总量但绿黄构成变化，或余额不变但绿色上限变化，都会拒绝旧账单并记录 `Event=fishing_stamina_bill_rejected`。拒绝不写 ASC，旧账单不能重放；重新采样后的新账单仍按先绿后黄支付。没有新增属性、复制字段、资产、配置或存档格式。

@@ -133,20 +133,20 @@
 | 表现 | PresentationDefinition | **唯一表现入口**，直接引用本鱼 `FishPresentation_*`；水中 Encounter、落地 Pickup 和嘴叼状态都沿这条引用解析，不得按 FishDefinitionId 再建 Mesh/ABP 映射表 |
 | 体型 | BodyClass | Standard=单人可搏 / Giant=可多人协作；抄网成功后世界鱼由首个合法抄手叼走；不能 Unknown |
 | 出没 | RegionIds / TimeOfDay / Weather | 可出现的水域 ID/时段/天气；水域为空拒绝；时段、天气各自过滤开启后空数组拒绝并 Warning。夜晚在时段枚举里没有对应值、解析为 Unknown，时段过滤开启时必被拒。D-31 开启节点未裁，本轮保持原开关 False，不将缺配解释成全时段/全天气 |
-| 稀有 | RarityTierId / SpawnWeight | 稀有度轴 ID / 选择正权重(稀有度由数据表达,代码无硬编码档位) |
+| 稀有 | RarityTierId | Common普通、Uncommon少见、Rare稀有、VeryRare珍稀；最高档完美削减清单同步为VeryRare。SpawnWeight只留旧资产反射载荷，不参与概率 |
 | 体重 | Minimum/MaximumWeightKilograms | 服务器在区间内抽取真实重量;min≤max |
-| 搏斗 | FishStrength | 二进制资产读取字段；运行时忽略，重存资产后可逐步清空 |
-| 搏斗 | FishFightStamina | **鱼搏斗体力**(短周期,与稀有度独立);>0 |
+| 搏斗 | FishStrengthPerKilogram | 每鱼力量系数K；实例力量=冻结重量×K。0或非法值不参与抽鱼；不借用猫方全局换算 |
+| 搏斗 | FishFightStaminaPerKilogram | 体力点/千克，乘实际重量得到本场初值；16资产已迁，旧定额折算已删 |
 | 搏斗 | MinimumFightParticipants | 需要的协作人数;单人局过滤 >1 的定义 |
-| 抄网 | **ScoopTargetRadiusCentimeters** | **这条鱼的可捞圆圈半径 cm**,圆心随鱼移动;抄手向正前方发射长度=抄网 ScoopReach 的水平线段,与圆相交即够得着。语义="这条鱼有多好捞"——小鱼小圈、巨鱼大圈以降低多人抢抄难度。**必须 >0,为 0 时服务器一律拒绝抢抄** |
+| 抄网 | **ScoopTargetRadiusCentimeters** | **这条鱼的可捞圆圈半径 cm**,圆心随鱼移动;抄手向正前方发射长度=抄网 ScoopReach 的水平线段,与圆相交即够得着。语义="这条鱼有多好捞"；巨影正式值0，不能抄。**必须 >0,为 0 时服务器一律拒绝抢抄** |
 | 性格 | BitePersonalityId / FightPersonalityId | Bite ID 仅保留旧资产反射兼容；Fight ID 仍接现有搏斗模板，未审鱼行为页本轮不切换 |
-| 咬钩 | ProbeDurationSeconds / TrueBiteWindowSeconds | 两个独立逐鱼秒数。试探 0 时按种子随机 2～4 秒；普通响应正式值 8～15 秒，0 时临时沿用全局 3 秒并 Warning，不代表 D-10 完成。完美基础 1 秒另加成长，与二者不混用 |
+| 咬钩 | ProbeDurationSeconds / TrueBiteWindowSeconds | 两个独立逐鱼秒数，16鱼已迁为1.5/9、2/11、2.5/13、3/15四档（巨影2.5/13）。缺字段时仍有配置/旧保险供预览与未知外部资产使用，正式16鱼不走保险。完美基础 1 秒另加成长，与二者不混用 |
 | 食用限时效果 | bEatingTimedEffectConfigured / EatingTimedEffect / EatingTimedEffectDurationSeconds | False 表示正式绑定未迁移并 Warning；True 且空 GE 表示属主确认无效果。有 GE 时用基础秒数乘成长时长倍率，同鱼刷新、异鱼并存，不作用于祝福 |
 | 投掷 | ThrowEffect.Kind / EffectRadiusCentimeters / DurationSeconds / ReactionMontage | 轻抛后的第一次权威命中接惊鱼反应或限时驱散区域；厘米、秒及正式反应 Montage 缺配时拒绝该效果，不填占位数 |
-| 偏好 | ChumPreference (三轴) | 与窝点三轴点积→经饱和曲线→选择权重放大(封顶 MaximumChumModifier) |
-| 偏好 | BaitWeightMultipliers | 特定鱼饵 ID→权重倍率;普通饵不用列 |
-| 食用 | FoodSafety / EatingExperience / PoisonIncrease | Safe/Toxic 结论 + 吃后体验/增毒量(Safe 必须 0 毒) |
-| 其他 | OfferingPoints / CaptureImprintEventId / bTankDisplayEligible | 供品点数 / 捕获成像事件 / 可否入展示鱼缸 |
+| 偏好 | ChumPreference (三轴) | 类别标记：正式鱼命中轴1、其余0；先按采样窝料三轴占比抽类，再在该类选鱼 |
+| 偏好 | BaitWeightMultipliers | 饵权重.csv五种正式饵→类内抽取倍率；未列旧饵默认1，不改变先选类别的概率 |
+| 食用 | FoodSafety / EatingExperiencePerKilogram / YellowStaminaGrant | Safe与SevereToxic可吃，经验按系数×重量；重毒直接倒地，轻毒由逐鱼GE；Inedible不能吃且经验/黄体力为0，无累积毒量字段 |
+| 其他 | CaptureImprintEventId / bTankDisplayEligible | 捕获成像旧接缝 / 可否入展示鱼缸；供奉点数由实际重量分档，鱼种不另配定额 |
 | gate | bEnableRuntimeDefinition | 必须 True |
 
 `FishPresentation_*` 是普通 `UCatFishPresentationDefinition` DataAsset，不单独注册到鱼目录。它配置本鱼的 `SkeletalMesh`、继承 `UCatFishAnimInstance` 的子 AnimBP、Calm/Struggle/Exhausted/Landed 四类动画、参考重量与缩放范围，以及 Encounter/Landed/Carried 三套 Mesh 局部 Transform。Mesh 自身持有 Skeleton；子 AnimBP 和四类动画必须与该 Skeleton 兼容。所有子 AnimBP 继承无 Target Skeleton 的 `ABPT_CatFishBase`，只覆盖三个 Sequence Player，美术资源变化不会复制游速公式与状态机。
@@ -164,7 +164,9 @@
 | EstuaryBass | peacock_bass | Puffer | frontosa |
 | ElectricEel | electric_catfish | Pike | pike |
 
-鱼种没有固定“低级/中级”战斗标签。服务器为每个候选鱼种按本次机会种子和稳定鱼 ID 独立抽取个体重量，令 `FishStrength=WeightKilograms×StrengthPerKilogram`；其中换算系数来自当前正式搏斗平衡资产。该重量和力量一旦选中便冻结，选择、搏斗和 HUD 共同读取这份冻结结果。令力量比 `S=FishStrength/玩家合计力量`、体力比 `T=FishFightStamina/玩家合计搏斗体力`，目录按 `max(S, 2ST/(S+T))` 计算当前上下文里的连续挑战度：力量比是危险下限，力量/体力调和均值只在两项都足够时抬高挑战度，避免力量极低但体力很高的鱼被错误归入势均力敌带。`≤ ComfortChallengeMaximumRatio` 为轻松带，之后到 `MatchedChallengeMaximumRatio` 为势均力敌带，再到 `MaximumChallengeRatio` 为高风险带；超过安全上限才不进入池。系统先按三条 `*ChallengeBandWeight` 在当前有候选的难度带之间抽取，再用 `SpawnWeight × 窝料倍率 × 鱼饵倍率 × 连续挑战倍率` 在带内选鱼。某个目标带没有鱼时会在其余有候选的带之间重新归一化；只有生态条件、协作人数或安全上限后确实没有鱼才会空钩。
+服务器按采样窝料腥/香/酵占比先抽类别，只在该类别符合水域、人数及已启用时段/天气门的鱼中按饵倍率抽鱼。猫力量、猫体力、稀有度、SpawnWeight和旧挑战分带不再改变概率；空窝、类内空候选、总权重无效走四鱼基础池，基础池仍受生态/人数条件限制。服务器以机会种子和稳定鱼ID冻结每鱼实际重量，鱼力量=重量×逐鱼K，体力=重量×逐鱼体力系数，捕获实物继续使用同一重量。完美提竿再削减实例力量/体力及初始线长。
+
+正式行为已接入发力段长、休息段长与游速系数；食性值已迁，但对应概率仍未裁。当前模板基速、横切和方向概率暂留，原因与退出条件见 [鱼与钓鱼保留建议](FishFightImplementationGuide_zh-CN.md)。
 
 ## 4. 旧咬钩资产兼容：`UCatBitePersonalityDefinition`（DA_Bite_*）
 
@@ -224,7 +226,6 @@
 
 | 曲线 | 引用处 | 输入→输出 | 校验(不满足→整条链失效) |
 |---|---|---|---|
-| Curve_ChumSaturation | CatFishCatalogSettings.ChumSaturationCurve | 归一化窝料亲和度 0→1 映射到权重倍率 | **v(0) 必须恰=1.0** 且单调不减,终值≤MaximumChumModifier |
 | Curve_ChumDistanceFalloff | 各窝料 `UCatEquipmentFragment_Chum` 的 ChumInfluence | 0=窝点中心→1=边缘 的浓度衰减 | 全程 ≥0 且 **v(0)>0** |
 | Curve_ChumTimeFalloff | 同上 | 0=刚投放→1=到期 的浓度衰减 | 同上 |
 
@@ -233,7 +234,7 @@
 | 症状 | 多半是 |
 |---|---|
 | starter 装配/发窝料失败 InvalidPayload | 对应 DA 未注册 / bEnableRuntimeDefinition 没勾 / 字段组合不满足当前入口需要的真实用途 |
-| No eligible fish | 鱼的 Region/TimeOfDay/Weather 不匹配或空数组；协作人数不足；全部鱼超过 MaximumChallengeRatio；或 CatFishCatalogSettings 的窝料曲线/连续挑战参数未配、非法 |
+| No eligible fish | 检查水域/人数/启用的时段天气门、逐鱼K、正式资产就绪和基础池映射；先查看fish_selection日志的类别及回退原因 |
 | 打窝 EquipmentUnavailable | 背包没窝料(上一条的下游);或窝料 Fragment 的 ChumInfluence 缺曲线 |
 | 提竿后搏斗数值全 0 | 猫种类 ID 配错(看 initial_attributes_unresolved 日志) / DA_Bite/DA_Fight 未注册 |
 | 新 DA 配好了不生效 | ini 没加注册行,或加了没重启 Editor |
