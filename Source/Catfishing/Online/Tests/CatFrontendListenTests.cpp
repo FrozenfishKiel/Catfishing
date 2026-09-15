@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
+#include "Misc/CoreDelegates.h"
 #include "Tests/AutomationCommon.h"
 #include "Online/CatFrontendListener.h"
 #include "Online/CatOnlineSubsystem.h"
@@ -69,6 +70,21 @@ bool FCatFrontendListenLifecycleTest::RunTest(const FString& Parameters)
 		Online->ActiveOperation = ECatOnlineOperation::Leave;
 		Online->FinishOperationFailure(ECatOnlineError::DestroyFailed);
 		TestTrue(TEXT("Session 销毁失败保留原监听"), Online->FrontendListener.IsListening(World));
+
+		// 操作取消必须取消帧末交接；迟到的旧 epoch 也不能提交旅行或影响原监听。
+		Online->ActiveOperation = ECatOnlineOperation::Start;
+		Online->OperationRole = ECatOnlineSessionRole::Host;
+		Online->HostListenReleaseHandle = FCoreDelegates::OnEndFrame.AddUObject(Online,
+			&UCatOnlineSubsystem::HandleHostListenReleased, Online->OperationEpoch, TWeakObjectPtr<UWorld>(World), GFrameCounter);
+		Online->HandleHostListenReleased(Online->OperationEpoch, World, GFrameCounter);
+		TestTrue(TEXT("释放当帧不提交旅行"), World->NextURL.IsEmpty());
+		TestTrue(TEXT("当帧仍等待平台清理边界"), Online->HostListenReleaseHandle.IsValid());
+		const uint64 CancelledEpoch = Online->OperationEpoch;
+		Online->FinishOperationFailure(ECatOnlineError::TravelRejected);
+		TestFalse(TEXT("失败收口解绑帧末交接"), Online->HostListenReleaseHandle.IsValid());
+		Online->HandleHostListenReleased(CancelledEpoch, World, 0);
+		TestTrue(TEXT("迟到交接不提交旅行"), World->NextURL.IsEmpty());
+		TestTrue(TEXT("迟到交接不关闭当前监听"), Online->FrontendListener.IsListening(World));
 
 		// 引擎旅行会销毁旧驱动；模拟同一个 World 上换成新驱动，旧所有权不能误关新实例。
 		GEngine->DestroyNamedNetDriver(World, NAME_GameNetDriver);

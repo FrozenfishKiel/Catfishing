@@ -216,6 +216,9 @@ private:
 
 	/** Host 预载完成后的唯一玩法地图 Listen 旅行入口；只提交旅行并等待 PostLoadMap，Lobby ready 还必须通过目标地图的 listen 与 Run 玩法命令门。 */
 	bool BeginHostTravelToGameplayMap();
+	void HandleHostListenReleased(uint64 CallbackEpoch, TWeakObjectPtr<UWorld> SourceWorld, uint64 ReleaseFrame);
+	/** 非无缝切图前，等待 CoreTicker 完成旧平台 socket 清理；操作结束时必须解绑。 */
+	FDelegateHandle HostListenReleaseHandle;
 
 	/** JoinSession 成功且地址解析完成后的唯一玩法地图 ClientTravel 入口；调用方仍等待 PostLoadMap 终态。 */
 	bool BeginClientTravelToGameplayMap(const FString& ConnectString);

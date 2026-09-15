@@ -1,4 +1,5 @@
 #include "Online/CatOnlineSubsystem.h"
+#include "Misc/CoreDelegates.h"
 
 #include "AbilitySystem/BodyAction/CatBodyActionPresentationSettings.h"
 #include "AbilitySystem/Config/CatAbilitySettings.h"
@@ -2190,7 +2191,7 @@ bool UCatOnlineSubsystem::BeginDestroySession(const ECatOnlineError FailureAfter
 	return bRequestQueued || !bStillAwaitingCompletion;
 }
 
-// Host 旅行流程：开房时已建立 Frontend Listen；这里只在预载成功后提交 GameplayMap?listen。旧驱动由 UE 切图销毁，玩法 World 真正就绪后才发布 CAT_GAME_READY。
+// Host 旅行流程：预载成功后先释放前台驱动，再跨过平台 socket 清理帧，最后提交 GameplayMap?listen。
 bool UCatOnlineSubsystem::BeginHostTravelToGameplayMap()
 {
 	UWorld* World = GetWorld();
@@ -2201,19 +2202,64 @@ bool UCatOnlineSubsystem::BeginHostTravelToGameplayMap()
 		return false;
 	}
 	FNamedOnlineSession* NamedSession = OperationSessionInterface->GetNamedSession(CatOnlineNames::GameSession);
-	if (!NamedSession)
+	if (!NamedSession || HostListenReleaseHandle.IsValid())
 	{
 		return false;
 	}
-	if (!World->ServerTravel(GameplayMapPackage + TEXT("?listen"), false))
+	// SteamSockets::Shutdown 仅标记删除；CoreTicker 才真正 CloseListenSocket。
+	// 同一次 LoadMap 内销毁旧驱动再 Listen 会让 Steam 的 P2P 虚拟端口仍被占用。
+	FrontendListener.Stop(TEXT("HostTravelHandoff"), ActiveRequestId, OperationEpoch);
+	HostListenReleaseHandle = FCoreDelegates::OnEndFrame.AddUObject(this, &ThisClass::HandleHostListenReleased,
+		OperationEpoch, TWeakObjectPtr<UWorld>(World), GFrameCounter);
+	BroadcastSnapshot(TEXT("online_host_listen_release_queued"));
+	return true;
+}
+
+void UCatOnlineSubsystem::HandleHostListenReleased(const uint64 CallbackEpoch,
+	const TWeakObjectPtr<UWorld> SourceWorld, const uint64 ReleaseFrame)
+{
+	if (CallbackEpoch != OperationEpoch || ActiveOperation != ECatOnlineOperation::Start
+		|| OperationRole != ECatOnlineSessionRole::Host)
 	{
-		return false;
+		return;
 	}
+	// UE 5.8 的帧末顺序是 CoreTicker -> OnEndFrame -> GFrameCounter++。
+	// 至少进入后续帧，保证即使释放发生在本帧 CoreTicker 之后，也已完成一次平台清理。
+	if (GFrameCounter <= ReleaseFrame) { return; }
+	FCoreDelegates::OnEndFrame.Remove(HostListenReleaseHandle);
+	HostListenReleaseHandle.Reset();
+	// 等待期间若网络失败已进入销毁链，交由原失败回执完成，不能再次切图或重开监听。
+	if (SessionState != ECatOnlineSessionState::Host || SessionRole != ECatOnlineSessionRole::Host) { return; }
+	UWorld* World = SourceWorld.Get();
+	const bool bHasSession = OperationSessionInterface.IsValid()
+		&& OperationSessionInterface->GetNamedSession(CatOnlineNames::GameSession);
+	const bool bCanTravel = World && World == GetWorld() && WorldState == ECatOnlineWorldState::Frontend
+		&& !World->GetNetDriver() && World->GetNetMode() == NM_Standalone
+		&& bHasSession;
+	if (!bCanTravel || !World->ServerTravel(GameplayMapPackage + TEXT("?listen"), false))
+	{
+		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_host_listen_handoff_failed RequestId=%s Epoch=%llu World=%s NetMode=%d Result=TravelRejected"),
+			*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch,
+			*GetNameSafe(World), World ? int32(World->GetNetMode()) : -1);
+		// 已经释放监听，不能把无监听的 Session 作为可重试房间留下。
+		if (bHasSession && World && World == GetWorld() && WorldState == ECatOnlineWorldState::Frontend
+			&& FrontendListener.Start(World, ActiveRequestId, OperationEpoch))
+		{
+			FinishOperationFailure(ECatOnlineError::TravelRejected);
+		}
+		else
+		{
+			BeginDestroySession(ECatOnlineError::TravelRejected);
+		}
+		return;
+	}
+	UE_LOG(LogCatOnline, Log, TEXT("Event=online_host_listen_handoff_completed RequestId=%s Epoch=%llu World=%s NetMode=%d Authority=1 ReleaseFrame=%llu TravelFrame=%llu Result=TravelSubmitted"),
+		*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch,
+		*GetNameSafe(World), int32(World->GetNetMode()), ReleaseFrame, GFrameCounter);
 	ExpectedPackage = GameplayMapPackage;
 	WorldState = ECatOnlineWorldState::TravelingToLake;
 	TransportState = ECatOnlineTransportState::TravelQueued;
 	BroadcastSnapshot(TEXT("online_host_travel_queued"));
-	return true;
 }
 
 // Client 旅行流程：Client 已预载成功、复核 Lobby ready 并解析真实地址后，当次取得本地控制器调用 ClientTravel；不保存 Controller 引用，PostLoadMap 才发布到达终态。
@@ -3130,6 +3176,8 @@ void UCatOnlineSubsystem::ClearRunTeardownDelegate()
 // 操作委托清理流程：只在保存的精确 Session 接口上逐一清理有效句柄；每个 Clear 同时 Reset 句柄，重复调用不会影响后续 epoch。
 void UCatOnlineSubsystem::ClearOperationDelegates()
 {
+	FCoreDelegates::OnEndFrame.Remove(HostListenReleaseHandle);
+	HostListenReleaseHandle.Reset();
 	JoinLink.Reset();
 	JoinResolveDeadline = 0.0;
 	bJoinLinkLaunched = false;

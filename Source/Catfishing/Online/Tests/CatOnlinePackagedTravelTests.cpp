@@ -4,6 +4,7 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "Engine/Engine.h"
+#include "Engine/NetDriver.h"
 #include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/GameViewportClient.h"
@@ -64,6 +65,10 @@ public:
 			if (!Test->TestEqual(TEXT("Create completes in the frontend"), Snapshot.WorldState, ECatOnlineWorldState::Frontend)
 				|| !Test->TestEqual(TEXT("Create already starts the listen server"), Game->GetWorld()->GetNetMode(), NM_ListenServer)
 				|| !Test->TestNotNull(TEXT("Frontend listen driver exists before Start"), Game->GetWorld()->GetNetDriver())) { return true; }
+			FrontendDriverClass = Game->GetWorld()->GetNetDriver()->GetClass()->GetFName();
+			FrontendPort = Game->GetWorld()->URL.Port;
+			if (FParse::Param(FCommandLine::Get(), TEXT("CatOnlineRequireSteam"))
+				&& !Test->TestEqual(TEXT("Steam regression must use the real SteamSockets driver"), FrontendDriverClass, FName(TEXT("SteamSocketsNetDriver")))) { return true; }
 			// Create 完成与 Steam 成员投影到达可能相隔一次 Lobby 轮询，等待真实成员而非绕过准备门。
 			if (Snapshot.RoomMembers.IsEmpty()) { return false; }
 			if (!Test->TestTrue(TEXT("Start through production frontend entry"), Online->RequestStartHostedGame().bAccepted)) { return true; }
@@ -75,6 +80,11 @@ public:
 			Test->TestEqual(TEXT("Host travel completed without error"), Snapshot.LastError, ECatOnlineError::None);
 			Test->TestNotNull(TEXT("Gameplay listen driver exists"), Game->GetWorld()->GetNetDriver());
 			Test->TestEqual(TEXT("Gameplay is a listen server"), Game->GetWorld()->GetNetMode(), NM_ListenServer);
+			if (UNetDriver* Driver = Game->GetWorld()->GetNetDriver())
+			{
+				Test->TestEqual(TEXT("Travel retains the transport implementation"), Driver->GetClass()->GetFName(), FrontendDriverClass);
+				Test->TestEqual(TEXT("Gameplay reuses the frontend listen port"), Game->GetWorld()->URL.Port, FrontendPort);
+			}
 			if (APlayerController* Controller = Game->GetFirstLocalPlayerController())
 			{
 				Test->TestTrue(TEXT("Player is possessed in gameplay World"), Controller->GetPawn() != nullptr);
@@ -131,6 +141,8 @@ private:
 	FString SlotName;
 	FName SlotId;
 	int32 Phase = 0;
+	FName FrontendDriverClass;
+	int32 FrontendPort = 0;
 };
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatOnlinePackagedTravelTest,
