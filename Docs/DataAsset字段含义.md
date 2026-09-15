@@ -1,6 +1,6 @@
 # DataAsset 字段说明手册
 
-对应代码状态：2026-09-04；2026-09-11 更新身体意图耗体及相关搏斗字段。给配数值/建资产的人看：每个 DataAsset 类型的字段含义、校验规则、注册方法。
+对应代码状态：2026-09-04；2026-09-11 更新身体意图耗体及相关搏斗字段；2026-09-14 §4 加墓碑。**2026-09-15 盘点：§1.2 的 RecoveryDelaySeconds／ExhaustionResumeRatio 已删（恢复闸 09-14 退役）；§5 性格表十四行已全部 DeprecatedProperty；§3 鱼定义字段已改名 *PerKilogram 并新增 Diet／SwimSpeedCoefficient／YellowStaminaGrant，待按头文件重列**（见 `Docs/Development/2026-09-15-文档盘点与处置.md`）。给配数值/建资产的人看：每个 DataAsset 类型的字段含义、校验规则、注册方法。
 
 ## 0. 所有 DataAsset 共同的规矩
 

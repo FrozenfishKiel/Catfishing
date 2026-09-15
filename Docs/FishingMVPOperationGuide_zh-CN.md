@@ -1,5 +1,7 @@
 # 钓鱼 MVP 落地操作手册
 
+> **2026-09-15 盘点：本手册已完成使命。** 步骤 1～3 要建的三棵 StateTree 已在 `Content/Data/StateTrees/`、路径已写进 `Config/DefaultGame.ini`（FishingSessionStateTree／RunFlowStateTree）；文内的选鱼时机、事件数、节点名与现行代码不符。现行接线看 `FishingBlueprintSetupGuide_zh-CN.md`，架构看 `FishingArchitecture_zh-CN.md`。文末「BakeGeometry 的坑」与资产损坏事故两段仍有用。
+
 面向：在 `Showcase2` 地图上把「放竿 → 抛竿 → 咬钩 → 搏斗 → 抄鱼」和「打窝」跑通。
 
 本文只写**还没做的事**，按执行顺序排列。已经完成的部分见文末「当前完成度」。

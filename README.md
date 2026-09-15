@@ -2,13 +2,13 @@
 
 Catfishing 是一个基于 Unreal Engine 5.8 的联机钓鱼与营地协作项目。当前工程重点不是先堆完整玩法，而是先建立一套能继续承载后续功能开发的框架：单 Runtime 模块、明确的领域目录、服务器权威的事务入口、失败时 fail-closed 的配置门禁，以及可以被 UE Automation 重复验证的模块合同和第一条跨模块纵向切片。
 
-当前代码已经具备 Frontend/Lake 基础地图、Online/Travel 状态框架、角色与 AbilitySystem 骨架、局流程与 StateTree 适配点、钓鱼/鱼容器/正式库存/图鉴/档案/营地/社交等领域服务的程序合同。正式数值、输入资产、鱼表、装备表、两棵 StateTree、Steam 双账号联机和完整产品体验仍需要后续补齐与人工验收。
+当前代码已经具备 Frontend/Lake 基础地图、Online/Travel 状态框架、角色与 AbilitySystem 骨架、局流程与 StateTree 适配点、钓鱼/鱼容器/正式库存/图鉴/档案/营地/社交等领域服务的程序合同。正式数值、输入资产、鱼表、装备表、Steam 双账号联机和完整产品体验仍需要后续补齐与人工验收（三棵 StateTree 资产已在 `Content/Data/StateTrees/`，2026-09-15 核）。
 
 ## 先看模块：当前代码分成哪些系统
 
 先把最容易混淆的地方说清楚：工程层面目前只有一个 Unreal Runtime 模块，名字叫 `Catfishing`；下面这些“模块”指的是 `Source/Catfishing/` 里的业务系统目录。也就是说，程序员平时找代码时看的是这些目录，而不是去找多个 UE Runtime Module。
 
-当前一共有 18 个主要系统目录：
+`Source/Catfishing/` 下现有 26 个系统目录（2026-09-15 数），下表只列其中 18 个；Growth、Input、Interaction、Items、Physics、Save、Settings、ShopEconomy 八个尚未入表，先看目录本身：
 
 | 分组 | 模块目录 | 它负责什么 | 你什么时候会看它 |
 |---|---|---|---|
@@ -40,18 +40,18 @@ Catfishing 是一个基于 Unreal Engine 5.8 的联机钓鱼与营地协作项�
 
 | 目录 | 存放内容 | 什么时候看 |
 |---|---|---|
-| `Docs/Development/` | 当前开发交接、自动化测试方案等“正在执行的工程说明”。 | 接手任务、判断当前阶段目标、补测试或核验测试边界时先看。 |
-| `Knowledge/Development/` | 早期框架接线溯源。 | 需要追溯阶段 A–G 的架构依据时看；当前工程事实先看 `Knowledge/Framework/` 和真实源码。 |
-| `Docs/gap-analysis/2026-09-09/` | 飞书镜像和代码的 9 号对表审计材料。 | 讨论差异时看 `SUMMARY.md` 和 `讨论清单.md`；它不是需求入口，也不是进度清单。 |
+| `Docs/Development/` | 当前开发交接、实现报告、决策台账等“正在执行的工程说明”。 | 接手任务、判断当前阶段目标、补测试或核验测试边界时先看。 |
+| `Knowledge/Development/` | 框架阅读入口（21 行；2026-09-10 起早期接线细节已删）。 | 进框架前按它的读取顺序走；当前工程事实先看 `Knowledge/Framework/` 和真实源码。 |
+| `Docs/gap-analysis/` | 设计对代码的对表报告，四轮按日期分目录（09-09、09-09-1321、09-11、09-13），每轮 `RUN.json` 记上一轮为基线；**最新基线是 `2026-09-13/`**。 | 讨论差异时看该轮 `SUMMARY.md` 与 `回填清单.md`；它不是需求入口，也不是进度清单。 |
 | `Docs/design-reviews/` | 设计侧过程材料：各轮评审报告、删除前备份、整合稿，按 `<日期-主题>/` 分文件夹（2026-09-15 从设计项目并入）。 | 查「这条裁决当时评了什么、原稿长什么样」时看；不是需求入口，里面的数字不当现行值。 |
 | `Docs/sim/` | 数值模拟脚本与 08-16／08-19 两轮报告（纯 Python 标准库）。 | 改参数前复跑；报告数字是当时的模拟结果，现行值看 `Knowledge/Design/数值模拟与参数记录.md`。 |
 | `Knowledge/Framework/` | 项目地图、规则、术语、决策、已知问题。 | 新程序员入场、整理模块边界、判断文件该放哪里、确认团队统一语言时看。 |
 | `Knowledge/Design/` | **设计真值**（2026-09-11 起）：GDD 九册、愿景、裁决账本、参数页与内容表。飞书降级为草稿／点子／同步页。 | 写具体玩法逻辑、数值、交互规则和产品验收用例前必须看。 |
-| `.codex/docs/` | AI 开发形成的测试报告、人工验收报告、程序员 Review 报告。 | 想知道“这版到底验证过什么、没验证什么、程序员从哪里审查”时看。 |
+| `.codex/docs/` | 目前只有 `items-inventory-review.md`（2026-09-10 快照，库存链此后已大改，见其页头声明）；早先说的测试报告、验收报告、Review 报告三份不存在。 | 测试与验收实况看 `Docs/Development/` 最新一份交接说明。 |
 | `Config/` | UE 默认地图、Online、输入和项目配置。 | 修改启动地图、平台服务、输入类或项目级开关时看。 |
 | `Source/Catfishing/` | 单 Runtime 模块的 C++ 实现和各系统 `Tests/`。 | 日常代码开发和 Review 的主入口。 |
-| `Content/Catfishing/Maps/` | 当前仅包含 `Frontend` 与 `Lake` 两张基础地图。 | 验证默认启动、旅行链或未来摆放场景 Actor 时看。 |
-| `Scripts/` | 地图生成和阶段 A 验证辅助脚本。 | 维护验证工具时才看；普通功能开发不应依赖脚本绕过正式入口。 |
+| `Content/Catfishing/Maps/` | `Frontend`、`Lake` 两张基础地图，另有 `TestMap`；玩法默认地图由 `Config/DefaultGame.ini` 的 GameplayMap 指定（当前 Showcase2）。 | 验证默认启动、旅行链或未来摆放场景 Actor 时看。 |
+| `Scripts/` | 资产创建／迁移脚本、设计清单刷新脚本与少量 verify 脚本；2026-09-10 起整批 `verify_*.ps1` 已删（可检查面收窄，不是实现被删）。 | 维护验证工具时才看；普通功能开发不应依赖脚本绕过正式入口。 |
 
 版本管理口径：`.codex/docs/` 和 `Knowledge/` 属于项目长期知识，应提交；`.codex/state/`、`Saved/`、`Intermediate/`、构建产物和本地缓存不提交。`Scripts/` 不是日常功能提交的默认范围，只有脚本本身成为稳定工程工具时才单独审查后提交。
 
@@ -61,7 +61,7 @@ Catfishing 是一个基于 Unreal Engine 5.8 的联机钓鱼与营地协作项�
 
 1. 先读本文，了解目录和边界。
 2. 读 `Knowledge/Framework/PROJECT_MAP.md`、`RULES.md`、`TERMS.md`，统一项目地图、文件归属和术语。
-3. 读 `Docs/Development/自动化测试方案.md`，确认当前测试护栏保护了哪些行为。
+3. 读 `Docs/Development/` 最新一份交接说明的〈测试〉节（现为 `2026-09-15-批7改动交接给两位程序.md`），确认当前测试护栏保护了哪些行为。
 4. 读 `.codex/docs/testing-report.md`，确认当前已经验证过什么、还没验证什么。
 5. 读 `Source/Catfishing/Catfishing.Build.cs`，确认模块依赖和 include 根。
 6. 按目标系统进入对应目录，例如 Online 先看 `Online/CatOnlineSubsystem.*`，钓鱼先看 `Fishing/CatFishingService.*` 和 `Fishing/CatFishingSession.*`。
@@ -99,7 +99,7 @@ Catfishing 是一个基于 Unreal Engine 5.8 的联机钓鱼与营地协作项�
 
 ### 自动化测试
 
-当前批次是 88 条 `Catfishing.Unit.*`。**`Catfishing.Slice.*` 套件已不存在**（源码里已无该命名空间），
+本节的条数与红项清单是 2026-09-12 的快照，最新统计见 `Docs/Development/2026-09-15-批7改动交接给两位程序.md`（228 条、220 通过、8 失败）。当时批次是 88 条 `Catfishing.Unit.*`。**`Catfishing.Slice.*` 套件已不存在**（源码里已无该命名空间），
 下面的口径全部按 `Catfishing.Unit` 写。
 
 日常跑：
@@ -115,7 +115,7 @@ Catfishing 是一个基于 Unreal Engine 5.8 的联机钓鱼与营地协作项�
 (Select-String -Path 'Saved/Logs/Catfishing.log' -Pattern 'Result=\{Fail\}' -AllMatches).Matches.Count
 ```
 
-**当前实际是 81 通过 / 7 失败，不是全绿。** 这 7 条红项：
+**09-12 时是 81 通过 / 7 失败。** 当时的 7 条红项（09-13、09-14 已全部修掉；现在仍红的 8 条见 09-15 交接）：
 
 ```text
 Catfishing.Unit.Fishing.BiteTiming.WorldFieldsDriveFormalStateTreeAndBobber
@@ -128,8 +128,8 @@ Catfishing.Unit.Inventory.EquipmentItemPickupRejectsFullBagAndPreventsReentrantD
 ```
 
 **改代码前先建基线**：`git stash -u` 回到对比点跑一遍，回来再跑一遍，比失败集的差集。
-不然分不清「你弄红的」和「本来就红的」。这 7 条的成因见
-`Docs/Development/2026-09-12-设计待办批量实现说明.md` 第七节。
+不然分不清「你弄红的」和「本来就红的」。这 7 条的成因与修法见
+`Docs/Development/2026-09-13-长期红项排查报告.md`（09-12 说明第七节是最早的版本）。
 
 需要完整报告（`index.json`）时：
 
