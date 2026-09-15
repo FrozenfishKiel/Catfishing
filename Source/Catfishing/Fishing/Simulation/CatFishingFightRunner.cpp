@@ -1398,7 +1398,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 		// T14：猫岸距归零＋实际外游＋总力量严格小于鱼力；有效松线没有拖拽前提。
 		const bool bOutward = FVector::DotProduct(Step.ResolvedFishVelocityCentimetersPerSecond, CatShore.WaterwardDirection) > 0.0;
 		if (bCatReachedShore && bOutward
-			&& SessionActor->TryResolvePrimaryCombinedStrength(TotalStrength) && TotalStrength < Config.FishStrength)
+			&& SessionActor->TryResolvePrimaryStrength(TotalStrength) && TotalStrength < Config.FishStrength)
 		{
 			UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_position_water SessionId=%s ShoreCm=%.3f TotalStrength=%.3f FishStrength=%.3f World=%s NetMode=%d Authority=1 Result=QueuedCatInWater"),
 				*SessionActor->GetSnapshot().FishingSessionId.ToString(), CatShore.SignedDistanceToShoreCm, TotalStrength, Config.FishStrength, *GetNameSafe(World), int32(World->GetNetMode()));

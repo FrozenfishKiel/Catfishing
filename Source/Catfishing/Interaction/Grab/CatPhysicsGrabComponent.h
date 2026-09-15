@@ -91,6 +91,9 @@ protected:
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 private:
+	friend class FCatFishingPhysicalCouplingTest;
+	/** 仅保护服务器显式持竿事务；普通伸手绝不能借此成为第二持竿入口。 */
+	bool bEstablishingExplicitHold = false;
 	UFUNCTION(Server, Reliable) void ServerSetGrabInput(bool bLeft, bool bHeld, uint32 Epoch, uint32 Sequence);
 	UFUNCTION() void OnRep_GripState();
 	void ApplyGrabInput(bool bLeft, bool bHeld);

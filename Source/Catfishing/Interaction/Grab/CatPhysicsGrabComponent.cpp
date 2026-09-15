@@ -1,4 +1,5 @@
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
+#include "Fishing/Actors/CatFishingRodActor.h"
 #include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
 
 #include "Character/Physics/CatPhysicalBodyComponent.h"
@@ -173,6 +174,9 @@ double UCatPhysicsGrabComponent::GetReachLengthCm() const
 
 bool UCatPhysicsGrabComponent::IsReachSurface(const UPrimitiveComponent* Target, const FName Bone, const bool bLeft) const
 {
+    // 09-15：普通伸手的合作目标是猫，不能把竿碰撞体当成第二个持竿入口。
+    // 服务器显式持竿仅在本次事务内豁免筛选，返回后普通伸手仍不能抓竿。
+    if (!bEstablishingExplicitHold && IsValid(Target) && Cast<ACatFishingRodActor>(Target->GetOwner())) return false;
 	const int32 Index = bLeft ? 0 : 1;
 	if (!IsValid(Target) || !IsValid(Target->GetOwner()) || Target->GetOwner() == GetOwner()
 		|| !Hands.IsValidIndex(Index) || !Hands[Index] || !Target->GetBodyInstance(Bone)
@@ -204,8 +208,10 @@ bool UCatPhysicsGrabComponent::TraceReachSurface(const bool bLeft, const FVector
 		FCollisionShape::MakeSphere(Hands[Index]->GetScaledSphereRadius()), Params);
 	bool bFound = false;
 	int32 IgnoredVolumes = 0;
+	int32 RejectedRodSurfaces = 0;
 	for (const FHitResult& Candidate : Hits)
 	{
+		if (Cast<ACatFishingRodActor>(Candidate.GetActor())) ++RejectedRodSurfaces;
 		if (!IsReachSurface(Candidate.GetComponent(), Candidate.BoneName, bLeft)) { ++IgnoredVolumes; continue; }
 		if (!bFound || Candidate.Time < Hit.Time) { Hit = Candidate; bFound = true; }
 	}
@@ -218,11 +224,11 @@ bool UCatPhysicsGrabComponent::TraceReachSurface(const bool bLeft, const FVector
 		ObservedReachSurface[Index] = Surface;
 		const auto* Physical = GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>();
 		UE_LOG(LogCatPhysicsGrab, Log,
-			TEXT("Event=physics_reach_surface World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s BodyId=%s Hand=%s GripId=%s SurfaceActor=%s Component=%s IgnoredVolumes=%d HandChannel=%d Result=%s"),
+			TEXT("Event=physics_reach_surface World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s BodyId=%s Hand=%s GripId=%s SurfaceActor=%s Component=%s IgnoredVolumes=%d RejectedRodSurfaces=%d HandChannel=%d Result=%s"),
 			*GetNameSafe(GetWorld()), int32(GetOwner()->GetNetMode()), GetOwner()->HasAuthority(), int32(GetOwner()->GetLocalRole()),
 			*GetNameSafe(GetOwner()), Physical ? *Physical->GetBodyId().ToString() : TEXT("None"), bLeft ? TEXT("Left") : TEXT("Right"),
 			*GetGripState(bLeft).GripId.ToString(), *GetNameSafe(Surface ? Surface->GetOwner() : nullptr), *GetNameSafe(Surface),
-			IgnoredVolumes, int32(Hands[Index]->GetCollisionObjectType()), bFound ? TEXT("SolidSurface") : TEXT("Clear"));
+			IgnoredVolumes, RejectedRodSurfaces, int32(Hands[Index]->GetCollisionObjectType()), bFound ? TEXT("SolidSurface") : TEXT("Clear"));
 	}
 	return bFound;
 }
@@ -559,6 +565,7 @@ bool UCatPhysicsGrabComponent::GripFromAuthority(bool bLeft,UPrimitiveComponent*
 	Hit.ImpactPoint=WorldPoint; Hit.Location=Hands[Index]->GetComponentLocation();
 	ApplyGrabInput(bLeft,true);
 	if (!IsReaching(bLeft)) return false;
+	TGuardValue<bool> ExplicitHoldScope(bEstablishingExplicitHold, true);
 	TryLatch(bLeft,Hit);
 	return IsGripping(bLeft);
 }

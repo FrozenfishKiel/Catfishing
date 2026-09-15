@@ -315,7 +315,14 @@ bool FCatFishingPhysicalCouplingTest::RunTest(const FString& Parameters)
 		FVector ClosestContact;
 		const double ClosestDistance = Rod->GetPhysicalRodBody()->GetClosestPointOnCollision(HelperContact, ClosestContact);
 		AddInfo(FString::Printf(TEXT("Event=controlled_rod_helper_contact Point=%s Closest=%s Distance=%.4f RodPose=%s"), *HelperContact.ToCompactString(), *ClosestContact.ToCompactString(), ClosestDistance, *Rod->GetPhysicalRodBody()->GetComponentTransform().ToHumanReadableString()));
-		if (!TestTrue(TEXT("helper actually holds the same rod"), HelperBody->GetGrab()->GripFromAuthority(true, Rod->GetPhysicalRodBody(), HelperContact))) return false;
+		auto* HelperGrab = HelperBody->GetGrab();
+		HelperGrab->SetGrabInput(true, true);
+		FHitResult RodContact(Rod, Rod->GetPhysicalRodBody(), HelperContact, FVector::UpVector);
+		RodContact.ImpactPoint = HelperContact;
+		HelperGrab->TryLatch(true, RodContact);
+		TestFalse(TEXT("ordinary reaching cannot latch a rod even at a valid real contact"), HelperGrab->IsGripping(true));
+		if (!TestTrue(TEXT("authority positioned hold remains available to the explicit rod service"), HelperGrab->GripFromAuthority(true, Rod->GetPhysicalRodBody(), HelperContact))) return false;
+		TestFalse(TEXT("explicit transaction does not leave the ordinary rod reach gate open"), HelperGrab->IsReachSurface(Rod->GetPhysicalRodBody(), NAME_None, true));
 		Rod->RefreshPrimaryControlFromAuthority();
 		if (!TestEqual(TEXT("two real grips retain only the explicit owner"), Rod->GetOperatorCount(), 1)) return false;
 		Rod->SetFightConstraintObservationFromAuthority(FVector::ForwardVector, 0, 0, true, 0, 50);

@@ -220,14 +220,14 @@ private:
 
 	/**
 	 * 钓鱼规则 §4.2（:176,178）的强度检查序：①竿强瞬断 → ②碾压 → ③常规搏斗。
-	 * 瞬时判定，只在搏斗开始、合力变动（换人/参与者进出）时调用一次，不是搏斗中的持续状态。
+	 * 瞬时判定，只在搏斗开始、显式换主时调用；普通力量变化与助手进出不触发。
 	 * 力量比较统一用 F_total（持竿猫当前力量，不随体力衰减）与已含完美削减的本场鱼力。
 	 * 返回 true 表示①或②已经写下终局，调用方必须立刻停止推进常规搏斗。
 	 */
 	bool EvaluateStrengthCheckOrderFromAuthority(const TCHAR* Trigger);
 
 	/** 读当前持竿猫的 F_total；体力归零不降力量，因此取 ASC 的 FishingStrength 而不是 Runner 的出力值。 */
-	bool TryResolvePrimaryCombinedStrength(double& OutCombinedStrength) const;
+	bool TryResolvePrimaryStrength(double& OutPrimaryStrength) const;
 
 	/** 读本场绑定鱼竿定义上的竿强度（静态配置，三档 25/60/210）；0 表示未裁，调用方不得据此瞬断。 */
 	bool TryResolveRodStrength(double& OutRodStrength) const;
@@ -372,13 +372,6 @@ private:
 	 * 搏斗体力是跨竿资源，会话结束不再把它写回上限。
 	 */
 	TWeakObjectPtr<ACatCharacter> StaminaOwner;
-
-	/**
-	 * 上一次跑强度检查序时观察到的 Snapshot.ActiveCombinedFishingStrength。
-	 * 它只是「合力是否变动」的判据，不是检查里用的 F_total（后者不随体力衰减，见 §4.1:170）。
-	 * 负值表示本场尚未查过。
-	 */
-	double LastStrengthCheckCombinedStrength = -1.0;
 
 	/**
 	 * 本次搏斗的起始服务器世界时间，秒；演出贡献名单向抓握组要「这一竿摸过竿的人」时的筛选窗口起点。

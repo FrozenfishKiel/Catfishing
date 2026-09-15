@@ -345,6 +345,16 @@ bool FCatFishingFormalPhysicalRunnerTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("the session publishes the actual fish balance without another charge"), Session->GetSnapshot().FishFightStaminaRemaining, Runner->State.FishStamina, 1e-8);
 		TestTrue(TEXT("the real reserved rod retains its paid durability"), Equipment->GetFishingRodDurability(SessionId, InitialDurability, bBroken)
 			&& !bBroken && InitialDurability == Session->GetSnapshot().RodDurabilityRemaining);
+		// 阈值只在开场/换主裁决。已建立的正式固定步链即使主控属性越过瞬断门，也不能额外判终局。
+		Session->SelectionResolution = ECatFishSelectionResolution::Selected;
+		Session->AttemptSnapshot.RodDefinitionId = TEXT("StarterRodT1");
+		Session->Snapshot.FishStrength = 1000000.0;
+		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 1000000.0);
+		FCatFightStepResult NoWearStep;
+		NoWearStep.bSucceeded = true;
+		Session->HandleFightRunnerStepFromAuthority(NoWearStep, Runner->State.FishStamina, ECatFishMotionIntent::StrugglingOutward);
+		TestFalse(TEXT("changing primary strength during an established fight does not repeat the instant threshold"), Session->IsTerminal());
+		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 50.0);
 		const double PaidDurability = InitialDurability;
 		if (!bHitch) TravelByRate.Add(Travel);
 		else if (TravelByRate.Num() == 2)

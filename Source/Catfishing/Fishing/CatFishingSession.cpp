@@ -752,7 +752,6 @@ bool ACatFishingSession::ScheduleWaitingProbeFromStateTree()
 	Snapshot.bGiant = false;
 	Snapshot.FishFightStaminaRemaining = 0.0;
 	FishFightStaminaInitial = 0.0;
-	LastStrengthCheckCombinedStrength = -1.0;
 	Snapshot.NormalizedFishStamina = 0.0;
 	Snapshot.bPerfectHook = false;
 	Snapshot.FishMotionIntent = ECatFishMotionIntent::None;
@@ -1221,7 +1220,7 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 	// 按冻结上下文从鱼类图鉴中选出本次的鱼种（含权重/稀有度/条件判定，具体算法在 Catalog 内部）。
 	FrozenSelectionResult = Catalog->SelectRuntimeDefinition(FrozenSelectionContext);
 	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=fishing_fish_selection_resolved SessionId=%s Selected=%s FishId=%s FightBalanceId=%s WeightKg=%.3f BaseFishStrength=%.3f StrengthPerKg=%.3f EligibleCandidates=%d PositiveWeightCandidates=%d NormalizedProbability=%.6f TimeFilter=%s WeatherFilter=%s TimeOfDay=%s Weather=%s ActivePlayers=%d ChumFields=%d FromBasePool=%d RandomSeed=%d Region=%s World=%s NetMode=%d Authority=1 LocalRole=%d"),
+		TEXT("Event=fishing_fish_selection_resolved SessionId=%s Selected=%s FishId=%s FightBalanceId=%s WeightKg=%.3f BaseFishStrength=%.3f CatConversionPerKg=%.3f EligibleCandidates=%d PositiveWeightCandidates=%d NormalizedProbability=%.6f ChumClass=%d ClassProbability=%.6f TimeFilter=%s WeatherFilter=%s TimeOfDay=%s Weather=%s ActivePlayers=%d ChumFields=%d FromBasePool=%d RandomSeed=%d Region=%s World=%s NetMode=%d Authority=1 LocalRole=%d"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphensLower),
 		FrozenSelectionResult.bSelected ? TEXT("true") : TEXT("false"),
 		*FrozenSelectionResult.FishDefinitionId.ToString(),
@@ -1230,6 +1229,7 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 		FrozenSelectionContext.StrengthPerKilogram, FrozenSelectionResult.EligibleCandidateCount,
 		FrozenSelectionResult.PositiveWeightCandidateCount,
 		FrozenSelectionResult.SelectedNormalizedProbability,
+		FrozenSelectionResult.SelectedChumClass, FrozenSelectionResult.SelectedChumClassProbability,
 		Catalog->bEnableTimeOfDayEligibilityFilter ? TEXT("Enabled") : TEXT("Bypassed"),
 		Catalog->bEnableWeatherEligibilityFilter ? TEXT("Enabled") : TEXT("Bypassed"),
 		*UEnum::GetValueAsString(FrozenSelectionContext.TimeOfDay),
@@ -1804,14 +1804,6 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 		static_cast<float>(Step.FishConstraintCorrectionCentimeters);
 	RefreshFightSummary(); // 每步都重新校验参与者是否仍然合法在场（掉线/倒地会即时反映）。
 	PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency); // 搏斗数值每步都要尽快同步给客户端表现层。
-	// §4.2（:178）的"合力变动时"重查：只有 F_total 真的变了才跑一次瞬断/碾压，不是每步轮询。
-	// 翻肚之后不再查——那时对抗已经结束，收尾只剩拖岸。
-	if (Snapshot.Phase == ECatFishingPhase::HookedFight
-		&& !FMath::IsNearlyEqual(Snapshot.ActiveCombinedFishingStrength, LastStrengthCheckCombinedStrength)
-		&& EvaluateStrengthCheckOrderFromAuthority(TEXT("CombinedStrengthChanged")))
-	{
-		return;
-	}
 	if (Step.Outcome == ECatFightStepOutcome::Escaped)
 	{
 		// 鱼距超过最大线长与逃脱余量后直接逃脱，无需先进入 NearShore。
@@ -2121,12 +2113,12 @@ bool ACatFishingSession::SpawnLandedFishPickupFromAuthority(const FVector& Surfa
 	return true;
 }
 
-// F_total 读取流程：钓鱼规则 §4.1（:168,170）——无辅助时 F_total 就是持竿猫的当前力量，
+// 阈值只读持竿猫当前力量；协助者的物理牵引不进入这项属性，
 // 且"当前力量不随体力衰减，体力低不降力量"。所以这里读 ASC 的 FishingStrength 属性，
 // 而不是 Runner 每步算出的出力值（后者在体力归零时会被压成 0，那是出力不是力量）。
-bool ACatFishingSession::TryResolvePrimaryCombinedStrength(double& OutCombinedStrength) const
+bool ACatFishingSession::TryResolvePrimaryStrength(double& OutPrimaryStrength) const
 {
-	OutCombinedStrength = 0.0;
+	OutPrimaryStrength = 0.0;
 	const ACatCharacter* Fisher = FisherCharacter.Get();
 	const UCatAbilitySystemComponent* AbilitySystem = Fisher ? Fisher->GetCatAbilitySystemComponent() : nullptr;
 	if (!AbilitySystem)
@@ -2139,7 +2131,7 @@ bool ACatFishingSession::TryResolvePrimaryCombinedStrength(double& OutCombinedSt
 	{
 		return false;
 	}
-	OutCombinedStrength = Strength;
+	OutPrimaryStrength = Strength;
 	return true;
 }
 
@@ -2210,18 +2202,17 @@ bool ACatFishingSession::TryResolveRodStrength(double& OutRodStrength) const
 }
 
 // 强度检查序流程（钓鱼规则 §4.2:176,178）：①竿强瞬断 → ②碾压 → ③常规搏斗。
-// 瞬时判定，只在搏斗开始与合力变动（换人／参与者进出）时各跑一次，绝不是搏斗中的持续状态。
+// 瞬时判定，只在搏斗开始与显式换主时各跑一次；抓猫、松手和属性变化不另开终局裁决。
 bool ACatFishingSession::EvaluateStrengthCheckOrderFromAuthority(const TCHAR* Trigger)
 {
 	if (!HasAuthority() || IsTerminal() || SelectionResolution != ECatFishSelectionResolution::Selected)
 	{
 		return false;
 	}
-	// 无论这次是否裁出终局都要记下观察值，否则同一份合力会被反复重查。
-	LastStrengthCheckCombinedStrength = Snapshot.ActiveCombinedFishingStrength;
-	double CombinedStrength = 0.0;
+	// 仅采样本次持竿猫的属性，不缓存合力、不按固定步重查。
+	double PrimaryStrength = 0.0;
 	const double FishStrength = Snapshot.FishStrength; // 已含完美削减，§3.4（:149）要求此后一律用削后值。
-	if (!TryResolvePrimaryCombinedStrength(CombinedStrength)
+	if (!TryResolvePrimaryStrength(PrimaryStrength)
 		|| !FMath::IsFinite(FishStrength) || FishStrength <= 0.0)
 	{
 		// 读不到任一边的力量就不裁瞬断也不裁碾压；依赖缺失由各自的 fail-closed 门禁处理。
@@ -2229,14 +2220,14 @@ bool ACatFishingSession::EvaluateStrengthCheckOrderFromAuthority(const TCHAR* Tr
 	}
 	double RodStrength = 0.0;
 	const bool bRodStrengthConfigured = TryResolveRodStrength(RodStrength);
-	// ① 竿强瞬断：竿强度不超过「总力量与鱼力中较小的那个」就当场断竿，张力由两端较小者决定。
-	if (bRodStrengthConfigured && RodStrength <= FMath::Min(CombinedStrength, FishStrength))
+	// ① 竿强瞬断：竿强度不超过「持竿猫力量与鱼力中较小的那个」就当场断竿，张力由两端较小者决定。
+	if (bRodStrengthConfigured && RodStrength <= FMath::Min(PrimaryStrength, FishStrength))
 	{
 		UE_LOG(LogCatFishing, Warning,
-			TEXT("Event=fishing_rod_strength_snapped SessionId=%s Trigger=%s RodStrength=%.3f CombinedStrength=%.3f "
+			TEXT("Event=fishing_rod_strength_snapped SessionId=%s Trigger=%s RodStrength=%.3f PrimaryStrength=%.3f "
 				"FishStrength=%.3f Phase=%s RodDefinition=%s %s"),
 			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), Trigger ? Trigger : TEXT("None"),
-			RodStrength, CombinedStrength, FishStrength, *UEnum::GetValueAsString(Snapshot.Phase),
+			RodStrength, PrimaryStrength, FishStrength, *UEnum::GetValueAsString(Snapshot.Phase),
 			*AttemptSnapshot.RodDefinitionId.ToString(),
 			*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
 		// 2026-09-12 拍：瞬断和耐久归零一样**报废鱼竿**。设计对两条路用的是同一个词「断竿」、
@@ -2268,17 +2259,17 @@ bool ACatFishingSession::EvaluateStrengthCheckOrderFromAuthority(const TCHAR* Tr
 			}
 		}
 		TerminateSession(ECatFishingOutcome::LineBroken,
-			TEXT("Rod strength did not exceed the smaller of combined strength and fish strength; rod destroyed"));
+			TEXT("Rod strength did not exceed the smaller of primary strength and fish strength; rod destroyed"));
 		return true;
 	}
 	// ② 碾压：猫力达到鱼力的 2 倍即碾压，直接把鱼甩上岸；达标立即飞鱼、跳过或中断搏斗循环。
-	if (CombinedStrength >= FishStrength * GetDefault<UCatFishingSettings>()->GetOverpowerStrengthRatio())
+	if (PrimaryStrength >= FishStrength * GetDefault<UCatFishingSettings>()->GetOverpowerStrengthRatio())
 	{
 		UE_LOG(LogCatFishing, Log,
-			TEXT("Event=fishing_fish_overpowered SessionId=%s Trigger=%s CombinedStrength=%.3f FishStrength=%.3f "
+			TEXT("Event=fishing_fish_overpowered SessionId=%s Trigger=%s PrimaryStrength=%.3f FishStrength=%.3f "
 				"Ratio=%.3f Phase=%s %s"),
 			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), Trigger ? Trigger : TEXT("None"),
-			CombinedStrength, FishStrength, CombinedStrength / FishStrength,
+			PrimaryStrength, FishStrength, PrimaryStrength / FishStrength,
 			*UEnum::GetValueAsString(Snapshot.Phase),
 			*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
 		if (FlingFishAshoreFromAuthority())
