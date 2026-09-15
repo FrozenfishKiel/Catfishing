@@ -13,7 +13,7 @@
 - 当前架构先读本目录和真实源码；`Docs/Architecture/项目技术方案.md` 与接线溯源只作为背景材料，凡与当前源码冲突都以本目录为准。
 - 当前代码事实先读本文和本目录其他文件。
 - 构建、运行和验收证据看 `Docs/Development/` 最新一份交接说明（现为 `2026-09-15-批7改动交接给两位程序.md`）；早先写的 `.codex/docs/testing-report.md`、`acceptance-report.md`、`review-report.md` 三份不存在。
-- `Knowledge/Design/` 是设计真值（2026-09-11 起）：正文直接改这里、走 git；内容表 CSV 仍在飞书填、定稿拉进来；`_feishu/` 是飞书非正式页的只读快照。动手前读该目录 README。
+- `Knowledge/Design/` 是设计真值（2026-09-11 起）：正文直接改这里、走 git；内容表 CSV 在飞书填、定稿拉进来。动手前读该目录 README。
 - 旧的 `Knowledge/GDD/` 快照与 `Knowledge/Feishu/` 镜像都已删除；遇到同名或改名文档以 `Knowledge/Design/README.md` 为准。
 - `Docs/gap-analysis/` 是设计对代码的对表审计材料，最新基线 `2026-09-13/`；总览看 `SUMMARY.md`，待处置项看 `回填清单.md`。在属主确认前，它不等同于产品需求、工程进度或代码修改指令。
 

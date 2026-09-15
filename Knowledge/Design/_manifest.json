@@ -37,22 +37,6 @@
       "feishu_revision_id": 29
     },
     {
-      "title": "里程碑",
-      "node_token": "IiJOwUQeQiZwUokQqKocQaUknRc",
-      "obj_token": "BFc3dw8SZo6oSrxoRAicfo2mnvb",
-      "obj_type": "docx",
-      "depth": 0,
-      "path": [
-        "里程碑"
-      ],
-      "has_child": false,
-      "file": "里程碑.md",
-      "revision_id": "37f7af93c722",
-      "lines": 49,
-      "content_sha1": "37f7af93c722",
-      "feishu_revision_id": 118
-    },
-    {
       "title": "动作表现集",
       "node_token": "HuFUwyepFiFA4lkb24ecPYEMnbf",
       "obj_token": "Mdr7dvUX1ouzGUxuMx0cqNifnYe",
@@ -96,9 +80,9 @@
       ],
       "has_child": true,
       "file": "GDD 系统分册/GDD 系统分册.md",
-      "revision_id": "04f3c0911ee8",
+      "revision_id": "006f6af7e95c",
       "lines": 164,
-      "content_sha1": "04f3c0911ee8",
+      "content_sha1": "006f6af7e95c",
       "feishu_revision_id": 176
     },
     {
@@ -442,9 +426,9 @@
       ],
       "has_child": false,
       "file": "设计修改记录.md",
-      "revision_id": "79d12b2b726d",
+      "revision_id": "bfa7928f8ad0",
       "lines": 305,
-      "content_sha1": "79d12b2b726d",
+      "content_sha1": "bfa7928f8ad0",
       "feishu_revision_id": 98
     },
     {
