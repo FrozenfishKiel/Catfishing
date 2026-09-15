@@ -1,0 +1,286 @@
+# 黑鱼 —— 鱼表格「第一版」一行按 author-model/1 展开的样板（2026-09-09）
+# 目的：验证 3.4.7 的内容层约定放到 UE 侧一条真实内容上是什么样：字段分类、来源、发布映射、讨论各落哪里。
+# 值全部来自镜像与代码的固定版本，见 sources；本文件不是发布输入，UE 资产仍由工程按输入包生成。
+schema_version: author-model/1
+sources:
+  - id: src.sheet
+    locator: "Knowledge/Feishu/GDD 系统分册/鱼/鱼表格/第一版.csv 第 12 行（黑鱼）"
+    version: "sheet-revision-821"
+  - id: src.sidecar
+    locator: "Knowledge/Schema/鱼表格.第一版.yaml"
+    version: "2026-09-09 初版"
+  - id: src.header
+    locator: "Source/Catfishing/Data/CatFishDefinition.h（UCatFishDefinition 成员）"
+    version: "git 87ba975"
+  - id: src.package
+    locator: ".harness/formal-fish-asset-input-package.json（sources.fish_table.revision、ue_required_fields、generated_assets）"
+    version: "package fish_table revision 580（2026-08-25）"
+  - id: src.rule
+    locator: "Knowledge/Feishu/GDD 系统分册/钓鱼系统/钓鱼规则.md:159-160,293"
+    version: "钓鱼规则 v1.5（2026-09-08）"
+  - id: src.rulings
+    locator: "Knowledge/Feishu/裁决同步/设计修改记录.md：「钱成澔名下三件由李前臻代拍（09-08 晚）」「鱼表格加 fish_id 列（09-09）」"
+    version: "doc revision 83"
+  - id: src.dlog
+    locator: "Docs/Development/工程自补决策记录.md D-20 行"
+    version: "git 87ba975"
+  - id: src.eat
+    locator: "Knowledge/Feishu/GDD 系统分册/猫咪与状态/吃鱼效果.md:27（黄色体力 +20／+20／+50：小彩鱼／黑鱼／猫神祝福）"
+    version: "吃鱼效果 v1.8"
+  - id: src.gap
+    locator: "Docs/gap-analysis/2026-09-09/鱼.md 与 钓鱼系统-核心.md（复核后）"
+    version: "git 87ba975 之后的工作区，2026-09-09 上午"
+  - id: src.sample
+    locator: "本文件的人工编排与核对"
+    version: "blackfish-sample/1"
+catalogs:
+  - id: catalog.fish.formal
+    fields:
+      - id: catalog.fish.formal.selector
+        classification: declarative
+        kind: value
+        value: "Content/Catfishing/Data/Fish/Fish_*.uasset"
+        sources: [src.package]
+        effective: "输入包 generated_assets 列出的 16 个正式鱼资产；只读 glob 观测，不手抄成员表。"
+      - id: catalog.fish.formal.count
+        classification: declarative
+        kind: value
+        value: 16
+        sources: [src.package]
+        effective: "package revision 580 时的成员数；快照观测值，不作为未来数量约束。"
+mechanisms:
+  - id: mechanism.stamina-init
+    status: indexed
+    fields:
+      - id: mechanism.stamina-init.rule
+        classification: interpretive
+        owner: Framework
+        kind: value
+        value: "初始体力 = 鱼表体力系数 × 实际重量；此后由鱼行为模型维护、钓鱼只读、≤0 翻肚（钓鱼规则 v1.5 §4.1）。代码仍读每鱼种定额 FishFightStamina，未接系数。"
+        sources: [src.rule, src.gap]
+        effective: "规则已定；实现落后，见 release.lag。"
+  - id: mechanism.strength-k
+    status: gap
+    fields:
+      - id: mechanism.strength-k.rule
+        classification: interpretive
+        owner: Framework
+        kind: value
+        value: "鱼力量 = 重量 × K。设计侧 K 逐鱼（参数页 v0.30「K 取鱼表 G 列现值」），工程侧 D-20 于 09-03 定全局 StrengthPerKilogram=10、逐鱼 K 不进资产；两边未合一，已入 需求对齐差距清单 §4「巨影门槛」。"
+        sources: [src.dlog, src.gap]
+        effective: "缺口：哪一侧作废尚无裁决；本样板只记录，不选边。"
+instances:
+  - id: fish.blackfish
+    version: "sheet-revision-821"
+    identity:
+      - id: fish.blackfish.id
+        classification: declarative
+        kind: value
+        value: Fish_Blackfish
+        sources: [src.sheet, src.package]
+        effective: "fish_id 列（W）；与资产名 Fish_Blackfish.uasset、FishDefinitionId 同一字符串。程序按它对鱼，不按名字。"
+      - id: fish.blackfish.name
+        classification: declarative
+        kind: value
+        value: 黑鱼
+        sources: [src.sheet]
+        effective: "名字列（A）；展示名，改名不改身份。"
+      - id: fish.blackfish.region
+        classification: declarative
+        kind: value
+        value: River
+        sources: [src.sheet, src.sidecar]
+        effective: "出现地点列「河流」经 sidecar 枚举映射为 River；森林湖对应的 ForestLake 水域工程尚未建。"
+      - id: fish.blackfish.rarity
+        classification: declarative
+        kind: value
+        value: 珍稀
+        sources: [src.sheet]
+        effective: "稀有度列；代码 RarityTierId 的取值集合在资产里未核，sidecar 标「待核」，发布前要补映射。"
+    adopted:
+      fields:
+        - id: fish.blackfish.weight.min
+          classification: declarative
+          kind: value
+          value: 3
+          sources: [src.sheet]
+          effective: "单位 kg；重量列「3~8」拆出下限；发布到 MinimumWeightKilograms。"
+        - id: fish.blackfish.weight.max
+          classification: declarative
+          kind: value
+          value: 8
+          sources: [src.sheet]
+          effective: "单位 kg；重量列「3~8」拆出上限；发布到 MaximumWeightKilograms。"
+        - id: fish.blackfish.strength.k
+          classification: declarative
+          kind: value
+          value: 11.5
+          sources: [src.sheet]
+          effective: "力量系数 K 列；鱼力量 = 重量 × K。当前不发布：工程按全局 StrengthPerKilogram=10（见 mechanism.strength-k）。"
+        - id: fish.blackfish.stamina.coef
+          classification: declarative
+          kind: value
+          value: 18
+          sources: [src.sheet, src.rulings]
+          effective: "体力系数列；初始体力 = 18 × 实际重量。占位＝原定额 100 ÷ 重量中点 5.5，正式值走模拟；发布目标 FishFightStamina 需先改成系数语义。"
+        - id: fish.blackfish.exp.coef
+          classification: declarative
+          kind: value
+          value: 15
+          sources: [src.sheet]
+          effective: "经验系数列；经验 = 15 × 实际重量（2026-09-07 拍）；代码 EatingExperience 仍是定额，发布前要改成系数语义。"
+        - id: fish.blackfish.chum
+          classification: declarative
+          kind: value
+          value: Fishy
+          sources: [src.sheet, src.sidecar]
+          effective: "需求窝料属性列「腥」→ FCatChumVector.Fishy=1，其余 0（sidecar 变换）；混合配比表里没有。"
+        - id: fish.blackfish.bait
+          classification: declarative
+          kind: value
+          value: MeatBait
+          sources: [src.sheet, src.sidecar]
+          effective: "偏好饵列「肉块饵」→ BaitWeightMultipliers 中 MeatBait 倍率 >1、其余 1；倍率数值不在表里（每鱼×每饵矩阵未建）。"
+        - id: fish.blackfish.diet
+          classification: declarative
+          kind: value
+          value: 食肉
+          sources: [src.sheet]
+          effective: "食性列；鱼的行为页用它取 P_base，代码无对应字段；不发布。"
+        - id: fish.blackfish.effort.range
+          classification: declarative
+          kind: value
+          value: "3~6"
+          sources: [src.sheet]
+          effective: "发力段长列，单位秒，快照值；代码读 Fight_* 性格模板，无逐鱼字段；不发布。"
+        - id: fish.blackfish.rest.range
+          classification: declarative
+          kind: value
+          value: "2~5"
+          sources: [src.sheet]
+          effective: "休息段长列，单位秒，快照值；同上不发布。"
+        - id: fish.blackfish.speed.coef
+          classification: declarative
+          kind: value
+          value: 1
+          sources: [src.sheet]
+          effective: "游速系数列（按鱼种写死 1；设计口径「按体重档」未合一，一致性检查矛盾 10）；不发布。"
+        - id: fish.blackfish.description
+          classification: declarative
+          kind: value
+          value: "凶残的掠食鱼，也许不那么好钓，但收益绝对大"
+          sources: [src.sheet]
+          effective: "图鉴描述列；文案即值，发布到 Description。"
+        - id: fish.blackfish.buff
+          classification: interpretive
+          owner: Framework
+          kind: value
+          value: "增加黄色体力 +20（一次性护盾；2026-08-21 裁定，原「瞬回50%+临时上限」废）"
+          sources: [src.sheet, src.eat]
+          effective: "限时Buff 列是快照文案；效果定义在吃鱼效果页 §2，代码里是 buff 资产；表缺 buff_id 列，不能直接发布。"
+        - id: fish.blackfish.eat.effect
+          classification: interpretive
+          owner: Framework
+          kind: value
+          value: "增长大量经验，增加一定黄色体力（一次性）"
+          sources: [src.sheet]
+          effective: "吃鱼效果列；人从这列翻译成 FoodSafety=Safe 与 buff；不发布。"
+        - id: fish.blackfish.traits
+          classification: interpretive
+          owner: Interface
+          kind: value
+          value: "黑黑的鱼，力气大大的"
+          sources: [src.sheet]
+          effective: "特点列；作者备注，不进资产。"
+        - id: fish.blackfish.bite.presentation
+          classification: interpretive
+          owner: Interface
+          kind: value
+          value: "黑鱼几乎不进行试探，鱼漂突然向斜下方猛沉"
+          sources: [src.sheet]
+          effective: "「鱼刚咬饵时，鱼漂的变化」列，给表现层的描述；落到 PresentationDefinition 由人配，不发布。"
+        - id: fish.blackfish.mechanisms
+          classification: declarative
+          kind: mechanism_refs
+          value: [mechanism.stamina-init, mechanism.strength-k]
+          sources: [src.sample]
+          effective: "本样板索引的两条机制；ID 是样板本地分配，不是项目契约编号。"
+      branches: []
+    release:
+      - id: fish.blackfish.release.asset
+        classification: declarative
+        kind: value
+        value: "Content/Catfishing/Data/Fish/Fish_Blackfish.uasset"
+        sources: [src.package]
+        effective: "资产存在，按输入包 fish_table revision 580 生成；资产内实际值本文件未读取。"
+      - id: fish.blackfish.release.lag
+        classification: interpretive
+        owner: C
+        kind: value
+        value: "资产落后于表：580 → 821 之间改了体力系数（09-08）、fish_id（09-09）；体力与经验两列的系数语义代码未接。重生成前这条鱼的运行值是旧定额。"
+        sources: [src.package, src.gap]
+        effective: "由工程重生成资产并改 FishFightStamina／EatingExperience 语义后才消除；本文件只记录。"
+    discussion:
+      - id: fish.blackfish.disc.stamina
+        target: fish.blackfish
+        target_version: "sheet-revision-821"
+        fields:
+          - id: fish.blackfish.disc.stamina.text
+            classification: interpretive
+            owner: Framework
+            kind: value
+            value: "18 是折算占位。黑鱼 3 kg 初始体力 54、8 kg 144，比原定额 100 的两端更散；第三轮模拟要看小重量黑鱼是否太好遛。"
+            sources: [src.rulings, src.sample]
+            effective: "未采纳讨论，不进入发布。"
+      - id: fish.blackfish.disc.k
+        target: fish.blackfish
+        target_version: "sheet-revision-821"
+        fields:
+          - id: fish.blackfish.disc.k.text
+            classification: interpretive
+            owner: Framework
+            kind: value
+            value: "逐鱼 K 11.5 与全局 10 差 15%；若工程侧保留全局 K，表里这一列该退役而不是留着当参考。"
+            sources: [src.dlog, src.sample]
+            effective: "等 §4「巨影门槛」裁决；未采纳，不进入发布。"
+publication_ir:
+  - id: projection.blackfish.ue
+    instance_id: fish.blackfish
+    fields:
+      - id: out.FishDefinitionId
+        from: [fish.blackfish.id]
+      - id: out.DisplayName
+        from: [fish.blackfish.name]
+      - id: out.RegionIds
+        from: [fish.blackfish.region]
+      - id: out.RarityTierId
+        from: [fish.blackfish.rarity]
+      - id: out.MinimumWeightKilograms
+        from: [fish.blackfish.weight.min]
+      - id: out.MaximumWeightKilograms
+        from: [fish.blackfish.weight.max]
+      - id: out.ChumPreference
+        from: [fish.blackfish.chum]
+      - id: out.BaitWeightMultipliers
+        from: [fish.blackfish.bait]
+      - id: out.FishFightStamina
+        from: [fish.blackfish.stamina.coef]
+      - id: out.EatingExperience
+        from: [fish.blackfish.exp.coef]
+      - id: out.Description
+        from: [fish.blackfish.description]
+    excluded:
+      - fish.blackfish.strength.k
+      - fish.blackfish.diet
+      - fish.blackfish.effort.range
+      - fish.blackfish.rest.range
+      - fish.blackfish.speed.coef
+      - fish.blackfish.buff
+      - fish.blackfish.eat.effect
+      - fish.blackfish.traits
+      - fish.blackfish.bite.presentation
+      - fish.blackfish.mechanisms
+      - fish.blackfish.release.asset
+      - fish.blackfish.release.lag
+      - fish.blackfish.disc.stamina.text
+      - fish.blackfish.disc.k.text
