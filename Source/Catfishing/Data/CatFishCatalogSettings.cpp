@@ -1,31 +1,15 @@
 #include "Data/CatFishCatalogSettings.h"
 
 #include "Data/CatFishDefinition.h"
-#include "Curves/CurveFloat.h"
 #include "Logging/CatLog.h"
 
 namespace CatFishCatalogSettingsPrivate
 {
-	// 墓碑（2026-09-13，D-29）：移除挑战三带、选带权重及连续挑战倍率；硬安全上限仍独立保留。
-
-	static double ResolveStrengthPerKilogram(const UCatFishDefinition& Definition,
-		const FCatFishSelectionContext& Context, int32& UnsetCount)
-	{
-		// 复用既有迁移口径，普通池与基础池不能对同一份未迁资产作相反裁决。
-		if (FMath::IsFinite(Definition.FishStrengthPerKilogram) && Definition.FishStrengthPerKilogram > 0.0)
-			return Definition.FishStrengthPerKilogram;
-		++UnsetCount;
-		return Context.StrengthPerKilogram;
-	}
+	// 2026-09-15：正式抽鱼不再读取挑战度。
 
 	static bool PassesWaterRegionGate(const UCatFishDefinition& Definition, const FName RegionId)
 	{
 		return Definition.IsRuntimeDefinitionReady() && Definition.RegionIds.Contains(RegionId);
-	}
-
-	static bool IsChallengeSelectionReady(const UCatFishCatalogSettings& Settings)
-	{
-		return FMath::IsFinite(Settings.MaximumChallengeRatio) && Settings.MaximumChallengeRatio > 0.0;
 	}
 
 	static double SampleIndividualWeight(const UCatFishDefinition& Definition,
@@ -40,51 +24,13 @@ namespace CatFishCatalogSettingsPrivate
 			static_cast<float>(Definition.MaximumWeightKilograms)));
 	}
 
-	static double CalculateChallengeRatio(const double FishStrength,
-		const double FishStamina, const double CombinedFishingStrength,
-		const double CombinedFightStamina)
-	{
-		const double StrengthRatio = FishStrength / CombinedFishingStrength;
-		const double StaminaRatio = FishStamina / CombinedFightStamina;
-		// 力量是持续约束对抗的危险下限，不能被低体力稀释；体力只有在鱼也具备相称力量时才构成持续挑战。
-		// 调和均值降低“高体力、极低力量”个体的挑战比值，避免硬安全门把它误判为高强度运动对手。
-		const double BalancedRatio = (2.0 * StrengthRatio * StaminaRatio)
-			/ (StrengthRatio + StaminaRatio);
-		return FMath::Max(StrengthRatio, BalancedRatio);
-	}
-
 	// 完美削减只允许落在 (0,1]：未配置、非有限或越界一律退回 1.0，保证配置缺失时只是"不削减"，不会放大鱼或把值清零。
 	static double SanitizePerfectMultiplier(const double Multiplier)
 	{
 		return FMath::IsFinite(Multiplier) && Multiplier > 0.0 && Multiplier <= 1.0 ? Multiplier : 1.0;
 	}
 
-	static bool IsSaturationReady(const UCurveFloat* Curve, const double HalfSaturation,
-		const double MaximumModifier)
-	{
-		if (!Curve || !FMath::IsFinite(HalfSaturation) || HalfSaturation <= 0.0
-			|| !FMath::IsFinite(MaximumModifier) || MaximumModifier < 1.0)
-		{
-			return false;
-		}
-		double Previous = Curve->GetFloatValue(0.0f);
-		if (!FMath::IsFinite(Previous) || !FMath::IsNearlyEqual(Previous, 1.0, UE_DOUBLE_SMALL_NUMBER)
-			|| Previous < 0.0 || Previous > MaximumModifier)
-		{
-			return false;
-		}
-		for (int32 Index = 1; Index <= 64; ++Index)
-		{
-			const double Value = Curve->GetFloatValue(static_cast<float>(Index) / 64.0f);
-			if (!FMath::IsFinite(Value) || Value + UE_DOUBLE_SMALL_NUMBER < Previous
-				|| Value < 0.0 || Value > MaximumModifier)
-			{
-				return false;
-			}
-			Previous = Value;
-		}
-		return true;
-	}
+
 }
 
 // ID 查询流程：遍历显式清单并同步解析定义；只接受唯一完整 ID，重复命中立即返回空以阻止数据冲突进入事务。
@@ -141,184 +87,108 @@ FCatFishBiteTimingDefaults UCatFishCatalogSettings::ResolveBiteTiming(const UCat
 	return Result;
 }
 
+// 两步抽鱼：先按窝料三轴占比冻结类别，再只在该类的合法候选中按鱼饵权重抽鱼。
+// 人数与生态条件仍是准入门；猫的力量/体力、鱼的稀有度和旧 SpawnWeight 不参与概率。
 FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
-	const FCatFishSelectionContext& Context) const
+    const FCatFishSelectionContext& Context) const
 {
-	FCatFishSelectionResult Result;
-	if (!FMath::IsFinite(Context.CatchWeightBonus) || Context.CatchWeightBonus < 0.0
-		|| !Context.WaterRegion.IsValid() || !Context.ChumSample.bSucceeded
-		|| !(Context.ChumSample.WaterRegion == Context.WaterRegion)
-		|| Context.ActivePlayerCount < 1 || Context.ActivePlayerCount > 8
-		|| !FMath::IsFinite(Context.CombinedFishingStrength) || Context.CombinedFishingStrength <= 0.0
-		|| !FMath::IsFinite(Context.CombinedFightStamina) || Context.CombinedFightStamina <= 0.0)
-	{
-		return Result;
-	}
-	UCurveFloat* SaturationCurve = ChumSaturationCurve.LoadSynchronous();
-	if (!CatFishCatalogSettingsPrivate::IsSaturationReady(SaturationCurve, ChumAffinityHalfSaturation,
-		MaximumChumModifier) || !CatFishCatalogSettingsPrivate::IsChallengeSelectionReady(*this))
-	{
-		return Result;
-	}
-	struct FCandidate
-	{
-		UCatFishDefinition* Definition = nullptr;
-		double WeightKilograms = 0.0;
-		double BaseFishStrength = 0.0;
-		double FinalWeight = 0.0;
-	};
-	// 墓碑（2026-09-14，鱼册 §3.1.2、设计修改记录④）：正式曲线在零浓度处必须为 1，
-	// 因此空窝不会自然触发 ZeroTotalWeight。显式走已批准基础池，非空窝的加权公式保持原样。
-	const FCatChumVector& Chum = Context.ChumSample.EffectiveChumVector;
-	if (Chum.Fishy == 0.0 && Chum.Fragrant == 0.0 && Chum.Fermented == 0.0)
-		return SelectFromBasePool(Context, TEXT("EmptyChum"));
-	TArray<FCandidate> Candidates;
-	// 单独统计逐鱼 K 尚未落到资产的迁移缺口；这些鱼仍可使用有效的全局兜底。
-	int32 UnsetStrengthCoefficientCount = 0;
-	for (const TSoftObjectPtr<UCatFishDefinition>& DefinitionRef : Definitions)
-	{
-		UCatFishDefinition* Definition = DefinitionRef.LoadSynchronous();
-		if (!Definition || !CatFishCatalogSettingsPrivate::PassesWaterRegionGate(*Definition,
-			Context.WaterRegion.RegionId))
-		{
-			continue;
-		}
-		// 先确定本鱼种在本次咬钩机会里的个体重量，再用同一重量推导力量和挑战度；选中后复用该重量。
-		const double WeightKilograms = CatFishCatalogSettingsPrivate::SampleIndividualWeight(
-			*Definition, Context);
-		// 逐鱼 K 未迁移时沿用既有全局兜底；资产补值后自动优先逐鱼值，两者都无效才跳过。
-		const double StrengthPerKilogram = CatFishCatalogSettingsPrivate::ResolveStrengthPerKilogram(
-			*Definition, Context, UnsetStrengthCoefficientCount);
-		if (!FMath::IsFinite(StrengthPerKilogram) || StrengthPerKilogram <= 0.0)
-		{
-			continue;
-		}
-		const double BaseFishStrength = WeightKilograms * StrengthPerKilogram;
-		// 挑战度是第一道实际玩法门：超出安全上限的个体不会再进入任何生态条件或权重计算。
-		// 鱼体力同样是逐鱼系数 × 实际重量（2026-09-08 改口径）；挑战度必须拿同一个量纲去比，
-		// 否则「体力系数」会被当成体力点直接和猫的体力总量比较，轻重鱼一律错档。
-		const double FishFightStamina = Definition->ResolveInitialFightStamina(WeightKilograms);
-		const double ChallengeRatio = CatFishCatalogSettingsPrivate::CalculateChallengeRatio(
-			BaseFishStrength, FishFightStamina,
-			Context.CombinedFishingStrength, Context.CombinedFightStamina);
-		if (!FMath::IsFinite(WeightKilograms) || WeightKilograms <= 0.0
-			|| !FMath::IsFinite(BaseFishStrength) || BaseFishStrength <= 0.0
-			|| !FMath::IsFinite(FishFightStamina) || FishFightStamina <= 0.0
-			|| !FMath::IsFinite(ChallengeRatio) || ChallengeRatio <= 0.0
-			|| ChallengeRatio > MaximumChallengeRatio)
-		{
-			continue;
-		}
-		// 时段和天气已有稳定扩展接缝，但测试期默认旁路；人数门继续保护多人鱼不会进入人数不足的局。
-		if (!FCatFishEligibilityPolicy::PassesTimeOfDay(*Definition, Context.TimeOfDay,
-			bEnableTimeOfDayEligibilityFilter)
-			|| !FCatFishEligibilityPolicy::PassesWeather(*Definition, Context.Weather,
-				bEnableWeatherEligibilityFilter)
-			|| !FCatFishEligibilityPolicy::PassesActivePlayerCount(*Definition, Context.ActivePlayerCount))
-		{
-			continue;
-		}
-		FCandidate& Candidate = Candidates.AddDefaulted_GetRef();
-		Candidate.Definition = Definition;
-		Candidate.WeightKilograms = WeightKilograms;
-		Candidate.BaseFishStrength = BaseFishStrength;
-	}
-	if (UnsetStrengthCoefficientCount > 0)
-	{
-		// 鱼表「力量系数K」列还没落到 Fish_*.uasset，这些候选暂用迁移前的全局系数换算力量。
-		// 数值会偏离设计（尤其巨影 K5 与普通鱼不该同系数），但比把它们跳掉、让钓鱼抽不到鱼强。
-		UE_LOG(LogCatFishing, Warning,
-			TEXT("Event=fish_selection_strength_coefficient_unset Region=%s FellBackToGlobal=%d Global=%.3f "
-				"Note=MigrationFallbackUntilFishAssetsCarryPerFishK"),
-			*Context.WaterRegion.RegionId.ToString(), UnsetStrengthCoefficientCount, Context.StrengthPerKilogram);
-	}
-	Candidates.Sort([](const FCandidate& Left, const FCandidate& Right)
-	{
-		return Left.Definition->FishDefinitionId.LexicalLess(Right.Definition->FishDefinitionId);
-	});
-	if (Candidates.IsEmpty())
-	{
-		// 候选为空＝落基础池（2026-09-08 李前臻裁「候选为空或总权重为零落基础池」）。
-		// 空窝、条件门全筛掉、名册没填都走这一条，绝不静默空钩。
-		return SelectFromBasePool(Context, TEXT("NoEligibleCandidate"));
-	}
-	Result.EligibleCandidateCount = Candidates.Num();
-	FRandomStream Random(Context.RandomSeed);
-	// 所有条件门通过后，全部合法候选共同计算窝料/鱼饵权重并归一化；挑战度只用于上面的硬安全门。
-	double TotalCandidateWeight = 0.0;
-	for (FCandidate& Candidate : Candidates)
-	{
-		const double RawAffinity = Context.ChumSample.EffectiveChumVector.Fishy
-				* Candidate.Definition->ChumPreference.Fishy
-			+ Context.ChumSample.EffectiveChumVector.Fragrant
-				* Candidate.Definition->ChumPreference.Fragrant
-			+ Context.ChumSample.EffectiveChumVector.Fermented
-				* Candidate.Definition->ChumPreference.Fermented;
-		if (!FMath::IsFinite(RawAffinity))
-		{
-			return FCatFishSelectionResult();
-		}
-		const double NormalizedAffinity = RawAffinity <= 0.0 ? 0.0
-			: RawAffinity / (RawAffinity + ChumAffinityHalfSaturation);
-		const double ChumModifier = FMath::Clamp(
-			static_cast<double>(SaturationCurve->GetFloatValue(static_cast<float>(NormalizedAffinity))),
-			0.0, MaximumChumModifier);
-		const double BaitModifier = Candidate.Definition->FindBaitMultiplierOrNeutral(Context.BaitDefinitionId);
-		Candidate.FinalWeight = Candidate.Definition->SpawnWeight * ChumModifier
-			* BaitModifier;
-		if (FMath::IsFinite(Candidate.FinalWeight) && Candidate.FinalWeight > 0.0)
-		{
-			TotalCandidateWeight += Candidate.FinalWeight;
-			++Result.PositiveWeightCandidateCount;
-		}
-	}
-	if (!FMath::IsFinite(TotalCandidateWeight) || TotalCandidateWeight <= 0.0)
-	{
-		// 总权重为零＝落基础池（同一条裁决的另一半）：有合法候选但窝料/鱼饵把它们全乘成 0。
-		return SelectFromBasePool(Context, TEXT("ZeroTotalWeight"));
-	}
-	double Cursor = Random.FRandRange(0.0f, static_cast<float>(TotalCandidateWeight));
-	const FCandidate* Selected = nullptr;
-	for (const FCandidate& Candidate : Candidates)
-	{
-		if (!FMath::IsFinite(Candidate.FinalWeight)
-			|| Candidate.FinalWeight <= 0.0)
-		{
-			continue;
-		}
-		Selected = &Candidate; // 最后一个正权重候选也是浮点游标落在尾端时的确定性回退。
-		Cursor -= Candidate.FinalWeight;
-		if (Cursor <= 0.0)
-		{
-			break;
-		}
-	}
-	if (!Selected)
-	{
-		return Result;
-	}
-	Result.bSelected = true;
-	Result.FishDefinitionId = Selected->Definition->FishDefinitionId;
-	Result.WeightKilograms = Selected->WeightKilograms;
-	Result.BaseFishStrength = Selected->BaseFishStrength;
-	Result.SelectedFinalWeight = Selected->FinalWeight;
-	Result.SelectedNormalizedProbability = Selected->FinalWeight / TotalCandidateWeight;
-	return Result;
+    FCatFishSelectionResult Result;
+    const FCatChumVector& Chum = Context.ChumSample.EffectiveChumVector;
+    if (!FMath::IsFinite(Context.CatchWeightBonus) || Context.CatchWeightBonus < 0.0
+        || !Context.WaterRegion.IsValid() || !Context.ChumSample.bSucceeded
+        || !(Context.ChumSample.WaterRegion == Context.WaterRegion)
+        || Context.ActivePlayerCount < 1 || Context.ActivePlayerCount > 8
+        || !FMath::IsFinite(Chum.Fishy) || Chum.Fishy < 0.0
+        || !FMath::IsFinite(Chum.Fragrant) || Chum.Fragrant < 0.0
+        || !FMath::IsFinite(Chum.Fermented) || Chum.Fermented < 0.0)
+        return Result;
+    const double Axes[] = {Chum.Fishy, Chum.Fragrant, Chum.Fermented};
+    const double TotalChum = Chum.Fishy + Chum.Fragrant + Chum.Fermented;
+    if (!FMath::IsFinite(TotalChum)) return Result;
+    if (TotalChum <= 0.0) return SelectFromBasePool(Context, TEXT("EmptyChum"));
+    FRandomStream Random(Context.RandomSeed);
+    double ClassCursor = Random.GetFraction() * TotalChum;
+    int32 SelectedClass = INDEX_NONE;
+    for (int32 Index = 0; Index < 3; ++Index)
+    {
+        if (Axes[Index] <= 0.0) continue;
+        SelectedClass = Index;
+        ClassCursor -= Axes[Index];
+        if (ClassCursor < 0.0) break;
+    }
+    const double ClassProbability = Axes[SelectedClass] / TotalChum;
+    struct FCandidate
+    {
+        UCatFishDefinition* Definition = nullptr;
+        double WeightKilograms = 0.0;
+        double BaseFishStrength = 0.0;
+        double Weight = 0.0;
+    };
+    TArray<FCandidate> Candidates;
+    TSet<FName> Seen;
+    double TotalWeight = 0.0;
+    int32 InvalidStrengthCoefficientCount = 0;
+    for (const TSoftObjectPtr<UCatFishDefinition>& Ref : Definitions)
+    {
+        UCatFishDefinition* Fish = Ref.LoadSynchronous();
+        if (!Fish || !CatFishCatalogSettingsPrivate::PassesWaterRegionGate(*Fish, Context.WaterRegion.RegionId)
+            || !FCatFishEligibilityPolicy::PassesActivePlayerCount(*Fish, Context.ActivePlayerCount)
+            || !FCatFishEligibilityPolicy::PassesTimeOfDay(*Fish, Context.TimeOfDay, bEnableTimeOfDayEligibilityFilter)
+            || !FCatFishEligibilityPolicy::PassesWeather(*Fish, Context.Weather, bEnableWeatherEligibilityFilter)) continue;
+        const double Membership[] = {Fish->ChumPreference.Fishy, Fish->ChumPreference.Fragrant, Fish->ChumPreference.Fermented};
+        if (Membership[SelectedClass] <= 0.0) continue;
+        if (Seen.Contains(Fish->FishDefinitionId))
+        {
+            UE_LOG(LogCatFishing, Warning, TEXT("Event=fish_selection_duplicate_id Fish=%s Region=%s Result=Rejected"),
+                *Fish->FishDefinitionId.ToString(), *Context.WaterRegion.RegionId.ToString());
+            return Result;
+        }
+        Seen.Add(Fish->FishDefinitionId);
+        const double K = Fish->FishStrengthPerKilogram;
+        if (!FMath::IsFinite(K) || K <= 0.0) { ++InvalidStrengthCoefficientCount; continue; }
+        const double Kg = CatFishCatalogSettingsPrivate::SampleIndividualWeight(*Fish, Context);
+        const double Weight = Fish->FindBaitMultiplierOrNeutral(Context.BaitDefinitionId);
+        if (!FMath::IsFinite(K) || K <= 0.0 || !FMath::IsFinite(Kg) || Kg <= 0.0
+            || !FMath::IsFinite(K * Kg) || !FMath::IsFinite(Weight) || Weight <= 0.0) continue;
+        Candidates.Add({Fish, Kg, K * Kg, Weight});
+        TotalWeight += Weight;
+    }
+    if (InvalidStrengthCoefficientCount > 0)
+        UE_LOG(LogCatFishing, Warning, TEXT("Event=fish_selection_strength_coefficient_unset Region=%s RejectedCandidates=%d"),
+            *Context.WaterRegion.RegionId.ToString(), InvalidStrengthCoefficientCount);
+    // 已选类别没有合法鱼时走基础池，不悄悄重抽其他类别、改变窝料占比。
+    if (Candidates.IsEmpty()) return SelectFromBasePool(Context, TEXT("SelectedClassEmpty"));
+    if (!FMath::IsFinite(TotalWeight) || TotalWeight <= 0.0) return SelectFromBasePool(Context, TEXT("ZeroTotalWeight"));
+    Candidates.Sort([](const FCandidate& A, const FCandidate& B)
+    { return A.Definition->FishDefinitionId.LexicalLess(B.Definition->FishDefinitionId); });
+    double Cursor = Random.GetFraction() * TotalWeight;
+    const FCandidate* Selected = &Candidates.Last();
+    for (const FCandidate& Candidate : Candidates)
+    {
+        Cursor -= Candidate.Weight;
+        if (Cursor < 0.0) { Selected = &Candidate; break; }
+    }
+    Result.bSelected = true;
+    Result.FishDefinitionId = Selected->Definition->FishDefinitionId;
+    Result.WeightKilograms = Selected->WeightKilograms;
+    Result.BaseFishStrength = Selected->BaseFishStrength;
+    Result.SelectedFinalWeight = Selected->Weight;
+    Result.SelectedNormalizedProbability = ClassProbability * Selected->Weight / TotalWeight;
+    Result.EligibleCandidateCount = Result.PositiveWeightCandidateCount = Candidates.Num();
+    Result.SelectedChumClass = SelectedClass;
+    Result.SelectedChumClassProbability = ClassProbability;
+    return Result;
 }
 
-// 食性档位取值流程：只在配置落在 (0,1) 开区间时才认；0 与越界都返回 0，代表「这一档未裁」，
-// 由行为侧退回测试期性格模板——不能把 0 当成合法的「永不向外」。
+// 食性概率尚未裁定时返回 0，由行为解析器沿已记录的模板接缝处理。
 double UCatFishCatalogSettings::ResolveDietOutwardSegmentProbability(const ECatFishDiet Diet) const
 {
-	const double Configured = Diet == ECatFishDiet::Carnivore ? CarnivoreOutwardSegmentProbability
-		: Diet == ECatFishDiet::Omnivore ? OmnivoreOutwardSegmentProbability
-		: Diet == ECatFishDiet::Herbivore ? HerbivoreOutwardSegmentProbability : 0.0;
-	return FMath::IsFinite(Configured) && Configured > 0.0 && Configured < 1.0 ? Configured : 0.0;
+    const double Configured = Diet == ECatFishDiet::Carnivore ? CarnivoreOutwardSegmentProbability
+        : Diet == ECatFishDiet::Omnivore ? OmnivoreOutwardSegmentProbability
+        : Diet == ECatFishDiet::Herbivore ? HerbivoreOutwardSegmentProbability : 0.0;
+    return FMath::IsFinite(Configured) && Configured > 0.0 && Configured < 1.0 ? Configured : 0.0;
 }
 
-// 基础池抽取流程：只按名册自己的固定概率抽，不读窝料、鱼饵、挑战度与稀有度——它是兜底名册不是第二套生态。
-// 仍然保留三道客观门：鱼定义必须就绪、必须属于本水域、必须满足在场协作人数（单人局不会兜出需要多人的鱼）。
-// 时段/天气两门跟随各自开关，与主链一致。名册没填或全被门挡掉时返回未选中，并记一条 Warning 指出是哪一种。
 FCatFishSelectionResult UCatFishCatalogSettings::SelectFromBasePool(const FCatFishSelectionContext& Context,
 	const TCHAR* FallbackReason) const
 {
@@ -332,7 +202,7 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectFromBasePool(const FCatFi
 		double BaseFishStrength = 0.0;
 	};
 	TArray<FBasePoolCandidate> Candidates;
-	int32 UnsetStrengthCoefficientCount = 0;
+	int32 InvalidStrengthCoefficientCount = 0;
 	double TotalProbability = 0.0;
 	TSet<FName> SeenIds;
 	for (const FCatFishBasePoolEntry& Entry : BasePool)
@@ -364,8 +234,8 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectFromBasePool(const FCatFi
 			continue;
 		}
 		const double WeightKilograms = CatFishCatalogSettingsPrivate::SampleIndividualWeight(*Definition, Context);
-		const double StrengthPerKilogram = CatFishCatalogSettingsPrivate::ResolveStrengthPerKilogram(
-			*Definition, Context, UnsetStrengthCoefficientCount);
+		const double StrengthPerKilogram = Definition->FishStrengthPerKilogram;
+		if (!FMath::IsFinite(StrengthPerKilogram) || StrengthPerKilogram <= 0.0) { ++InvalidStrengthCoefficientCount; continue; }
 		if (!FMath::IsFinite(WeightKilograms) || WeightKilograms <= 0.0
 			|| !FMath::IsFinite(StrengthPerKilogram) || StrengthPerKilogram <= 0.0)
 		{
@@ -376,13 +246,14 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectFromBasePool(const FCatFi
 		Candidate.Probability = Entry.Probability;
 		Candidate.WeightKilograms = WeightKilograms;
 		Candidate.BaseFishStrength = WeightKilograms * StrengthPerKilogram;
+		if (!FMath::IsFinite(Candidate.BaseFishStrength)) { Candidates.Pop(); continue; }
 		TotalProbability += Entry.Probability;
 	}
-	if (UnsetStrengthCoefficientCount > 0)
+	if (InvalidStrengthCoefficientCount > 0)
 	{
 		UE_LOG(LogCatFishing, Warning,
-			TEXT("Event=fish_selection_strength_coefficient_unset Region=%s RandomSeed=%d Source=BasePool UnsetEntries=%d Global=%.3f Note=MigrationFallbackUntilFishAssetsCarryPerFishK"),
-			*Context.WaterRegion.RegionId.ToString(), Context.RandomSeed, UnsetStrengthCoefficientCount, Context.StrengthPerKilogram);
+			TEXT("Event=fish_selection_strength_coefficient_unset Region=%s RandomSeed=%d Source=BasePool RejectedCandidates=%d"),
+			*Context.WaterRegion.RegionId.ToString(), Context.RandomSeed, InvalidStrengthCoefficientCount);
 	}
 	if (Candidates.IsEmpty() || !FMath::IsFinite(TotalProbability) || TotalProbability <= 0.0)
 	{

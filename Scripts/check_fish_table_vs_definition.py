@@ -22,6 +22,7 @@ import argparse
 import csv
 import io
 import json
+import hashlib
 import re
 import sys
 from pathlib import Path
@@ -183,8 +184,22 @@ def main(argv=None) -> int:
     pkg_rev = ((pkg.get("sources") or {}).get("fish_table") or {}).get("revision")
     req = pkg.get("ue_required_fields") or []
     P(f"- 输入包按表 revision **{pkg_rev}** 生成（{((pkg.get('sources') or {}).get('fish_table') or {}).get('live_read_at_local', '?')}）；镜像现在是 **{sheet.get('revision', '?')}**。")
-    if pkg_rev and sheet.get("revision") and int(sheet["revision"]) > int(pkg_rev):
-        problems += 1; P("- ❌ 资产落后于表：表在输入包之后又改了（含 09-08 体力系数、09-09 fish_id），资产未重生成。")
+    migration = pkg.get("current_migration") or {}
+    if migration:
+        # 定向迁移有明确CSV和包哈希时，八月生成revision只代表历史，不能据此宣称现资产没迁。
+        files = dict(migration.get("asset_sha256") or {})
+        files[migration["source"]] = migration["source_sha256"]
+        files[migration["bait_source"]] = migration["bait_sha256"]
+        mismatched = [name for name, expected in files.items()
+                      if not (ROOT / name).is_file()
+                      or hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != expected]
+        if mismatched:
+            problems += 1
+            P(f"- ❌ 定向迁移后有输入/资产变化，需要重新核验：{mismatched}")
+        else:
+            P(f"- ✅ {migration['date']} 定向迁移的CSV与{len(migration['asset_sha256'])}个包哈希一致；只证明这份已核验快照，未覆盖正式GE/表现缺口。")
+    elif pkg_rev and sheet.get("revision") and int(sheet["revision"]) > int(pkg_rev):
+        problems += 1; P("- ❌ 历史输入包版本落后于镜像，缺少新迁移证据；需开引擎核对现资产，不能仅凭版本差断言实际字段值。")
     req_missing = [f for f in req if f not in fields]
     if req_missing:
         problems += 1; P(f"- ❌ 输入包要求的字段头文件里没有：{req_missing}")

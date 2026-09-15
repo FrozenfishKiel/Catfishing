@@ -809,7 +809,6 @@ void UCatOnlineSubsystem::CollectGameplayStartupAssetPaths(TArray<FSoftObjectPat
 		{
 			AddUniquePath(OutAssetPaths, Definition.ToSoftObjectPath());
 		}
-		AddUniquePath(OutAssetPaths, FishCatalogSettings->ChumSaturationCurve.ToSoftObjectPath());
 	}
 
 	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();

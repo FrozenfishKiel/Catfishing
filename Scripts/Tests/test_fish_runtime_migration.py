@@ -50,14 +50,14 @@ class FishMigrationTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             M.prepare(fish, pool)
         pool = self.table(["fish_id", "权重"], [["Fish_A", 2]], "pool.csv")
-        self.assertEqual(M.prepare(fish, pool)["base_pool"], [{"FishDefinitionId": "Fish_A", "Probability": 2.0}])
+        self.assertEqual(M.prepare(fish, pool)["base_pool"], [{"AssetName": "Fish_A", "Probability": 2.0}])
         pool = self.table(["fish_id", "权重"], [["Fish_A", 1], ["Fish_A", 2]], "pool.csv")
         with self.assertRaises(ValueError):
             M.prepare(fish, pool)
 
     def test_editor_import_preflights_all_identities_and_uses_fish_properties(self):
         writes = []
-        asset = types.SimpleNamespace(get_editor_property=lambda field: "Fish_A", set_editor_property=lambda field, value: writes.append((field, value)))
+        asset = types.SimpleNamespace(get_editor_property=lambda field: "RuntimeA", set_editor_property=lambda field, value: writes.append((field, value)))
         ue = types.SimpleNamespace(load_asset=lambda path: asset if path.endswith("Fish_A") else None,
                                    CatEnvironmentTimeOfDay=types.SimpleNamespace(DAY="day"), CatEnvironmentWeather=types.SimpleNamespace(CLEAR="clear"))
         patch = M.prepare(self.table(["fish_id", "试探期", "真咬响应窗"], [["Fish_A", 2, 12], ["Fish_B", 3, 15]]))
@@ -68,6 +68,7 @@ class FishMigrationTest(unittest.TestCase):
         self.assertEqual(M.import_into_editor_memory(patch, ue), 1)
         self.assertIn(("probe_duration_seconds", 2.0), writes)
         self.assertIn(("true_bite_window_seconds", 12.0), writes)
+        self.assertFalse(any(field in ("fish_definition_id", "time_of_day", "weather") for field, _ in writes))
 
 
 if __name__ == "__main__":

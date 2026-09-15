@@ -109,15 +109,6 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Catalog")
 	TArray<TSoftObjectPtr<UCatFishDefinition>> Definitions;
 
-	UPROPERTY(Config, EditAnywhere, Category = "Selection")
-	TSoftObjectPtr<class UCurveFloat> ChumSaturationCurve;
-
-	UPROPERTY(Config, EditAnywhere, Category = "Selection")
-	double ChumAffinityHalfSaturation = 0.0;
-
-	UPROPERTY(Config, EditAnywhere, Category = "Selection")
-	double MaximumChumModifier = 0.0;
-
 	/**
 	 * 测试期默认关闭；开启后才按 FishDefinition.TimeOfDay 过滤候选鱼。
 	 * T23：开启后鱼定义 TimeOfDay 为空数组＝未配置，拒绝并 Warning（不得当作不受约束），
@@ -139,22 +130,6 @@ public:
 	TArray<FCatFishBasePoolEntry> BasePool;
 
 	/**
-	 * Fish_*.uasset 的体力列是否还是 2026-09-08 之前的「每鱼种一份定额体力」。
-	 *
-	 * 为什么是一个总开关而不是按值猜：算过了，猜不出来。旧定额 ＝ 系数 × 重量中点，
-	 * 而重量中点在鱼表里横跨 0.22~27.5 kg，于是旧定额（15~261）与正式系数（9.5~250）两个区间完全重叠——
-	 * 小银鱼的旧定额 15 比它的系数 67 小，湖心巨影的旧定额 261 比它的系数 9.5 大。
-	 * 任何「超过某个数就当成旧定额」的阈值都会既漏判又误判。
-	 * 但这 16 份资产是同一批、按同一个表 revision 生成的，迁与不迁是整体状态，所以用一个显式开关表达。
-	 *
-	 * 为 true 时取值按裁决给的占位口径「原定额 ÷ 重量中点」现场折算并记 Warning（设计修改记录.md:275）；
-	 * 它只是让没迁数据的工程能开起来，不是正式数值来源。
-	 * 张佳终版鱼表重生成资产之后，把这一行改成 False，过渡逻辑整条失效。
-	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Migration")
-	bool bFishAssetsStillHoldLegacyFlatFightStamina = true;
-
-	/**
 	 * 食性 → 段末「下一段向外」的基础概率（鱼的行为 §2 的 P_base）。三个值都在 (0,1) 内才生效。
 	 * 默认 0 ＝ 未裁：食性列仍然读，但不改变行为，鱼按测试期性格模板跑。
 	 * 为什么不直接写死 70/50/35：那三个数只出现在「鱼的行为」页，该页页头写明「待整页重写，实现不读本页」，
@@ -169,15 +144,10 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Selection|Behavior", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	double HerbivoreOutwardSegmentProbability = 0.0;
 
-	// 墓碑（2026-09-13，D-29）：三带阈值、选带权重和连续挑战倍率配置已删除，保留硬安全门。
-	/** 可进入抽取池的挑战度安全上限；允许略强于当前玩家的鱼出现，超过此值仍 fail-closed。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Selection|Challenge", meta = (ClampMin = "0.0"))
-	double MaximumChallengeRatio = 0.0;
-
 	/**
 	 * 取「稀有鱼」完美系数的稀有度档 ID 清单；不在清单里的档一律按「普通鱼」取（钓鱼规则 §3.4 末句）。
 	 * 墓碑（2026-09-14）：五档含事件的旧口径退役（设计修改记录 2026-09-13 裁决⑤）。
-	 * 现行四档最高为珍稀，实际资产 ID 为 Rare；巨影按普通系数，清单为空时也全部按普通鱼取。
+	 * 现行四档最高为珍稀，迁移后资产 ID 为 VeryRare；巨影按普通系数，清单为空时也全部按普通鱼取。
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Perfect Hook")
 	TArray<FName> RarePerfectHookRarityTierIds;

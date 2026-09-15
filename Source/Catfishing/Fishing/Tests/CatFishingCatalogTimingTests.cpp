@@ -35,7 +35,7 @@ bool FCatFishingCatalogTimingDefaultsTest::RunTest(const FString& Parameters)
 		{TEXT("ElectricEel"), {2.5, 13.0}},
 		{TEXT("Pike"), {3.0, 15.0}}
 	};
-	TestEqual(TEXT("逐鱼覆盖16键齐全"), Catalog->BiteTimingOverridesByFishDefinitionId.Num(), 16);
+	TestTrue(TEXT("迁移后没有重复逐鱼配置"), Catalog->BiteTimingOverridesByFishDefinitionId.IsEmpty());
 	TestEqual(TEXT("正式配置四键齐全"), Catalog->BiteTimingDefaultsByRarityTier.Num(), 4);
 	TestEqual(TEXT("正式鱼目录包含16条"), Catalog->Definitions.Num(), 16);
 	TSet<FName> SeenTiers;
@@ -52,14 +52,14 @@ bool FCatFishingCatalogTimingDefaultsTest::RunTest(const FString& Parameters)
 		const TCHAR* ResponseSource = nullptr;
 		TestTrue(TEXT("生产试探解析器成功"), Session->TryResolveProbeDurationSeconds(Probe, &ProbeSource));
 		TestTrue(TEXT("生产响应解析器成功"), Session->TryResolveTrueBiteWindowSeconds(Response, &ResponseSource));
-		TestEqual(TEXT("试探优先逐鱼，否则逐鱼设计值"), Probe, Fish->ProbeDurationSeconds > 0.0 ? Fish->ProbeDurationSeconds : Timing->X);
-		TestEqual(TEXT("响应优先逐鱼，否则逐鱼设计值"), Response, Fish->TrueBiteWindowSeconds > 0.0 ? Fish->TrueBiteWindowSeconds : Timing->Y);
-		TestTrue(TEXT("正式16条均不走任何旧兜底"), FString(ProbeSource) != TEXT("LegacyFallback") && FString(ResponseSource) != TEXT("LegacyFallback"));
+		TestEqual(TEXT("试探优先逐鱼，否则逐鱼设计值"), Probe, Timing->X);
+		TestEqual(TEXT("响应优先逐鱼，否则逐鱼设计值"), Response, Timing->Y);
+		TestTrue(TEXT("正式16条均不走任何旧兜底"), FString(ProbeSource) == TEXT("Asset") && FString(ResponseSource) == TEXT("Asset"));
 		TestTrue(TEXT("响应在8到15秒内，绝不落全局3秒"), Response >= 8.0 && Response <= 15.0);
 		AddInfo(FString::Printf(TEXT("Event=formal_fish_timing_verified Fish=%s RarityTierId=%s ProbeSeconds=%.3f ProbeSource=%s ResponseSeconds=%.3f ResponseSource=%s"),
 			*Fish->FishDefinitionId.ToString(), *Fish->RarityTierId.ToString(), Probe, ProbeSource, Response, ResponseSource));
 	}
-	TestEqual(TEXT("正式加载覆盖Event等全部四键"), SeenTiers.Num(), 4);
+	TestEqual(TEXT("正式加载覆盖四档且不含旧Event"), SeenTiers.Num(), 4);
 	return !HasAnyErrors();
 }
 
@@ -75,6 +75,12 @@ bool FCatFishingCatalogTimingOverridesTest::RunTest(const FString& Parameters)
 	Session->FishDefinition = Fish;
 	auto* Catalog = GetMutableDefault<UCatFishCatalogSettings>();
 	TGuardValue<TMap<FName, FCatFishBiteTimingDefaults>> RestoreDefaults(Catalog->BiteTimingDefaultsByRarityTier, Catalog->BiteTimingDefaultsByRarityTier);
+    TGuardValue<TMap<FName, FCatFishBiteTimingDefaults>> RestoreOverrides(Catalog->BiteTimingOverridesByFishDefinitionId, Catalog->BiteTimingOverridesByFishDefinitionId);
+    // 显式构造兼容消费者，生产16鱼不再依赖逐鱼配置。
+    FCatFishBiteTimingDefaults LegacyDefaults; LegacyDefaults.ProbeDurationSeconds=1.75; LegacyDefaults.TrueBiteWindowSeconds=10.0;
+    FCatFishBiteTimingDefaults FishOverride; FishOverride.ProbeDurationSeconds=2.0; FishOverride.TrueBiteWindowSeconds=11.0;
+    Catalog->BiteTimingDefaultsByRarityTier.Add(TEXT("Common"), LegacyDefaults);
+    Catalog->BiteTimingOverridesByFishDefinitionId.Add(TEXT("LittleSilverFish"), FishOverride);
 	Fish->RarityTierId = TEXT("Common");
 	double Probe = 0.0, Response = 0.0;
 	Fish->ProbeDurationSeconds = 6.25;
@@ -181,7 +187,7 @@ bool FCatFishFormalBasePoolTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishBasePoolStrengthMigrationTest,
-	"Catfishing.Unit.Data.FishSelection.BaseAndWeightedPoolsShareAuthoredStrengthAndMigrationFallback",
+	"Catfishing.Unit.Data.FishSelection.BaseAndWeightedPoolsUseAuthoredStrengthAndRejectMissingK",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 bool FCatFishBasePoolStrengthMigrationTest::RunTest(const FString& Parameters)
 {
@@ -203,26 +209,24 @@ bool FCatFishBasePoolStrengthMigrationTest::RunTest(const FString& Parameters)
 	Context.ActivePlayerCount = 1;
 	Context.CombinedFishingStrength = Context.CombinedFightStamina = 1000000.0;
 	Context.RandomSeed = 42;
-	for (const double AssetK : {6.0, 0.0})
-	{
-		Fish->FishStrengthPerKilogram = AssetK; // 仅改瞬态副本，模拟将来的资产迁移。
-		Context.StrengthPerKilogram = 10.0;
-		for (const bool bEmpty : {true, false})
-		{
-			Context.ChumSample.EffectiveChumVector.Fishy = bEmpty ? 0.0 : 1.0;
-			const auto Result = Catalog->SelectRuntimeDefinition(Context);
-			TestTrue(TEXT("两种池均能选中已配置或待迁移鱼"), Result.bSelected);
-			TestEqual(TEXT("空窝与非空窝进入各自生产分支"), Result.bFromBasePool, bEmpty);
-			TestEqual(TEXT("逐鱼K优先，缺配才沿用既有全局K"), Result.BaseFishStrength,
-				Result.WeightKilograms * (AssetK > 0.0 ? AssetK : 10.0), 1e-6);
-		}
-	}
-	Context.StrengthPerKilogram = 0.0;
-	for (const bool bEmpty : {true, false})
-	{
-		Context.ChumSample.EffectiveChumVector.Fishy = bEmpty ? 0.0 : 1.0;
-		TestFalse(TEXT("逐鱼与全局K都缺配时仍拒绝，不编造鱼力量"), Catalog->SelectRuntimeDefinition(Context).bSelected);
-	}
+    Fish->FishStrengthPerKilogram=6.0;
+    Context.StrengthPerKilogram=1000.0; // 猫方换算不得影响鱼力量。
+    for (const bool bEmpty : {true, false})
+    {
+        Context.ChumSample.EffectiveChumVector.Fermented=bEmpty ? 0.0 : 1.0;
+        const auto Result=Catalog->SelectRuntimeDefinition(Context);
+        TestTrue(TEXT("两种池均能选中已迁移鱼"), Result.bSelected);
+        TestEqual(TEXT("空窝与非空窝进入各自生产分支"), Result.bFromBasePool, bEmpty);
+        TestEqual(TEXT("力量只读逐鱼K"), Result.BaseFishStrength, Result.WeightKilograms*6.0, 1e-6);
+    }
+    AddExpectedMessage(TEXT("Event=fish_selection_strength_coefficient_unset"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 3);
+    AddExpectedMessage(TEXT("Event=fish_selection_base_pool_unavailable"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 2);
+    Fish->FishStrengthPerKilogram=0.0;
+    for (const bool bEmpty : {true, false})
+    {
+        Context.ChumSample.EffectiveChumVector.Fermented=bEmpty ? 0.0 : 1.0;
+        TestFalse(TEXT("缺失逐鱼K不能借用全局K"), Catalog->SelectRuntimeDefinition(Context).bSelected);
+    }
 	return !HasAnyErrors();
 }
 

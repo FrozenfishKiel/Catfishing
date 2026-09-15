@@ -83,27 +83,24 @@
   "ue_required_fields": [
     "FishDefinitionId",
     "BodyClass",
-    "SacrificeContribution",
     "RarityTierId",
     "RegionIds",
     "TimeOfDay",
     "Weather",
-    "SpawnWeight",
     "MinimumWeightKilograms",
     "MaximumWeightKilograms",
     "ScoopTargetRadiusCentimeters",
     "MinimumFightParticipants",
-    "FishStrength",
-    "FishFightStamina",
-    "BitePersonalityId",
+    "FishStrengthPerKilogram",
+    "FishFightStaminaPerKilogram",
     "FightPersonalityId",
     "ChumPreference",
     "BaitWeightMultipliers",
     "FoodSafety",
-    "EatingExperience",
-    "PoisonIncrease",
+    "EatingExperiencePerKilogram",
     "bTankDisplayEligible",
-    "bEnableRuntimeDefinition"
+    "bEnableRuntimeDefinition",
+    "PresentationDefinition"
   ],
   "generated_assets": {
     "fish_definitions": [
@@ -163,5 +160,53 @@
     "reason": "These prototype-only assets are no longer registered by runtime config. Their binary packages remain until an Unreal Editor reference audit can prove deletion is safe; runtime and verification paths must not use them."
   },
   "blocking_gaps": [],
-  "asset_readiness_rule": "This package is ready when generated fish, bite, and fight DataAssets exist, Config/DefaultGame.ini references them instead of DA_Fish_Test01, DA_Bite_Test01, or DA_Fight_Test01, and blocking_gaps is empty. The package remains provisional product content, but no longer blocks the runtime from using formal fish assets."
+  "asset_readiness_rule": "This package is ready when generated fish, bite, and fight DataAssets exist, Config/DefaultGame.ini references them instead of DA_Fish_Test01, DA_Bite_Test01, or DA_Fight_Test01, and blocking_gaps is empty. The package remains provisional product content, but no longer blocks the runtime from using formal fish assets.",
+  "historical_metadata_notice": "2026-08-25 authoring_basis/sources/runtime_fit_notes describe the original generated snapshot, not current field values. current_migration records the 2026-09-15 scoped migration. This evidence does not close a delivery module.",
+  "current_migration": {
+    "date": "2026-09-15",
+    "scope": "16 fish approved numeric fields, rarity, chum class, bait matrix and windows; stable runtime IDs and presentation references preserved",
+    "source": "Knowledge/Design/GDD 系统分册/鱼/鱼表格/第一版.csv",
+    "source_sha256": "bd5e75a0a98ec72cc5c44c7e04d0cb9b3015560a035263ba7168e97e45a7d80d",
+    "bait_source": "Knowledge/Design/GDD 系统分册/鱼/鱼表格/饵权重.csv",
+    "bait_sha256": "b29f00626dba61edf32eb190b8f6a799988534583d47f695af34d619ff101cb5",
+    "script": "Scripts/migrate_fish_design_data.py",
+    "verification": "Saved/FishAlignment/fish-data-verified.json",
+    "conflicts": "Docs/FishFightImplementationGuide_zh-CN.md",
+    "identities": {
+      "Fish_RiverPattern": "RiverPatternFish",
+      "Fish_LittleSilver": "LittleSilverFish",
+      "Fish_LittleColor": "LittleColorFish",
+      "Fish_ForestLongtail": "ForestLongtailFish",
+      "Fish_SilvermoonTrout": "SilvermoonTrout",
+      "Fish_LakeGiantShadow": "LakeGiantShadow",
+      "Fish_Petal": "PetalFish",
+      "Fish_Windbell": "WindbellFish",
+      "Fish_Salted": "SaltedFish",
+      "Fish_Stinky": "StinkyFish",
+      "Fish_Blackfish": "Blackfish",
+      "Fish_Loach": "Loach",
+      "Fish_EstuaryBass": "EstuaryBass",
+      "Fish_Puffer": "PufferFish",
+      "Fish_ElectricEel": "ElectricEel",
+      "Fish_Pike": "Pike"
+    },
+    "asset_sha256": {
+      "Content/Catfishing/Data/Fish/Fish_RiverPattern.uasset": "b285936a6cfdcb38ea77d7bd00c0049ac481cebd2b866f51c7cc7e059dff1f6a",
+      "Content/Catfishing/Data/Fish/Fish_LittleSilver.uasset": "11d5f27122411d9f4952229745d711870533c2e6a206572e61371266ceee16d7",
+      "Content/Catfishing/Data/Fish/Fish_LittleColor.uasset": "068550392657861f96e2a98ec8d1d0a73da9444c6d13c279b0775e96c4a7305b",
+      "Content/Catfishing/Data/Fish/Fish_ForestLongtail.uasset": "cc2ba2758606b1a23bbdbfadb982a87bbfc3ab1c86d9380345045d8d2d294df9",
+      "Content/Catfishing/Data/Fish/Fish_SilvermoonTrout.uasset": "56238b20c0f29c22d6cfdbb103eac78032f879111ba4511fab5a5c4a39c18845",
+      "Content/Catfishing/Data/Fish/Fish_LakeGiantShadow.uasset": "27c007d89d7cd714d44171d3c6c274c52493d7c07cc423ec64955c50a05e7ca0",
+      "Content/Catfishing/Data/Fish/Fish_Petal.uasset": "7b37d7aa3beb3f9551624893cf0dc70b86ed50cfa06c5e63d3fe58215c4453ae",
+      "Content/Catfishing/Data/Fish/Fish_Windbell.uasset": "37146d78d199dae56b095890f6c41c6cc1c69d8f993c1a92f946fd402083bddc",
+      "Content/Catfishing/Data/Fish/Fish_Salted.uasset": "8544583cd6261ea537f14ee537c7fd25c388c2ad906432c13a75f86674c3ab0e",
+      "Content/Catfishing/Data/Fish/Fish_Stinky.uasset": "04f8321c3e5bcddf9e95a378df45a56b617797a26d74fcc23418d9caa014763e",
+      "Content/Catfishing/Data/Fish/Fish_Blackfish.uasset": "8b05bc7c89a0d79234b95f89fb5078bb18041bb3d8b72203b672aa950aec6b70",
+      "Content/Catfishing/Data/Fish/Fish_Loach.uasset": "1d914eff2cd9902a9a0814b103de00ac5ec395182b72fda585d170d9124f5c5f",
+      "Content/Catfishing/Data/Fish/Fish_EstuaryBass.uasset": "84e43d079054ee4758e9a69cf1d88fb12b5f4da18996f761141eb8c29d78ac27",
+      "Content/Catfishing/Data/Fish/Fish_Puffer.uasset": "7517ac37d8c27720a509e81e0a449ff14abdebce3ff165facaa06686942393f8",
+      "Content/Catfishing/Data/Fish/Fish_ElectricEel.uasset": "0c6e610aee3a9b022ce821d9351ee88432fede7988bdd93d1237d8626cfb85d7",
+      "Content/Catfishing/Data/Fish/Fish_Pike.uasset": "b5186bfa1211ed4a069b5b3c67faa7f3922f71a6654e1a7beb9a41f0ef99f587"
+    }
+  }
 }

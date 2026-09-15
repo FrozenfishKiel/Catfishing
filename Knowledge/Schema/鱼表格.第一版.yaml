@@ -16,7 +16,7 @@ table:
   sheet_id: R7rRBp
   mirror: Knowledge/Design/GDD 系统分册/鱼/鱼表格/第一版.csv   # SSOT 2026-09-11 迁进本仓库，路径相对工程根
   manifest: Knowledge/Design/_manifest.json
-  identity_column: fish_id            # 2026-09-09 加，值＝工程 FishDefinitionId
+  identity_column: fish_id            # 资产文件名；运行身份从对应资产读回并保留
   declared_at_revision: 872           # 写本文件时的表 revision；表改列序不影响本文件（按列名对；09-09 晚 fish_id 已移到首列、「金钱系数」列在力量系数 K 旁；09-10 加「最近冲岸距离」列与两张子表）
   header_row: 1
   data_rows: 2-17                     # 16 条鱼；空行不算
@@ -37,7 +37,7 @@ field_groups:
     owner: 工程（技术维护者）与鱼册属主共管：ID 由工程定，名字由鱼册定
     columns: [fish_id, 名字]
     reads: [{source: feishu-sheet, locator: 第一版!fish_id/名字, version: sheet-revision}]
-    resolution: fish_id 是唯一身份；名字只是展示，改名不改对应
+    resolution: fish_id 定位资产文件；FishDefinitionId 是运行与存档身份，由迁移脚本显式映射并保留；名字只作展示
   - id: balance
     owner: 数值属主（参数页挂号表：鱼表格属主张佳；数值由李前臻拍）
     columns: [重量/KG, 力量系数K, 体力系数, 经验系数, 稀有度, 需求窝料属性, 偏好饵, 出现地点, 可捞圈半径]
@@ -47,7 +47,7 @@ field_groups:
     owner: 钓鱼系统属主（钱成澔）；数值待模拟
     columns: [食性, 发力段长, 休息段长, 游速系数]
     reads: [{source: feishu-sheet, locator: 第一版!各列, version: sheet-revision}]
-    resolution: 当前代码读的是四套性格模板资产（Bite_*/Fight_*），这些列没有消费者；先定「挂模板」还是「逐鱼配」再谈发布
+    resolution: 三个数值列已写入资产并由 CatFishBehaviorProfileResolver 覆盖模板；食性已迁但概率未裁，基速/横切仍暂用 Fight 模板，见 Docs/FishFightImplementationGuide_zh-CN.md
   - id: presentation-text
     owner: Interface（张佳）
     columns: [特点, 图鉴描述, 吃鱼效果, 限时Buff, 持续时间, 鱼刚咬饵时鱼漂的变化, 鱼刚咬饵时水面的变化, 与猫搏斗时鱼的动作变化, 与猫搏斗时水面的变化]
@@ -82,8 +82,8 @@ columns:
     owner: Framework
     type: text
     publish: excluded
-    gap: 代码用 FoodSafety（Unset/Safe/Toxic/Inedible）+ PoisonIncrease + EatingExperiencePerKilogram 表达，全靠人从这列翻译；
-      不可食用档 2026-09-12 已加（咸鱼、巨影走 Inedible，经验系数与 Poison 都必须为 0）；本列里的投掷规格另落 ThrowEffect，两者是两件事
+    gap: 代码用 FoodSafety（Unset/Safe/SevereToxic/Inedible）+ EatingTimedEffect + EatingExperiencePerKilogram 表达，全靠人从这列翻译；
+      不可食用档 2026-09-12 已加（咸鱼、巨影走 Inedible，经验系数与 YellowStaminaGrant 都必须为 0）；本列里的投掷规格另落 ThrowEffect，两者是两件事
   - name: 出现地点
     classification: declarative
     type: enum
@@ -99,21 +99,21 @@ columns:
   - name: 力量系数K
     classification: declarative
     type: number
-    publish: excluded
-    gap: 代码按全局 StrengthPerKilogram=10（D-20，09-03 用户裁）；参数页 v0.30 仍写「K 取鱼表 G 列现值」——两边未合一，已入 需求对齐差距清单 §4「巨影门槛」
+    publish: FishStrengthPerKilogram
+    note: 2026-09-15 已迁16鱼，选鱼仅按逐鱼K乘冻结重量；猫方换算系数不再兜底鱼力量
   - name: 体力系数
     classification: declarative
     type: number
     publish: FishFightStaminaPerKilogram
     transform: "初始体力 = 体力系数 × 实际重量（钓鱼规则 v1.5 §4.1）；代码口径已改为系数（字段 2026-09-12 由 FishFightStamina 改名）"
-    gap: Fish_*.uasset 上仍是旧定额，过渡期由 CatFishCatalogSettings.bFishAssetsStillHoldLegacyFlatFightStamina 按「原定额÷重量中点」现场折算；资产按终版表重生成后把该开关改 False
+    migration: 2026-09-15 已迁16鱼并独立重载；旧定额折算及开关删除
     note: 2026-09-08 改口径，16 行为占位（原定额÷重量中点），正式值走模拟
   - name: 可捞圈半径
     classification: declarative
     type: number
     unit: cm
     publish: ScoopTargetRadiusCentimeters
-    note: 2026-09-09 李前臻裁「可抄几何按代码、逐鱼配圆」后加列；16 行占位按体重档 小 60／中 90／大 120，湖心巨影 0＝不可抄，正式值待调；资产现值未与本列对过（需开引擎）
+    note: 2026-09-09 李前臻裁「可抄几何按代码、逐鱼配圆」后加列；16 行占位按体重档 小 60／中 90／大 120，湖心巨影 0＝不可抄，正式值待调；2026-09-15 已迁并独立重载核验；数值仍属于待试玩校准值
   - name: 最近冲岸距离
     classification: declarative
     type: number
@@ -126,7 +126,7 @@ columns:
     type: number
     unit: 金币/公斤
     publish: excluded
-    gap: 代码没有逐鱼单价字段，收鱼估价现为体重档表 FCatShopFishWeightPrice；09-09 晚裁改为 售价＝本列×实际重量，待加字段
+    note_runtime: 现有DT_CatFishSalePrices按内部鱼ID保存MoneyCoefficient；2026-09-15只读核对16鱼与本列全部一致，保留原售鱼权威链
     note: 2026-09-09 晚李前臻加列（初名「售价」，同晚改名并挪到力量系数 K 旁），逐鱼每公斤单价，16 行已填齐；商店册体重档收购价表随之作废
   - name: 图鉴描述
     classification: declarative
@@ -158,20 +158,20 @@ columns:
     type: number
     publish: EatingExperiencePerKilogram
     transform: "经验 = 经验系数 × 实际重量（2026-09-07 拍）；代码口径已改为系数（字段 2026-09-12 由 EatingExperience 改名）"
-    gap: Fish_*.uasset 上仍是旧定额，本列正式值随终版表重生成资产；经验取整口径（floor/round/保留小数）未裁
+    migration: 2026-09-15 已迁16鱼系数，保留既有成长消费者的连续经验输入
   - name: 偏好饵
     classification: declarative
     type: enum
     values: {虫虫饵: BugBait, 肉块饵: MeatBait, 果实饵: FruitBait, 花蜜饵: NectarBait, 月光饵: MoonlightBait}
     publish: BaitWeightMultipliers
-    transform: "单个偏好饵 → 该饵倍率>1、其余 1；倍率数值不在表里（钓鱼规则 §2.3 每鱼×每饵权重矩阵未建）"
+    transform: "以同目录饵权重.csv为准，五种正式饵按资产内部ID写入BaitWeightMultipliers；未列旧饵中性1"
   - name: 稀有度
     classification: declarative
     type: enum
-    values: {普通: 待核, 少见: 待核, 稀有: 待核, 珍稀: 待核, 事件: 待核}
-    enum_order: [普通, 少见, 稀有, 珍稀, 事件]   # 低→高；完美削减「最高一档」＝珍稀（钓鱼规则 §4.3）
+    values: {普通: Common, 少见: Uncommon, 稀有: Rare, 珍稀: VeryRare}
+    enum_order: [普通, 少见, 稀有, 珍稀]   # 低→高；完美削减「最高一档」＝珍稀（钓鱼规则 §4.3）
     publish: RarityTierId
-    note: 代码 RarityTierId 的取值集合在资产里，Config 未列，待核后填映射。2026-09-10：「事件」只有湖心巨影，完美削减暂按最高档处理，李前臻未拍
+    note: 2026-09-15 已迁；湖心巨影 Rare 取普通完美削减，最高档 VeryRare 四鱼取稀有削减。旧 Event 不再用于正式资产
   - name: 食性
     classification: declarative
     type: enum
@@ -233,7 +233,8 @@ columns:
 
 # 代码有、表里没有的字段：谁定值、要不要在表里加列
 code_only_fields:
-  FishDefinitionId: 资产内部稳定 ID（RiverPatternFish／Loach／StinkyFish…），代码一律按它查表，配置里的 BasePool 等清单也用它。表里 fish_id 列装的是资产文件名（Fish_RiverPattern），两者不同名，迁移脚本必须做映射。2026-09-14 发现：往 BasePool 填包名会抽不出鱼。要不要把两套统一成一套归张佳的鱼资产迁移定
+  YellowStaminaGrant: 逐鱼食用的一次性黄色体力赠送，单位点；不可食用鱼必须为0，现有四鱼赠送资产保持，本轮不重复迁移
+  FishDefinitionId: 资产内部稳定 ID（RiverPatternFish／Loach／StinkyFish…），代码一律按它查表，配置里的 BasePool 等清单也用它。表里 fish_id 列装的是资产文件名（Fish_RiverPattern），两者不同名，迁移脚本必须做映射。2026-09-14 发现：往 BasePool 填包名会抽不出鱼。2026-09-15 按用户保留建议固定保留内部ID，迁移报告输出文件名映射
   bEatingTimedEffectConfigured: 属主确认食用限时 GE 绑定的显式标记；False 为迁移缺口，True 且空 GE 表示确认无效果
   EatingTimedEffect: T02 每鱼独立限时 GameplayEffect 类，Condition 进食提交后由 ASC 应用；同鱼刷新、异鱼并存；正式 GE/GameplayCue 绑定待钱成澔与张佳
   EatingTimedEffectDurationSeconds: T02 食用 GE 基础秒数，应用时乘成长时长倍率；不覆盖猫神祝福，正式绑定未迁移
@@ -243,7 +244,7 @@ code_only_fields:
   BodyClass: 由 名字 是否为湖心巨影推出（Standard/Giant）；可不加列
   SacrificeContribution: 设计按实际体重档取（参数页供奉值行），不该是定额字段；对表已列为待办
   CaptureImprintEventId: 印记触发清单归印记册，不进鱼表
-  SpawnWeight: 设计的抽鱼权重在 钓鱼规则 §2.3（分布+窝料+饵），表里无此列；程序侧口径需与鱼册对齐
+  SpawnWeight: 仅保留旧反射载荷，2026-09-15 已退出选择器和就绪门；二进制外部引用未穷举，暂不删字段
   TimeOfDay: T23 逐鱼时段数据待张佳；开关 D-31 保持关闭，开启后空数组拒绝并 Warning，基础池同样遵循
   Weather: T23 逐鱼天气数据待张佳；开关 D-31 保持关闭，开启后空数组拒绝并 Warning
   MinimumFightParticipants: 设计「单人局不出需要多人的鱼」，巨影=多人；可由 BodyClass 推出
@@ -257,7 +258,7 @@ code_only_fields:
 
 editor_backflow: 未接。资产字段被人在编辑器里改了不会回到表；改数一律先改表再重生成（README 的三方合并链条尚不存在）
 
-# 本组只准备接收映射；不把专表占位成员/权重写成已批准配置。
+# 窗口/时段天气接收脚本与正式数据迁移入口；基础池按已批准四成员配置。
 runtime_migration_receiver:
   script: Scripts/prepare_fish_runtime_migration.py
   outputs: Saved/Migration/Batch7C/fish-runtime-patch.json
@@ -265,4 +266,7 @@ runtime_migration_receiver:
   optional_columns: {试探期: ProbeDurationSeconds, 真咬响应窗: TrueBiteWindowSeconds, 时段: TimeOfDay, 天气: Weather}
   base_pool: 已批准的 fish_id/权重专表映射到 CatFishCatalogSettings.BasePool 的 FishDefinitionId/Probability；拒绝占位列、未知ID、重复ID、非正及非有限权重
   base_pool_owner: 张佳
-  deferred: D-30 两步抽样/整数窝归属、D-31 开启节点、未审鱼行为均不切换
+  applied: 两步选类/饵倍率抽鱼、16鱼K/体力/经验/行为数值/窗口/四档稀有度已迁移
+  data_migrator: Scripts/migrate_fish_design_data.py
+  verification: Saved/FishAlignment/fish-data-verified.json
+  deferred: D-31 时段天气开启节点、未审鱼行为、正式GE和投掷资源仍待交付

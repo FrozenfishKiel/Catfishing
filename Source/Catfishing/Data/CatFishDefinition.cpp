@@ -1,6 +1,5 @@
 #include "Data/CatFishDefinition.h"
 
-#include "Data/CatFishCatalogSettings.h"
 #include "Fishing/Presentation/CatFishPresentationDefinition.h"
 #include "Inventory/CatFishInventoryItemInstance.h"
 #include "Logging/CatLog.h"
@@ -57,7 +56,6 @@ bool UCatFishDefinition::IsRuntimeDefinitionReady() const
 		&& LoadRuntimePresentationDefinition() != nullptr
 		&& BodyClass != ECatFishBodyClass::Unknown
 		&& RegionIds.Num() > 0
-		&& FMath::IsFinite(SpawnWeight) && SpawnWeight > 0.0
 		&& FMath::IsFinite(MinimumWeightKilograms) && MinimumWeightKilograms > 0.0
 		&& FMath::IsFinite(MaximumWeightKilograms) && MaximumWeightKilograms >= MinimumWeightKilograms
 		&& MinimumFightParticipants >= 1 && MinimumFightParticipants <= 8
@@ -97,51 +95,14 @@ double UCatFishDefinition::GetWeightMidpointKilograms() const
 	return (MinimumWeightKilograms + MaximumWeightKilograms) * 0.5;
 }
 
-// 体力系数取值流程：正常直接返回鱼表系数；识别出「还是旧定额」的资产时按 设计修改记录.md:275 的占位口径
-// （原定额 ÷ 重量中点）现场折算并记一条 Warning。折算只是让没迁数据的工程能开起来，不是正式数值来源。
+// 正式资产已迁为体力点/千克；非法系数拒绝，不再按重量中点折算旧定额。
 double UCatFishDefinition::ResolveFightStaminaPerKilogram() const
 {
-	if (!FMath::IsFinite(FishFightStaminaPerKilogram) || FishFightStaminaPerKilogram <= 0.0)
-	{
-		return 0.0;
-	}
-	const UCatFishCatalogSettings* Catalog = GetDefault<UCatFishCatalogSettings>();
-	if (!Catalog || !Catalog->bFishAssetsStillHoldLegacyFlatFightStamina)
-	{
-		return FishFightStaminaPerKilogram;
-	}
-	// 过渡换算只作用于磁盘上的正式鱼资产。运行期临时构造的鱼定义（单元测试夹具、编辑器预览对象）
-	// 本来就是直接按新口径填的系数，再除一次重量中点只会把它们弄错。
-	if (GetOutermost() == GetTransientPackage())
-	{
-		return FishFightStaminaPerKilogram;
-	}
-	const double Midpoint = GetWeightMidpointKilograms();
-	if (Midpoint <= 0.0)
-	{
-		// 重量区间本身不合法时不折算：宁可把原值交出去让上层的就绪校验拦下，也不拿一个编的中点去除。
-		UE_LOG(LogCatFishing, Warning,
-			TEXT("Event=fish_fight_stamina_legacy_conversion_skipped Fish=%s RawValue=%.3f ")
-			TEXT("Reason=InvalidWeightRange MinKg=%.3f MaxKg=%.3f"),
-			*FishDefinitionId.ToString(), FishFightStaminaPerKilogram,
-			MinimumWeightKilograms, MaximumWeightKilograms);
-		return FishFightStaminaPerKilogram;
-	}
-	const double Converted = FishFightStaminaPerKilogram / Midpoint;
-	// 选鱼链每次评估候选都会走到这里；每条鱼只报一次，既不淹没日志也不会让人以为只错了一次。
-	if (!bLoggedLegacyFightStaminaConversion)
-	{
-		bLoggedLegacyFightStaminaConversion = true;
-		UE_LOG(LogCatFishing, Warning,
-			TEXT("Event=fish_fight_stamina_legacy_flat_value_converted Fish=%s FlatValue=%.3f ")
-			TEXT("WeightMidpointKg=%.3f PlaceholderCoefficient=%.3f ")
-			TEXT("Note=AssetsStillHoldPre-2026-09-08FlatStamina;ClearTheIniSwitchAfterRegeneratingFishAssets"),
-			*FishDefinitionId.ToString(), FishFightStaminaPerKilogram, Midpoint, Converted);
-	}
-	return Converted;
+    return FMath::IsFinite(FishFightStaminaPerKilogram) && FishFightStaminaPerKilogram > 0.0
+        ? FishFightStaminaPerKilogram : 0.0;
 }
 
-// 本场体力初值流程：系数走过渡换算，重量用本次抽取冻结的实际值；任一非法时返回 0，由上层按未就绪处理。
+// 本场体力初值流程：系数直接取鱼表，重量用本次抽取冻结的实际值；任一非法时返回 0，由上层按未就绪处理。
 double UCatFishDefinition::ResolveInitialFightStamina(const double ActualWeightKilograms) const
 {
 	const double Coefficient = ResolveFightStaminaPerKilogram();

@@ -44,15 +44,16 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 	FCatFishingBiteTimingParameters Timing;
 	if (!TestTrue(TEXT("正式等待配置可读取"), GetDefault<UCatFishingSettings>()->TryGetBiteTimingParameters(Timing))) return false;
 	const auto* Catalog = GetDefault<UCatFishCatalogSettings>();
-	TestEqual(TEXT("正式窗口覆盖 16 个运行时鱼 ID"), Catalog->BiteTimingOverridesByFishDefinitionId.Num(), 16);
-	for (const auto& Pair : Catalog->BiteTimingOverridesByFishDefinitionId)
-	{
-		const auto* Fish = Catalog->FindRuntimeDefinition(Pair.Key);
-		if (!TestNotNull(*FString::Printf(TEXT("正式鱼资产 %s"), *Pair.Key.ToString()), Fish)) return false;
-		const auto Resolved = Catalog->ResolveBiteTiming(*Fish);
-		TestEqual(TEXT("正式资产解析试探秒数"), Resolved.ProbeDurationSeconds, Pair.Value.ProbeDurationSeconds);
-		TestEqual(TEXT("正式资产解析响应秒数"), Resolved.TrueBiteWindowSeconds, Pair.Value.TrueBiteWindowSeconds);
-	}
+    TestEqual(TEXT("正式窗口覆盖16鱼资产"), Catalog->Definitions.Num(), 16);
+    for (const auto& Ref : Catalog->Definitions)
+    {
+        const auto* Fish=Ref.LoadSynchronous();
+        if (!TestNotNull(TEXT("正式鱼资产"), Fish)) return false;
+        const auto Resolved=Catalog->ResolveBiteTiming(*Fish);
+        TestTrue(TEXT("正式窗口有有效逐鱼秒数"), Fish->ProbeDurationSeconds > 0.0 && Fish->TrueBiteWindowSeconds >= 8.0);
+        TestEqual(TEXT("正式资产解析试探秒数"), Resolved.ProbeDurationSeconds, Fish->ProbeDurationSeconds);
+        TestEqual(TEXT("正式资产解析响应秒数"), Resolved.TrueBiteWindowSeconds, Fish->TrueBiteWindowSeconds);
+    }
 	// 只准备抛竿事务的已冻结输入；后续采样、计时器、正式 StateTree 和正式 Hook BP 都走生产代码。
 	for (const int32 Portions : {0, 1, 5, 2, 3})
 	{

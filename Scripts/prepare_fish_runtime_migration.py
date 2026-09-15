@@ -1,9 +1,9 @@
 """Prepare reviewed fish-data patches without writing Content or editing design sources.
 
 Default: read the current fish table, report missing optional columns, emit JSON in Saved.
---approved-base-pool accepts an owner-approved CSV with fish_id/权重 columns. The current
-基础池概率（占位） column is deliberately rejected: supplying a path is not approval of its values.
-The result uses UE property names and stable fish IDs; apply through the editor only after review.
+--approved-base-pool accepts approved fish_id/基础池概率 or fish_id/权重 columns;
+headers explicitly marked 占位 are rejected. CSV fish_id is an asset filename, not a save ID.
+The editor importer resolves and preserves the existing internal fish ID.
 """
 from __future__ import annotations
 
@@ -54,7 +54,8 @@ def prepare(table: Path, approved_pool: Path | None = None):
         if fish_id in seen or not fish_id.startswith("Fish_"):
             raise ValueError(f"invalid/duplicate identity: {fish_id}")
         seen.add(fish_id)
-        patch = {"FishDefinitionId": fish_id}
+        # CSV fish_id 是资产文件名。运行 ID 必须在 UE 读取，不能把文件名写进存档身份。
+        patch = {"AssetName": fish_id}
         for name, target in fields.items():
             key = column(headers, name)
             raw = (row.get(key) or "").strip() if key else ""
@@ -82,7 +83,8 @@ def prepare(table: Path, approved_pool: Path | None = None):
         result["fish"].append(patch)
     if approved_pool:
         pool_headers, pool_rows = read_rows(approved_pool)
-        if "fish_id" not in pool_headers or "权重" not in pool_headers or any("占位" in h for h in pool_headers):
+        weight_column = column(pool_headers, "基础池概率") or column(pool_headers, "权重")
+        if "fish_id" not in pool_headers or not weight_column or any("占位" in h for h in pool_headers):
             raise ValueError("base pool must be an approved fish_id/权重 table; placeholder probabilities cannot be published")
         pool_ids = set()
         for row in pool_rows:
@@ -90,7 +92,7 @@ def prepare(table: Path, approved_pool: Path | None = None):
             if not fish_id or fish_id not in seen or fish_id in pool_ids:
                 raise ValueError(f"unknown/duplicate base-pool fish: {fish_id}")
             pool_ids.add(fish_id)
-            result["base_pool"].append({"FishDefinitionId": fish_id, "Probability": positive_number(row["权重"], fish_id)})
+            result["base_pool"].append({"AssetName": fish_id, "Probability": positive_number(row[weight_column], fish_id)})
         if not pool_ids:
             raise ValueError("approved base pool is empty")
     else:
@@ -114,19 +116,24 @@ def import_into_editor_memory(patch, unreal_module=None):
     }
     loaded = []
     for row in patch["fish"]:
-        fish_id = row["FishDefinitionId"]
+        fish_id = row["AssetName"]
         asset = unreal_module.load_asset(f"/Game/Catfishing/Data/Fish/{fish_id}")
-        if asset is None or str(asset.get_editor_property("fish_definition_id")) != fish_id:
+        if asset is None or str(asset.get_editor_property("fish_definition_id")) in ("", "None"):
             raise ValueError(f"asset missing or identity mismatch: {fish_id}")
         values = {}
+        runtime_id = str(asset.get_editor_property("fish_definition_id"))
+        if any(existing_id == runtime_id for _, _, existing_id in loaded):
+            raise ValueError(f"duplicate runtime identity: {runtime_id}")
         for source, target in bindings.items():
             value = row[source]
             if source in ("TimeOfDay", "Weather"):
                 enum = getattr(unreal_module, "CatEnvironmentTimeOfDay" if source == "TimeOfDay" else "CatEnvironmentWeather")
                 value = [getattr(enum, item.upper()) for item in value]
-            values[target] = 0.0 if value is None else value
-        loaded.append((asset, values))
-    for asset, values in loaded:
+            # 空列表示未发布，不清空已有生态限制或窗口。
+            if value is not None and value != []:
+                values[target] = value
+        loaded.append((asset, values, runtime_id))
+    for asset, values, _ in loaded:
         for field, value in values.items():
             asset.set_editor_property(field, value)
     # BasePool uses a separate config mapping, never silently edits DefaultGame.ini.

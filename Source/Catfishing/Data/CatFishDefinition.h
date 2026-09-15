@@ -150,18 +150,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Fish")
 	double GetWeightMidpointKilograms() const;
 
-	/**
-	 * 取本鱼的体力系数（体力点/千克）。
-	 *
-	 * 过渡期换算：Fish_*.uasset 上的值还是 2026-09-08 之前的「每鱼种一份定额体力」。
-	 * 定额直接当系数用会按重量中点整体偏一个倍率（湖心巨影会放大 27 倍，小鱼则反过来缩水）。
-	 * UCatFishCatalogSettings::bFishAssetsStillHoldLegacyFlatFightStamina 为 true 时，
-	 * 本函数按裁决给的占位口径「原定额 ÷ 重量中点」折算并记一条 Warning，让没迁数据的工程仍能试玩。
-	 * 资产按终版鱼表重生成之后，把那个开关改成 False 即可整条关掉这段过渡逻辑。
-	 */
+	/** 取本鱼体力系数（点/千克）；正式资产已迁移，非法值返回 0。 */
 	double ResolveFightStaminaPerKilogram() const;
 
-	/** 本场鱼体力初值 ＝ 体力系数 × 实际重量；系数走上面的过渡换算，重量由本次抽取冻结。 */
+	/** 本场鱼体力初值 ＝ 体力系数 × 实际重量；系数直接读鱼表，重量由本次抽取冻结。 */
 	double ResolveInitialFightStamina(double ActualWeightKilograms) const;
 	/** 解析本鱼直接引用且合同完整的表现定义；不会扫描目录或按 ID 查询第二张表。 */
 	UCatFishPresentationDefinition* LoadRuntimePresentationDefinition() const;
@@ -226,7 +218,7 @@ public:
 	/**
 	 * 稀有度轴的内容 ID，与 BodyClass 协作轴独立。资产仍为 Common/Uncommon/Rare/Event 旧口径，
 	 * 尚未迁移到鱼表的普通／少见／稀有／珍稀四档，不能按字面翻译。
-	 * 它是价值判断，不进抽鱼概率（分布由 SpawnWeight、窝料轴与鱼饵偏好表达，鱼册 §2）；
+	 * 它是价值判断，不进抽鱼概率（分布由区域、窝料类别与鱼饵偏好表达，鱼册 §2）；
 	 * 鱼目录用它解析完美提竿削减分档及两项窗口的配置默认值。
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Distribution")
@@ -244,7 +236,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Distribution")
 	TArray<ECatEnvironmentWeather> Weather;
 
-	/** 候选选择的正权重；它由内容数据表达稀有度，不在代码硬编码档位概率。 */
+	/** 旧资产的基础权重载荷；正式两步抽鱼不消费，待资产引用审计后移除。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Distribution", meta = (ClampMin = "0.0"))
 	double SpawnWeight = 0.0;
 
@@ -272,7 +264,7 @@ public:
 	/**
 	 * 力量系数 K：鱼表格「力量系数K」列，本条鱼的实例力量 ＝ 实际重量 × K（钓鱼规则 §4.1「鱼力量 F_fish」行）。
 	 * 逐鱼配，不走全局常数（2026-09-09 八问④撤回工程自补的全局 StrengthPerKilogram）；湖心巨影 K＝5，与竿强 210 配对。
-	 * 0 表示尚未迁移：选鱼链回退旧平衡资产 StrengthPerKilogram 并告警，不能因该列没填而跳光候选。
+	 * 0 或非法值使该鱼退出候选并告警，不再借用猫方全局换算系数。
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing", meta = (ClampMin = "0.0", DisplayName = "力量系数K"))
 	double FishStrengthPerKilogram = 0.0;
@@ -281,7 +273,7 @@ public:
 	 * 体力系数：本场鱼体力初值 ＝ 该系数 × 实际重量（鱼表格「体力系数」列，2026-09-08 李前臻代拍，
 	 * 设计修改记录.md:275；原「每鱼种一份定额体力」作废）。单位是「体力点/千克」，不是体力点本身。
 	 * 0 表示未裁：选鱼链 fail-closed 跳过该候选。
-	 * 过渡期注意：Fish_*.uasset 上仍可能是旧定额，取值一律走 ResolveFightStaminaPerKilogram()，不要直读本字段。
+	 * 通过 ResolveFightStaminaPerKilogram() 校验后乘本条实际重量；不再接受旧定额语义。
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing", meta = (ClampMin = "0.0", DisplayName = "体力系数"))
 	double FishFightStaminaPerKilogram = 0.0;
@@ -333,7 +325,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Behavior", meta = (ClampMin = "0.0", DisplayName = "游速系数"))
 	double SwimSpeedCoefficient = 0.0;
 
-	/** 该鱼偏好的特殊鱼饵定义 ID；普通饵无限且不要求出现在数组中。 */
+	/** 鱼的窝料类别：正式资产为腥/香/酵单一轴 1，其余轴 0；不作为连续亲和倍率。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Preference")
 	FCatChumVector ChumPreference;
 
@@ -382,12 +374,6 @@ public:
 
 private:
 	friend struct FCatFishBehaviorProfileResolver;
-	/**
-	 * 本条鱼的旧定额体力折算是否已经报过一次。
-	 * 选鱼链每评估一次候选就会取一次系数，不去重会把日志刷满；它只服务日志，不参与任何数值，
-	 * 因此不是 UPROPERTY、不复制、不存档。
-	 */
-	mutable bool bLoggedLegacyFightStaminaConversion = false;
 	/** 只用于迁移诊断去重，不序列化、不复制，也不参与行为决策。 */
 	mutable bool bLoggedBehaviorTemplateFallback = false;
 };

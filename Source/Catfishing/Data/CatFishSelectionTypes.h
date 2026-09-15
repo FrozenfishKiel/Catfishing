@@ -10,7 +10,7 @@ class UCatFishDefinition;
 
 /**
  * 鱼种候选的可扩展条件门。测试期可让未验收条件保持旁路；正式启用时只切换配置，
- * 不改变挑战档、窝料/鱼饵权重和最终归一化流程。
+ * 不改变窝料选类、类内鱼饵权重和最终归一化流程。
  * T23：时段与天气过滤开启后，空数组按未配置拒绝并 Warning；关闭开关仍遵守 D-31。
  */
 struct CATFISHING_API FCatFishEligibilityPolicy
@@ -47,11 +47,7 @@ struct FCatFishSelectionContext
 	int32 ActivePlayerCount = 0;
 	double CombinedFishingStrength = 0.0;
 	double CombinedFightStamina = 0.0;
-	/**
-	 * 正式鱼力量优先按 UCatFishDefinition::FishStrengthPerKilogram 逐鱼换算。
-	 * 本字段保留既有资产迁移兜底及搏斗计价的同源校验：普通池与基础池的逐鱼 K 未迁移时均读取它。
-	 * 待逐鱼 K 全部迁移且搏斗不再依赖本字段时再删除，不可把当前仍有消费者的字段标成退出主链。
-	 */
+	/** 猫方计价/等效质量换算的冻结值，仅供 Session 开场同源校验；选鱼不读取此字段。 */
 	double StrengthPerKilogram = 0.0;
 	/** 抛竿者成长的重量上浮比例；抽样时夹到本鱼种上限，后续力量与实物共用该重量。 */
 	double CatchWeightBonus = 0.0;
@@ -63,6 +59,9 @@ struct FCatFishSelectionResult
 {
 	GENERATED_BODY()
 
+	/** 本次先选中的窝料类：0腥/1香/2酵；基础池为 INDEX_NONE。 */
+	int32 SelectedChumClass = INDEX_NONE;
+	double SelectedChumClassProbability = 0.0;
 	bool bSelected = false;
 	FName FishDefinitionId = NAME_None;
 	double WeightKilograms = 0.0;
