@@ -11,6 +11,7 @@
 #include "EngineUtils.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/CatFishingSettings.h"
+#include "Fishing/Presentation/CatFishAnimInstance.h"
 #include "Fishing/Presentation/CatFishPresentationDefinition.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Fishing/Simulation/CatFishingFightRunner.h"
