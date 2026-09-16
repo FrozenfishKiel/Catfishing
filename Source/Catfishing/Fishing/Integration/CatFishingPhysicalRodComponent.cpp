@@ -380,6 +380,7 @@ void UCatFishingPhysicalRodComponent::RefreshControlledCarrier()
 	auto* Light = UCatLightPropComponent::FindFor(Body);
 	if (Next == ControlledBody.Get() && !Body->IsSimulatingPhysics()
 		&& (!Light || (Light->GetState().Mode == ECatLightPropMode::Parked) == (Next == nullptr))) return;
+	UPrimitiveComponent* PreviousCarrier = ControlledBody.Get();
     if (ControlledBody.IsValid())
         if (auto* Previous = ControlledBody->GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>(); Previous && Previous->UsesCharacterMovement())
             GetOwner()->PrimaryActorTick.RemovePrerequisite(Previous, Previous->GetPostMovementTick());
@@ -402,6 +403,13 @@ void UCatFishingPhysicalRodComponent::RefreshControlledCarrier()
 		Rod->AuthoritativeAimHolder = Cat;
 		PositionControlledRod();
 	}
+	else if (PreviousCarrier && !bEndingPlay && !Rod->IsActorBeingDestroyed()
+		&& Rod->PresentationState.bDeployed && !Rod->PresentationState.bBroken)
+	{
+		ParkOnGroundFromAuthority(PreviousCarrier);
+		RefreshObservedPose();
+		Rod->ForceNetUpdate();
+	}
 	if (Light)
 	{
 		Light->SetParkedFromAuthority(Next == nullptr);
@@ -419,6 +427,42 @@ void UCatFishingPhysicalRodComponent::RefreshControlledCarrier()
 		*GetNameSafe(Next), Next != nullptr, Next == nullptr, *Body->GetComponentLocation().ToCompactString(),
 		*Body->GetComponentRotation().ToCompactString(), *LoadSessionId.ToString(), *GetNameSafe(GetWorld()),
 		int32(GetWorld()->GetNetMode()), int32(GetOwner()->GetLocalRole()), Next ? TEXT("PrimaryPoseAndPhysicalAssist") : TEXT("FixedSupportNoHandGrips"));
+}
+
+void UCatFishingPhysicalRodComponent::ParkOnGroundFromAuthority(UPrimitiveComponent* PreviousCarrier)
+{
+	auto* Rod = CastChecked<ACatFishingRodActor>(GetOwner());
+	const FTransform HeldPose = GetObservedActorTransform();
+	FCollisionQueryParams Query(SCENE_QUERY_STAT(FishingRodGroundPark), true);
+	// Neither another player nor another parked rod is a ground support.
+	for (TActorIterator<APawn> It(GetWorld()); It; ++It) Query.AddIgnoredActor(*It);
+	for (TActorIterator<ACatFishingRodActor> It(GetWorld()); It; ++It) Query.AddIgnoredActor(*It);
+	const auto* PreviousPawn = Cast<APawn>(PreviousCarrier->GetOwner());
+	const int32 PlayerId = PreviousPawn && PreviousPawn->GetPlayerState() ? PreviousPawn->GetPlayerState()->GetPlayerId() : INDEX_NONE;
+	const FVector Candidates[] = {HeldPose.GetLocation(), PreviousCarrier->GetComponentLocation()};
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Candidates); ++Index)
+	{
+		FHitResult Ground;
+		const FVector Candidate = Candidates[Index];
+		if (!GetWorld()->LineTraceSingleByChannel(Ground, Candidate + FVector(0, 0, 100), Candidate - FVector(0, 0, 250), ECC_Visibility, Query)
+			|| Ground.bStartPenetrating || Ground.ImpactNormal.Z < 0.7) continue;
+		// The formal BP's origin is the butt; its local shaft already carries the authored upward tilt.
+		// Keep the horizontal pointing direction, remove held pitch/roll, and seat that authored pose on the surface.
+		FVector Heading = Rod->GetAuthoritativeRodForwardVector().GetSafeNormal2D();
+		if (Heading.IsNearlyZero()) Heading = PreviousCarrier->GetForwardVector().GetSafeNormal2D();
+		if (Heading.IsNearlyZero()) Heading = FVector::ForwardVector;
+		const FRotator LocalHeading(0, BodyLocal.GetRotation().GetForwardVector().Rotation().Yaw, 0);
+		const FQuat Rotation = FRotationMatrix::MakeFromZX(Ground.ImpactNormal, Heading).ToQuat() * LocalHeading.Quaternion().Inverse();
+		Body->SetWorldTransform(BodyLocal * FTransform(Rotation, Ground.ImpactPoint, HeldPose.GetScale3D()), false, nullptr, ETeleportType::TeleportPhysics);
+		UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_rod_ground_parked RodActorId=%s PlayerId=%d SessionId=%s World=%s NetMode=%d Authority=1 LocalRole=%d Support=%s PositionCm=%s Normal=%s Result=%s"),
+			*Rod->PresentationState.RodActorId.ToString(), PlayerId, *LoadSessionId.ToString(), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()),
+			int32(Rod->GetLocalRole()), *GetNameSafe(Ground.GetActor()), *Ground.ImpactPoint.ToCompactString(), *Ground.ImpactNormal.ToCompactString(),
+			Index == 0 ? TEXT("RodButtGrounded") : TEXT("CarrierGroundFallback"));
+		return;
+	}
+	UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_rod_ground_park_rejected RodActorId=%s PlayerId=%d SessionId=%s World=%s NetMode=%d Authority=1 LocalRole=%d PositionCm=%s Reason=NoNearbyGround Result=PreviousFixedPosePreserved"),
+		*Rod->PresentationState.RodActorId.ToString(), PlayerId, *LoadSessionId.ToString(), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()),
+		int32(Rod->GetLocalRole()), *HeldPose.GetLocation().ToCompactString());
 }
 
 void UCatFishingPhysicalRodComponent::PositionControlledRod()

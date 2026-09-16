@@ -13,6 +13,8 @@
 #include "Engine/LocalPlayer.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
+#include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/CatFishingSettings.h"
@@ -176,8 +178,13 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("formal BP uses the original controlled held offset before any tick"), Rod->GetGripWorldTransform().GetLocation().Equals(ExpectedGrip, 0.01));
 		TestTrue(TEXT("held rod updates with movement"), Rod->IsActorTickEnabled());
 		const int64 UsedEquipmentRevision = Equipment->GetSnapshot().Revision;
+		const auto* RodDefinition = Definition->FindFragment<UCatEquipmentFragment_Rod>();
+		const FVector AuthoredShaft = (RodDefinition->RodTipLocalTransform.GetLocation() - RodDefinition->GripLocalTransform.GetLocation()).GetSafeNormal();
+		const auto* PhysicalRod = Rod->FindComponentByClass<UCatFishingPhysicalRodComponent>();
 		for (int32 Cycle = 0; Cycle < 2; ++Cycle)
 		{
+			const FVector HeldHeading = Rod->GetAuthoritativeRodForwardVector().GetSafeNormal2D();
+			const double HeldButtHeight = PhysicalRod->GetObservedActorTransform().GetLocation().Z;
 			const FCatFishingInputEdge Edge = Commands->SubmitRodInteract();
 			FCatFishingCommandResult Result;
 			TestTrue(TEXT("subsequent R has a result"), Commands->TryGetResult(Edge.RequestId, Result));
@@ -185,6 +192,11 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("R puts down the occupied physical rod"), Rod->GetPresentationState().PoseMode, ECatFishingRodPoseMode::Grounded);
 			TestFalse(TEXT("R releases the actual holding constraint"), Character->GetPhysicalBodyComponent()->GetGrab()->IsGripping(true));
 			const FTransform ParkedPose = Rod->GetPhysicalRodBody()->GetComponentTransform();
+			TestTrue(TEXT("R places the formal BP butt on the ground immediately"), FMath::Abs(Rod->GetActorLocation().Z) < .01);
+			TestTrue(TEXT("ground placement replaces the elevated held pose"), HeldButtHeight > Rod->GetActorLocation().Z + 1);
+			TestTrue(TEXT("parked rod restores authored upward tilt"), AuthoredShaft.Z > .5
+				&& FMath::IsNearlyEqual(Rod->GetAuthoritativeRodForwardVector().Z, AuthoredShaft.Z, .001));
+			TestTrue(TEXT("parked rod keeps its horizontal pointing direction"), Rod->GetAuthoritativeRodForwardVector().GetSafeNormal2D().Equals(HeldHeading, .001));
 			TestFalse(TEXT("parked formal rod has no independent simulation"), Rod->GetPhysicalRodBody()->IsSimulatingPhysics());
 			TestFalse(TEXT("parked formal rod has no gravity"), Rod->GetPhysicalRodBody()->IsGravityEnabled());
 			TestEqual(TEXT("parked mode is the authoritative hand-grab gate"), Rod->FindComponentByClass<UCatLightPropComponent>()->GetState().Mode, ECatLightPropMode::Parked);
@@ -201,6 +213,48 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("only one deployed rod exists"), Fishing->GetDeployedRodCountForDiagnostics(), 1);
 		TestTrue(TEXT("taking or leaving rod never teleports character"), Character->GetActorLocation().Equals(OriginalLocation));
 		TestEqual(TEXT("taking or leaving rod preserves movement mode"), Character->GetCharacterMovement()->MovementMode.GetValue(), OriginalMovement);
+		// Exercise the same release authority on a slope, a shore edge and a missing support, without moving the cat.
+		const FTransform FlatGroundPose = Ground->GetActorTransform();
+		for (int32 Scenario = 0; Scenario < 3; ++Scenario)
+		{
+			const FTransform HeldPose = PhysicalRod->GetObservedActorTransform();
+			if (Scenario == 0) Ground->SetActorRotation(FRotator(15, 0, 0));
+			if (Scenario == 1)
+			{
+				const FVector Carrier = Character->GetPhysicalBodyComponent()->GetBody()->GetComponentLocation();
+				TestTrue(TEXT("shore fixture leaves held butt outside support"), FVector::Dist2D(HeldPose.GetLocation(), Carrier) > 20);
+				GroundBox->SetBoxExtent(FVector(10, 10, 10));
+				Ground->SetActorLocation(FVector(Carrier.X, Carrier.Y, -10));
+			}
+			if (Scenario == 2)
+			{
+				GroundBox->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+				AddExpectedErrorPlain(TEXT("Event=fishing_rod_ground_park_rejected"), EAutomationExpectedErrorFlags::Contains, 1);
+			}
+			Controller->ParkHeldRodFromInput();
+			TestNull(TEXT("ground cases release the operator"), Fishing->FindRodOperatedBy(Player));
+			if (Scenario == 2) TestTrue(TEXT("missing ground preserves last pose without inventing a surface"), Rod->GetActorTransform().Equals(HeldPose, .001));
+			else
+			{
+				FHitResult Support;
+				FCollisionQueryParams Query(SCENE_QUERY_STAT(ParkedRodSupportTest), true);
+				Query.AddIgnoredActor(Character);
+				Query.AddIgnoredActor(Rod);
+				const FVector Butt = Rod->GetActorLocation();
+				TestTrue(TEXT("parked butt actually touches the supporting surface"), World->LineTraceSingleByChannel(Support,
+					Butt + FVector(0, 0, 10), Butt - FVector(0, 0, 10), ECC_Visibility, Query)
+					&& Support.GetActor() == Ground && Support.ImpactPoint.Equals(Butt, .01));
+				TestTrue(TEXT("authored upward tilt is preserved relative to surface normal"),
+					FMath::IsNearlyEqual(FVector::DotProduct(Rod->GetAuthoritativeRodForwardVector(), Support.ImpactNormal), AuthoredShaft.Z, .001));
+				if (Scenario == 1) TestTrue(TEXT("shore edge uses ground below the previous holder"),
+					FVector::Dist2D(Butt, Character->GetPhysicalBodyComponent()->GetBody()->GetComponentLocation()) < .01);
+			}
+			Ground->SetActorTransform(FlatGroundPose);
+			GroundBox->SetBoxExtent(FVector(1000, 1000, 10));
+			GroundBox->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+			TestTrue(TEXT("same rod can be retaken after each support case"), Rod->Interact_Implementation(Controller, FGuid::NewGuid()));
+			TestEqual(TEXT("ground placement keeps the exact inventory instance"), Rod->GetPresentationState().ItemInstanceId, ItemId);
+		}
 		// 真实 R 分派：另一个玩家没有鱼竿库存，仍能接管长时间架放的同一实例。
 		auto* GuestController = World->SpawnActor<ACatfishingPlayerController>();
 		auto* GuestPlayer = World->SpawnActor<ACatfishingPlayerState>();

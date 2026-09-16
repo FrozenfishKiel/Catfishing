@@ -1,5 +1,30 @@
 # 钓鱼核心架构（技术文档）
 
+## 2026-09-16：R 放杆恢复蓝图斜插地面姿态
+
+此前正式杆脱手只停止跟随，保留最后持竿 Transform，因此悬在空中。现在只在真实主控持握退出时，由权威杆体在竿尾下方查找地面，必要时回退到原持竿者脚下；射线沿用部署入口上 100 / 下 250 厘米、法线 Z 至少 0.7 的范围，忽略所有 Pawn 与其他鱼竿。Actor 原点作为已核对的正式蓝图竿尾，恢复模型本地斜角并沿支撑面法线对齐，保留水平指向。无有效支撑时保留上次固定姿态并记录明确警告，不伪造地面。放置完成立即刷新 Actor 并走原移动复制，此后不进行逐帧贴地。
+
+基线 `11102c04`，修改前仅有用户未跟踪的《裁决同步 · 程序（工程待办）》；原取放测试 `Saved/Automation/RodGroundPose/Baseline/index.json` 通过（带警告）。以下路径均相对工程根，表是本次变更审查材料，不另设业务进度。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 输入、主控与生命周期 | `Source/Catfishing/Framework/Game/CatfishingPlayerController.cpp::ParkHeldRodFromInput` → Command/Service 离竿 → `Fishing/Integration/CatFishingPhysicalRodComponent.cpp::RefreshControlledCarrier` | 旧退出只冻结最后持握姿态；目标退出时一次性斜插地面 | 同组件增加私有 `ParkOnGroundFromAuthority`，仅有旧 Carrier 且正式竿有效时执行；初次初始化、损坏、销毁不放置 | 撤销主控→清握持→权威放置→发布 Parked | 取放、失败回滚、重新拾取、共享与收包 | 已接入；最终验证见表后 |
+| 核心坐标、默认与单位 | 同组件 `BodyLocal / GetObservedActorTransform / PositionControlledRod`；部署 `CatFishingService::PlaceRod` 的地面约束 | 规范握点/竿尖及模型斜角不变；竿尾落在碰撞支撑点，持握世界俯仰/横滚不再继承 | 以当前物理姿态取点和水平方向，规范本地杆轴与支撑法线组合世界旋转；厘米/度语义保持 | 先求支撑→设置独立 Body→立即 RefreshObservedPose | 平地、斜坡、岸边回退、无支撑；不能拿上一帧 Actor 坐标当当前杆体 | 已实现；新增四种实际世界碰撞场景 |
+| 物理、会话与资源 | `PhysicalRod::PopulateEndpointResponse` → FightRunner；`CatFishingService::RemoveOperatorAndReconcileSession` → Suspend；LightProp/Grab 接收 Parked | 固定支撑、零独立模拟、清除全部手抓点保持；不新建 Session/Hook，不增加扣费/磨损/存档写口 | 保留现有链，仅改变脱手时一次世界姿态 | 放置先于下一次端点求解；Suspend/Resume 保持 | 固定载荷、帮助者、真实 Runner 单一结算、库存身份 | 生产公式和账本未改；最终回归见表后 |
+| 网络、表现与资产 | Rod 原 Actor 移动复制、LightProp 状态复制；`/Game/Blueprint/Actors/BP_CatFishingRodActor` 的 StaticMesh 使用 `/Game/Catfishing/Fishing/Presentation/SM_Rod_BendSource` | 旧客户端看到悬停；目标看到服务器落地斜杆 | 不新增复制字段；`ForceNetUpdate` 通知现有移动复制；资产不保存 | 权威坐标提交→原复制→客户端 Mesh/鱼线/交互观察 | 双端根位置量化、斜角、静止漂移、截图 | 已核对 BP 实例：模型根在原点，Mesh 自带约 45°斜角；原历史 Stand 锚点仍保留，额外二进制图消费者未确认，不删除接口 |
+| 失败、日志与退出清理 | 同组件 `bEndingPlay`、Rod deployed/broken gate、LogCatFishing；原 Pack/Destroy | 找不到地面不能隐式丢失竿或清会话 | 成功 `fishing_rod_ground_parked`；失败 `fishing_rod_ground_park_rejected`，携带 RodActorId/PlayerId/SessionId/World/NetMode/LocalRole；只在退出时记录一次 | 原终局/清理继续负责其状态 | 无地面仍固定、可再次拾回；正常部署和销毁不误触发 | 默认 Log/Warning 可落盘；打包双端本轮未验收 |
+| 测试、文档与交付入口 | `Source/Catfishing/Fishing/Tests/CatFishingFirstRodHeldTests.cpp`、`Source/CatfishingEditor/Interaction/Grab/Tests/CatLightPropNetworkTests.cpp`；本页和 PhysicsGrabPrototype 说明 | 旧测试只断言放下后不漂移，不能发现悬空 | 增加竿尾接触、正式资产斜角、水平朝向、支撑面与客户端断言；更正现行原位架竿说明 | 源码/测试→Editor/Game→真实网络/画面 | 保持原不漂移与资源检查；配置/WBP/动画/资产生成脚本/Cook 入口不涉及修改 | 8 项回归通过，联机放置/同步/重新持握阶段通过，后续协作者抓握失败需保留；无资产迁移或删除 |
+
+`contract`：Editor/Game Win64 Development 编译成功，日志在 `Saved/Automation/RodGroundPose/EditorBuildFinal.log` 与 `GameBuild.log`。基线对照后恢复修复版本的构建另记 `EditorBuildRestoredFinal.log / GameBuildFinal.log`；恢复文件内容与备份 SHA256 一致，并显式更新时间戳触发重新编译，避免旧基线对象因备份时间戳被误复用。本轮新增运行时诊断默认落盘于 `FinalTests.log`，按 `fishing_rod_ground_parked / fishing_rod_ground_park_rejected` 检索；未依赖屏幕提示。
+
+`runtime_behavior`：`Saved/Automation/RodGroundPose/FinalReport/index.json` 共 9 项，8 项通过（1 clean、7 warning），1 项网络长场景失败。通过项包括两种正式鱼竿的真实选格/R/E/X、四种碰撞支撑、65 秒固定/共享取回，以及 6 项 PhysicalRod 和真实 Runner 单 ASC 结算。网络场景的放杆、双端贴地/斜角、静止、Parked 禁抓与同杆重新持握断言已通过，`fishing_parked_replication_measured` 记录根位置差、角差、客户端漂移均为 0；其后协作者普通抓握超时 `grounded helper could not reach the controlled rod`，不能将整项记为通过。以 `11102c04` 的 PhysicalRod 生产文件和原网络测试做同渲染条件对照，`NetworkBaselineReport/index.json` 复现完全相同的唯一失败，属于既有缺口，未放宽断言或改抓握逻辑。
+
+工作区隔离：验证途中出现前端房间聊天与样式脚本并行修改，保留其内容且不纳入本次提交。首次基线构建被并行 `CatFrontendRootWidget.Chat.cpp` 的 C4458 阻塞；该修改方修正后重试成功。本轮只临时对照自己涉及的两个文件，并已按备份完整恢复；最终构建交付修复版本。
+
+最终 DLL 恢复复验：`RestoredReport/index.json` 的正式取放完整场景通过（带警告），`RestoredTests.log` 再次记录贴地与岸边回退事件，确认加载的已是修复版本；源码、DLL 与正式竿资产指纹见同目录 `FinalHashes.json`。
+
+`presentation_delivery`：已查看真实客户端 `Saved/Automation/LightProps/Images/20260916-053944-formal-parked-rod.png`，正式杆竿尾贴地且向上斜插；同时查看站姿截图。未运行正式湖岸地图真人操作、新 Cook 或 Development 包双端默认落盘验收，不关闭 Fishing/PhysicsGrab/Delivery 模块。后续打包日志仍应查 `<打包根目录>/Catfishing/Saved/Logs`，不将本机自动化日志当成打包证据。
+
 
 ## 2026-09-16：抽鱼与实体生成分离
 

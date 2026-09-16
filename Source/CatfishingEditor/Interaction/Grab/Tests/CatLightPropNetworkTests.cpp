@@ -232,6 +232,10 @@ namespace CatLightPropNetwork
 				Test->AddInfo(FString::Printf(TEXT("Event=light_prop_jump_baseline BareMinZ=%.4f BareMaxZ=%.4f HeldMinZ=%.4f HeldMaxZ=%.4f SupportedMinZ=%.4f"), BareMinimumZ, BareMaximumZ, MinimumBodyZ, MaximumBodyZ, SupportedMinimumZ));
 				Capture(Client, TEXT("formal-parked-cat-standing"));
 				Test->TestEqual(TEXT("no owner is automatically promoted on release"), Rod->GetOperatorCount(), 0);
+				Test->TestTrue(TEXT("authority parks the formal rod butt on the ground"), FMath::Abs(Rod->GetActorLocation().Z) < .01);
+				Test->TestTrue(TEXT("client observes the rod butt on the ground"), FMath::Abs(ClientRod->GetActorLocation().Z) < .51);
+				Test->TestTrue(TEXT("authority restores the formal BP upward shaft tilt"), Rod->GetAuthoritativeRodForwardVector().Z > .5);
+				Test->TestTrue(TEXT("client observes the formal BP upward shaft tilt"), ClientRod->GetAuthoritativeRodForwardVector().Z > .5);
 				Test->TestTrue(TEXT("parked rod world position and angle stay fixed on authority"), Rod->GetPhysicalRodBody()->GetComponentTransform().Equals(ParkedPose, 1.e-5));
 				Test->TestTrue(TEXT("client parked pose does not drift after its state arrives"), ClientRod->GetPhysicalRodBody()->GetComponentTransform().Equals(ClientParkedPose, 1.e-5));
 				// FRepMovement rounds the Actor root, not the distant shaft centre. Keep its existing transport contract.

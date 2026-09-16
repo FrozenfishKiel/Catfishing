@@ -67,6 +67,7 @@ private:
 	void PopulateCMCEndpointPrediction(FCatFightRodConstraintInput& OutInput);
 	void RefreshControlledCarrier();
 	void PositionControlledRod();
+	void ParkOnGroundFromAuthority(UPrimitiveComponent* PreviousCarrier);
 	TWeakObjectPtr<UPrimitiveComponent> ControlledBody;
 	FVector ControlledAngularVelocity = FVector::ZeroVector;
 	FVector SmoothedFishPull = FVector::ZeroVector;
