@@ -452,7 +452,7 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 				TestEqual(TEXT("shared cast does not debit the deployer"), Quantity(Owner.Equipment, TEXT("BugBait")), 4);
 				if (bAfterWarning)
 				{
-					for (int32 Frame = 0; Frame < 5000 && BorrowedSession->GetSnapshot().HookActor
+					for (int32 Frame = 0; Frame < 15000 && BorrowedSession->GetSnapshot().HookActor
 						&& BorrowedSession->GetSnapshot().HookActor->GetPresentationState().BobberMode != ECatFishingBobberPresentationMode::BiteWarning; ++Frame)
 						TickConnectedWorld(.01f);
 					if (!TestTrue(TEXT("production timers reach the visible fast warning"), BorrowedSession->GetSnapshot().HookActor

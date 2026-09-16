@@ -9,6 +9,7 @@
 #include "Data/CatFishSelectionTypes.h"
 #include "Framework/Core/CatProfileContracts.h"
 #include "Fishing/Integration/CatFishingCommandTypes.h"
+#include "Fishing/Simulation/CatFishingBiteTimingModel.h"
 #include "CatFishingSession.generated.h"
 
 class ACatCharacter;
@@ -271,6 +272,16 @@ private:
 		const FString& ScooperStableNetId);
 	/** 渔获收口：确认消耗本场鱼饵，并按钓鱼规则 §4.4（:203）给鱼竿另扣 1 点基础磨损。 */
 	bool CommitCatchEquipmentFromAuthority();
+    void StopWaitingBiteClock();
+    void RefreshWaitingBiteClock();
+    void HandleWaitingChumChanged(FGuid FieldId);
+    FCatFishingBiteWaitProgress BiteWaitProgress;
+    FTimerHandle BiteRefreshTimerHandle;
+    bool bBiteWaitActive = false;
+    bool bBiteSampleFailed = false;
+    double BiteWaitMultiplier = 1.0;
+    double LastLoggedBiteInterval = 0.0;
+    int32 LastBiteFieldCount = INDEX_NONE;
 	void HandleBiteWarningTimer();
 	/** 咬钩等待计时到点：只把「试探触发」送进 StateTree，选鱼在 BeginProbeFromStateTree 里发生。 */
 	void HandleProbeTimer();
@@ -379,9 +390,9 @@ private:
 	FCatFishSelectionContext FrozenSelectionContext;
 	FCatFishSelectionResult FrozenSelectionResult;
 	ECatFishSelectionResolution SelectionResolution = ECatFishSelectionResolution::None;
-	/** 当前是本次抛竿的第几个咬钩机会；入夜收回后重回 Waiting 时递增，使下一轮等待与选鱼拥有新的确定性随机流。 */
+	/** 当前是本次抛竿的第几个咬钩机会；入夜收回后重回 Waiting 时递增，使下一轮选鱼拥有新的确定性随机流。 */
 	uint32 BiteOpportunitySequence = 0;
-	/** 从抛竿种子和 BiteOpportunitySequence 派生；等待采样、选鱼与后续搏斗共用。 */
+	/** 从抛竿种子和 BiteOpportunitySequence 派生；选鱼与后续搏斗共用；等待进度不消费随机数。 */
 	uint64 CurrentBiteRandomSeed = 0;
 	/** 服务器是否仍接受当前真咬窗口的首次左键；计时器先关闸，再按 §3.4 写鱼吐钩逃跑终局。 */
 	bool bTrueBiteWindowAcceptingHook = false;

@@ -117,10 +117,7 @@ bool UCatFishingSettings::TryGetScoopCooldown(double& OutCooldownSeconds) const
 bool UCatFishingSettings::TryGetBiteWarning(double& OutWarningSeconds) const
 {
 	OutWarningSeconds = 0.0;
-	if (!FMath::IsFinite(BiteWarningSeconds) || BiteWarningSeconds <= 0.0
-		|| !FMath::IsFinite(MinimumBiteDelaySeconds) || MinimumBiteDelaySeconds < 0.0
-		|| !FMath::IsFinite(MaximumBiteDelaySeconds)
-		|| MaximumBiteDelaySeconds < MinimumBiteDelaySeconds + BiteWarningSeconds)
+	if (!FMath::IsFinite(BiteWarningSeconds) || BiteWarningSeconds <= 0.0)
 	{
 		return false;
 	}
@@ -132,13 +129,9 @@ bool UCatFishingSettings::TryGetBiteTimingParameters(FCatFishingBiteTimingParame
 {
 	OutParameters = {};
 	FCatFishingBiteTimingParameters Candidate;
-	Candidate.NoChumMeanSeconds = NoChumMeanBiteDelaySeconds;
-	Candidate.SingleChumMeanSeconds = SingleChumMeanBiteDelaySeconds;
-	Candidate.FullChumMeanSeconds = FullChumMeanBiteDelaySeconds;
-	Candidate.SingleChumContribution = SingleChumContribution;
-	Candidate.FullChumContribution = FullChumContribution;
-	Candidate.MinimumCalmSeconds = MinimumBiteDelaySeconds;
-	Candidate.MaximumWaitSeconds = MaximumBiteDelaySeconds;
+    Candidate.UnchummedIntervalSeconds = UnchummedBiteIntervalSeconds;
+    Candidate.ChummedBaseIntervalSeconds = ChummedBiteBaseIntervalSeconds;
+    Candidate.ConcentrationScale = BiteConcentrationScale;
 	if (!TryGetBiteWarning(Candidate.WarningSeconds) || !Candidate.IsValid()) return false;
 	OutParameters = Candidate;
 	return true;

@@ -33,6 +33,38 @@
 #include "Framework/Game/CatfishingPlayerState.h"
 #include "GameFramework/CharacterMovementComponent.h"
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingConcentrationTimingTest,
+    "Catfishing.Unit.Fishing.BiteTiming.ConcentrationAndProgress",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingConcentrationTimingTest::RunTest(const FString& Parameters)
+{
+    FCatFishingBiteTimingParameters Timing;
+    double Seconds = 0.0;
+    TestTrue(TEXT("空窝参数有效"), FCatFishingBiteTimingModel::TryComputeInterval(Timing, 0.0, 1.0, Seconds));
+    TestEqual(TEXT("空窝120秒"), Seconds, 120.0);
+    FCatFishingBiteTimingModel::TryComputeInterval(Timing, 1.7, 1.0, Seconds);
+    TestEqual(TEXT("单份中心约11.54秒"), Seconds, 150.0 / 13.0, 1.e-9);
+    FCatFishingBiteTimingModel::TryComputeInterval(Timing, 8.5, 1.0, Seconds);
+    TestEqual(TEXT("五份中心6秒"), Seconds, 6.0, 1.e-9);
+    FCatFishingBiteTimingModel::TryComputeInterval(Timing, 850.0, 1.0, Seconds);
+    TestTrue(TEXT("高浓度不被旧慢浮或预警时长托底"), Seconds > 0.0 && Seconds < 1.5);
+    TestFalse(TEXT("负浓度拒绝"), FCatFishingBiteTimingModel::TryComputeInterval(Timing, -1.0, 1.0, Seconds));
+    TestFalse(TEXT("非正成长乘数拒绝"), FCatFishingBiteTimingModel::TryComputeInterval(Timing, 1.7, 0.0, Seconds));
+    FCatFishingBiteWaitProgress Progress;
+    Progress.IntervalSeconds = 120.0;
+    Progress.LastServerTime = 2.0;
+    Progress.Advance(1.0, 120.0);
+    TestEqual(TEXT("飞行不消费等待进度"), Progress.RemainingSeconds(1.0), 121.0);
+    Progress.Advance(32.0, 6.0);
+    TestEqual(TEXT("已等四分之一后补窝剩4.5秒"), Progress.RemainingSeconds(32.0), 4.5);
+    Progress.Advance(33.5, 120.0);
+    TestEqual(TEXT("已等一半后窝消失剩60秒"), Progress.RemainingSeconds(33.5), 60.0);
+    Progress.Advance(93.5, 120.0);
+    TestEqual(TEXT("到点只耗尽本漂进度"), Progress.RemainingFraction, 0.0);
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingBiteTimingWorldTest,
 	"Catfishing.Unit.Fishing.BiteTiming.WorldFieldsDriveFormalStateTreeAndBobber",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
@@ -111,6 +143,11 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("正式资产保留三分钟持续时间"), Prepared.ExpireServerTime - Prepared.StartServerTime, 180.0);
 			const auto Activated = Chum->ActivatePreparedFieldDeferred(Prepared.CommitToken);
 			if (!TestTrue(TEXT("真实窝料场激活成功"), Activated.bCommitted)) return false;
+            FCatPlaceChumResult Terminal;
+            Terminal.RequestId = Request.Command.RequestId;
+            Terminal.bCommitted = true;
+            Terminal.FieldId = Activated.FieldId;
+            Chum->StoreTerminalResult(Request.StableNetId, Terminal);
 			Chum->PublishActivatedField(Activated.FieldId);
 		}
 		const auto Sample = Chum->SampleChumAtPoint(FVector::ZeroVector, Built.Cache.Handle, StartTime);
@@ -129,10 +166,10 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("时间衰减降低有效贡献"), Aged.bSucceeded && Total(Aged) > 0.0 && Total(Aged) < Total(Sample));
 			TestTrue(TEXT("扩大后的八米处仍在范围内且更淡"), Edge.bSucceeded && Total(Edge) > 0.0 && Total(Edge) < Total(Sample));
 			TestTrue(TEXT("到期按零贡献返回"), Expired.bSucceeded && Total(Expired) == 0.0);
-			FCatFishingBiteTimingDistribution FreshDistribution, AgedDistribution;
-			FCatFishingBiteTimingModel::BuildDistribution(Timing, Total(Sample), 1.0, 1.0, FreshDistribution);
-			FCatFishingBiteTimingModel::BuildDistribution(Timing, Total(Aged), 1.0, 1.0, AgedDistribution);
-			TestTrue(TEXT("真实衰减采样使均值回升"), AgedDistribution.ExpectedMeanSeconds > FreshDistribution.ExpectedMeanSeconds);
+			double FreshInterval = 0.0, AgedInterval = 0.0;
+			FCatFishingBiteTimingModel::TryComputeInterval(Timing, Total(Sample), 1.0, FreshInterval);
+			FCatFishingBiteTimingModel::TryComputeInterval(Timing, Total(Aged), 1.0, AgedInterval);
+			TestTrue(TEXT("真实衰减采样使间隔回升"), AgedInterval > FreshInterval);
 		}
 		UClass* HookClass = GetDefault<UCatFishingPresentationSettings>()->HookActorClass.LoadSynchronous();
 		if (!HookClass) return false;
@@ -204,19 +241,62 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 			Session->SuspendOperatorFromAuthority();
 			TestFalse(TEXT("unattended wait has no operator character"), Session->FisherCharacter.IsValid());
 		}
-		FCatFishingBiteTimingDistribution Distribution;
-		FCatFishingBiteTimingModel::BuildDistribution(Timing, Total(Sample), 1.0, 1.0, Distribution);
-		FRandomStream Random(static_cast<int32>(Session->CurrentBiteRandomSeed));
 		double ExpectedWait = 0.0;
-		Distribution.TrySample(Random.FRand(), ExpectedWait);
+        FCatFishingBiteTimingModel::TryComputeInterval(Timing, Total(Sample), 1.0, ExpectedWait);
 		const double FlightSeconds = Hook->GetPresentationState().CastTrajectory.DurationSeconds;
 		const double BiteRemaining = World->GetTimerManager().GetTimerRemaining(Session->ProbeTimerHandle);
 		const double WarningRemaining = World->GetTimerManager().GetTimerRemaining(Session->BiteWarningTimerHandle);
 		TestEqual(TEXT("生产计时器消费冻结落点的新模型并加飞行时间"), BiteRemaining, ExpectedWait + FlightSeconds, 1.e-4);
 		TestEqual(TEXT("计时器保证完整1.5秒预警"), BiteRemaining - WarningRemaining, 1.5, 1.e-4);
+        if (Portions == 0)
+        {
+            // 真正落水后等待30秒，再通过正式投放/清场通知改排，不能重新开始一轮。
+            for (int32 Frame = 0; Frame < FMath::CeilToInt((FlightSeconds + 30.0) / 0.01); ++Frame)
+                Wrapper.TickTestWorld(0.01f);
+            const uint32 Opportunity = Session->BiteOpportunitySequence;
+            const uint64 Seed = Session->CurrentBiteRandomSeed;
+            const double BeforeReentry = World->GetTimerManager().GetTimerRemaining(Session->ProbeTimerHandle);
+            TestTrue(TEXT("等待重入成功"), Session->ScheduleWaitingProbeFromStateTree());
+            TestEqual(TEXT("等待重入不重置进度"), double(World->GetTimerManager().GetTimerRemaining(Session->ProbeTimerHandle)), BeforeReentry, 0.002);
+            const double Before = World->GetTimerManager().GetTimerRemaining(Session->ProbeTimerHandle);
+            FCatPrepareChumFieldRequest Refill;
+            Refill.StableNetId = TEXT("BiteTimingAutomation");
+            Refill.Command.RequestId = FGuid::NewGuid();
+            Refill.Command.ExpectedWaterRegionHandle = Built.Cache.Handle;
+            Refill.Command.ChumDefinitionId = ChumDefinition->EquipmentDefinitionId;
+            Refill.Command.Quantity = 1;
+            Refill.Influence = ChumDefinition->FindFragment<UCatEquipmentFragment_Chum>()->ChumInfluence;
+            Refill.ServerTime = World->GetTimeSeconds();
+            const auto Prepared = Chum->PrepareField(Refill);
+            if (!TestTrue(TEXT("等待中补窝准备成功"), Prepared.bPrepared)) return false;
+            const auto Activated = Chum->ActivatePreparedFieldDeferred(Prepared.CommitToken);
+            if (!TestTrue(TEXT("等待中补窝激活成功"), Activated.bCommitted)) return false;
+            FCatPlaceChumResult Terminal;
+            Terminal.RequestId = Refill.Command.RequestId;
+            Terminal.bCommitted = true;
+            Terminal.FieldId = Activated.FieldId;
+            Chum->StoreTerminalResult(Refill.StableNetId, Terminal);
+            Chum->PublishActivatedField(Activated.FieldId);
+            double RefilledInterval = 0.0;
+            FCatFishingBiteTimingModel::TryComputeInterval(Timing, 1.7, 1.0, RefilledInterval);
+            TestEqual(TEXT("补窝即时按已完成比例折算"), double(World->GetTimerManager().GetTimerRemaining(Session->ProbeTimerHandle)),
+                Before * RefilledInterval / Timing.UnchummedIntervalSeconds, 0.002);
+            const double Fraction = Session->BiteWaitProgress.RemainingFraction;
+            for (int32 Frame = 0; Frame < 100; ++Frame) Wrapper.TickTestWorld(0.01f);
+            TestTrue(TEXT("持续衰减抬高当前间隔且等待继续前进"), Session->BiteWaitProgress.IntervalSeconds > RefilledInterval
+                && Session->BiteWaitProgress.RemainingFraction < Fraction);
+            const double BeforeClear = World->GetTimerManager().GetTimerRemaining(Session->ProbeTimerHandle);
+            const double BeforeClearInterval = Session->BiteWaitProgress.IntervalSeconds;
+            Chum->ClearFieldsForRunTransition();
+            TestEqual(TEXT("清场即时延长剩余但不重置120秒"), double(World->GetTimerManager().GetTimerRemaining(Session->ProbeTimerHandle)),
+                BeforeClear * Timing.UnchummedIntervalSeconds / BeforeClearInterval, 0.002);
+            TestEqual(TEXT("改排保持同一选鱼机会"), Session->BiteOpportunitySequence, Opportunity);
+            TestEqual(TEXT("改排不重抽随机种子"), Session->CurrentBiteRandomSeed, Seed);
+            TestEqual(TEXT("改排不扣饵"), BaitCharacter->GetInventoryComponent()->CountVisibleInventoryQuantityByDefinitionId(TEXT("BugBait")), 1);
+        }
 		double ObservedWarningTime = -1.0;
 		double ObservedProbeTime = -1.0;
-		for (int32 Frame = 0; Frame < 5000 && !Session->IsTerminal() && Session->GetSnapshot().Phase != ECatFishingPhase::TrueBiteWindow; ++Frame)
+		for (int32 Frame = 0; Frame < 20000 && !Session->IsTerminal() && Session->GetSnapshot().Phase != ECatFishingPhase::TrueBiteWindow; ++Frame)
 		{
 			Wrapper.TickTestWorld(0.01f);
 			if (Portions == 2 && bNightDuringProbePublish)
@@ -267,6 +347,7 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 			continue;
 		}
 		if (!TestEqual(TEXT("真咬阶段成功"), Session->GetSnapshot().Phase, ECatFishingPhase::TrueBiteWindow)) return false;
+		TestFalse(TEXT("进入试探后持续采样计时器已清理"), World->GetTimerManager().IsTimerActive(Session->BiteRefreshTimerHandle));
 		const auto ResolvedTiming = Catalog->ResolveBiteTiming(*Session->FishDefinition);
 		TestEqual(TEXT("实际逐鱼试探时长"), World->GetTimeSeconds() - ObservedProbeTime, ResolvedTiming.ProbeDurationSeconds, 0.04);
 		TestEqual(TEXT("逐鱼响应截止时间"), Session->Snapshot.WindowEndsServerTime - Session->Snapshot.PhaseStartedServerTime, ResolvedTiming.TrueBiteWindowSeconds, 0.001);

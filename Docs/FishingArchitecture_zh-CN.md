@@ -1,5 +1,31 @@
 # 钓鱼核心架构（技术文档）
 
+
+## 2026-09-16：浓度等待与每漂进度
+
+用户确认采用连续窝料浓度，不做水域／窝中鱼库存或逐条扣减；保留正式衰减曲线，等待改为空窝120秒、有窝15/(1+A/K)，K暂定17/3浓度单位。落水后才消耗进度；既有间隔成长仍乘入，鱼饵只在选鱼／消耗链发挥作用。设计见 `Knowledge/Design/GDD 系统分册/钓鱼系统/钓鱼规则.md` §2，配置位于 `Config/DefaultGame.ini` 的 `/Script/Catfishing.CatFishingSettings`。
+
+基线为 `afd0a975` 加用户并行工作区；原工作区 Session、CoreFlow 已有输入改动，实施期间另一任务提交 `642e17ec`，本轮按其后 diff 保留这些变化。修改前未运行基线编译或测试，不将发现的失败自动归为既有。以下表是本轮变更审查材料，模块进度只维护在需求对齐差距清单。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 窝料输入与状态 | `Source/Catfishing/Environment/CatChumFieldSubsystem.cpp` 的 `SampleChumAtPoint / PublishActivatedField / CleanupExpiredFields`；Session读取冻结水域和落点 | 原场已按位置和年龄叠加，无鱼库存；等待只采样一次 | 保留场、预算、道具事务与复制；Session订阅正式提交后的激活及移除事件，每0.1秒采样 | 先准备进度计算，再订阅生产通知 | 补窝不刷新旧场寿命；测真实正式场投放回执、衰减、清场 | 已接入；运行验证结果见下方 |
+| 核心公式与配置 | `Source/Catfishing/Fishing/Simulation/CatFishingBiteTimingModel.*` → `CatFishingSettings::TryGetBiteTimingParameters` → Session | 原20/14/6均值、随机截顶、慢浮下限；改120或15/(1+A/K)，A/K均为浓度 | 原分布类型和公式删除；新增三配置键，既有成长间隔乘数保留 | 模型→设置→调用，旧ini键移除 | 无随机和上限；验证0/1.7/8.5/850、非法值、飞行排除 | 已替换；旧模型无native消费者 |
+| 单漂时钟与抽鱼 | `Source/Catfishing/Fishing/CatFishingSession.*` 的 `ScheduleWaitingProbeFromStateTree / RefreshWaitingBiteClock / HandleProbeTimer`，正式StateTree调用 | 从固定截止改为剩余完成比例；事件和连续采样均不重置机会或随机种子 | 服务器独占进度，旧间隔结算后更新新间隔；到点仍发同一个ProbeTriggered | 排程→进度结算→原Probe选鱼→原真咬扣饵 | 重入、补窝、变淡、清场、独立机会、原鱼实体/扣饵时序 | 已接入；测试覆盖不重置及不提前扣饵 |
+| 退出与昼夜 | 同Session的 `RefreshBiteAvailabilityFromAuthority / BeginProbeFromStateTree / FinalizeSession / EndPlay` | 新增持续采样与事件订阅必须一同清理 | `StopWaitingBiteClock`统一清理三计时器及订阅；入夜不跨天续进度 | 先停钟再进入旧终局/试探链 | 入夜重入、空竿、真咬超时、不残留采样 | 已接入现有清理点；不新增终局或资源入口 |
+| 浮漂表现与网络 | `Source/Catfishing/Fishing/Actors/CatFishingHookActor.cpp::SetBobberPresentationModeFromAuthority` 与原复制消费者 | 保留Calm/Warning/Sunk；短间隔不再为完整预警延长等待 | 最后至多1.5秒预警，原Hook复制不改；变化时才发布模式 | 服务器重排→原模式复制→原BP/WBP | 正式Hook BP/StateTree自动回归；双端真人呈现仍需验证 | 无新DTO或RPC；未改UI和动画资产 |
+| 鱼饵旧校验 | `Source/Catfishing/Equipment/Fragments/CatEquipmentFragment_Bait.*::IsRuntimeReady` →装备定义准入 | 已不消费的旧等待倍率仍能拒绝装备 | 改为父片段准入；保留特殊饵身份；两字段废弃且不再提供编辑入口 | 先移除等待消费，再移除准入依赖 | 正式饵加载、抛竿及真咬扣饵；未知BP绑定保留 | native剩余引用是夹具赋值；二进制字段身份暂留 |
+| 测试、资源与交付 | `Source/Catfishing/Fishing/Tests/CatFishingBiteTimingWorldTests.cpp`、`CatFishingOwnedRodLifecycleTests.cpp`；正式ST/Hook/Chum/Fish资产 | 原分布测试失效，50秒借竿测试上限不足 | 改验行为与进度；借竿仅提高等待上限，收竿不扣饵断言不变 | 编译→正式资产World回归→借竿生命周期 | 不以编译替代运行或表现验收 | 资产生成/迁移、存档写入不涉及；Cook入口不变，新Cook未运行 |
+| 日志与文档 | Session的 `LogCatFishing`；本页、CoreFlow、BlueprintGuide、Knowledge规则/总览/参数/道具册窝料机制、技术方案与唯一差距清单 | 旧“均值已排程”不能解释动态进度；文档有库存及面积守恒双口径 | `fishing_bite_clock_updated`记录Session/Cast/机会、浓度、K、间隔和剩余比例；首次/场数变化/累计间隔变化25%输出 | 运行事件核查→设计与指南同步 | 默认Log落盘，无每Tick刷屏；失败Warning | 历史方案明确退役；聚鱼/渔网旧库存依赖标为待裁，不声称实现 |
+
+旧字段保留边界：Settings的 `NoChumMeanBiteDelaySeconds / SingleChumMeanBiteDelaySeconds / FullChumMeanBiteDelaySeconds / SingleChumContribution / FullChumContribution / MinimumBiteDelaySeconds / MaximumBiteDelaySeconds`，及鱼饵片段的 `BiteRateMultiplier / MinimumBiteDelayMultiplier` 均不再控制玩法。原反射身份暂留，因完整二进制Blueprint属性绑定及外部资产引用未确认；完成编辑器字段引用审查与必要迁移后删除。旧随机模型实现与ini入口已删除，不保留双运行路径。
+
+验证结果：`contract`：Editor（`Saved/ChumTiming/BuildEditor-03.log`）与Game Development（`Saved/ChumTiming/BuildGame.log`）均Succeeded。`Saved/ChumTiming/Report-02/index.json` 10项全部通过，其中5项带警告、0失败、0未运行；覆盖公式、逐鱼配置、当前饵/真咬距离、完美线长与借竿生命周期。首轮编译的测试float/double重载错误已修正；首轮World回归补窝即时断言失败，原因是夹具未保存正式投放终态回执，发布函数按契约未广播，补齐真实事务步骤后通过，没有放宽断言。
+
+`runtime_behavior`：`Saved/ChumTiming/Automation-02.log` 使用正式StateTree、Hook BP、鱼目录与BugChum验证0/1/5及中间份数，覆盖飞行不计入、等待中正式补窝、连续衰减、清场保留比例、等待重入、机会/种子不变、试探无实体与不扣饵、真咬扣饵及入夜重入终局清理。日志已实际落盘 `fishing_bite_clock_updated`（例如空窝已等约30秒后单份补窝，剩余约8.65秒；随后清场按当前进度延长）。
+
+`presentation_delivery`：新Cook、独立进程房主/客户端默认落盘和真人浮漂/UI验收未运行，整体Fishing与RunEnvironmentSocial模块不关闭。Development包后续应在 `<打包根目录>/Catfishing/Saved/Logs` 分别核查房主的 `fishing_bite_clock_updated` 与双端 `fishing_bobber_mode_observed`。
+
 ## 2026-09-16：协作网络测试改为抓角色
 
 现行规则来自 `Knowledge/Design/GDD 系统分册/钓鱼系统/多人钓鱼附篇.md` §2.1 的 09-15 裁决：队友抓主控身体，普通伸爪不能抓杆。生产 `UCatPhysicsGrabComponent::IsReachSurface` 已在 `5f3e8ecd` 落实；`GripFromAuthority` 是服务器显式持握接收方，事务内有临时豁免，不能用它证明普通伸爪可以抓杆。此次基线 `e61c6cd1`，前轮 `RodGroundPose/FinalReport` 与 `NetworkBaselineReport` 的相同超时属于旧测试要求错误；不恢复抓杆，不修改生产物理或裁决。

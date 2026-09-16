@@ -41,9 +41,9 @@ public:
 	bool TryGetScoopReach(double& OutReachCentimeters) const;
 	/** 读取有限正抄网冷却；非法配置清零并返回 false，服务器据此 fail-closed。 */
 	bool TryGetScoopCooldown(double& OutCooldownSeconds) const;
-	/** 读取真咬前有限正预警时长；调度器保证预警完整播放后才允许进入真咬。 */
+	/** 读取真咬前有限正预警时长；预警不延长等待，高浓度短间隔允许缩短预警。 */
 	bool TryGetBiteWarning(double& OutWarningSeconds) const;
-	/** 读取中性鱼饵的窝料/平均等待锚点；均值包含慢浮和预警，非法或不可达配置拒绝。 */
+	/** 读取浓度等待公式参数，秒数从落水计到试探开始；非法配置拒绝。 */
 	bool TryGetBiteTimingParameters(FCatFishingBiteTimingParameters& OutParameters) const;
 
 	/** 读取终态快照的有界复制留存秒数；未裁或 runtime gate 关闭时清零并返回 false。 */
@@ -103,24 +103,28 @@ public:
 	/** 鱼表试探期及鱼目录档位默认均未填（0）时使用的随机兜底区间；不参与普通或完美响应窗。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (Units = "s"))
 	FVector2D ProbeDurationRangeSeconds = FVector2D(2.0, 4.0);
-	/** 无窝时落水到真咬的目标平均秒数；替代旧的每秒频率调参，计入等待上限。 */
-	UPROPERTY(Config, EditAnywhere, Category="Bite|Chum", meta=(ClampMin="0", Units="s"))
+    /** 空窝间隔；有窝间隔＝基准 / (1 + 三轴有效浓度 / K)。均为落水到试探开始。 */
+    UPROPERTY(Config, EditAnywhere, Category="Bite|Concentration", meta=(ClampMin="0.001", Units="s"))
+    double UnchummedBiteIntervalSeconds = 120.0;
+    UPROPERTY(Config, EditAnywhere, Category="Bite|Concentration", meta=(ClampMin="0.001", Units="s"))
+    double ChummedBiteBaseIntervalSeconds = 15.0;
+    /** K 为浓度单位，不是条数；暂按五份新窝中心 A=8.5 对应 6 秒标定。 */
+    UPROPERTY(Config, EditAnywhere, Category="Bite|Concentration", meta=(ClampMin="0.001"))
+    double BiteConcentrationScale = 17.0 / 3.0;
+    // 仅保留旧资产字段身份，运行时不读取。待完成 Blueprint 属性绑定迁移后删除。
+	UPROPERTY(meta=(DeprecatedProperty, DeprecationMessage="Use UnchummedBiteIntervalSeconds / ChummedBiteBaseIntervalSeconds / BiteConcentrationScale"))
 	double NoChumMeanBiteDelaySeconds = 0.0;
-	UPROPERTY(Config, EditAnywhere, Category="Bite|Chum", meta=(ClampMin="0", Units="s"))
+	UPROPERTY(meta=(DeprecatedProperty, DeprecationMessage="Use UnchummedBiteIntervalSeconds / ChummedBiteBaseIntervalSeconds / BiteConcentrationScale"))
 	double SingleChumMeanBiteDelaySeconds = 0.0;
-	UPROPERTY(Config, EditAnywhere, Category="Bite|Chum", meta=(ClampMin="0", Units="s"))
+	UPROPERTY(meta=(DeprecatedProperty, DeprecationMessage="Use UnchummedBiteIntervalSeconds / ChummedBiteBaseIntervalSeconds / BiteConcentrationScale"))
 	double FullChumMeanBiteDelaySeconds = 0.0;
-	/** 单份锚点的有效三轴总贡献；当前正式单份新窝中心为 1+0.5+0.2=1.7，无距离/时间衰减。 */
-	UPROPERTY(Config, EditAnywhere, Category="Bite|Chum", meta=(ClampMin="0"))
+	UPROPERTY(meta=(DeprecatedProperty, DeprecationMessage="Retired mean-anchor timing"))
 	double SingleChumContribution = 0.0;
-	/** 满窝锚点的有效三轴总贡献，达到后提速饱和；并非投放数量或库存硬上限。 */
-	UPROPERTY(Config, EditAnywhere, Category="Bite|Chum", meta=(ClampMin="0"))
+	UPROPERTY(meta=(DeprecatedProperty, DeprecationMessage="Retired mean-anchor timing"))
 	double FullChumContribution = 0.0;
-	/** 抛竿落水后、开始快速抖动前，浮漂至少保持慢浮的秒数。 */
-	UPROPERTY(Config, EditAnywhere, Category="Bite", meta=(ClampMin="0", Units="s"))
+	UPROPERTY(meta=(DeprecatedProperty, DeprecationMessage="Retired timing floor/cap"))
 	double MinimumBiteDelaySeconds = 0.0;
-	/** 从落水到 Probe 开始的等待上限，包含慢浮与预警，不包含逐鱼试探期。 */
-	UPROPERTY(Config, EditAnywhere, Category="Bite", meta=(ClampMin="0", Units="s"))
+	UPROPERTY(meta=(DeprecatedProperty, DeprecationMessage="Retired timing floor/cap"))
 	double MaximumBiteDelaySeconds = 0.0;
 	/** 进入 Probe 前的浮漂点动预警；Probe 继续轻点逐鱼秒数，随后真咬下沉。 */
 	UPROPERTY(Config, EditAnywhere, Category="Bite", meta=(ClampMin="0", Units="s"))

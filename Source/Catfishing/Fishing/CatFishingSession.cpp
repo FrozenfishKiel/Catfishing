@@ -673,7 +673,7 @@ bool ACatFishingSession::PrepareSessionFromAuthority(const FCatFishingAttemptSna
 // Probe：按空竿收回（钓鱼规则 §7 入夜行:337「入夜瞬间处于试探期的竿按空竿收回，不损饵、已抽库存不回」）。
 //   2026-09-12 之前试探期长度是 0，这一格根本不存在；现在它有 2～4 秒，必须真的收回，
 //   否则入夜后还会照常开真咬窗，与「入夜不再产生新咬钩」相反。饵没扣过，FinalizeSession 的
-//   ReleaseFishingUse 会把它退回；已抽的窝点库存按设计不回。
+//   ReleaseFishingUse 仅释放使用预约；浓度场不按抽鱼扣减。
 // 真咬待响应属于「进行中」，允许打完，不在本入口收口。
 void ACatFishingSession::RefreshBiteAvailabilityFromAuthority()
 {
@@ -704,8 +704,7 @@ void ACatFishingSession::RefreshBiteAvailabilityFromAuthority()
 	}
 	const bool bHadTimers = GetWorldTimerManager().IsTimerActive(ProbeTimerHandle)
 		|| GetWorldTimerManager().IsTimerActive(BiteWarningTimerHandle);
-	GetWorldTimerManager().ClearTimer(BiteWarningTimerHandle);
-	GetWorldTimerManager().ClearTimer(ProbeTimerHandle);
+	StopWaitingBiteClock();
 	GetWorldTimerManager().ClearTimer(ProbeStayTimerHandle);
 	if (Snapshot.HookActor)
 		Snapshot.HookActor->SetBobberPresentationModeFromAuthority(ECatFishingBobberPresentationMode::Calm);
@@ -733,6 +732,12 @@ bool ACatFishingSession::ScheduleWaitingProbeFromStateTree()
 		|| !Snapshot.HookActor || !Settings->TryGetBiteTimingParameters(TimingParameters))
 	{
 		return RejectSchedule(TEXT("SessionOrTimingConfigurationUnavailable"));
+	}
+	// 重入只刷新浓度，不重置同一漂的进度或选鱼机会。
+	if (bBiteWaitActive && Snapshot.Phase == ECatFishingPhase::Waiting)
+	{
+		RefreshWaitingBiteClock();
+		return !IsTerminal();
 	}
 	// Waiting 由首次抛竿或入夜撤销未真咬的 Probe 进入；超时是终局，不再循环。
 	// 已有实体或选鱼事实时拒绝重新抽取。
@@ -792,77 +797,118 @@ bool ACatFishingSession::ScheduleWaitingProbeFromStateTree()
 		if (!EnterPhaseFromStateTree(ECatFishingPhase::Waiting).bApplied)
 			return RejectSchedule(TEXT("WaitingPhaseRejected"));
 	}
-	double BaitRateMultiplier = 1.0;
-	double BaitMinimumDelayMultiplier = 1.0;
-	// 鱼饵按其配置的倍率修正基础上钩率与最小延迟。
-	const FName WaitingBaitDefinitionId = CastEquipment.IsValid()
-		? CastEquipment->GetCurrentFishingBaitDefinitionId(Snapshot.FishingSessionId) : NAME_None;
-	if (const UCatEquipmentDefinition* Bait = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(WaitingBaitDefinitionId))
-	{
-		BaitRateMultiplier = Bait->FindFragment<UCatEquipmentFragment_Bait>()->BiteRateMultiplier;
-		BaitMinimumDelayMultiplier = Bait->FindFragment<UCatEquipmentFragment_Bait>()->MinimumBiteDelayMultiplier;
-	}
-	// 初次调度时钩子还在飞行；窝料必须采样服务器冻结的水面落点。
-	FCatChumSample ChumSample;
-	if (UCatChumFieldSubsystem* Chum = GetWorld()->GetSubsystem<UCatChumFieldSubsystem>())
-	{
-		ChumSample = Chum->SampleChumAtPoint(AttemptSnapshot.ServerCorrectedLandingWorldPoint,
-			AttemptSnapshot.WaterRegion, GetWorld()->GetTimeSeconds());
-	}
-	if (!ChumSample.bSucceeded)
-	{
-		// 保留采样失败时按无窝调度的既有契约，但不再把失败静默伪装成有效零浓度。
-		UE_LOG(LogCatFishing, Warning,
-			TEXT("Event=fishing_bite_chum_sample_failed SessionId=%s CastAttemptId=%s Opportunity=%u Error=%s Result=UnchummedFallback World=%s WorldNetMode=%d Authority=%d LocalRole=%d Actor=%s"),
-			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *Snapshot.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens), BiteOpportunitySequence,
-			*UEnum::GetValueAsString(ChumSample.Error), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(),
-			static_cast<int32>(GetLocalRole()), *GetName());
-	}
-	const double TotalChum = ChumSample.bSucceeded ? ChumSample.EffectiveChumVector.Fishy
-		+ ChumSample.EffectiveChumVector.Fragrant + ChumSample.EffectiveChumVector.Fermented : 0.0;
-	FCatFishingBiteTimingDistribution Distribution;
-	if (!FCatFishingBiteTimingModel::BuildDistribution(TimingParameters, TotalChum,
-		BaitRateMultiplier, BaitMinimumDelayMultiplier, Distribution))
-		return RejectSchedule(TEXT("InvalidContributionOrBaitTiming"));
-	// 每轮仍只消费原随机流的第一个随机数，保留鱼种抽样与机会种子的既有关系。
-	FRandomStream Random(static_cast<int32>(CurrentBiteRandomSeed));
-	double WaitSeconds = 0.0;
-	if (!Distribution.TrySample(static_cast<double>(Random.FRand()), WaitSeconds))
-		return RejectSchedule(TEXT("InvalidWaitSample"));
-	WaitSeconds *= 1.0 + GetFisherGrowthMagnitude(ECatGrowthOptionId::BiteInterval);
-	const FCatFishingCastTrajectory& Flight = Snapshot.HookActor->GetPresentationState().CastTrajectory;
-	const double RemainingFlightSeconds = FMath::Max(0.0,
-		Flight.StartedServerTime + Flight.DurationSeconds - GetWorld()->GetTimeSeconds());
-	const double WarningDelay = RemainingFlightSeconds + FMath::Max(0.0, WaitSeconds - Distribution.WarningSeconds);
-	const double Delay = RemainingFlightSeconds + WaitSeconds;
-	GetWorldTimerManager().ClearTimer(BiteWarningTimerHandle);
-	GetWorldTimerManager().ClearTimer(ProbeTimerHandle);
-	GetWorldTimerManager().ClearTimer(ProbeStayTimerHandle);
-	if (WarningDelay <= UE_DOUBLE_SMALL_NUMBER)
-	{
-		HandleBiteWarningTimer();
-	}
-	else
-	{
-		GetWorldTimerManager().SetTimer(BiteWarningTimerHandle, this,
-			&ThisClass::HandleBiteWarningTimer, WarningDelay, false);
-	}
-	GetWorldTimerManager().SetTimer(ProbeTimerHandle, this, &ThisClass::HandleProbeTimer, Delay, false);
-	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=fishing_bite_scheduled Model=ChumMeanAnchors SessionId=%s CastAttemptId=%s Opportunity=%u Seed=%llu World=%s WorldNetMode=%d Authority=%d LocalRole=%d Actor=%s Hook=%s Region=%s Landing=%s SampleServerTime=%.3f ChumFields=%d ChumFishy=%.6f ChumFragrant=%.6f ChumFermented=%.6f TotalChum=%.6f NeutralMeanSeconds=%.6f ExpectedMeanSeconds=%.6f RatePerSecond=%.9f Bait=%s BaitRateMultiplier=%.3f BaitMinimumMultiplier=%.3f MinimumCalmSeconds=%.3f WarningSeconds=%.3f MaximumWaitSeconds=%.3f WaitSeconds=%.6f RemainingFlightSeconds=%.6f WarningAtServerTime=%.6f ProbeAtServerTime=%.6f %s"),
-		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *Snapshot.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens), BiteOpportunitySequence,
-		CurrentBiteRandomSeed, *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), static_cast<int32>(GetLocalRole()),
-		*GetName(), *GetNameSafe(Snapshot.HookActor), *AttemptSnapshot.WaterRegion.RegionId.ToString(),
-		*AttemptSnapshot.ServerCorrectedLandingWorldPoint.ToString(), ChumSample.SampleServerTime,
-		ChumSample.ContributingFieldCount, ChumSample.EffectiveChumVector.Fishy,
-		ChumSample.EffectiveChumVector.Fragrant, ChumSample.EffectiveChumVector.Fermented, TotalChum,
-		Distribution.NeutralMeanSeconds, Distribution.ExpectedMeanSeconds, Distribution.RatePerSecond,
-		*WaitingBaitDefinitionId.ToString(), BaitRateMultiplier, BaitMinimumDelayMultiplier,
-		Distribution.MinimumCalmSeconds, Distribution.WarningSeconds, Distribution.MaximumWaitSeconds,
-		WaitSeconds, RemainingFlightSeconds, GetWorld()->GetTimeSeconds() + WarningDelay,
-		GetWorld()->GetTimeSeconds() + Delay,
-		*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
-	return true;
+    if (IsTerminal() || !Snapshot.HookActor || Snapshot.Phase != ECatFishingPhase::Waiting)
+        return RejectSchedule(TEXT("WaitingCancelledDuringPublish"));
+    StopWaitingBiteClock();
+    // 等待只受浓度和既有咬钩间隔成长影响；饵的偏好仍在试探抽鱼时读取。
+    BiteWaitMultiplier = 1.0 + GetFisherGrowthMagnitude(ECatGrowthOptionId::BiteInterval);
+    double EmptyInterval = 0.0;
+    if (!FCatFishingBiteTimingModel::TryComputeInterval(TimingParameters, 0.0, BiteWaitMultiplier, EmptyInterval))
+        return RejectSchedule(TEXT("InvalidIntervalMultiplier"));
+    const double Now = GetWorld()->GetTimeSeconds();
+    const FCatFishingCastTrajectory& Flight = Snapshot.HookActor->GetPresentationState().CastTrajectory;
+    BiteWaitProgress = {};
+    BiteWaitProgress.IntervalSeconds = EmptyInterval;
+    BiteWaitProgress.LastServerTime = FMath::Max(Now, Flight.StartedServerTime + Flight.DurationSeconds);
+    bBiteWaitActive = true;
+    bBiteSampleFailed = false;
+    LastLoggedBiteInterval = 0.0;
+    LastBiteFieldCount = INDEX_NONE;
+    if (UCatChumFieldSubsystem* Chum = GetWorld()->GetSubsystem<UCatChumFieldSubsystem>())
+    {
+        Chum->OnFieldActivated.AddUObject(this, &ThisClass::HandleWaitingChumChanged);
+        Chum->OnFieldRemoved.AddUObject(this, &ThisClass::HandleWaitingChumChanged);
+    }
+    // 连续曲线每0.1秒重采样；投放/移除即时刷新。客户端只消费原浮漂复制。
+    GetWorldTimerManager().SetTimer(BiteRefreshTimerHandle, this, &ThisClass::RefreshWaitingBiteClock, 0.1f, true);
+    RefreshWaitingBiteClock();
+    return !IsTerminal();
+}
+
+void ACatFishingSession::StopWaitingBiteClock()
+{
+    bBiteWaitActive = false;
+    GetWorldTimerManager().ClearTimer(BiteRefreshTimerHandle);
+    GetWorldTimerManager().ClearTimer(BiteWarningTimerHandle);
+    GetWorldTimerManager().ClearTimer(ProbeTimerHandle);
+    if (UCatChumFieldSubsystem* Chum = GetWorld()->GetSubsystem<UCatChumFieldSubsystem>())
+    {
+        Chum->OnFieldActivated.RemoveAll(this);
+        Chum->OnFieldRemoved.RemoveAll(this);
+    }
+}
+
+void ACatFishingSession::HandleWaitingChumChanged(FGuid FieldId)
+{
+    RefreshWaitingBiteClock();
+}
+
+void ACatFishingSession::RefreshWaitingBiteClock()
+{
+    if (!bBiteWaitActive) return;
+    if (!HasAuthority() || IsTerminal() || Snapshot.Phase != ECatFishingPhase::Waiting || !Snapshot.HookActor)
+    {
+        StopWaitingBiteClock();
+        return;
+    }
+    const auto* Mode = GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>();
+    if (!Mode || !Mode->CanGenerateNewFishingBites())
+    {
+        RefreshBiteAvailabilityFromAuthority();
+        return;
+    }
+    const double Now = GetWorld()->GetTimeSeconds();
+    FCatChumSample Sample;
+    if (const auto* Chum = GetWorld()->GetSubsystem<UCatChumFieldSubsystem>())
+        Sample = Chum->SampleChumAtPoint(AttemptSnapshot.ServerCorrectedLandingWorldPoint, AttemptSnapshot.WaterRegion, Now);
+    if (!Sample.bSucceeded && !bBiteSampleFailed)
+        UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_bite_chum_sample_failed SessionId=%s Error=%s Result=UnchummedFallback World=%s NetMode=%d Authority=1 LocalRole=%d"),
+            *Snapshot.FishingSessionId.ToString(), *UEnum::GetValueAsString(Sample.Error), *GetNameSafe(GetWorld()), GetNetMode(), int32(GetLocalRole()));
+    bBiteSampleFailed = !Sample.bSucceeded;
+    const double Concentration = Sample.bSucceeded
+        ? Sample.EffectiveChumVector.Fishy + Sample.EffectiveChumVector.Fragrant + Sample.EffectiveChumVector.Fermented : 0.0;
+    FCatFishingBiteTimingParameters Parameters;
+    double Interval = 0.0;
+    if (!GetDefault<UCatFishingSettings>()->TryGetBiteTimingParameters(Parameters)
+        || !FCatFishingBiteTimingModel::TryComputeInterval(Parameters, Concentration, BiteWaitMultiplier, Interval)
+        || !BiteWaitProgress.Advance(Now, Interval))
+    {
+        StopWaitingBiteClock();
+        UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_bite_clock_rejected SessionId=%s Result=InvalidConfiguration World=%s NetMode=%d Authority=1 LocalRole=%d"),
+            *Snapshot.FishingSessionId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), int32(GetLocalRole()));
+        TerminateSession(ECatFishingOutcome::Invalidated, TEXT("Bite clock configuration invalid"));
+        return;
+    }
+    const double Remaining = BiteWaitProgress.RemainingSeconds(Now);
+    // 只记录首次排程、覆盖场变化和间隔累计变化25%；不在0.1秒采样中刷日志。
+    if (LastLoggedBiteInterval <= 0.0 || LastBiteFieldCount != Sample.ContributingFieldCount
+        || FMath::Abs(Interval - LastLoggedBiteInterval) >= LastLoggedBiteInterval * 0.25)
+    {
+        UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_bite_clock_updated Model=ConcentrationProgress SessionId=%s CastAttemptId=%s Opportunity=%u Concentration=%.6f K=%.6f IntervalSeconds=%.6f RemainingFraction=%.6f RemainingSeconds=%.6f Fields=%d World=%s NetMode=%d Authority=1 LocalRole=%d %s"),
+            *Snapshot.FishingSessionId.ToString(), *Snapshot.CastAttemptId.ToString(), BiteOpportunitySequence,
+            Concentration, Parameters.ConcentrationScale, Interval, BiteWaitProgress.RemainingFraction, Remaining,
+            Sample.ContributingFieldCount, *GetNameSafe(GetWorld()), GetNetMode(), int32(GetLocalRole()),
+            *CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
+        LastLoggedBiteInterval = Interval;
+        LastBiteFieldCount = Sample.ContributingFieldCount;
+    }
+    if (BiteWaitProgress.RemainingFraction <= 1.e-9)
+    {
+        StopWaitingBiteClock();
+        HandleProbeTimer();
+        return;
+    }
+    GetWorldTimerManager().ClearTimer(BiteWarningTimerHandle);
+    const double WarningDelay = FMath::Max(0.0, Remaining - Parameters.WarningSeconds);
+    const double FlightRemaining = FMath::Max(0.0, BiteWaitProgress.LastServerTime - Now);
+    const double PresentationDelay = FMath::Max(WarningDelay, FlightRemaining);
+    if (PresentationDelay <= UE_DOUBLE_SMALL_NUMBER) HandleBiteWarningTimer();
+    else
+    {
+        Snapshot.HookActor->SetBobberPresentationModeFromAuthority(ECatFishingBobberPresentationMode::Calm);
+        GetWorldTimerManager().SetTimer(BiteWarningTimerHandle, this, &ThisClass::HandleBiteWarningTimer, PresentationDelay, false);
+    }
+    GetWorldTimerManager().SetTimer(ProbeTimerHandle, this, &ThisClass::HandleProbeTimer, FMath::Max(Remaining, 0.000001), false);
 }
 
 void ACatFishingSession::HandleBiteWarningTimer()
@@ -883,6 +929,7 @@ void ACatFishingSession::HandleBiteWarningTimer()
 
 void ACatFishingSession::HandleProbeTimer()
 {
+    if (bBiteWaitActive) { RefreshWaitingBiteClock(); return; }
 	// 计时器到期：只有仍处于 Waiting 阶段才把"试探触发"事件送进 StateTree，
 	// 阶段已经变化（比如提前被取消/提竿）则说明这次触发已经过期，直接忽略。
 	if (!HasAuthority() || IsTerminal() || Snapshot.Phase != ECatFishingPhase::Waiting || !StateTreeComponent) return;
@@ -975,6 +1022,8 @@ bool ACatFishingSession::BeginProbeFromStateTree()
 	{
 		return false;
 	}
+
+	StopWaitingBiteClock();
 
 	// 白天排队的回调若到夜晚才消费，按现行试探期空竿收口；不扣饵、不回到另一条旧等待路径。
 	const ACatfishingGameModeBase* Mode = World->GetAuthGameMode<ACatfishingGameModeBase>();
@@ -2866,8 +2915,7 @@ void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, cons
 		}
 	}
 	if (FightRunner) FightRunner->Stop(); // 停止仍在跑的搏斗模拟，防止终态之后还有 Step 回调。
-	GetWorldTimerManager().ClearTimer(BiteWarningTimerHandle);
-	GetWorldTimerManager().ClearTimer(ProbeTimerHandle);
+	StopWaitingBiteClock();
 	GetWorldTimerManager().ClearTimer(ProbeStayTimerHandle);
 	GetWorldTimerManager().ClearTimer(TrueBiteTimerHandle);
 	GetWorldTimerManager().ClearTimer(ExhaustedRevivalTimerHandle);
@@ -2983,8 +3031,7 @@ void ACatFishingSession::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	GetWorldTimerManager().ClearTimer(CancelHoldTimer);
 	if (FightRunner) FightRunner->Stop();
-	GetWorldTimerManager().ClearTimer(BiteWarningTimerHandle);
-	GetWorldTimerManager().ClearTimer(ProbeTimerHandle);
+	StopWaitingBiteClock();
 	GetWorldTimerManager().ClearTimer(ProbeStayTimerHandle);
 	GetWorldTimerManager().ClearTimer(TrueBiteTimerHandle);
 	GetWorldTimerManager().ClearTimer(ExhaustedRevivalTimerHandle);
