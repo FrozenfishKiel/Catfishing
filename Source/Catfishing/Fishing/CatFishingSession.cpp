@@ -55,7 +55,6 @@
 #include "FishContainers/CatFishPickupSettings.h"
 #include "Items/Fish/CatFishPickupActor.h"
 #include "FishContainers/CatFishGuardActor.h"
-#include "FishContainers/World/CatWorldSurfaceResolver.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
 #include "Social/CatSocialService.h"
 #include "Net/UnrealNetwork.h"
@@ -306,10 +305,9 @@ bool ACatFishingSession::ResumePrimaryControlFromAuthority(AController* NewFishe
 
 	RefreshFightSummary();
 	PublishSnapshot(ECatFishingSnapshotMutation::Discrete);
-	// 换人是 §4.2（:178）点名的合力变动之一：新主控接手后立刻重查一次瞬断与碾压，
-	// 强弱换手都可能把本场推过门槛。已写终局就不再输出"接管成功"之外的搏斗推进。
+	// 换主后只重查鱼竿承载门槛；鱼与猫的位移继续由原 Runner 求解。
 	if (bFightTakeover && Snapshot.Phase == ECatFishingPhase::HookedFight
-		&& EvaluateStrengthCheckOrderFromAuthority(TEXT("PrimaryHandover")))
+		&& EvaluateRodStrengthFromAuthority(TEXT("PrimaryHandover")))
 	{
 		return true;
 	}
@@ -1386,7 +1384,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	}
 
 	// 完美中鱼（钓鱼规则 §3.4:145,149）：鱼力量、鱼体力、初始线长三项在入场直接乘到本场实际值，
-	// 此后运动求解、负载、消耗、碾压判定全用削后值。倍率按鱼册稀有度档取
+	// 此后运动求解、负载、消耗全用削后值。倍率按鱼册稀有度档取
 	// （09-09 晚裁「四套 Bite_* 性格模板只是测试用，正式口径走鱼册」），不再读那三个已弃用的过渡字段。
 	const FCatPerfectHookReduction PerfectReduction = Snapshot.bPerfectHook
 		? GetDefault<UCatFishCatalogSettings>()->ResolvePerfectHookReduction(*FishDefinition)
@@ -1483,16 +1481,10 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	Config.EscapeSlackCentimeters = FightBalance->EscapeSlackCentimeters;
 	if (!Config.IsValid()) return false; // 配置自检（如任何数值非有限/非法组合）未通过则拒绝启动搏斗。
 
-	// 搏斗起始时刻就记在这里，而不是等 Runner 启动成功之后：下面的碾压会当场交出一条鱼，
-	// 那条鱼的演出贡献名单也要按「本次搏斗摸过竿的人」来收，晚记就拿不到窗口。
-	// 此刻正握着竿的猫无论时间戳早晚都算数（抓握组按「仍握着」直接命中），所以这个起点不会漏掉开场合力。
+	// 记录本场参与者贡献窗口；竿强和配置校验通过后统一启动物理搏斗。
 	FightStartedServerTimeSeconds = GetWorld()->GetTimeSeconds();
-
-	// 强度检查序（钓鱼规则 §4.2:176,178）：①竿强瞬断 → ②碾压 → ③常规搏斗。
-	// 位置选在这里有两个理由：鱼力已按 §3.4（:149）乘过完美削减成为本场定值；
-	// 而竿耐久、鱼竿定义与整份 Config 的 fail-closed 校验都已经跑完——碾压会当场交出一条鱼并扣渔获磨损，
-	// 不能赶在“竿已断/配置不合法”这些本就不该开场的情况前面。①或②成立就已写下终局，本次不进搏斗。
-	if (EvaluateStrengthCheckOrderFromAuthority(TEXT("FightStart")))
+	// 本场鱼力已含完美削减，鱼竿耐久与模拟配置也已完成校验。
+	if (EvaluateRodStrengthFromAuthority(TEXT("FightStart")))
 	{
 		return false;
 	}
@@ -1634,6 +1626,11 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		bFightStaminaInitialized = false;
 		return false;
 	}
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_physical_fight_started SessionId=%s FishActor=%s FishStrength=%.3f PrimaryStrength=%.3f Result=RunnerStarted %s"),
+		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(Encounter),
+		Snapshot.FishStrength, Config.PrimaryOperatorCatStrength,
+		*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
 	// 巨物全体提示（多人钓鱼附篇 §3.3、交互册「求助与震动」）：求助一律手动喊人，**只有巨物**由系统发全场提示。
 	// 接线点选在这里，不选抽中鱼种那一刻：试探期只冻结鱼种数据，玩家还没提竿，
 	// 竿强不够会在下面的检查序里当场瞬断、这一竿根本不成立——那时候把全队喊过来，来了也没有可合力的对象。
@@ -2078,7 +2075,7 @@ void ACatFishingSession::AppendGripContributorsToParticipants(TArray<FString>& P
 	}
 }
 
-// 岸上世界鱼的唯一生成流程：力竭拖岸与碾压甩岸都从这里走。先 fail-closed 校验依赖，再收口装备事务
+// 岸上世界鱼的唯一生成流程：真实拖岸从这里交付。先 fail-closed 校验依赖，再收口装备事务
 // （扣饵 + §4.4 的渔获磨损 1 点），然后生成 Pickup、退掉水中 Encounter 的可视与碰撞，最后写 Landed 终态。
 bool ACatFishingSession::SpawnLandedFishPickupFromAuthority(const FVector& SurfaceLocation,
 	const FVector& GroundNormal, const TCHAR* DiagnosticReason)
@@ -2252,9 +2249,9 @@ bool ACatFishingSession::TryResolveRodStrength(double& OutRodStrength) const
 	return true;
 }
 
-// 强度检查序流程（钓鱼规则 §4.2:176,178）：①竿强瞬断 → ②碾压 → ③常规搏斗。
+// 鱼竿承载检查：只判断器材能否承受本场负载，不依据猫鱼力量比直接收鱼。
 // 瞬时判定，只在搏斗开始与显式换主时各跑一次；抓猫、松手和属性变化不另开终局裁决。
-bool ACatFishingSession::EvaluateStrengthCheckOrderFromAuthority(const TCHAR* Trigger)
+bool ACatFishingSession::EvaluateRodStrengthFromAuthority(const TCHAR* Trigger)
 {
 	if (!HasAuthority() || IsTerminal() || SelectionResolution != ECatFishSelectionResolution::Selected)
 	{
@@ -2266,7 +2263,7 @@ bool ACatFishingSession::EvaluateStrengthCheckOrderFromAuthority(const TCHAR* Tr
 	if (!TryResolvePrimaryStrength(PrimaryStrength)
 		|| !FMath::IsFinite(FishStrength) || FishStrength <= 0.0)
 	{
-		// 读不到任一边的力量就不裁瞬断也不裁碾压；依赖缺失由各自的 fail-closed 门禁处理。
+		// 读不到任一边的力量就不裁瞬断；依赖缺失由各自的 fail-closed 门禁处理。
 		return false;
 	}
 	double RodStrength = 0.0;
@@ -2313,109 +2310,8 @@ bool ACatFishingSession::EvaluateStrengthCheckOrderFromAuthority(const TCHAR* Tr
 			TEXT("Rod strength did not exceed the smaller of primary strength and fish strength; rod destroyed"));
 		return true;
 	}
-	// ② 碾压：猫力达到鱼力的 2 倍即碾压，直接把鱼甩上岸；达标立即飞鱼、跳过或中断搏斗循环。
-	if (PrimaryStrength >= FishStrength * GetDefault<UCatFishingSettings>()->GetOverpowerStrengthRatio())
-	{
-		UE_LOG(LogCatFishing, Log,
-			TEXT("Event=fishing_fish_overpowered SessionId=%s Trigger=%s PrimaryStrength=%.3f FishStrength=%.3f "
-				"Ratio=%.3f Phase=%s %s"),
-			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), Trigger ? Trigger : TEXT("None"),
-			PrimaryStrength, FishStrength, PrimaryStrength / FishStrength,
-			*UEnum::GetValueAsString(Snapshot.Phase),
-			*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
-		if (FlingFishAshoreFromAuthority())
-		{
-			return true;
-		}
-		// 甩岸失败不能把鱼凭空吞掉：缺口已经写进 Error 日志，这里退回常规搏斗，除非失败路径自己已判终局。
-		return IsTerminal();
-	}
-	// ③ 常规搏斗：两道门槛都没过，交回 Runner。
+	// 鱼竿可承受本场负载，后续运动与收鱼交给 Runner。
 	return false;
-}
-
-// 碾压甩岸流程：沿钓线向猫身后固定距离找可达干地，失败才回脚下（§4.2:178"飞上岸的鱼进入待拾取状态，
-// 不直接进主钓手库存"）。它不是 AutoHauling——那条是鱼体力归零后的力竭拖岸，走 Runner 与 ExhaustedReel。
-bool ACatFishingSession::FlingFishAshoreFromAuthority()
-{
-	UWorld* World = GetWorld();
-	const UCatFishPickupSettings* ItemSettings = GetDefault<UCatFishPickupSettings>();
-	ACatCharacter* Fisher = FisherCharacter.Get();
-	if (!HasAuthority() || !World || !ItemSettings || !Fisher || !Snapshot.FishEncounterActor)
-	{
-		UE_LOG(LogCatFishing, Error,
-			TEXT("Event=fishing_overpower_fling_rejected SessionId=%s World=%s Settings=%s Fisher=%s Encounter=%s Reason=Dependency"),
-			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-			World ? TEXT("valid") : TEXT("null"), ItemSettings ? TEXT("valid") : TEXT("null"),
-			Fisher ? TEXT("valid") : TEXT("null"), *GetNameSafe(Snapshot.FishEncounterActor));
-		return false;
-	}
-	// 落点（钓鱼规则 §4.2，2026-09-12 拍）：沿钓线方向朝持竿猫身后甩一段固定距离。
-	// 取固定距离而不是按超出倍率缩放——倍率缩放会让 4 倍碾压的鱼飞出屏幕，反而看不见那一下。
-	// 撞水或撞墙就按比例往回收，收不到干地才退回落在猫脚下。
-	// 距离与回收采样比例统一读参数配置，非法值回退迁移前默认值并告警。
-	TArray<const AActor*> IgnoredActors;
-	IgnoredActors.Reserve(5);
-	IgnoredActors.Add(this);
-	IgnoredActors.Add(Fisher);
-	IgnoredActors.Add(Snapshot.FishEncounterActor.Get());
-	IgnoredActors.Add(Snapshot.RodActor.Get());
-	IgnoredActors.Add(Snapshot.HookActor.Get());
-	const FVector FootPoint = Fisher->GetBodyFootPointWorld();
-	// 「身后」＝钓线的反方向：鱼在水里，猫背对水面，所以从鱼指向猫的水平分量就是甩出去的方向。
-	const FVector ToFisher = FootPoint - Snapshot.FishEncounterActor->GetActorLocation();
-	const FVector BackwardDirection = FVector(ToFisher.X, ToFisher.Y, 0.0).GetSafeNormal();
-	const UCatWaterQuerySubsystem* Water = World->GetSubsystem<UCatWaterQuerySubsystem>();
-	constexpr double MinimumDryGroundHeightCentimeters = 1.0;
-	// 墓碑（2026-09-14，T17；钓鱼规则 §4.2）：原来只向下查地表，能把鱼交付到墙后／墙顶。
-	// 先扫完整通路限制可达身后距离，再从最远可达点向猫回收找最近干地；无可用干地按脚下兜底。
-	const double FlingDistance = GetDefault<UCatFishingSettings>()->GetOverpowerFlingDistanceCentimeters();
-	FCollisionQueryParams PathParams(SCENE_QUERY_STAT(CatOverpowerPath), false);
-	for (const AActor* Ignored : IgnoredActors) if (Ignored) PathParams.AddIgnoredActor(Ignored);
-	const FVector Clearance(0, 0, 50.0);
-	FHitResult Hit;
-	const bool bBlockedBeforeCat = World->SweepSingleByChannel(Hit,
-		Snapshot.FishEncounterActor->GetFishingCollisionCenter() + Clearance, FootPoint + Clearance,
-		FQuat::Identity, ItemSettings->LandingGroundTraceChannel, FCollisionShape::MakeSphere(5.0f), PathParams);
-	double ReachableDistance = bBlockedBeforeCat ? 0.0 : FlingDistance;
-	if (!bBlockedBeforeCat && World->SweepSingleByChannel(Hit, FootPoint + Clearance,
-		FootPoint + BackwardDirection * FlingDistance + Clearance, FQuat::Identity,
-		ItemSettings->LandingGroundTraceChannel, FCollisionShape::MakeSphere(5.0f), PathParams))
-		ReachableDistance = FMath::Max(0.0, FlingDistance * Hit.Time - 5.0);
-	FVector LandingPoint = FootPoint;
-	FVector LandingNormal = FVector::UpVector;
-	bool bFoundDryGround = false;
-	// 5cm 是空间搜索精度，不是玩法射程；保留配置采样点，并补连续回收避免漏掉窄岸。
-	TArray<double> Distances;
-	Distances.Add(ReachableDistance);
-	for (double Distance = ReachableDistance - 5.0; Distance > 0.0; Distance -= 5.0) Distances.Add(Distance);
-	for (double Fraction : GetDefault<UCatFishingSettings>()->GetOverpowerLandingDistanceFractions())
-		Distances.Add(FMath::Min(ReachableDistance, FlingDistance * Fraction));
-	Distances.Add(0.0);
-	Distances.Sort([](double A, double B) { return A > B; });
-	for (const double Distance : Distances)
-	{
-		const FVector Candidate = FootPoint + BackwardDirection * Distance;
-		const FCatWorldSurfaceResult Surface = FCatWorldSurfaceResolver::ResolveHighestBlockingSurface(
-			World, Candidate, ItemSettings->LandingGroundTraceChannel, IgnoredActors);
-		if (!Surface.bSucceeded) continue;
-		const FVector Point = Surface.WorldPosition;
-		const FCatWaterImmersionResult Relation = Water && AttemptSnapshot.WaterRegion.IsValid()
-			? Water->QueryImmersionAtWorldPoint(Point, AttemptSnapshot.WaterRegion) : FCatWaterImmersionResult{};
-		if (!Relation.bSucceeded || Point.Z <= Relation.WaterSurfaceWorldPoint.Z + MinimumDryGroundHeightCentimeters) continue;
-		// 再查到实际落点的路径，防止最高表面解析越过墙体或把墙顶当干地。
-		if (World->SweepSingleByChannel(Hit, FootPoint + Clearance, Point + Clearance, FQuat::Identity,
-			ItemSettings->LandingGroundTraceChannel, FCollisionShape::MakeSphere(5.0f), PathParams)) continue;
-		LandingPoint = Point;
-		LandingNormal = Surface.SurfaceNormal;
-		bFoundDryGround = true;
-		break;
-	}
-	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_overpower_landing SessionId=%s Landing=%s ReachableCm=%.3f Result=%s World=%s NetMode=%d Authority=1 LocalRole=%d"),
-		*Snapshot.FishingSessionId.ToString(), *LandingPoint.ToCompactString(), ReachableDistance,
-		bFoundDryGround ? TEXT("NearestReachableDryGround") : TEXT("FootFallback"), *GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()));
-	return SpawnLandedFishPickupFromAuthority(LandingPoint, LandingNormal,
-		TEXT("Overpowered fish delivered at reachable landing or foot fallback"));
 }
 
 // 苏醒计时流程：鱼一翻肚就起算（钓鱼规则 §5.3:260"拖动中计时照走"），到点仍没上岸就苏醒逃跑。
@@ -2457,7 +2353,7 @@ void ACatFishingSession::HandleExhaustedRevivalTimer()
 			return;
 		}
 	}
-	// "拖上岸或碾压甩上岸后不再苏醒"：鱼已经越过岸线就让收尾继续，不再重排计时。
+	// "实际拖上岸后不再苏醒"：鱼已经越过岸线就让收尾继续，不再重排计时。
 	if (FightRunner && FightRunner->IsFishBeachedForAuthority())
 	{
 		UE_LOG(LogCatFishing, Log,

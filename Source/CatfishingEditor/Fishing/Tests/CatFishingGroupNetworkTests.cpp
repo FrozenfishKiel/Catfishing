@@ -441,17 +441,8 @@ namespace CatFishingGroupNetwork
 				if (!Test->TestTrue(TEXT("real waiting and bite window retain the same session while helpers remain physically connected"),
 					UnloadedPhases.Contains(ECatFishingPhase::Waiting)
 					&& UnloadedPhases.Contains(ECatFishingPhase::TrueBiteWindow))) return true;
-				// 本用例验证持续搏斗中的协作和复制；固定50力量会把正式基础池小鱼直接碾压上岸。
-				// 等完美窗结束后按已经冻结的鱼力配置同强度团队测试属性，仍通过真实普通提竿和强度裁决。
+				// 保留正式默认猫力；普通提竿无论力量比都必须接上同一物理 Runner。
 				if (Server->GetTimeSeconds() <= Session->GetSnapshot().PerfectWindowEndsServerTime + 0.05) return false;
-				const double SelectedFishStrength = Session->GetSnapshot().FishStrength;
-				if (!Test->TestTrue(TEXT("formal selected fish has finite positive strength for matched-fight fixture"),
-					FMath::IsFinite(SelectedFishStrength) && SelectedFishStrength > 0.0)) return true;
-				for (ACatCharacter* AuthorityCat : AuthorityCats)
-					AuthorityCat->GetCatAbilitySystemComponent()->SetNumericAttributeBase(
-						UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), static_cast<float>(SelectedFishStrength));
-				Test->AddInfo(FString::Printf(TEXT("Event=fishing_group_fixture_strength FishStrength=%.6f EachCatStrength=%.6f Hook=Ordinary"),
-					SelectedFishStrength, SelectedFishStrength));
 				if (!Test->TestTrue(TEXT("formal bite starts the actual fight runner"), Session->RequestHookFromAuthority(FGuid::NewGuid()).bCommitted)) return true;
 				if (!Test->TestTrue(TEXT("hook receipt includes an actual selected fish in HookedFight"),
 					Session->GetSnapshot().Phase == ECatFishingPhase::HookedFight

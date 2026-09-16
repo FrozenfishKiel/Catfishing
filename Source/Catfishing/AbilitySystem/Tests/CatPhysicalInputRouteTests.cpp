@@ -1,4 +1,4 @@
-﻿#if WITH_DEV_AUTOMATION_TESTS
+#if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
@@ -300,30 +300,10 @@ bool FCatPhysicalInputRouteTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("完整随机咬钩等待仍保持同一条显式抓握"),bWaitingGripSurvived)
 		|| !TestTrue(TEXT("等待与提竿始终处于真实岸地支撑范围，没有掉出夹具"),bHasShoreSupport && MinimumWaitingBodyZ>-1)) return false;
 	if (!TestEqual(TEXT("真实飞行和等口计时器推进到提竿窗口"),CastSession->GetSnapshot().Phase,ECatFishingPhase::TrueBiteWindow)) return false;
-	// 墓碑（2026-09-14，批7遗漏回归；钓鱼规则 §4.2:176-178、§3.4:149）：
-	// 原夹具默认猫力50，随机小鱼经完美削减后会被碾压；T17脚下兜底交鱼成功，本就应跳过Runner。
-	// 本测试验的是鼠标收线与R显式持竿独立，必须构造非瞬断、非碾压的常规搏斗，不能接受Landed替代Runner断言。
-	// 保留真实随机选鱼与提竿输入，只在选鱼完成后调整本World猫的ASC；兼顾普通/完美两种入场鱼力。
-	const UCatFishCatalogSettings* FishCatalog = GetDefault<UCatFishCatalogSettings>();
-	const UCatFishDefinition* SelectedFish = FishCatalog->FindRuntimeDefinition(CastSession->GetSnapshot().FishDefinitionId);
-	const UCatEquipmentDefinition* HeldRodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(
-		Equipment->GetSnapshot().RodDefinitionId);
-	const UCatEquipmentFragment_Rod* HeldRodFragment = HeldRodDefinition ? HeldRodDefinition->FindFragment<UCatEquipmentFragment_Rod>() : nullptr;
-	if (!TestTrue(TEXT("常规搏斗夹具读取本场正式鱼种与竿强"),SelectedFish && HeldRodFragment)) return false;
-	const double MinimumEntryFishStrength = CastSession->GetSnapshot().FishStrength
-		* FMath::Min(1.0, FishCatalog->ResolvePerfectHookReduction(*SelectedFish).FishStrengthMultiplier);
-	// Rod片段的0表示未配置，生产TryResolveRodStrength会跳过瞬断，不能把0当作力量上限。
-	const bool bRodStrengthConfigured = FMath::IsFinite(HeldRodFragment->FishingStrength) && HeldRodFragment->FishingStrength > 0.0;
-	const float FixtureCatStrength = static_cast<float>(bRodStrengthConfigured
-		? FMath::Min(MinimumEntryFishStrength * 0.75, HeldRodFragment->FishingStrength * 0.5) : MinimumEntryFishStrength * 0.75);
-	if (!TestTrue(TEXT("常规搏斗夹具力量为有限正值"),FMath::IsFinite(FixtureCatStrength) && FixtureCatStrength > 0.0f)) return false;
-	const float OriginalCatStrength = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
-	ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(),FixtureCatStrength);
+	// 保留正式默认猫力；小鱼也必须通过真实提竿进入物理搏斗。
 	ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(),23.0f);
 	ASC->ClearYellowFightStaminaFromAuthority();
 	ASC->ApplyYellowFightStaminaDelta(20.0f);
-	AddInfo(FString::Printf(TEXT("Event=physical_input_regular_fight_fixture SessionId=%s OriginalCatStrength=%.3f CatStrength=%.3f MinimumEntryFishStrength=%.3f RodStrength=%.3f World=%s Authority=1"),
-		*CastSessionId.ToString(),OriginalCatStrength,FixtureCatStrength,MinimumEntryFishStrength,HeldRodFragment->FishingStrength,*World->GetName()));
 	Input->HandleAbilityInputTagPressed(CatFishingAbilityTags::Input_Fishing_Primary);
 	Input->ProcessAbilityInput(1.0f/60.0f,false);
 	for (int32 Frame=0; Frame<10 && !CastSession->IsFightRunnerRunning(); ++Frame) TickInputFrame();
@@ -332,10 +312,6 @@ bool FCatPhysicalInputRouteTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("真实提竿沿用跨竿余额，不补满绿色体力"),
 		ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()) <= 23.1f);
 	TestEqual(TEXT("真实提竿保留当天黄色储备"),ASC->GetYellowFightStamina(),20.0f);
-	const double ActualCatStrength = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
-	TestTrue(TEXT("实际入场仍满足非瞬断、非碾压前提"),ActualCatStrength > 0.0
-		&& (!bRodStrengthConfigured || ActualCatStrength < HeldRodFragment->FishingStrength)
-		&& ActualCatStrength <= CastSession->GetSnapshot().FishStrength);
 	Input->HandleAbilityInputTagReleased(CatFishingAbilityTags::Input_Fishing_Primary);
 	Input->ProcessAbilityInput(1.0f/60.0f,false);
 	TestFalse(TEXT("正常松鼠标停止本人收线"),CastSession->GetSnapshot().bReeling);
@@ -357,7 +333,6 @@ bool FCatPhysicalInputRouteTest::RunTest(const FString& Parameters)
 		CastSession->CancelFromAuthority(FGuid::NewGuid());
 		TestEqual(TEXT("真实取消终态不会回满任何一段体力"), ASC->GetTotalFightStamina(), BeforeCancel);
 	}
-	ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(),OriginalCatStrength);
 	Rod->SetPrimaryOperatorFromAuthority(nullptr,Rod->GetPresentationState().RodActorRevision);
 
 	{

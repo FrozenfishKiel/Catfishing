@@ -1,5 +1,27 @@
 # 鱼运动与遛鱼逻辑：设计与实现
 
+## 2026-09-16：删除力量碾压，统一进入物理搏斗
+
+用户确认小鱼通过实际移动拖岸、大鱼通过鱼线把猫拖入水中；取消按猫鱼力量倍数直接甩岸收鱼。鱼竿强度、耐久、抄网规则不变。本文下方带日期的碾压实现和夹具记录属于历史证据，不再作为当前实现要求；旧模拟报告保留用于解释历史数值，不可用于生成当前玩法。
+
+修改前基线：仅根目录用户未跟踪的工程待办文档，保留未纳入。未重跑修改前基线；已知多人协作测试存在架竿后抓握失败。没有修改正式二进制资产、StateTree 拓扑、枚举序号、鱼力量或质量单位。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 开场、换主 | `Source/Catfishing/Fishing/CatFishingSession.cpp` 提钩/接管→原强度检查→Runner | 原 2 倍直接交鱼；目标均由物理运动决定收鱼 | 改为 `EvaluateRodStrengthFromAuthority`，仅保留器材门槛 | 校验配置/竿强后启动或复用 Runner | 普通/完美提钩跨旧阈值、强猫接管 | 已删除碾压分支；提钩及高力量重新接管回归通过 |
+| 物理运动 | `CatFishingFightRunner.cpp::ResolveFishSurfaceFromAuthority`、入水检查→Session | 保留真实拖岸/落水 | 原物理链不变 | 同一 Runner 推进 | 正式竿约束、岸线和身体水位测试 | 定向回归通过；真人手感仍待验证 |
+| 渔获、消耗、复制、退出 | 原 `FlingFishAshoreFromAuthority`→`SpawnLandedFishPickupFromAuthority` | 删除无实际拖岸的额外交付；保留正常事务 | 删除专属甩岸函数，保留真实落岸唯一交付、收尾和快照 | 先去调用后清理函数 | 不提前生成 Pickup；收鱼归属不变 | 高力量仍无 Pickup，正常落岸/抄取收集契约通过 |
+| 配置 | `CatFishingSettings.h/.cpp`、`Config/DefaultGame.ini` 的 `/Script/Catfishing.CatFishingSettings` | 原倍率 2、距离 250cm、采样比例专属碾压 | 删除三字段、getter、ini 配置；其余默认值不变 | 源码去消费者后清配置 | UHT/构建、引用盘点 | Source/Config/Scripts 无旧钓鱼碾压实现引用 |
+| 资产、UI、脚本、Cook | `/Game/Data/StateTrees/ST_FishingSession`；字段无 Blueprint 读写、函数无 UFUNCTION | 无新状态或表现协议 | 保留正式资产、生成脚本及打包入口 | 验证配置与正式鱼/竿资产加载 | 2003 个二进制包序列化名称扫描；正式资产运行测试 | 零字段/函数名命中，相关正式资产测试加载成功；未 Cook、未完整检查 WBP 图，不据此声明画面验收 |
+| 日志、测试、文档 | Session 启动→`LogCatFishing`；输入/提钩/多人夹具；当前 GDD 与指南 | 旧夹具降猫力绕碾压；旧文档仍要求倍数交鱼 | 去绕行，新增 `fishing_physical_fight_started`；更新当前规则和提示 | 构建后跑定向/多人 | Development 默认日志，保留 SessionId 与控制器上下文 | 定向 11/11 通过（10 项带 warning）；多人到达真实搏斗，架竿后的协作者抓握断言仍失败，见证据 |
+
+验证证据（相对工程根）：
+
+- `contract`：Editor 与 Game Development 构建通过；`Saved/Logs/RemoveOverpower-Build.log`、`Saved/Logs/RemoveOverpower-GameBuild.log`。资产名称扫描 `Saved/Logs/RemoveOverpower-AssetScan.txt`。
+- `runtime_behavior`：`Saved/Automation/RemoveOverpower-Targeted/Report/index.json`，11/11 成功；日志观察猫力 50、鱼力 20/16 进入同一物理 Runner，没有直接交鱼。`Saved/Automation/RemoveOverpower-Network/Report/index.json`，三客户端用例 0/1 成功，失败为 `parking retains the independent helper body grip on both endpoints`；不能把进入搏斗当成多人全链通过。
+- 接管补测：`Saved/Automation/RemoveOverpower-Handover-Final/Report/index.json`，1/1 成功；普通/完美入场后 500 点猫力重新接管仍保留同一 Runner、鱼实体且不生成 Pickup。首次补测因夹具未登记正常入局身份失败，已通过现有测试夹具补齐，未放宽生产准入。
+- `presentation_delivery`：未运行真人操作和新包双机测试；未验证无 `-log` 的新包房主/客户端日志。模块仍未整体验收，缺口继续记在唯一进度入口。
+
 ## 2026-09-15：鱼嘴牵引鱼身，侧向控鱼打开收线机会
 
 用户反馈是鱼常向湖心游、出力却没有拉回进展，以及被拉时整条鱼平移、看不到鱼头先转。本次沿原 StateTree、连续出力和权威物理链实现，不增加 AIController。下方同日“保留建议”是此前的数据迁移记录；本节说明其后的运动实现，模块总状态仍见 [需求对齐差距清单](Development/需求对齐差距清单.md)。

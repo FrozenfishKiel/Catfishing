@@ -24,7 +24,7 @@ struct FCatFishBiteTimingDefaults
 
 /**
  * 完美提竿的入场削减系数（钓鱼规则 §3.4）；按鱼册稀有度档取，入场时直接乘到本场实际值，
- * 此后运动求解、负载、消耗、碾压判定全用削后值。未配置的档位退回 1.0，只会不削减，绝不放大。
+ * 此后运动求解、负载、消耗全用削后值。未配置的档位退回 1.0，只会不削减，绝不放大。
  */
 USTRUCT(BlueprintType)
 struct FCatPerfectHookReduction

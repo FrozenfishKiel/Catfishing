@@ -26,15 +26,6 @@ public:
 	/** 渔获结束额外扣除的竿磨损点；与搏斗累计磨损独立结算一次。 */
 	UPROPERTY(Config, EditAnywhere, Category="Tuning|Terminal", meta=(ClampMin="0"))
 	double CatchCompletionRodWearPoints = 1.0;
-	/** 碾压后沿钓线反方向甩到猫身后的距离，厘米。 */
-	UPROPERTY(Config, EditAnywhere, Category="Tuning|Overpower", meta=(ClampMin="0", Units="cm"))
-	double OverpowerFlingDistanceCentimeters = 250.0;
-	/** 猫力/鱼力达到此倍率即可碾压；竿强瞬断仍先检查。 */
-	UPROPERTY(Config, EditAnywhere, Category="Tuning|Overpower", meta=(ClampMin="1"))
-	double OverpowerStrengthRatio = 2.0;
-	/** 从远到近尝试的甩岸距离比例；首项 1、末项 0（脚下），中间项递减。 */
-	UPROPERTY(Config, EditAnywhere, Category="Tuning|Overpower", meta=(ClampMin="0", ClampMax="1"))
-	TArray<double> OverpowerLandingDistanceFractions = {1.0, 2.0 / 3.0, 1.0 / 3.0, 0.0};
 	/** 每名玩家可部署的鱼竿数量；默认保持两根，不依赖鱼竿资产新增字段。 */
 	UPROPERTY(Config, EditAnywhere, Category="Tuning|Rod", meta=(ClampMin="1"))
 	int32 MaximumDeployedRodsPerPlayer = 2;
@@ -42,9 +33,6 @@ public:
 	// 以下读取保留旧配置的可用默认值；非法新值只记一次 Warning，不让整条钓鱼链因迁移而关闭。
 	double GetExhaustedFishRevivalSeconds() const;
 	double GetCatchCompletionRodWearPoints() const;
-	double GetOverpowerFlingDistanceCentimeters() const;
-	double GetOverpowerStrengthRatio() const;
-	const TArray<double>& GetOverpowerLandingDistanceFractions() const;
 	int32 GetMaximumDeployedRodsPerPlayer() const;
 	/** 判断正式运行配置是否具备显式总 gate、StateTree 资产、正响应/终态复制窗口与近岸几何；任一未裁字段都返回 false。 */
 	bool IsRuntimeReady() const;

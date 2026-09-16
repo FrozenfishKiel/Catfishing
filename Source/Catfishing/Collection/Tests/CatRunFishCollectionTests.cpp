@@ -193,7 +193,7 @@ bool FCatRunFishCollectionHandoffTest::RunTest(const FString& Parameters)
 	Pickup->Destroy();
 	TestEqual(TEXT("实物消失后板子保留记录"), Collection->GetSnapshot().Pages.Num(), 1);
 
-	// 力竭拖岸与碾压共用同一落地出口；在夹具中使用正式钓具冻结和磨损接口。
+	// 真实拖岸使用唯一落地出口；在夹具中使用正式钓具冻结和磨损接口。
 	auto* LandedSession = F.World->SpawnActor<ACatFishingSession>();
 	if (!LandedSession) return false;
 	LandedSession->Snapshot.FishingSessionId = FGuid::NewGuid();

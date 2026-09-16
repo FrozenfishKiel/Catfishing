@@ -217,13 +217,8 @@ private:
 	/** 只有断线/猫落水拥有当前猫 Montage；其余终局返回空 Tag，不借用错误表现。 */
 	static FGameplayTag ResolveTerminalFisherPresentationTag(ECatFishingOutcome Outcome);
 
-	/**
-	 * 钓鱼规则 §4.2（:176,178）的强度检查序：①竿强瞬断 → ②碾压 → ③常规搏斗。
-	 * 瞬时判定，只在搏斗开始、显式换主时调用；普通力量变化与助手进出不触发。
-	 * 力量比较统一用 F_total（持竿猫当前力量，不随体力衰减）与已含完美削减的本场鱼力。
-	 * 返回 true 表示①或②已经写下终局，调用方必须立刻停止推进常规搏斗。
-	 */
-	bool EvaluateStrengthCheckOrderFromAuthority(const TCHAR* Trigger);
+	/** 仅在搏斗开场与显式换主时检查竿强；返回 true 表示已因断竿终止会话。 */
+	bool EvaluateRodStrengthFromAuthority(const TCHAR* Trigger);
 
 	/** 读当前持竿猫的 F_total；体力归零不降力量，因此取 ASC 的 FishingStrength 而不是 Runner 的出力值。 */
 	bool TryResolvePrimaryStrength(double& OutPrimaryStrength) const;
@@ -238,10 +233,7 @@ private:
 	 */
 	void PublishBiteSignalFromAuthority();
 
-	/** 碾压达标：沿钓线向猫身后固定距离找可达干地，找不到才脚下兜底，交付待拾取鱼。 */
-	bool FlingFishAshoreFromAuthority();
-
-	/** 岸上世界鱼的唯一生成口；力竭拖岸与碾压甩岸共用，负责收口装备事务、隐藏水中 Encounter 并写 Landed 终态。 */
+	/** 岸上世界鱼的唯一生成口；实际拖岸使用，负责收口装备事务、隐藏水中 Encounter 并写 Landed 终态。 */
 	bool SpawnLandedFishPickupFromAuthority(const FVector& SurfaceLocation, const FVector& GroundNormal,
 		const TCHAR* DiagnosticReason);
 	/** 两个成功收鱼出口共用；公共板子归上钩者，实物交接失败时绝不调用。 */

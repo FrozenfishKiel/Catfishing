@@ -143,7 +143,7 @@ Root
 | Probe | StateTree 进入阶段后调用 `BeginProbeFromStateTree` 抽定数据，尚无实体鱼 |
 | TrueBiteWindow | 试探计时结束后打开逐鱼响应窗并扣一份饵；此时没有鱼 Actor |
 | HookedFight | 真咬窗内收到左键后，`RequestHook` 使用试探期已选数据生成 Actor 并进入搏斗，不重抽、不重复扣饵 |
-| ExhaustedReel | 鱼体力耗尽或力量碾压后，Session 保留鱼的死亡瞬间位置、停止搏斗 Runner 并进入；随后仅在持续左键时有限速收近 |
+| ExhaustedReel | 鱼体力耗尽或真实拖岸后进入；保留同一物理 Runner，继续按实际移动和收线拖行。没有力量倍数直接收鱼路径 |
 | Resolved / Terminated | `FinalizeSession()`，**StateTree 禁止进入** |
 
 ### 2.3 节点说明

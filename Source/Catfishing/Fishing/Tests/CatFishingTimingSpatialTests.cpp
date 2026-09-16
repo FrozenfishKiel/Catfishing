@@ -58,6 +58,14 @@ namespace CatR3Tests
 		ACatfishingPlayerState* Player = nullptr;
 		UCatEquipmentComponent* Equipment = nullptr;
 		FGuid SessionId = FGuid::NewGuid();
+		void AdmitController()
+		{
+			auto* Mode = Wrapper.GetTestWorld()->GetAuthGameMode<ACatfishingGameModeBase>();
+			ACatfishingGameModeBase::FAdmissionRecord Admission;
+			Admission.Phase = ACatfishingGameModeBase::EAdmissionPhase::Active;
+			Admission.Controller = Controller;
+			Mode->AdmissionRecords.Add(ACatfishingGameModeBase::MakeStableNetIdKey(Player->GetUniqueId()), Admission);
+		}
 		bool Init(FAutomationTestBase& Test, bool bWithDay = false)
 		{
 			if (!Wrapper.CreateTestWorld(EWorldType::Game)) return false;
@@ -385,8 +393,9 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 	{
 		const bool bPerfect = Scenario == 1;
 		CatR3Tests::FFixture F;
-		if (!F.Init(*this)) return false;
+		if (!F.Init(*this, true)) return false;
 		auto* World = F.Wrapper.GetTestWorld();
+		F.AdmitController();
 		FCatWaterGeometryBuildInput Geometry;
 		Geometry.RegionId = TEXT("River");
 		Geometry.WaterPointVerticalToleranceCm = 100;
@@ -454,8 +463,8 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 		Session->FisherCharacter = F.Cat;
 		Session->CastEquipment = F.Equipment;
 		Session->bStartupInProgress = true;
-		// 冻结常规搏斗样本，猫鱼力量比保持在瞬断/碾压区间之外，确保经过真实入场。
-		F.Cat->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 10.0f);
+		// 猫力超过鱼力两倍，普通和完美提钩都必须进入真实搏斗，不得直接交鱼。
+		F.Cat->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 50.0f);
 		// 夹具仅准备真咬已经完成的扣饵和冻结数据，生成实体与初始化搏斗走正式提钩事务。
 		if (!TestTrue(TEXT("中鱼前置通过唯一库存入口提交鱼饵"), F.Equipment->CommitFishingBaitDeferred(F.SessionId).bApplied)) return false;
 		const auto CountFishActors = [&]()
@@ -505,6 +514,10 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 			&& Session->FightRunner->SteeringState.BehaviorDurationSeconds <= Fish->OutwardSegmentDurationRangeSeconds.Y);
 		TestTrue(TEXT("横切时长保留模板不借逐鱼发力列重定义"), Session->FightRunner->SteeringConfig.LateralDurationRangeSeconds.Equals(Template->AdaptiveSteeringConfig.LateralDurationRangeSeconds, 1e-9));
 		if (bPerfect) TestTrue(TEXT("游速测试具有区别于模板的正式系数"), Fish->SwimSpeedCoefficient != 1.0);
+		TestTrue(TEXT("强猫提钩后保持活跃且未生成岸上渔获"), !Session->IsTerminal()
+			&& Session->Snapshot.Outcome == ECatFishingOutcome::None
+			&& !TActorIterator<ACatFishPickupActor>(World));
+		TestTrue(TEXT("本场猫力确实超过旧倍数门槛"), 50.0 >= Session->Snapshot.FishStrength * 2.0);
 		const double Expected = D0 * (bPerfect ? 0.9 : 1.0);
 		const double Actual = Session->FightRunner->State.LineLengthCentimeters;
 		const double Distance = FVector::Distance(Rod->GetRodTipWorldTransform().GetLocation(), Encounter->GetMouthWorldLocation());
@@ -546,7 +559,7 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 			FCatFishingRodResistanceResult Resistance;
 			const auto Motion = Runner->ResolveFishSurfaceFromAuthority(Step, Constraint, WaterResult, bBeached, GroundNormal, GroundActor, Resistance);
 			if (!TestTrue(TEXT("同一真实水域地形接收方完成线力和操杆结算"), Step.bSucceeded && Motion.bSucceeded && Resistance.bSucceeded)) return false;
-			TestEqual(TEXT("前后左右输入均保留主控完整操杆力量"), Resistance.CatTorqueCapacityStrengthMeters, 10.0, 1e-9);
+			TestEqual(TEXT("前后左右输入均保留主控完整操杆力量"), Resistance.CatTorqueCapacityStrengthMeters, 50.0, 1e-9);
 			if (ReferenceReelForce < 0.0)
 			{
 				ReferenceReelForce = Step.Trace.ReelForceLimitNewtons;
@@ -566,6 +579,13 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 			&& Hook->GetActorLocation().Equals(Encounter->GetMouthWorldLocation(), 0.001));
 		TestEqual(TEXT("Session提交的鱼线直距来自同一嘴点"), Hook->GetPresentationState().StraightLineDistanceCentimeters,
 			FVector::Distance(Rod->GetRodTipWorldTransform().GetLocation(), Hook->GetActorLocation()), 0.001);
+		// 重新接管走生产换主路径，保留同一鱼实体与 Runner。
+		Session->FisherStableNetId.Reset();
+		F.Cat->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 500.0f);
+		TestTrue(TEXT("高力量重新接管继续同一物理会话"), Session->ResumePrimaryControlFromAuthority(F.Controller));
+		TestTrue(TEXT("接管不会交鱼或重建Runner"), !Session->IsTerminal() && Session->FightRunner == Runner
+			&& Runner->IsRunning() && Session->Snapshot.FishEncounterActor == Encounter
+			&& !TActorIterator<ACatFishPickupActor>(World));
 		Session->FightRunner->Stop();
 		F.Equipment->ReleaseFishingUse(F.SessionId);
 	}
