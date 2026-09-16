@@ -171,7 +171,7 @@ bool ACatFishingRodActor::Interact_Implementation(AController* RequestingControl
 	{
 		Action = TEXT("Operate");
 		FCatOperateRodCommand Command; Command.Context.RequestId = RequestId; Command.Context.RodActorId = State.RodActorId; Command.Context.ExpectedRodActorRevision = State.RodActorRevision;
-		Result = Fishing->OperateRod(Controller, Command);
+		Result = Fishing->AcquireRodIntoQuickbar(Controller, Command);
 	}
 	InteractionTerminalByPlayerAndRequest.Add(CacheKey, Result);
 	LogInteractionResult(Action, Result, Result.bCommitted ? TEXT("committed") : TEXT("rejected"));

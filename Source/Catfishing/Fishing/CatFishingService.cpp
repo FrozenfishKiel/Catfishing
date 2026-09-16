@@ -32,6 +32,7 @@
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatBackPackComponent.h"
 #include "Inventory/CatInventoryItemInstance.h"
 #include "Social/CatSocialService.h"
 #include "GameFramework/PlayerState.h"
@@ -696,6 +697,67 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 		GetDeployedRodCount(PlayerState), GetDefault<UCatFishingSettings>()->GetMaximumDeployedRodsPerPlayer(),
 		*GetNameSafe(World), static_cast<int32>(World->GetNetMode()), static_cast<int32>(Controller->GetLocalRole()),
 		*CatLogContext::BuildControllerFields(Controller));
+	return Result;
+}
+
+FCatFishingCommandResult UCatFishingService::AcquireRodIntoQuickbar(AController* Controller, const FCatOperateRodCommand& Command)
+{
+	FCatFishingCommandResult Result;
+	Result.CommandType = ECatFishingCommandType::OperateRod;
+	Result.RequestId = Command.Context.RequestId;
+	Result.RodActorId = Command.Context.RodActorId;
+	Result.Error = ECatFishingCommandError::DependencyUnavailable;
+	auto* PC = Cast<ACatfishingPlayerController>(Controller);
+	auto* Character = PC ? Cast<ACatCharacter>(PC->GetPawn()) : nullptr;
+	auto* TargetEquipment = Character ? Character->GetEquipmentComponent() : nullptr;
+	auto* TargetInventory = Character ? Cast<UCatBackPackComponent>(Character->GetInventoryComponent()) : nullptr;
+	auto* Rod = FindDeployedRodById(Command.Context.RodActorId);
+	auto* SourceEquipment = ResolveRodEquipmentFromAuthority(Rod);
+	auto* SourceInventory = SourceEquipment ? SourceEquipment->ResolveOwnerInventoryComponent() : nullptr;
+	const FGuid ItemId = Rod ? Rod->GetPresentationState().ItemInstanceId : FGuid();
+	const auto* Entry = SourceInventory ? SourceInventory->FindHeldInventoryEntryFromAuthority(ItemId) : nullptr;
+	int32 SlotIndex = INDEX_NONE;
+	if (PC && PC->HasAuthority() && TargetEquipment && TargetInventory && Entry && Entry->Instance)
+	{
+		for (int32 Index = 0; Index < TargetInventory->GetInventorySlotCount(); ++Index)
+			if (!TargetInventory->HasItemAtSlot(Index) && TargetInventory->CanAcceptInventoryEntryAtSlot(*Entry, Index))
+			{ SlotIndex = Index; break; }
+	}
+	if (SlotIndex == INDEX_NONE)
+	{
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=quickbar_rod_acquire_rejected RequestId=%s RodActorId=%s ItemId=%s Reason=NoInventorySlot %s"),
+			*Result.RequestId.ToString(), *Result.RodActorId.ToString(), *ItemId.ToString(), *CatLogContext::BuildControllerFields(Controller));
+		return Result;
+	}
+	Result = OperateRod(Controller, Command);
+	if (!Result.bCommitted) return Result;
+	const bool bTransfer = SourceEquipment != TargetEquipment;
+	const bool bMoved = !bTransfer || SourceEquipment->MoveFishingResourcesToCustodian(TargetEquipment, {}, {ItemId});
+	if (bMoved) PreservedRodEquipment.Add(Result.RodActorId, TargetEquipment);
+	const bool bReserved = bMoved && TargetInventory->ReserveExistingHeldQuickbarSlotFromAuthority(SlotIndex, ItemId);
+	if (!bReserved)
+	{
+		const bool bRolledBack = !bTransfer || !bMoved || TargetEquipment->MoveFishingResourcesToCustodian(SourceEquipment, {}, {ItemId});
+		PreservedRodEquipment.Add(Result.RodActorId, bRolledBack ? SourceEquipment : TargetEquipment);
+		FCatLeaveRodCommand Leave;
+		Leave.Context.RequestId = FGuid::NewGuid(); Leave.Context.RodActorId = Result.RodActorId;
+		Leave.Context.ExpectedRodActorRevision = Rod->GetPresentationState().RodActorRevision;
+		LeaveRod(Controller, Leave);
+		Result.bCommitted = false;
+		Result.Error = ECatFishingCommandError::DependencyUnavailable;
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=quickbar_rod_acquire_rejected RequestId=%s RodActorId=%s ItemId=%s Reason=InventoryCommitRejected RolledBack=%d %s"),
+			*Result.RequestId.ToString(), *Result.RodActorId.ToString(), *ItemId.ToString(), bRolledBack, *CatLogContext::BuildControllerFields(Controller));
+		return Result;
+	}
+	if (auto* OldBackPack = Cast<UCatBackPackComponent>(SourceInventory); bTransfer && OldBackPack
+		&& OldBackPack->GetQuickbarHeldSlot().ItemInstanceId == ItemId) OldBackPack->ClearQuickbarHeldSlotFromAuthority();
+	const auto* Session = FindActiveSessionByRod(Rod);
+	TargetInventory->SetQuickbarHeldSlotInUseFromAuthority(Session != nullptr);
+	if (bTransfer) { SourceEquipment->PublishSnapshot(); TargetEquipment->PublishSnapshot(); }
+	PC->SelectAcquiredRodSlotFromAuthority(Result.RequestId);
+	UE_LOG(LogCatFishing, Log, TEXT("Event=quickbar_rod_acquired RequestId=%s RodActorId=%s ItemId=%s SessionId=%s Slot=%d Transferred=%d %s"),
+		*Result.RequestId.ToString(), *Result.RodActorId.ToString(), *ItemId.ToString(),
+		Session ? *Session->GetSnapshot().FishingSessionId.ToString() : TEXT("None"), SlotIndex, bTransfer, *CatLogContext::BuildControllerFields(Controller));
 	return Result;
 }
 

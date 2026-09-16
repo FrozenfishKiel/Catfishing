@@ -88,8 +88,8 @@ namespace CatInventoryQuickbarRemoteUseTests
 	{
 	public:
 		/** 保存 Automation 断言出口和本次网络场景；状态机不拥有 PIE 对象，也不会修改全局网络配置。 */
-		explicit FVerifyRemoteSelectedUse(FAutomationTestBase* InTest, const bool bInSimulateWeakNetwork, const bool bInToolsOnly=false)
-			: Test(InTest), bSimulateWeakNetwork(bInSimulateWeakNetwork), bToolsOnly(bInToolsOnly) {}
+		explicit FVerifyRemoteSelectedUse(FAutomationTestBase* InTest, const bool bInSimulateWeakNetwork, const bool bInToolsOnly=false, const bool bInTransferRod=false)
+			: Test(InTest), bSimulateWeakNetwork(bInSimulateWeakNetwork), bToolsOnly(bInToolsOnly), bTransferRod(bInTransferRod) {}
 		/** 等待复制或按阶段提交真实本地输入；超时输出端点和库存状态供日志复查。 */
 		virtual bool Update() override
 		{
@@ -127,6 +127,7 @@ namespace CatInventoryQuickbarRemoteUseTests
 			case 17: return BeginRemoteChumCancellation();
 			case 18: return CancelRemoteChum();
 			case 19: return VerifyRemoteChumCancellation();
+			case 20: return VerifyRemotePackedRodSelection();
 			default: Test->AddError(TEXT("Remote quickbar use test reached an unknown stage.")); return true;
 			}
 		}
@@ -550,6 +551,20 @@ namespace CatInventoryQuickbarRemoteUseTests
 			UCatFishingService* Fishing = ServerWorld->GetSubsystem<UCatFishingService>();
 			ACatFishingRodActor* Rod = Fishing ? Fishing->FindDeployedRodById(RodActorId) : nullptr;
 			if (!Rod || Rod->IsPrimaryOperator(ServerCharacter->GetPlayerState())) return false;
+			if (bTransferRod)
+			{
+				auto* Host = Cast<ACatfishingPlayerController>(ServerWorld->GetFirstPlayerController());
+				auto* HostCharacter = Host ? Cast<ACatCharacter>(Host->GetPawn()) : nullptr;
+				auto* HostBackPack = HostCharacter ? Cast<UCatBackPackComponent>(HostCharacter->GetInventoryComponent()) : nullptr;
+				if (!Test->TestTrue(TEXT("host prepares inventory for cross-player rod custody"), HostBackPack && HostBackPack->ReplaceInventoryEntriesFromAuthority({}, 4))) return true;
+				HostCharacter->GetPhysicalBodyComponent()->TeleportBodyFromAuthority(FTransform(FRotator::ZeroRotator,
+					Rod->GetGripWorldTransform().GetLocation() - FVector(80, 0, 0)), TEXT("CrossPlayerRodFixture"));
+				if (!Test->TestTrue(TEXT("host E-acquires the parked remote player's exact rod"), Rod->Interact_Implementation(Host, FGuid::NewGuid()))) return true;
+				if (!Test->TestTrue(TEXT("source item moves to host with no duplicate remote active record"), HostBackPack->FindHeldInventoryEntryFromAuthority(SecondRodId)
+					&& !ServerBackpack->FindHeldInventoryEntryFromAuthority(SecondRodId))) return true;
+				Host->ParkHeldRodFromInput();
+				if (!Test->TestNull(TEXT("host R leaves the same rod for the remote player's E pickup"), Fishing->FindRodOperatedBy(Host->PlayerState))) return true;
+			}
 			Stage = 11; return false;
 		}
 		/** 对同一远端复制 Actor 发新的正式交互 RPC，验证拾回不会改操作到其它场景鱼竿。 */
@@ -568,7 +583,36 @@ namespace CatInventoryQuickbarRemoteUseTests
 			UCatFishingService* Fishing = ServerWorld->GetSubsystem<UCatFishingService>();
 			ACatFishingRodActor* Rod = Fishing ? Fishing->FindDeployedRodById(RodActorId) : nullptr;
 			if (!Rod || !Rod->IsPrimaryOperator(ServerCharacter->GetPlayerState())) return false;
-			return Test->TestEqual(TEXT("targeted remote E retakes the same deployed second rod instance"), Rod->GetPresentationState().ItemInstanceId, SecondRodId);
+			const auto& ClientHeld = ClientBackpack->GetQuickbarHeldSlot();
+			if (ClientHeld.ItemInstanceId != SecondRodId || ClientController->GetSelectedQuickbarSlotIndex() != ClientHeld.SlotIndex) return false;
+			if (!Test->TestEqual(TEXT("targeted remote E retakes the same deployed second rod instance"), Rod->GetPresentationState().ItemInstanceId, SecondRodId)) return true;
+			if (!Test->TestEqual(TEXT("E restores the same quickbar reservation on both endpoints"), ServerBackpack->GetQuickbarHeldSlot().ItemInstanceId, SecondRodId)) return true;
+			for (TActorIterator<ACatFishingRodActor> It(ClientWorld.Get()); It; ++It)
+				if (It->GetPresentationState().RodActorId == RodActorId && It->IsPrimaryOperator(ClientController->PlayerState))
+				{
+					ClientController->PackHeldRodFromInput();
+					Stage = 20; return false;
+				}
+			return false;
+		}
+		/** 等待 X 的归还和选中格重装备同时复制，不能只凭库存数量或服务器持竿判断成功。 */
+		bool VerifyRemotePackedRodSelection()
+		{
+			auto* Fishing = ServerWorld->GetSubsystem<UCatFishingService>();
+			auto* Rod = Fishing ? Fishing->FindRodOperatedBy(ServerCharacter->GetPlayerState()) : nullptr;
+			if (!Rod || Rod->GetPresentationState().RodActorId == RodActorId) return false;
+			const auto& Held = ClientBackpack->GetQuickbarHeldSlot();
+			if (Held.ItemInstanceId != SecondRodId || ClientController->GetSelectedQuickbarSlotIndex() != Held.SlotIndex) return false;
+			for (TActorIterator<ACatFishingRodActor> It(ClientWorld.Get()); It; ++It)
+				if (It->GetPresentationState().RodActorId == Rod->GetPresentationState().RodActorId && It->IsPrimaryOperator(ClientController->PlayerState))
+				{
+					const auto* Entry = ServerBackpack->FindHeldInventoryEntryFromAuthority(SecondRodId);
+					const auto* Instance = Entry ? Cast<UCatEquipmentInventoryItemInstance>(Entry->Instance) : nullptr;
+					Test->TestTrue(TEXT("remote X keeps original rod durability and exact active instance"), Instance && FMath::IsNearlyEqual(Instance->GetRodDurability(), SecondRodDurability));
+					Test->TestEqual(TEXT("remote X immediately holds the selected original rod"), It->GetPresentationState().ItemInstanceId, SecondRodId);
+					return true;
+				}
+			return false;
 		}
 		/** Automation 的断言写入对象。 */
 		FAutomationTestBase* Test = nullptr;
@@ -609,6 +653,8 @@ namespace CatInventoryQuickbarRemoteUseTests
 		/** 本次状态机是否应在初始复制完成后启用两端 PIE Driver 的弱网配置；正常网络入口保持 false。 */
 		bool bSimulateWeakNetwork = false;
 		bool bToolsOnly = false;
+		/** 额外验证原实例先迁到房主，再由远端 E 接回时的复制和 X 重装备。 */
+		bool bTransferRod = false;
 		TWeakObjectPtr<ACatFishPickupActor> ScoopFish;
 		FGuid ScoopId;
 		int32 ScoopSlot=INDEX_NONE;
@@ -620,7 +666,7 @@ namespace CatInventoryQuickbarRemoteUseTests
 	};
 
 	/** 复用相同 PIE 拓扑和状态机排入正常或弱网用例；网络参数只在状态机确认初始库存同步后写入 Driver。 */
-	bool QueueRemoteSelectedUseScenario(FAutomationTestBase* Test, const bool bSimulateWeakNetwork, const bool bToolsOnly=false)
+	bool QueueRemoteSelectedUseScenario(FAutomationTestBase* Test, const bool bSimulateWeakNetwork, const bool bToolsOnly=false, const bool bTransferRod=false)
 	{
 		if (!Test->TestTrue(TEXT("remote quickbar selected-use test requires idle editor"), GEditor && GEngine && !GEditor->PlayWorld)) return false;
 		const TSharedRef<FRestoreSettings> Restore = MakeShared<FRestoreSettings>();
@@ -630,7 +676,7 @@ namespace CatInventoryQuickbarRemoteUseTests
 			if (Driver.DefName == TEXT("GameNetDriver")) { Driver.DriverClassName = TEXT("/Script/OnlineSubsystemUtils.IpNetDriver"); Driver.DriverClassNameFallback = Driver.DriverClassName; }
 		FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShareable(new FEditorLoadMap(TEXT("/Game/Catfishing/Maps/TestMap"))));
 		FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShareable(new FStartPIECommand(false)));
-		FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FVerifyRemoteSelectedUse>(Test, bSimulateWeakNetwork, bToolsOnly));
+		FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FVerifyRemoteSelectedUse>(Test, bSimulateWeakNetwork, bToolsOnly, bTransferRod));
 		FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShareable(new FEndPlayMapCommand()));
 		FAutomationTestFramework::Get().EnqueueLatentCommand(Restore);
 		return true;
@@ -657,6 +703,21 @@ bool FCatInventoryQuickbarRemoteSelectedUseTest::RunTest(const FString& Paramete
 {
 	(void)Parameters;
 	return CatInventoryQuickbarRemoteUseTests::QueueRemoteSelectedUseScenario(this, true);
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatQuickbarCrossPlayerRodNormalTest,
+	"Catfishing.Editor.Inventory.Quickbar.CrossPlayerRodAcquireAndPack",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FCatQuickbarCrossPlayerRodNormalTest::RunTest(const FString& Parameters)
+{
+	return CatInventoryQuickbarRemoteUseTests::QueueRemoteSelectedUseScenario(this, false, false, true);
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatQuickbarCrossPlayerRodWeakTest,
+	"Catfishing.Editor.Inventory.Quickbar.CrossPlayerRodAcquireAndPackWeakNetwork",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FCatQuickbarCrossPlayerRodWeakTest::RunTest(const FString& Parameters)
+{
+	return CatInventoryQuickbarRemoteUseTests::QueueRemoteSelectedUseScenario(this, true, false, true);
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatToolsLeftClickNetworkTest,

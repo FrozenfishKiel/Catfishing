@@ -37,6 +37,8 @@ public:
 	FCatBeginCastResult BeginCast(AController* FisherController, const FCatBeginCastCommand& Command);
 	FCatFishingCommandResult PlaceRod(AController* Controller, const FCatPlaceRodCommand& Command);
 	FCatFishingCommandResult OperateRod(AController* Controller, const FCatOperateRodCommand& Command);
+	/** E 接回原世界竿到物品栏并选中；复用操作权事务，保留同一会话和实例。 */
+	FCatFishingCommandResult AcquireRodIntoQuickbar(AController* Controller, const FCatOperateRodCommand& Command);
 	FCatFishingCommandResult LeaveRod(AController* Controller, const FCatLeaveRodCommand& Command);
 	FCatFishingCommandResult PackRod(AController* Controller, const FCatPackRodCommand& Command);
 

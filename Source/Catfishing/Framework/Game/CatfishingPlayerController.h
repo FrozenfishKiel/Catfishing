@@ -54,6 +54,10 @@ public:
 		FGuid ItemInstanceId, FGameplayTag Action, int32 Quantity, FCatInventoryUseTarget Target = FCatInventoryUseTarget());
 	/** 本机物品栏输入选择一个实际库存槽位；预测焦点并请求服务器切换同一实例，背包窗口不能触发它。 */
 	bool RequestSelectQuickbarSlotFromInput(int32 RequestedSlotIndex);
+	/** 地上鱼竿接回完成后按已提交的 held 占位同步焦点，不重新部署或打断会话。 */
+	void SelectAcquiredRodSlotFromAuthority(FGuid RequestId);
+	UFUNCTION(Client, Reliable)
+	void ClientReceiveAcquiredRodSlot(FGuid RequestId, int32 SlotIndex);
 	/** 读取物品栏当前焦点；只读背包容量来排除无效槽位，不在背包组件或库存 Model 中保存选择。 */
 	int32 GetSelectedQuickbarSlotIndex() const;
 	/** 本机物品栏焦点已变化；独立 View 刷新外圈，普通背包窗口不订阅此通知。 */

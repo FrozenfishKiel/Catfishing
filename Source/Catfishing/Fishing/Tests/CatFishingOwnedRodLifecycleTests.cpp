@@ -30,6 +30,7 @@
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "Framework/Game/CatfishingPlayerState.h"
 #include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatBackPackComponent.h"
 #include "OnlineSubsystemTypes.h"
 #include "UI/CatFishingViewBridge.h"
 
@@ -294,14 +295,23 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 				Rod->GetGripWorldTransform().GetLocation() - FVector(80, 0, 0)), TEXT("SharedSessionPickup"));
 			FCatOperateRodCommand Take;
 			Take.Context = Context();
-			if (!TestTrue(TEXT("another player explicitly takes the existing waiting session"), Fishing->OperateRod(Helper.Controller, Take).bCommitted)) return false;
+			if (!TestTrue(TEXT("E takes another player's existing waiting session into the quickbar"), Rod->Interact_Implementation(Helper.Controller, Take.Context.RequestId))) return false;
+			auto* GuestBackPack = Cast<UCatBackPackComponent>(Helper.Character->GetInventoryComponent());
+			TestEqual(TEXT("E moves the same rod to guest active inventory"), Fishing->ResolveRodEquipmentFromAuthority(Rod), Helper.Equipment);
+			TestTrue(TEXT("guest quickbar owns the exact rod instance"), GuestBackPack && GuestBackPack->FindHeldInventoryEntryFromAuthority(OwnerRodId)
+				&& GuestBackPack->GetQuickbarHeldSlot().ItemInstanceId == OwnerRodId && GuestBackPack->GetQuickbarHeldSlot().bInUse);
+			TestFalse(TEXT("E does not duplicate the rod in its original active inventory"), Owner.Character->GetInventoryComponent()->FindHeldInventoryEntryFromAuthority(OwnerRodId) != nullptr);
+			TestTrue(TEXT("original session still locks transferred rod"), Helper.Equipment->IsFishingRodInUse(OwnerRodId));
+			TestEqual(TEXT("E retains exact active session"), Fishing->FindActiveSessionByRod(Rod), Session);
 			TestEqual(TEXT("takeover binds the guest to the same hook"), Session->GetSnapshot().HookActor.Get(), Hook);
 			TestEqual(TEXT("takeover changes the actual session input receiver"), Session->GetSnapshot().FisherPlayerState.Get(), static_cast<APlayerState*>(Helper.State));
 			TestEqual(TEXT("takeover cannot debit bait before true bite"), Quantity(Owner.Equipment, TEXT("BugBait")), 4);
 			Leave.Context = Context();
 			if (!Fishing->LeaveRod(Helper.Controller, Leave).bCommitted) return false;
 			Take.Context = Context();
-			if (!TestTrue(TEXT("deployer can retake the same released session"), Fishing->OperateRod(Owner.Controller, Take).bCommitted)) return false;
+			if (!TestTrue(TEXT("deployer can E-retake the same released session"), Rod->Interact_Implementation(Owner.Controller, Take.Context.RequestId))) return false;
+			TestEqual(TEXT("retake restores original item custody without replacing the session"), Fishing->ResolveRodEquipmentFromAuthority(Rod), Owner.Equipment);
+			TestFalse(TEXT("retake clears guest quickbar reservation"), GuestBackPack->GetQuickbarHeldSlot().ItemInstanceId.IsValid());
 		}
 
 		// 旁人只有真实约束，不调用 OperateRod，不进入会话或取得装备预留。

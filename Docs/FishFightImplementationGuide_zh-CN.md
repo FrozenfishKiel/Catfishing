@@ -1,5 +1,22 @@
 # 鱼运动与遛鱼逻辑：设计与实现
 
+## 2026-09-16 E 接回物品栏与 X 保持选中鱼竿
+
+用户确认：R 放下后世界竿保留原会话；E 拿起时回到拿起者物品栏并自动选中，保留同一世界竿、同一钩和会话；X 收回后，如果原实例所在格仍是当前选中格，应立即恢复未抛投的手持状态，不要求切走再切回来。E 接回采用当前手持物品的一格保留方式，原实例仍只存在一份。库存满时 E 拒绝接回，原世界竿及会话不变。
+
+基线：本轮开始时 `Source/Catfishing/Fishing/Simulation/CatFishingFightSimulator.cpp` 与未跟踪的本地待办已有并行改动，本轮均未修改或提交。修改前新的 R/E/X 定向回归未运行。用户授权后正常关闭编辑器及其独立游戏窗口，未强制终止或丢弃内容。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| E 入口及权威 | `Source/Catfishing/Fishing/Actors/CatFishingRodActor.cpp::Interact` 原来直接调用 Service::OperateRod | 只取得世界竿操作权，不进入物品栏 | 切到 `CatFishingService::AcquireRodIntoQuickbar`，底层 OperateRod 继续处理权限、距离、占用和物理接管 | 先确认可用格，再操作同一竿；沿 Actor 原请求缓存防止重放反向操作 | E 后同 RodActorId、满包无副作用、重复 E、普通/弱网 | 首轮四项回归与跨玩家普通/弱网两项全部通过 |
+| 会话与原实例 | `CatFishingService::ResolveRodEquipmentFromAuthority`；`Equipment::MoveFishingResourcesToCustodian`→Inventory 原 held 实例迁移并改各 FishingUseRecord.RodInventory | E 尚未关联当前拿起者的库存；不能取消原会话再造竿 | 复用同一实例迁移，刷新 PreservedRodEquipment 来源索引；CastEquipment/鱼饵记录继续保留原事务 | 操作成功后迁移，失败迁回并退出操作位；实例迁移/占位成功后发布 | 别人接过等待会话保留 Hook/SessionId，原实例唯一，后续耐久锁及取消守恒 | OwnedRodTransactions 场景验证双方往返 E、同会话和钩、迁移后锁；其他离场/取消场景继续通过 |
+| 占位与选中复制 | `Source/Catfishing/Inventory/CatBackPackComponent.*`；`CatfishingPlayerController::SelectAcquiredRodSlotFromAuthority/ClientReceiveAcquiredRodSlot` | 原 Reserve 只接收可见格实例，E 的实例已在 held 区 | 新增 ReserveExistingHeldQuickbarSlotFromAuthority；保留原 OwnerOnly QuickbarHeldSlot 结构，可靠 RPC 同步焦点 | 先接收原实例再建立空格保留；会话存在则 bInUse=true；较晚用户选格回执仍可生效 | 两端格位、图标消费者、使用中锁定、重复接管；正式 WBP 无新资产 | 普通/弱网格位与世界竿同时验证通过；真人画面未验 |
+| X 入口及状态转换 | `Source/Catfishing/Framework/Game/CatfishingPlayerController.cpp::ServerPackHeldRod`→CutLine/LeaveRod/PackRod | 原实例归还后手持清空，选中格没有重新装备 | 归还成功且返回格=AuthorityQuickbarSlotIndex 时调用原 ServerSelectQuickbarSlot 实现，重用原实例装备 | 保留容量预检与原会话终止顺序，先归还再部署；新世界竿身份隔离旧 X 请求 | X 后同 ItemId/耐久、立即手持、随后换格、迟到 X 不能收掉新竿 | FirstRod 与正常/弱网 RemoteSelectedUse 通过；返回其他未选中格仍只入库 |
+| UI、配置、资产及 Cook | QuickbarHeldSlot OnRep→InventoryModel→`Source/Catfishing/UI/Inventory/CatInventoryQuickbarWidget.cpp::SetHeldItemPresentation`；原 E 交互、IA_ParkHeldFishingRod/IA_PackHeldFishingRod | UI 仍消费同一结构，无新图标或按键要求 | 保留原 WBP、Blueprint、DataAsset 和配置，更新当前指南 | 不改存档字段、单位、器材/物理默认值或 Cook 入口 | Editor/Game 构建；新包与真人双端独立验收 | 构建通过；二进制额外消费者未全量审计，因此无资产删除；不涉及新持久化 |
+| 日志、测试及旧路径 | FirstRodHeld、OwnedRodLifecycle、RemoteUse 测试；LogCatFishing/LogCatfishing | 旧测试明确期待 X 空手，旧指南把世界竿拾取列为待定 | 替换旧断言，新增跨玩家普通/弱网用例；记录 acquire/rejected、选择回执、pack_selection_restored | RequestId/RodActorId/ItemId/SessionId 串联原事务，正常边沿 Log、拒绝 Warning | 回滚/满包/重放；检查两端日志；不在 Tick 刷屏 | 旧 X 空手断言已替换；底层 OperateRod 保留，因部署、握手交接、回滚和现有显式命令仍调用它，不是第二个 E 入口 |
+
+验证：`contract` 的 Editor/Game Development 分别通过 `Saved/Logs/RodQuickbarPickup-Editor01.log`、`RodQuickbarPickup-Game01.log`，新增跨玩家用例编译见 `RodQuickbarPickup-Editor02.log`。`runtime_behavior` 首轮 `Saved/Automation/RodQuickbarPickup-01/Report/index.json` 四项全部成功（均带警告），含 R/E/X 原实例、满包、原会话往返接管、普通及两端各100ms±30ms/5%丢包；两端事件见同目录 `Automation.log`。跨玩家补验 `Saved/Automation/RodQuickbarPickup-CrossPlayer/Report/index.json` 两项全部成功（均带警告），验证原实例先迁到房主、R 放下后由远端 E 接回，以及同格 X 的客户端实际持竿复制。运行警告包含既有 HUD/Collection 输入缺失、测试地图静态灯光、鱼护旧容量和预期满包/旧请求拒绝；不声明全库无警告。`presentation_delivery` 未进行真人湖岸、正式 UI 画面、新 Cook/打包和双端默认落盘验收，不关闭 Fishing/Inventory/UI/Delivery。包端后续应分别核对 `<打包根目录>/Catfishing/Saved/Logs` 的 `quickbar_rod_acquired`、`quickbar_rod_acquired_selection_received`、`quickbar_rod_pack_selection_restored` 以及原库存/钓鱼回执。
+
 ## 2026-09-16 窝料左键投掷预判曲线修复
 
 统一库存 Use 迁移曾清空 `DrawChumChargePreview`，但 `UCatGA_FishingChum` 为 ServerOnly，客户端没有接收替代预览。当前修复把本地输入表现接在原窝料实例上：选窝料按住左键显示曲线和落点，松开/取消清理；服务器仍用自己的 WaitInputRelease 时间、弹道和原库存事务完成投放。客户端按住秒数仅供表现，不复制、不上传、不扣量。弱网下本地时间及位置与服务器裁决可能有偏差，预判不保证最终放置成功。
@@ -20,7 +37,7 @@
 
 ## 2026-09-16 选格取竿与钓鱼生命周期修复
 
-当前输入：选中鱼竿立即装备；左键沿用瞄准/松开抛钩、真咬提钩及收线；未抛钩可换格，抛钩后到终局锁定。R 架竿保留会话并释放格位，E 操作同一世界竿，X 收回当前手持竿。其他选中物品使用左键。空手 X 不承担统一拾取入口；地面竿的通用拾取权限仍待定。下节力量碾压删除结果仍有效，竿强断竿规则保留。
+当前输入：选中鱼竿立即装备；左键沿用瞄准/松开抛钩、真咬提钩及收线；未抛钩可换格，抛钩后到终局锁定。R 架竿保留会话并释放格位，E 接回同一世界竿到物品栏并选中，X 收回当前手持竿并恢复仍被选中格的装备。其他选中物品使用左键。空手 X 不承担统一拾取入口；本轮用户已确认地面竿的 E 接回口径，见本文上方补充。下节力量碾压删除结果仍有效，竿强断竿规则保留。
 
 修改前基线：上一个独立检查点 `0bd9faae`，并保留 `245af919` 的有效提钩后才生成鱼实体。开始本轮盘点时无已跟踪并行改动；根目录未跟踪的程序工程待办保留。既有多人辅助抓握失败见下节，不当作本轮已修复。
 
@@ -31,7 +48,7 @@
 | 收货容量预检 | `Inventory/CatInventoryComponent::SimulateAddInventoryBatch`→`SimulateAddItemDefinition` | 仅按定义模拟，无法区分原竿和同型号新竿 | 实例批次保留实例身份并复用实际接收规则；定义批次禁止占用手持格 | 与 BackPack reservation 同步 | 同型号新竿预检拒绝、原竿归还预检接受、通用库存收货回归 | 最终容量回归见下 |
 | 输入边沿 | `AbilitySystem/Input/CatAbilityInputBindingComponent`→Primary/selected Use；`CatFishingPrimaryActionAbility::EndAbility` | 左键空手只抓握；取消 Primary 也发 Released，可能误抛钩 | 按下固定 Use/GAS/Grab 接收者；取消清瞄准而不抛钩 | 先改取消，再切选格及 R/X | 松键、菜单取消、持竿约束、持续窝料 | 已接入；真实鼠标路由/会话保持测试见下 |
 | 架竿、咬钩与终局 | `Fishing/CatFishingService::LeaveRod`→Session.Suspend；`ResolveHookSelectionFromAuthority/OpenTrueBiteWindowFromAuthority/RequestHookFromAuthority` | 离竿清空 FisherCharacter 后抽鱼失败，D0=-1；正常断竿误报初始化失败 | 抽鱼用会话竿/原装备；无人持竿时 D0 从握把到冻结落点计算（cm）；已裁断竿回执成功，不二次 Invalidated | 不重启等待/真咬计时；不预生成鱼；保留同一 SessionId 和原扣饵来源 | 无人等待到真咬、架竿后接管、合法提钩断竿重放 | 已接入；原断竿阈值与正常窗口默认值不变 |
-| 世界交互与离场托管 | `Fishing/Actors/CatFishingRodActor`→E trace/Service；`ResolveRodEquipmentFromAuthority` 被授予、抛钩、收竿调用 | 竿物理体很细；能力来源只找 Owner Pawn，离场后找不到实例 | 附加半厚至少 8cm 的 Visibility 查询盒，禁焊接/物理/重叠；先找托管装备，再找活体来源 | 不加新物理质量，不转移会话或物品归属 | 偏离细杆6cm的真实查询、离场后接管原实例能力 | 已接入；遮挡仍用原 first-hit 查询，世界拾取规则未扩展 |
+| 世界交互与离场托管 | `Fishing/Actors/CatFishingRodActor`→E trace/Service；`ResolveRodEquipmentFromAuthority` 被授予、抛钩、收竿调用 | 竿物理体很细；能力来源只找 Owner Pawn，离场后找不到实例 | 附加半厚至少 8cm 的 Visibility 查询盒，禁焊接/物理/重叠；先找托管装备，再找活体来源 | 不加新物理质量，保留原会话；E 的原实例迁移按本文最新补充 | 偏离细杆6cm的真实查询、离场后接管原实例能力 | 早前版本已接入查询；遮挡仍用原 first-hit 查询。世界竿 E 接回现已按本文上方最新口径扩展 |
 | UI/复制消费者 | `UI/Inventory/CatInventoryQuickbarWidget`→`UI/InventorySlot/CatInventorySlotWidget::SetHeldItemPresentation` | 空格无法表明手持和使用中 | reservation OnRep 通知原 Model 重读，正式格子画原缩略图和状态字 | 等库存/保留记录复制后重绘，选择最终由回执校正 | owning-client 实例/格位、正式 WBP 控件及画面 | 原 WBP 结构不变；未新增正式界面资产，不声明完整人工视觉验收 |
 | 配置、生成脚本与资产 | `CatInventoryQuickbarAuthoringLibrary::MigrateBackpackQuickbarInputAssets`、`Scripts/migrate_inventory_quickbar.py`→`/Game/Input/InputContext/IMC_InputContext`、`/Game/Data/Abilities/DA_CatAbilityInputConfig` | 旧 G Use、R 未绑定、X 持续取消 | 新 `/Game/Input/InputAction/IA_ParkHeldFishingRod`(R)、`IA_PackHeldFishingRod`(X)；移除 G 与旧 X 映射；LMB 保持 Primary 路由 | C++ 标签编译后编辑器迁移，再运行正式资产测试 | 重生成不恢复 G；映射/Tag 加载；Cook 入口继续引用原 IMC | 迁移日志 `Saved/Logs/QuickbarRod-MigrationCompleted.log` 为0 Error；未 Cook |
 | 旧入口、日志、文档 | 原 `SubmitRodInteract/SubmitCancel` 仍被自动化/兼容命令使用；旧 InputAction 可能有外部 BP 消费者 | 旧 R/G/X 口径不能继续作为当前操作说明 | 保留尚有消费者的代码/资产，解除正式 IMC 旧绑定；新 RequestId/RodId 结果与客户端回执落盘 | 先切实际入口再保留隔离兼容路径 | Source/资产检查、diff、Development 构建与日志 | 旧二进制外部引用未完全确认，不删除资产；未来全量引用迁移后可清理。当前 UI 接口文档已改，历史说明不作当前契约 |

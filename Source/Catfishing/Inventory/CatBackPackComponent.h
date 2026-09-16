@@ -36,6 +36,8 @@ public:
 	virtual bool EnforcesCarryLimits() const override { return true; }
 
 	bool ReserveQuickbarHeldSlotFromAuthority(int32 SlotIndex, FGuid ItemId);
+	/** 地上接回的原实例已在活动区；为它保留空格，不执行第二次 Use。 */
+	bool ReserveExistingHeldQuickbarSlotFromAuthority(int32 SlotIndex, FGuid ItemId);
 	void ClearQuickbarHeldSlotFromAuthority();
 	void SetQuickbarHeldSlotInUseFromAuthority(bool bInUse);
 	const FCatQuickbarHeldSlot& GetQuickbarHeldSlot() const { return QuickbarHeldSlot; }

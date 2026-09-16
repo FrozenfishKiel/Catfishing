@@ -158,11 +158,35 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("parked rod is targetable beside its thin physical body"), World->LineTraceSingleByChannel(InteractionHit,
 			RodBodyPose.TransformPosition(FVector(0, 100, 6)), RodBodyPose.TransformPosition(FVector(0, -100, 6)), ECC_Visibility, InteractionTrace)
 			&& InteractionHit.GetActor() == SelectedRod);
+		TArray<int32> FilledSlots;
+		for (int32 Index = 0; Index < BackPack->GetInventorySlotCount(); ++Index)
+		{
+			if (BackPack->HasItemAtSlot(Index)) continue;
+			if (!TestTrue(TEXT("fills a free slot to exercise pickup capacity"), BackPack->AddItemDefinition(OriginalRodEntry.ItemInstance->GetItemDefinition(), 1))) return false;
+			FilledSlots.Add(Index);
+		}
+		TestFalse(TEXT("E cannot acquire a world rod when every inventory slot is full"), SelectedRod->Interact_Implementation(Controller, FGuid::NewGuid()));
+		TestNull(TEXT("full-inventory rejection leaves the rod unattended"), Fishing->FindRodOperatedBy(Player));
+		TestNotNull(TEXT("full-inventory rejection retains the original held item record"), BackPack->FindHeldInventoryEntryFromAuthority(SecondItemId));
+		for (const int32 Index : FilledSlots)
+		{
+			FCatInventoryEntry Removed;
+			if (!TestTrue(TEXT("clears only temporary capacity fixture items"), BackPack->RemoveInventoryEntryAtSlotFromAuthority(Index, Removed))) return false;
+		}
 		TestTrue(TEXT("E reacquires the same parked rod"), SelectedRod->Interact_Implementation(Controller, FGuid::NewGuid()));
 		TestEqual(TEXT("E restores operation"), Fishing->FindRodOperatedBy(Player), SelectedRod);
+		TestEqual(TEXT("E restores the exact rod quickbar reservation"), BackPack->GetQuickbarHeldSlot().ItemInstanceId, SecondItemId);
+		TestEqual(TEXT("E selects its restored quickbar slot"), Controller->GetSelectedQuickbarSlotIndex(), BackPack->GetQuickbarHeldSlot().SlotIndex);
+		const FGuid PackedActorId = SelectedRod->GetPresentationState().RodActorId;
 		Controller->PackHeldRodFromInput();
-		TestNull(TEXT("X releases operation"), Fishing->FindRodOperatedBy(Player));
-		TestTrue(TEXT("X returns same second instance"), BackPack->FindInventorySlotIndexFromInstanceId(SecondItemId) != INDEX_NONE);
+		auto* ReequippedRod = Fishing->FindRodOperatedBy(Player);
+		if (!TestNotNull(TEXT("X immediately equips the still-selected rod without switching away"), ReequippedRod)) return false;
+		TestEqual(TEXT("X re-equips the same second item"), ReequippedRod->GetPresentationState().ItemInstanceId, SecondItemId);
+		TestEqual(TEXT("X preserves selected rod slot"), BackPack->GetQuickbarHeldSlot().SlotIndex, Controller->GetSelectedQuickbarSlotIndex());
+		TestNotEqual(TEXT("X retires the old world actor identity"), ReequippedRod->GetPresentationState().RodActorId, PackedActorId);
+		TestNotNull(TEXT("same instance remains in the active inventory"), BackPack->FindHeldInventoryEntryFromAuthority(SecondItemId));
+		Controller->ServerPackHeldRod(FGuid::NewGuid(), PackedActorId);
+		TestEqual(TEXT("late X targeting the retired actor cannot pack the newly equipped rod"), Fishing->FindRodOperatedBy(Player), ReequippedRod);
 		if (!TestTrue(TEXT("select first rod for remaining lifecycle scenarios"), Controller->RequestSelectQuickbarSlotFromInput(FirstSlot))) return false;
 		ACatFishingRodActor* Rod = Fishing->FindDeployedRod(Player);
 		if (!TestNotNull(TEXT("first R creates a registered rod"), Rod)) return false;

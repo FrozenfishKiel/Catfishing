@@ -61,6 +61,21 @@ bool UCatBackPackComponent::ReserveQuickbarHeldSlotFromAuthority(const int32 Slo
 	GetOwner()->ForceNetUpdate();
 	return true;
 }
+bool UCatBackPackComponent::ReserveExistingHeldQuickbarSlotFromAuthority(const int32 SlotIndex, const FGuid ItemId)
+{
+	const auto* Entry = FindHeldInventoryEntryFromAuthority(ItemId);
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !IsValidInventorySlotIndex(SlotIndex) || HasItemAtSlot(SlotIndex)
+		|| !Entry || !Entry->Instance || Entry->StackCount != 1 || !Entry->Instance->GetItemDefinition()) return false;
+	if (QuickbarHeldSlot.ItemInstanceId.IsValid())
+		return QuickbarHeldSlot.ItemInstanceId == ItemId && QuickbarHeldSlot.SlotIndex == SlotIndex;
+	QuickbarHeldSlot.SlotIndex = SlotIndex;
+	QuickbarHeldSlot.ItemInstanceId = ItemId;
+	QuickbarHeldSlot.DefinitionId = Entry->Instance->GetItemDefinition()->GetInventoryDefinitionId();
+	OnRep_QuickbarHeldSlot();
+	GetOwner()->ForceNetUpdate();
+	return true;
+}
+
 void UCatBackPackComponent::ClearQuickbarHeldSlotFromAuthority()
 {
 	if (!GetOwner() || !GetOwner()->HasAuthority() || !QuickbarHeldSlot.ItemInstanceId.IsValid()) return;

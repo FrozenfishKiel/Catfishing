@@ -246,10 +246,10 @@ FishingSessionStateTree=/Game/Data/StateTrees/ST_FishingSession.ST_FishingSessio
 | --- | --- | --- |
 | 选中鱼竿格 | 自动拿起该实例；抛钩后使用中锁定切换 | 物品栏选择及鱼竿部署事务 |
 | **R** | 架竿，保留世界竿和会话，随后可切换物品 | `IA_ParkHeldFishingRod` |
-| **X** | 收竿归还原库存实例 | `IA_PackHeldFishingRod` |
+| **X** | 收竿归还原实例；返回格仍被选中时立即恢复手持，无需重新切格 | `IA_PackHeldFishingRod` |
 | **左键** | 选中窝料按住蓄力、松开投放；选中抄网使用；持竿时瞄准/抛竿、提竿/收线 | 原 `Cat.Input.Fishing.Primary` 路由按本次输入身份分派 |
 | **右键** | 主位搏斗松线；其他身体交互沿现有路由 | 原 `Cat.Input.Fishing.Slack` / 抓握路由 |
-| **E** | 对准世界物品交互；服务器复核目标和权限 | 原通用交互入口 |
+| **E** | 对准世界鱼竿接回物品栏并选中，保留原会话；满包拒绝。其他世界物品沿原交互规则 | 原通用交互入口 |
 
 旧的 Q 打窝、F 抄网和 G 取出物品映射已退役。打窝能力由原窝料实例的 AbilitySet 在服务器授予，客户端预览不依赖它在本机激活。不要再额外从蓝图提交一遍投放。
 

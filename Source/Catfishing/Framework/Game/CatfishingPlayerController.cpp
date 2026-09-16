@@ -1087,6 +1087,23 @@ void ACatfishingPlayerController::ClientReceiveQuickbarSelection_Implementation(
 		*RequestId.ToString(), SlotIndex, bCommitted, *CatLogContext::BuildControllerFields(this));
 }
 
+void ACatfishingPlayerController::SelectAcquiredRodSlotFromAuthority(const FGuid RequestId)
+{
+	const auto* BackPack = GetControlledBackPack();
+	if (!HasAuthority() || !BackPack || !BackPack->GetQuickbarHeldSlot().ItemInstanceId.IsValid()) return;
+	AuthorityQuickbarSlotIndex = BackPack->GetQuickbarHeldSlot().SlotIndex;
+	ClientReceiveAcquiredRodSlot(RequestId, AuthorityQuickbarSlotIndex);
+}
+
+void ACatfishingPlayerController::ClientReceiveAcquiredRodSlot_Implementation(const FGuid RequestId, const int32 SlotIndex)
+{
+	// 不清空用户随后发起的选格请求；同一 Controller 上可靠回执的顺序会让较新的选格继续生效。
+	SelectedQuickbarSlotIndex = SlotIndex;
+	OnQuickbarSelectionChanged.Broadcast(SlotIndex);
+	UE_LOG(LogCatfishing, Log, TEXT("Event=quickbar_rod_acquired_selection_received RequestId=%s Slot=%d %s"),
+		*RequestId.ToString(), SlotIndex, *CatLogContext::BuildControllerFields(this));
+}
+
 bool ACatfishingPlayerController::IsQuickbarRodSelected() const
 {
 	const auto* BackPack = GetControlledBackPack();
@@ -1168,6 +1185,23 @@ void ACatfishingPlayerController::ServerPackHeldRod_Implementation(const FGuid R
 		Restore.Context.ExpectedRodActorRevision = Rod->GetPresentationState().RodActorRevision;
 		const auto Restored = Fishing->OperateRod(this, Restore);
 		if (FishingCommandComponent) FishingCommandComponent->DeliverResultFromAuthority(Restored);
+	}
+	// 收回不改变当前选中格的含义：归还的仍是该格鱼竿时，沿唯一选格入口重新装备原实例。
+	// 不从客户端旧库存发二次请求，避免归还复制尚未抵达时携带空 ItemId；新 RodActorId 也隔离旧 X 重放。
+	if (bCommitted)
+	{
+		const FGuid ReturnedItemId = Rod->GetPresentationState().ItemInstanceId;
+		const int32 ReturnedSlot = BackPack->FindInventorySlotIndexFromInstanceId(ReturnedItemId);
+		if (ReturnedSlot != INDEX_NONE && ReturnedSlot == AuthorityQuickbarSlotIndex)
+		{
+			const FGuid EquipRequestId = FGuid::NewGuid();
+			ServerSelectQuickbarSlot_Implementation(EquipRequestId, ReturnedSlot, ReturnedItemId);
+			const auto* EquippedRod = Fishing->FindRodOperatedBy(PlayerState);
+			const bool bEquipped = EquippedRod && EquippedRod->GetPresentationState().ItemInstanceId == ReturnedItemId;
+			UE_LOG(LogCatfishing, Log, TEXT("Event=quickbar_rod_pack_selection_restored RequestId=%s EquipRequestId=%s ItemId=%s Slot=%d Equipped=%d %s"),
+				*RequestId.ToString(), *EquipRequestId.ToString(), *ReturnedItemId.ToString(), ReturnedSlot, bEquipped,
+				*CatLogContext::BuildControllerFields(this));
+		}
 	}
 	UE_LOG(LogCatfishing, Log, TEXT("Event=quickbar_rod_pack_result RequestId=%s RodActorId=%s Committed=%d %s"),
 		*RequestId.ToString(), *RodId.ToString(), bCommitted, *CatLogContext::BuildControllerFields(this));
