@@ -1343,7 +1343,7 @@ bool ACatfishingGameModeBase::DoesLastRunFlowResultMatch(const ECatRunTransition
 }
 
 // 确认发起流程：
-// 1. 先核对 authority、现场交互、开放夜晚、没有正式过场或其他等待请求，再只读取供品配置，不冻结或扣除地面鱼。
+// 1. 先核对 authority、现场交互、开放夜晚、没有正式过场或其他等待请求，再只读取供品配置，不冻结或扣除现场供品。
 // 2. 固定此刻全部 Active 玩家（倒地也保留）为公开 Participants，写入 30 秒服务器截止和发起者默认确认，并启动唯一超时计时器。
 // 3. 通过 SetAltarConfirmation 复用同一条更新路径；单人会立即 Accepted 并进入正式翻天，多人继续等待远程 F8/F9。
 bool ACatfishingGameModeBase::BeginAltarConfirmation(ACatAltarActor* Altar, AController* Initiator, FGuid RequestId)
@@ -1590,7 +1590,7 @@ bool ACatfishingGameModeBase::ValidateAltarConfirmationParticipants() const
 }
 
 // 过渡开始：
-// 1. 核对同世界祭坛、已接受的同一确认请求、请求者资格及开放夜晚；再检查过场时长、StateTree、冻结供品、服务器身份和 GAS 预演，失败取消确认并记录原因，不扣鱼。
+// 1. 核对同世界祭坛、已接受的同一确认请求、请求者资格及开放夜晚；再检查过场时长、StateTree、冻结供品、服务器身份和结算预演，失败取消确认并记录原因，不扣鱼。
 // 2. 保存本轮祭坛、请求者和命令，重建时间轴但保留上次成功凭据；冻结过场时长和预期天数，置为活动态并提升 Run 修订。
 // 3. 发布公开状态与操作门，分别安排遮黑提交和过场结束计时器，记录开始事件；之后由提交或取消入口收口本轮事务。
 bool ACatfishingGameModeBase::BeginAltarDayTransition(ACatAltarActor* Altar, AController* Controller, FGuid RequestId)
@@ -1648,9 +1648,9 @@ bool ACatfishingGameModeBase::BeginAltarDayTransition(ACatAltarActor* Altar, ACo
 }
 
 // 黑屏提交：
-// 1. 非活动或已提交时直接结束；重新核对祭坛、玩家资格和冻结鱼，失败交给取消入口清计时、解锁。
-// 2. 刷新命令预期修订并记录旧天、目标与进度，再调用唯一 GAS 结算；拒绝时取消，通过后同步消费冻结实物。
-// 3. 消费异常时保留已提交的 GAS 事实并报告失败，不重复扣鱼；全部消费成功才替换公开成功凭据和已提交标记。
+// 1. 非活动或已提交时直接结束；重新核对祭坛、玩家资格和冻结供品，失败交给取消入口清计时、解锁。
+// 2. 冻结旧天目标和进度，并在预留供品前先拦截跨晚或跨祭坛重放的旧请求，避免缓存成功被当成新消费许可。
+// 3. 祭坛整批预留实物后调用唯一结算写口；准备或结算拒绝时释放散鱼和鱼护库存预留，接受后再完成同一批消费。
 // 4. 根据命令结果选择失败终局、毕业或下一天文案，重置祭坛确认，提升修订并发布结果与日志；正常结束仍由原计时器负责。
 void ACatfishingGameModeBase::CommitAltarDayTransition()
 {
@@ -1672,16 +1672,22 @@ void ACatfishingGameModeBase::CommitAltarDayTransition()
 	OfferingResult.SettlementDay = RunPublicState.Phase.DayIndex;
 	OfferingResult.TargetPoints = RunPublicState.DailyOfferingTarget;
 	OfferingResult.WorldProgressBefore = RunPublicState.WorldProgress;
-	const FCatRunCommandResult Result = SubmitOfferingSettlementInternal(TransitionOffering);
-	if (!Result.bCommitted)
+	FCatRunCommandResult Result;
+	// 相同请求可能在下一晚从另一祭坛重放；必须在预留新供品前拦下，不能把缓存的结算成功当成新一批消费许可。
+	if (TryReplayRunCommand(MakeRunCommandCacheKey(TransitionOffering.Context.StableNetId,
+		ECatRunCommandType::OfferingSettlement, TransitionOffering.Context.RequestId), Result))
 	{
-		CancelAltarDayTransition(Altar, NSLOCTEXT("Catfishing", "AltarSettlementRejected", "献祭结算未被接受，供品未消耗"));
+		CancelAltarDayTransition(Altar, NSLOCTEXT("Catfishing", "AltarRequestAlreadyResolved", "这次献祭请求已处理，请重新发起"));
 		return;
 	}
-	if (!Altar->ConsumeFrozenOffering(Controller, RunPublicState.DayTransition.RequestId))
+	// 实物整批独占后才执行唯一结算写口，任何准备或结算拒绝都完整释放散鱼和鱼护库存预留，不会留下已计分未扣鱼。
+	if (!Altar->ConsumeFrozenOffering(Controller, RunPublicState.DayTransition.RequestId, [&]()
 	{
-		// 此分支意味着单鱼消费违反整批预检契约；不再次结算或伪造成功，保留已提交事实供日志定位。
-		CancelAltarDayTransition(Altar, NSLOCTEXT("Catfishing", "AltarConsumeContractFailed", "供品消费异常，结算已提交，请检查服务器日志"));
+		Result = SubmitOfferingSettlementInternal(TransitionOffering);
+		return Result.bCommitted;
+	}))
+	{
+		CancelAltarDayTransition(Altar, NSLOCTEXT("Catfishing", "AltarSettlementRejected", "献祭结算未被接受，供品未消耗"));
 		return;
 	}
 	FCatRunDayTransition& Transition = RunPublicState.DayTransition;

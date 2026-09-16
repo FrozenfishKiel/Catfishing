@@ -75,6 +75,11 @@ public:
 
 	/** 只读预检单鱼消费所需的身份、携带归属和捕获记录依赖；请求门与交互范围由出售等调用方裁决。 */
 	bool CanConsumeFromAuthority(AController* RequestingController) const;
+	/** 为跨多条鱼的同一献祭批次独占实物；只写消费预留门，不归档、不隐藏、不销毁，失败后仍可正常操作。 */
+	bool PrepareConsumptionFromAuthority(AController* Controller, FGuid RequestId);
+	/** 完成已准备实物的消费或撤销占用；同请求提交不再运行会失败的预检，接受时沿用原有捕获归档并销毁实物。 */
+	void FinishConsumptionFromAuthority(AController* Controller, FGuid RequestId, bool bCommit);
+
 
 	/** 消费已预检的世界鱼；可选提交回调在独占鱼后执行，失败保留实物，成功再补捕获记录并清理销毁；外层保存请求重放结果。 */
 	bool ConsumeFromAuthority(AController* RequestingController, FGuid RequestId,
@@ -99,8 +104,6 @@ public:
 	/** 权威占用空嘴并附着本鱼；抄网和地面拾取立即发布，库存 Carry 可延后发布到静默移格完成后，失败会撤销本次 expected-actor 认领。 */
 	bool BeginMouthCarryFromAuthority(ACatCharacter* Character, APlayerState* PlayerState, bool bPublish = true);
 
-	/** 携带者倒地、失去占有或销毁时释放本鱼到地面；只影响仍由本鱼占用的嘴部引用。 */
-	void ReleaseMouthCarryFromAuthority(const FVector& DropLocation);
 
 	/** 只读核对保管 Actor 与库存鱼实例是否仍是一对一；Carry 的预检用它拒绝槽位复用，不在预检阶段改实例归属、可见性或附着。 */
 	bool CanCarryInventoryItemFromAuthority(const UCatFishInventoryItemInstance* ExpectedItem) const;
@@ -109,8 +112,6 @@ public:
 	void RestoreInventoryRetentionFromAuthority(UCatFishInventoryItemInstance* ExpectedItem,
 		const FTransform& ExpectedWorldTransform);
 
-	/** 玩家主动丢弃当前真实嘴叼鱼；先预检空间，成功才解除携带并轻抛原 Actor，失败保持嘴部与鱼身份不变。 */
-	bool DropFromAuthority(AController* RequestingController);
 
 	/**
 	 * authority 把这条嘴叼鱼提交到射线命中的地面鱼护。
@@ -133,6 +134,12 @@ public:
 		const FCatFishPickupPresentationState& Current);
 
 protected:
+	/** 为公共释放提供这条鱼对应的库存实例；世界新鱼尚未入库时允许为空，公共层不会为它创建替代实例。 */
+	virtual UCatInventoryItemInstance* GetCarriedInventoryItem() const override;
+	/** 只读预检鱼的落地姿态与形状；主动 Q 缺少身份或表现资源时拒绝，强制释放可保留公共层位置继续清嘴，不在这里扣库存或改 Actor。 */
+	virtual bool PrepareCarryRelease(ACatCharacter* Character, FTransform& Transform, bool bThrow) const override;
+	/** 公共解绑后清理鱼专属监听、表现和投掷效果；根物理、库存离库和网络发布由共同携带基类完成。 */
+	virtual void OnCarryReleased(ACatCharacter* Character, bool bThrow) override;
 	/** 完成生成后设置独立交互范围并恢复当前鱼姿态；客户端按复制的身份配置同一尺寸的物理根。 */
 	virtual void BeginPlay() override;
 	/** Actor 被售出、消费或容器清理销毁时按 expected actor 清除嘴部引用；不再依赖角色附件树是否已经先解绑。 */
@@ -196,6 +203,8 @@ private:
 	bool bCaptureRecorded = false;
 	/** 本鱼是否正被不可逆消费提交占用；入护成功会解除该占用以便同一保管 Actor 后续 Carry，真正售出或吃掉才保持到销毁。 */
 	bool bConsumptionCommitted = false;
+	/** 当前实物消费预留的关联标识；PrepareConsumptionFromAuthority 写入，FinishConsumptionFromAuthority 只允许同请求完成或取消。 */
+	FGuid PreparedConsumptionRequest;
 	// 仅正式Store静默入库作用域内授权该接收器，不让通用Add直接接走世界/嘴部原鱼。
 	TWeakObjectPtr<UCatInventoryComponent> InventoryStoreTarget;
 	FTransform LandedMeshBaseTransform = FTransform::Identity;

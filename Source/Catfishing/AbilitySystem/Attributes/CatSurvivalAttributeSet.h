@@ -47,6 +47,12 @@ public:
 	FGameplayAttributeData YellowFightStamina;
 	ATTRIBUTE_ACCESSORS_BASIC(UCatSurvivalAttributeSet, YellowFightStamina)
 
+ /** GE 执行后消费一次经验元属性；先清零再交给 Growth，防止回调重入累计本次数值。 */
+ virtual void PostGameplayEffectExecute(const FGameplayEffectModCallbackData& Data) override;
+ /** 本次 GE 提供的经验点数；仅作为服务器执行中间值，消费即清零，不复制、不持久化。 */
+ UPROPERTY() FGameplayAttributeData IncomingFishExperience;
+ ATTRIBUTE_ACCESSORS_BASIC(UCatSurvivalAttributeSet, IncomingFishExperience)
+
 protected:
 	/** FishingStrength 到达客户端时交给 GAS 标准预测收敛；不在此计算协作加成。 */
 	UFUNCTION()

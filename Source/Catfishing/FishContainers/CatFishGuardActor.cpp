@@ -83,33 +83,15 @@ ACatFishGuardActor* ACatFishGuardActor::FindCarriedGuard(const ACatCharacter* Ch
 	return Character ? Cast<ACatFishGuardActor>(Character->GetMouthCarriedActor()) : nullptr;
 }
 
-// 鱼护生命周期释放流程：先从角色正式库存精确移出当前 GuardItem，再释放嘴部引用并脱离附件、落地和恢复运行宿主。
-// 内部 FishInventory 从头到尾不迁移；若库存格已被其它事务移除，仍继续收口嘴部与地面状态，避免角色继续占有已落地鱼护。
-void ACatFishGuardActor::ReleaseMouthCarryFromAuthority(const FVector& DropLocation)
+// 鱼护只交出本体实例，内部鱼库存始终保留在原 Actor 上，由公共释放处理本体离库。
+UCatInventoryItemInstance* ACatFishGuardActor::GetCarriedInventoryItem() const { return GuardItem; }
+
+// 本体落地后仅恢复交互探测，根碰撞、速度和复制由共同释放负责。
+void ACatFishGuardActor::OnCarryReleased(ACatCharacter* Character, bool bThrow)
 {
-	if (!HasAuthority()) return;
-	ACatCharacter* Character = Cast<ACatCharacter>(InventoryOwner);
-	if (!Character || Character->GetMouthCarriedActor() != this) return;
-	if (UCatInventoryComponent* CharacterInventory = Character->GetInventoryComponent(); CharacterInventory && GuardItem)
-	{
-		const int32 GuardSlot = CharacterInventory->FindInventorySlotIndexFromInstanceId(GuardItem->GetItemInstanceId());
-		const FCatInventoryEntry* GuardEntry = CharacterInventory->GetInventoryEntryAtSlot(GuardSlot);
-		FCatInventoryEntry RemovedEntry;
-		if (GuardEntry && GuardEntry->Instance == GuardItem && GuardEntry->StackCount == 1)
-		{
-			CharacterInventory->RemoveInventoryEntryAtSlotFromAuthority(GuardSlot, RemovedEntry);
-		}
-	}
-	Character->ReleaseMouthCarriedActorFromAuthority(this);
-	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
-	SetActorLocation(DropLocation, false, nullptr, ETeleportType::TeleportPhysics);
-	if (GuardItem) GuardItem->SetRuntimeOwnerActor(this);
-	WorldCollision->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	InteractionCollision->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-	WorldCollision->SetSimulatePhysics(true);
-	SetActorHiddenInGame(false);
-	ForceNetUpdate();
 }
+
 
 // 拾取流程：依次验证地面、触达、身体、单嘴占用和配置，再让正式背包整件收货；各拒绝原因落盘，满包不变，成功由宿主同步附着原鱼护。
 bool ACatFishGuardActor::PickUpFromAuthority(AController* RequestingController, const FGuid RequestId)
@@ -128,7 +110,7 @@ bool ACatFishGuardActor::PickUpFromAuthority(AController* RequestingController, 
 		return bAccepted;
 	};
 	if (!HasAuthority() || !RequestId.IsValid()) return Finish(false, TEXT("InvalidRequest"));
-	if (!IsGrounded() || !bInteractionEnabled) return Finish(false, TEXT("UnavailableGuard"));
+	if (!IsGrounded() || !bInteractionEnabled || (FishInventory && FishInventory->HasPreparedRemoval())) return Finish(false, TEXT("UnavailableGuard"));
 	if (!Character || !Character->GetConditionComponent() || Character->GetConditionComponent()->GetSnapshot().bDowned)
 		return Finish(false, TEXT("UnavailableCharacter"));
 	if (!IsAuthorityRequestSpatiallyValid(RequestingController)) return Finish(false, TEXT("UnreachableGuard"));

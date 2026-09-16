@@ -1,7 +1,11 @@
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
+#include "GameplayEffectExtension.h"
+#include "AbilitySystemComponent.h"
+#include "AbilitySystem/Effects/CatItemEffectApplication.h"
+#include "Growth/CatGrowthComponent.h"
+#include "GameFramework/Actor.h"
 #include "AbilitySystem/Physics/CatPhysicalEffortComponent.h"
 
-#include "AbilitySystemComponent.h"
 #include "Net/UnrealNetwork.h"
 
 namespace
@@ -125,4 +129,19 @@ void UCatSurvivalAttributeSet::OnRep_YellowFightStamina(const FGameplayAttribute
 		if (AActor* Avatar = ASC->GetAvatarActor())
 			if (auto* Effort = Avatar->FindComponentByClass<UCatPhysicalEffortComponent>())
 				Effort->ObserveStaminaFromReplication(double(GetFightStamina()) + OldYellowFightStamina.GetCurrentValue());
+}
+
+// 经验执行流程：读取 GE 实际求值结果并立即清空元属性；合法来源才交给 Growth，回执用于决定实物事务是否提交。
+void UCatSurvivalAttributeSet::PostGameplayEffectExecute(const FGameplayEffectModCallbackData& Data)
+{
+ Super::PostGameplayEffectExecute(Data);
+ if (Data.EvaluatedData.Attribute != GetIncomingFishExperienceAttribute()) return;
+ const float Amount = GetIncomingFishExperience();
+ SetIncomingFishExperience(0.0f);
+ UCatItemEffectApplication* Application = Cast<UCatItemEffectApplication>(Data.EffectSpec.GetContext().GetSourceObject());
+ AActor* Avatar = Data.Target.GetAvatarActor();
+ UCatGrowthComponent* Growth = Avatar ? Avatar->FindComponentByClass<UCatGrowthComponent>() : nullptr;
+ if (!Application || !Growth || !Avatar->HasAuthority() || !FMath::IsFinite(Amount)
+  || Amount < 0.0f || static_cast<double>(Amount) > MAX_int32) return;
+ Application->Result = Growth->ApplyExperienceFromEffect(Application->RequestId, FMath::FloorToInt(Amount));
 }

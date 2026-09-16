@@ -1,4 +1,5 @@
 #include "Inventory/CatInventoryItemInstance.h"
+#include "Inventory/Fragments/CatConsumableEffectFragment.h"
 #include "Character/CatCharacter.h"
 #include "Inventory/CatInventoryStatics.h"
 #include "Condition/CatConditionComponent.h"
@@ -198,10 +199,10 @@ bool UCatInventoryItemInstance::KeepsInventoryInstanceWhileUsed() const
 	return false;
 }
 
-// 库存实例扣量策略读取流程：普通实例没有消耗语义；数量耗材必须通过专属实例覆盖后才由库存组件扣减。
+// 扣量策略读取流程：基础实例只在定义声明有效消耗片段时扣量；无 Use 配置继续不可用。
 bool UCatInventoryItemInstance::ConsumesInventoryQuantityOnUse() const
 {
-	return false;
+	return GetInventoryUseQuantity() > 0;
 }
 
 // 实例身份恢复流程：只有服务器拥有的实例能接收外部 ID，非法 ID 保持现有身份，避免客户端或坏存档制造无身份物品。
@@ -245,24 +246,63 @@ AActor* UCatInventoryItemInstance::GetRuntimeOwnerActor() const
 	return Cast<AActor>(GetOuter());
 }
 
-// 通用使用预检流程：这里只读条目和使用者，基础实例没有真实物品效果所以默认拒绝；能使用的物品必须在结构化提交入口声明自己的效果。
+// 通用使用预检流程：同一真实条目必须有足够数量且定义效果可用；没有片段的物品不会因此获得默认行为。
 bool UCatInventoryItemInstance::CanUseFromInventory(const FCatInventoryEntry& InventoryEntry, APawn* UserPawn) const
 {
-	(void)InventoryEntry;
-	(void)UserPawn;
-	return false;
+ const UCatConsumableEffectFragment* Effect = ItemDefinition ? ItemDefinition->FindFragment<UCatConsumableEffectFragment>() : nullptr;
+ return InventoryEntry.Instance == this && GetInventoryUseQuantity() > 0
+  && InventoryEntry.StackCount >= GetInventoryUseQuantity() && Effect && Effect->ValidateForUser(UserPawn);
 }
 
-// 结构化使用流程：基础实例仍然拒绝，因为它没有声明任何真实物品效果；返回请求 ID 和错误码，让 UI 只按正式命令回包诊断和刷新。
+// 通用消费流程：核对上下文，复用库存唯一事务暂扣精确实例；实例效果成功才发布扣量，失败与重放沿用事务结果。
 FCatDomainCommandResult UCatInventoryItemInstance::UseFromInventorySlotFromAuthority(
-	const FCatInventoryEntry& InventoryEntry, const FCatInventoryItemUseContext& UseContext)
+ const FCatInventoryEntry& InventoryEntry, const FCatInventoryItemUseContext& UseContext)
 {
-	(void)InventoryEntry;
-	FCatDomainCommandResult Result;
-	Result.RequestId = UseContext.RequestId;
+ FCatDomainCommandResult Result;
+ Result.RequestId = UseContext.RequestId;
+ if (!UseContext.SourceInventory || !UseContext.UserPawn || !UseContext.UserPawn->HasAuthority()
+  || !UseContext.RequestId.IsValid() || InventoryEntry.Instance != this || GetInventoryUseQuantity() <= 0)
+ {
+  Result.Error = ECatDomainCommandError::InvalidPayload;
+  return Result;
+ }
+ const FString Payload = FString::Printf(TEXT("UseSlot=%d|Definition=%s"), UseContext.InventorySlotIndex, *GetPathNameSafe(ItemDefinition));
+ const FCatInventoryItemUseResult Used = UseContext.SourceInventory->UseItemInstanceFromAuthority(
+  UseContext.RequestId, GetItemInstanceId(), GetInventoryUseQuantity(), Payload,
+  [&](FCatInventoryItemUseResult& Mutable)
+  {
+   return CanUseFromInventory(InventoryEntry, UseContext.UserPawn)
+    ? ECatDomainCommandError::None : ECatDomainCommandError::DependencyUnavailable;
+  },
+  [&](FCatInventoryItemUseResult& Mutable)
+  {
+   return CatIsAcceptedDomainCommandResult(ApplyUseEffectsFromAuthority(UseContext));
+  });
+ Result.RequestId = Used.RequestId;
+ Result.bCommitted = Used.bCommitted;
+ Result.bTerminalReplay = Used.bTerminalReplay;
+ Result.bReplayedTerminalCommitted = Used.bReplayedTerminalCommitted;
+ Result.Error = Used.Error;
+ Result.ReplayedTerminalError = Used.ReplayedTerminalError;
+ return Result;
+}
 
-	Result.Error = ECatDomainCommandError::InvalidPayload;
-	return Result;
+// 扣量读取流程：只从当前定义消费片段读取，返回值不持久化也不另存于快捷栏。
+int32 UCatInventoryItemInstance::GetInventoryUseQuantity() const
+{
+ const UCatConsumableEffectFragment* Effect = ItemDefinition ? ItemDefinition->FindFragment<UCatConsumableEffectFragment>() : nullptr;
+ return Effect && Effect->IsRuntimeReady() ? Effect->ConsumeCount : 0;
+}
+
+// 效果提交流程：基础实例不生成玩法参数；需要实例数值的物品覆盖此口，数量始终由调用方事务处理。
+FCatDomainCommandResult UCatInventoryItemInstance::ApplyUseEffectsFromAuthority(const FCatInventoryItemUseContext& UseContext)
+{
+ const UCatConsumableEffectFragment* Effect = ItemDefinition ? ItemDefinition->FindFragment<UCatConsumableEffectFragment>() : nullptr;
+ if (Effect) return Effect->ApplyFromAuthority(UseContext.UserPawn, UseContext.RequestId, this, {});
+ FCatDomainCommandResult Result;
+ Result.RequestId = UseContext.RequestId;
+ Result.Error = ECatDomainCommandError::InvalidPayload;
+ return Result;
 }
 
 // 持续输入声明流程：基础实例没有按住后的第二阶段效果，返回 false 让 Controller 不保留无意义的输入会话。

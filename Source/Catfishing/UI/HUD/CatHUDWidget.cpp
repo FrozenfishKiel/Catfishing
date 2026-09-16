@@ -1,6 +1,5 @@
-#include "UI/HUD/CatHUDWidget.h"
+﻿#include "UI/HUD/CatHUDWidget.h"
 #include "Styling/CoreStyle.h"
-#include "Fishing/Integration/CatFishingAimLibrary.h"
 
 #include "Components/Button.h"
 #include "Components/ProgressBar.h"
@@ -32,7 +31,7 @@ void UCatHUDWidget::AnnounceFishSpeciesDiscovery(const FText& BroadcastText)
 // HUD 渲染流程：缓存 Model 生成的只读投影，按 Designer 真实绑定控件写入天数、调试文本、钓鱼反馈、入口按钮状态和进度条，再触发蓝图扩展点。
 void UCatHUDWidget::RenderHUD(const FCatHUDViewState& ViewState)
 {
-	if (ViewState.bShowPhysicalControls && (!PhysicalControlTextBlock || !PhysicalHandStateTextBlock)
+	if (ViewState.bShowPhysicalControls && !PhysicalHandStateTextBlock
 		&& !bHasLoggedMissingPhysicalControls)
 	{
 		UE_LOG(LogCatUI, Warning,
@@ -52,11 +51,6 @@ void UCatHUDWidget::RenderHUD(const FCatHUDViewState& ViewState)
 			Controller && Controller->HasAuthority(), Controller ? static_cast<int32>(Controller->GetLocalRole()) : INDEX_NONE,
 			Controller && Controller->PlayerState ? Controller->PlayerState->GetPlayerId() : INDEX_NONE,
 			ViewState.bPrimaryRodOperator, ViewState.bLeftHandGripped, ViewState.bRightHandGripped);
-	}
-	if (PhysicalControlTextBlock)
-	{
-		PhysicalControlTextBlock->SetText(ViewState.PhysicalControlText);
-		PhysicalControlTextBlock->SetVisibility(ViewState.bShowPhysicalControls ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 	}
 	if (PhysicalHandStateTextBlock)
 	{
@@ -381,7 +375,7 @@ void UCatHUDWidget::NativeTick(const FGeometry& MyGeometry, const float InDeltaT
 	}
 }
 
-// 准星绘制流程：先让 WBP 和子控件完成绘制；只有 ViewState 明确要求时，才在最终层用本 HUD 的局部中心画四条灰色短线。
+// 状态绘制流程：先绘制 WBP，再按已有投影叠加黄体力、取消进度与准星；不在绘制阶段查找世界目标或生成按键提示。
 // 本 Widget 只会由 LocalPlayer UI 子系统为本地 Controller 创建，不读取 NetMode 或 HasAuthority，远端客户端不会依赖服务器生成 UI。
 int32 UCatHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry,
 	const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, const int32 LayerId,
@@ -401,7 +395,7 @@ int32 UCatHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& Allott
 			FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, FLinearColor(1.0f, 0.78f, 0.12f));
 	}
 	const FVector2D LocalSize = AllottedGeometry.GetLocalSize();
-	// T16，钓鱼规则 §4.7：原生进度条消费服务器复制的保持区间，不依赖本轮不可编辑的 WBP 新插槽。
+	// 取消进度只读取服务器复制的保持区间；进度含义和时长沿用原规则，不在这里附加操作教程。
 	const UWorld* World = GetWorld();
 	const AGameStateBase* GameState = World ? World->GetGameState() : nullptr;
 	const double Now = GameState ? GameState->GetServerWorldTimeSeconds() : World ? World->GetTimeSeconds() : 0.0;
@@ -416,19 +410,6 @@ int32 UCatHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& Allott
 		FSlateDrawElement::MakeLines(OutDrawElements, MaxLayer + 1, Geometry, Track, ESlateDrawEffect::None, FLinearColor(0.15f, 0.15f, 0.15f), true, 8.0f);
 		Track[1] = Left + FVector2D(180.0f * Alpha, 0.0f);
 		FSlateDrawElement::MakeLines(OutDrawElements, MaxLayer + 2, Geometry, Track, ESlateDrawEffect::None, FLinearColor(1.0f, 0.7f, 0.25f), true, 8.0f);
-		FSlateDrawElement::MakeText(OutDrawElements, MaxLayer + 2,
-			AllottedGeometry.ToPaintGeometry(FVector2D(240, 28), FSlateLayoutTransform(Left + FVector2D(0, 12))),
-			FText::FromString(TEXT("收竿放弃 · 松手取消")), FCoreStyle::GetDefaultFontStyle("Regular", 14), ESlateDrawEffect::None, FLinearColor::White);
-	}
-	if (LastHUDViewState.bShowCrosshair)
-	{
-		FVector Origin, Direction;
-		APlayerController* Controller = GetOwningPlayer();
-		if (UCatFishingAimLibrary::TryGetLocalCastViewRay(Controller, Origin, Direction)
-			&& UCatFishingAimLibrary::ResolveFishingViewTarget(Controller, Origin, Direction))
-			FSlateDrawElement::MakeText(OutDrawElements, MaxLayer + 2,
-				AllottedGeometry.ToPaintGeometry(FVector2D(200, 28), FSlateLayoutTransform(LocalSize * 0.5f + FVector2D(16, 16))),
-				FText::FromString(TEXT("F 收鱼")), FCoreStyle::GetDefaultFontStyle("Regular", 14), ESlateDrawEffect::None, FLinearColor::White);
 	}
 
 	if (!LastHUDViewState.bShowCrosshair

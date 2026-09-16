@@ -21,12 +21,13 @@ python <game-toolkit 插件>/skills/layer-contracts/scripts/project_env.py check
 **动手前先读 `Knowledge/Design/README.md`**，那里写了三条数据流——改错地方会被覆盖或被忽略。
 
 - 九册与子页：`Knowledge/Design/GDD 系统分册/`（含「钓鱼规则」＝唯一实现规格书）
-- 裁决账本：`Knowledge/Design/设计修改记录.md`，按日期、最新为准；**判口径以最新裁决为准，
+- 裁决账本「设计修改记录」：只在飞书裁决同步下（https://qcniqd0mjfwg.feishu.cn/wiki/ZNEpwV95CiU8eVkXoN4c0M1Sn8c ，
+  2026-09-15 起仓库不存，新裁决在那页文末追加），按日期、最新为准；**判口径以最新裁决为准，
   不以页面字面为准**
 - 内容表（鱼表格 / 道具四表 / ui 表 / 商店表）：各册子目录下的 `*.csv`。张佳、王甜甜在飞书填，
   定稿拉进仓库；裁决也可以直接改仓库 CSV，两边不一致以仓库为准（2026-09-15 定）
-- 正文（九册、愿景、账本）直接改仓库文件，走 git。飞书同名页只放「规则版摘要」（不镜像正文、不要求一致），大改后用 `Scripts/push_feishu_summary.py` 重推
-- 同步页、程序页、点子、草稿、里程碑只在飞书；仓库不放快照（2026-09-15 起 `_feishu/` 已删）。飞书起草、审核通过才迁入仓库
+- 正文（九册、愿景、参数页）直接改仓库文件，走 git。飞书同名页只放「规则版摘要」（不镜像正文、不要求一致），大改后用 `Scripts/push_feishu_summary.py` 重推
+- 同步页、程序页、点子、草稿、里程碑、裁决账本只在飞书；仓库不放快照（2026-09-15 起 `_feishu/` 已删）。飞书起草、审核通过才迁入仓库
 - `_assets/` 是 45 张配图，原本挂在飞书要登录才打得开
 - 旧的 `Knowledge/GDD/` 快照与 `Knowledge/Feishu/` 镜像都已删除，不要再引用
 

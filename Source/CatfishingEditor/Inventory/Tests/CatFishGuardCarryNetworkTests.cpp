@@ -10,6 +10,9 @@
 #include "Engine/LocalPlayer.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/World.h"
+#include "Engine/NetDriver.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "EngineUtils.h"
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/FileManager.h"
@@ -113,10 +116,10 @@ namespace CatFishGuardCarryNetwork
 		}
 
 		/** 按真实网络时序推进一个连续用例：
-		 * 1. 等正式登录、身体与地图地面就绪，在服务器生成原鱼护并通过既有库存装鱼。
+		 * 1. 等正式登录、身体与地图地面就绪，在服务器生成原鱼护并通过既有库存装鱼；命令行弱网只在初始复制完成后临时加到两端 NetDriver。
 		 * 2. 等初始复制完整才从客户端拾取；收到对应回执后检查两端归属、嘴部附着与原鱼。
 		 * 3. 从客户端背包读取实际槽位和 GUID 发送 Place，等地面、扣格和固定变换收敛后再次拾取。
-		 * 4. 第二次携带收敛后无参通知服务器丢弃当前携带物，分别采样两端释放后的位移，等真实刚体落稳、位置收敛且嘴空。
+		 * 4. 第二次携带收敛后先在库存模态窗口验证 Q 不穿透，再对每次正式 Q 前发送旧代次重复 RPC，等待服务器确认仍叼同一实物后才按真实按键。
 		 * 5. 每次落稳均由拥有客户端重新拾取同一 Actor，连续三次核对原库存、GUID、关闭物理和嘴部附着；权威角色每次移动250厘米，再等客户端角色和鱼护的世界位置共同收敛。
 		 * 6. 第三次重新拾取后的移动收敛后再次丢下，保留原占嘴按钮禁用检查，并从落地原鱼护经真实 Slate 点击取出原鱼和保存前后画面。
 		 * 7. 对同一条原鱼再执行三轮拥有客户端丢弃、物理落地、E 交互再拾取和250厘米移动，确认共同携带基类同时覆盖鱼护与鱼。
@@ -124,6 +127,21 @@ namespace CatFishGuardCarryNetwork
 		bool Update() override
 		{
 			const double Now = FPlatformTime::Seconds();
+			if (DropKeyPressedAt > 0 && Now - DropKeyPressedAt >= 0.15 && ClientController.IsValid())
+			{
+				ClientController->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::Q, IE_Released, 0));
+				DropKeyPressedAt = 0;
+			}
+			// 先让旧代次与重复请求经过真实网络，再确认仍叼着同一实物，随后才发送合法 Q。
+			if (PendingDropAt > 0)
+			{
+				if (Now - PendingDropAt < 0.75) return false;
+				ACatCharacter* AuthorityCat = ServerController.IsValid() ? Cast<ACatCharacter>(ServerController->GetPawn()) : nullptr;
+				if (!Test->TestTrue(TEXT("旧携带代次和重复请求不能丢掉当前实物"), AuthorityCat && AuthorityCat->GetMouthCarriedActor() == ExpectedDropActor.Get())) return true;
+				ClientController->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::Q, IE_Pressed, 1));
+				DropKeyPressedAt = Now;
+				PendingDropAt = 0;
+			}
 			if (StageStartedAt <= 0.0) StageStartedAt = Now;
 			if (Now - StageStartedAt > 45.0)
 			{
@@ -160,6 +178,20 @@ namespace CatFishGuardCarryNetwork
 				if (!ClientGuard.IsValid()) return false;
 				if (!ClientFishInventory.IsValid()) ClientFishInventory = ClientGuard->GetFishInventoryComponent();
 				if (!BothSidesMatch(false, false)) return false;
+				// 弱网开关是本回归的可选压力层；等原鱼护和内鱼先完整复制，再对真实两端 NetDriver 加 100±30ms 与 5% 丢包，恢复命令会撤回设置。
+				if (FParse::Param(FCommandLine::Get(), TEXT("CatCarryWeakNetwork")))
+				{
+					FPacketSimulationSettings Simulation;
+					Simulation.PktLag = 100; Simulation.PktLagVariance = 30; Simulation.PktLoss = 5;
+					UNetDriver* Host = ServerWorld->GetNetDriver();
+					UNetDriver* Remote = ClientWorld->GetNetDriver();
+					if (!Host || !Remote) return false;
+					Host->SetPacketSimulationSettings(Simulation); Remote->SetPacketSimulationSettings(Simulation);
+					if (!Test->TestTrue(TEXT("两端真实网络延迟与丢包设置已生效"), Host->PacketSimulationSettings.PktLag == 100
+						&& Remote->PacketSimulationSettings.PktLag == 100 && Host->PacketSimulationSettings.PktLoss == 5
+						&& Remote->PacketSimulationSettings.PktLoss == 5)) return true;
+					UE_LOG(LogTemp, Display, TEXT("Event=CarryWeakNetworkApplied HostLag=100 RemoteLag=100 Variance=30 Loss=5"));
+				}
 				RequestId = FGuid::NewGuid();
 				ClientController->ServerPickUpFishGuard(ClientGuard.Get(), RequestId);
 				Stage = 2;
@@ -188,8 +220,8 @@ namespace CatFishGuardCarryNetwork
 			if (Stage == 9)
 			{
 				if (!BothSidesFishMatch(true, false)) return false;
-				// 正式 UI 已经把原鱼叼起；此处仍只经拥有客户端调用原有 RPC，避免测试直接操纵附件或刚体绕过网络链路。
-				ClientController->ServerDropCarriedItem();
+				// 正式 UI 已经把原鱼叼起；此处经拥有客户端的正式 Q 映射，避免测试直接操纵附件或刚体绕过网络链路。
+				PressDropKey();
 				Stage = 10;
 				StageStartedAt = Now;
 				StableSince = 0.0;
@@ -236,7 +268,7 @@ namespace CatFishGuardCarryNetwork
 					Test->AddInfo(TEXT("Event=fish_guard_carry_network Result=GuardAndFishCompleteThreeDropRepickMoveRounds Fish=OriginalTwoGUIDs_2.5kg_3.75kg Screenshots=ClientBeforeCarry,ClientAfterCarry"));
 					return true;
 				}
-				ClientController->ServerDropCarriedItem();
+				PressDropKey();
 				Stage = 10;
 				StageStartedAt = Now;
 				StableSince = 0.0;
@@ -273,6 +305,18 @@ namespace CatFishGuardCarryNetwork
 			{
 				if (!BothSidesMatch(true, false)) return false;
 				if (Stage == 2 && !VerifyFormalCarryActionDisabledForOccupiedGuard()) return false;
+				if (Stage == 2 && CarryView.IsValid() && !bModalDropChecked)
+				{
+					if (ModalDropAt <= 0)
+					{
+						ClientController->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::Q, IE_Pressed, 1));
+						DropKeyPressedAt = ModalDropAt = Now;
+						return false;
+					}
+					if (Now - ModalDropAt < 0.75) return false;
+					if (!Test->TestTrue(TEXT("库存模态打开时 Q 不穿透丢弃嘴叼物"), ServerCat->GetMouthCarriedActor() == ServerGuard.Get())) return true;
+					bModalDropChecked = true;
+				}
 				if (Stage == 2 && CarryView.IsValid())
 				{
 					CarryView->RequestCloseInventory();
@@ -302,7 +346,7 @@ namespace CatFishGuardCarryNetwork
 				else if (Stage == 4)
 				{
 					RequestId = FGuid::NewGuid();
-					ClientController->ServerDropCarriedItem();
+					PressDropKey();
 				}
 				else
 				{
@@ -342,7 +386,7 @@ namespace CatFishGuardCarryNetwork
 				if (!bWorldMovementConverged) { StableSince = 0.0; return false; }
 				if (StableSince <= 0.0) StableSince = Now;
 				if (Now - StableSince < 0.25) return false;
-				ClientController->ServerDropCarriedItem();
+				PressDropKey();
 				Stage = 5;
 				StageStartedAt = Now;
 				StableSince = 0.0;
@@ -401,6 +445,30 @@ namespace CatFishGuardCarryNetwork
 		}
 
 	private:
+		/** Q 按下时间；至少跨一个输入帧后松开，确保正式 Enhanced Input 产生 Started。 */
+		double DropKeyPressedAt = 0;
+		/** 旧代次重复 RPC 发出时间；短等待让请求穿过真实网络，再验证服务器嘴部没有变化并转入合法 Q。 */
+		double PendingDropAt = 0;
+		/** 旧代次重复 RPC 前的服务器嘴叼实物；用于判断服务器是否错误地把过期请求作用到当前物体。 */
+		TWeakObjectPtr<AActor> ExpectedDropActor;
+		/** 模态 Q 检查的开始时间；与正常 Q 分离，窗口仍打开时验证不穿透。 */
+		double ModalDropAt = 0;
+		/** 本轮是否已完成模态 Q 验证；避免循环按键妨碍后续正式关闭。 */
+		bool bModalDropChecked = false;
+		/** 正式丢弃入口的准备步骤：若库存窗口仍在则先走原关闭入口，再发两次同 RequestId 的旧代次 RPC；合法 Q 由等待分支确认负向请求无效后再按下。 */
+		void PressDropKey()
+		{
+			if (CarryView.IsValid()) { CarryView->RequestCloseInventory(); CarryView.Reset(); }
+			ACatCharacter* LocalCat = Cast<ACatCharacter>(ClientController->GetPawn());
+			ACatCharacter* AuthorityCat = Cast<ACatCharacter>(ServerController->GetPawn());
+			ACatCarryableActor* Item = LocalCat ? Cast<ACatCarryableActor>(LocalCat->GetMouthCarriedActor()) : nullptr;
+			if (!Item || !AuthorityCat) { Test->AddError(TEXT("Q 测试缺少当前携带对象")); return; }
+			ExpectedDropActor = AuthorityCat->GetMouthCarriedActor();
+			const FGuid StaleRequest = FGuid::NewGuid();
+			ClientController->ServerDropCarriedItem(StaleRequest, Item, Item->GetCarryRevision() - 1);
+			ClientController->ServerDropCarriedItem(StaleRequest, Item, Item->GetCarryRevision() - 1);
+			PendingDropAt = FPlatformTime::Seconds();
+		}
 		/** 定位真实 listen server 与唯一远端，并按有效 UniqueId 匹配权威 PC；等待正式玩法门、落地角色和空嘴。
 		 * 查询角色前方现有地图地面后生成正式 BP，以实际物理根尺寸对齐地面，再经原库存入口加入两条正式鱼。
 		 * 登录尚未完成时重试；资产或地面不满足时报告 stage=0，不修改角色身份、朝向、权限或地图碰撞。 */

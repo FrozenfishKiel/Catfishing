@@ -6,6 +6,11 @@
 
 class AActor;
 class UTexture2D;
+class UCatAbilitySet;
+
+/** 装配型装备 Use 的目标槽；定义显式声明写入位置，运行实例不再按子类或用途猜测。 */
+UENUM(BlueprintType)
+enum class ECatEquipmentLoadoutTargetSlot : uint8 { None, Bait, Float };
 
 /** 一条功能型装备/道具定义；字段只表达玩法用途，不含等级、战力、随机词条或强制升级。 */
 UCLASS(BlueprintType)
@@ -76,6 +81,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Loadout")
 	FName LoadoutSlotId = NAME_None;
 
+	/** 这件装配型装备 Use 后应覆盖的既有钓具槽；作者器为鱼饵/鱼漂写入，其他装备保持 None。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Loadout")
+	ECatEquipmentLoadoutTargetSlot TargetSlot = ECatEquipmentLoadoutTargetSlot::None;
+
 	/** 玩家可见名称；库存格和商店表现读取它，空名称时显示稳定 ID。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation")
 	FText DisplayName;
@@ -107,5 +116,9 @@ public:
 	/** 数据人员对正式定义的显式运行 gate；默认关闭。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Runtime")
 	bool bEnableRuntimeDefinition = false;
+
+	/** 这件装备部署或装备时授予的能力集合；每个 Spec 的 SourceObject 是本件库存实例，撤销随装备生命周期配对完成。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Abilities")
+	TArray<TSoftObjectPtr<UCatAbilitySet>> AbilitySetsToGrant;
 
 };

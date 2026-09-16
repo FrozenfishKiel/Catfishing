@@ -1,9 +1,10 @@
-#include "Fishing/Integration/CatFishingCommandComponent.h"
+﻿#include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Fishing/Integration/CatFishingResolutionSubsystem.h"
 #include "Items/Fish/CatFishPickupActor.h"
 
 #include "GameFramework/PlayerController.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Fishing/InputAbilities/CatFishingChumAbility.h"
 #include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "Character/CatCharacter.h"
@@ -136,9 +137,9 @@ FCatDomainCommandResult UCatFishingCommandComponent::PlaceRodFromInventoryUseOnA
 }
 
 // 窝料持续 Use 开始流程：
-// 1. 先验证组件归属、服务器权威以及本次槽位/实例/定义身份均完整。
-// 2. 再只记录这次开始请求的来源事实和服务器时间，不做弹道、扣量或库存扫描。
-// 3. 重复 Begin 只有在同一请求和同一实例时幂等成功，其余请求拒绝，避免覆盖尚未松开的物品。
+// 1. 先验证组件归属、服务器权威和来源实例身份；UseContext 已由实例保存，Ability 激活后立即冻结它。
+// 2. 再只查找 SourceObject 正是该实例的 Chum AbilitySpec，避免 G 键把背包中所有窝料或默认输入 Ability 一并激活。
+// 3. 最后由服务器激活该 Spec；计时、等待松开和结束提交全部留在 AbilityTask，不在命令组件保存第二份会话状态。
 FCatDomainCommandResult UCatFishingCommandComponent::BeginChumUseFromInventoryOnAuthority(
 	APlayerController* RequestingController, const FCatInventoryItemUseContext& UseContext,
 	const FGuid ChumItemInstanceId, const FName ChumDefinitionId)
@@ -152,50 +153,119 @@ FCatDomainCommandResult UCatFishingCommandComponent::BeginChumUseFromInventoryOn
 		Result.Error = ECatDomainCommandError::InvalidPayload;
 		return Result;
 	}
-	if (ActiveChumUseRequestId.IsValid())
+	ACatCharacter* Character = Cast<ACatCharacter>(RequestingController->GetPawn());
+	UCatAbilitySystemComponent* AbilitySystem = Character ? Character->GetCatAbilitySystemComponent() : nullptr;
+	const FCatInventoryEntry* SourceEntry = UseContext.SourceInventory
+		? UseContext.SourceInventory->GetInventoryEntryAtSlot(UseContext.InventorySlotIndex) : nullptr;
+	UCatInventoryItemInstance* SourceItem = SourceEntry ? SourceEntry->Instance : nullptr;
+	if (!AbilitySystem || !SourceItem || SourceItem->GetItemInstanceId() != ChumItemInstanceId
+		|| SourceItem->GetItemDefinitionId() != ChumDefinitionId)
 	{
-		Result.bCommitted = ActiveChumUseRequestId == UseContext.RequestId
-			&& ActiveChumItemInstanceId == ChumItemInstanceId
-			&& ActiveChumSourceInventory.Get() == UseContext.SourceInventory
-			&& ActiveChumInventorySlotIndex == UseContext.InventorySlotIndex;
-		Result.Error = Result.bCommitted ? ECatDomainCommandError::None : ECatDomainCommandError::InvalidPhase;
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Result;
 	}
-	ChumChargeStartServerTime = GetWorld() ? GetWorld()->GetTimeSeconds() : -1.0;
-	ActiveChumUseRequestId = UseContext.RequestId;
-	ActiveChumItemInstanceId = ChumItemInstanceId;
-	ActiveChumDefinitionId = ChumDefinitionId;
-	ActiveChumSourceInventory = UseContext.SourceInventory;
-	ActiveChumInventorySlotIndex = UseContext.InventorySlotIndex;
-	Result.bCommitted = true;
-	Result.Error = ECatDomainCommandError::None;
+	for (const FGameplayAbilitySpec& Spec : AbilitySystem->GetActivatableAbilities())
+	{
+		if (Spec.SourceObject.Get() != SourceItem || !Spec.Ability
+			|| !Spec.Ability->GetClass()->IsChildOf(UCatGA_FishingChum::StaticClass()))
+		{
+			continue;
+		}
+		// G 的来源 Ability 没有全局 InputTag 路由；先显式标记同一 Spec 正在按住，避免 WaitInputRelease(true) 把首帧误判为已松开。
+		FGameplayAbilitySpec* MutableSpec = AbilitySystem->FindAbilitySpecFromHandle(Spec.Handle);
+		if (MutableSpec)
+		{
+			MutableSpec->InputPressed = true;
+		}
+		Result.bCommitted = Spec.IsActive() || (MutableSpec && AbilitySystem->TryActivateAbility(Spec.Handle));
+		Result.Error = Result.bCommitted ? ECatDomainCommandError::None : ECatDomainCommandError::InvalidPhase;
+		if (Result.bCommitted)
+		{
+			UE_LOG(LogCatFishing, Log, TEXT("Event=chum_source_ability_begin RequestId=%s InstanceId=%s DefinitionId=%s World=%s Authority=1 Result=Activated"),
+				*UseContext.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *ChumItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *ChumDefinitionId.ToString(), *GetNameSafe(GetWorld()));
+		}
+		else
+		{
+			UE_LOG(LogCatFishing, Warning, TEXT("Event=chum_source_ability_begin RequestId=%s InstanceId=%s DefinitionId=%s World=%s Authority=1 Result=Rejected"),
+				*UseContext.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *ChumItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *ChumDefinitionId.ToString(), *GetNameSafe(GetWorld()));
+		}
+		return Result;
+	}
+	Result.Error = ECatDomainCommandError::NotFound;
 	return Result;
 }
 
 // 窝料持续 Use 结束流程：
-// 1. 先要求 Release/Cancel 回到同一个 Request、库存组件和槽位；不匹配时保留原状态，避免旧输入取消新输入。
-// 2. 匹配后立即取出并清空固定事实，保证重复 Release 不能二次投放。
-// 3. Cancel 只返回取消终态；正常结束才把同一槽位、同一实例交给原有蓄力投放计算。
+// 1. 先按同一来源库存重读已固定实例，再只定位该实例对应的活动 Chum AbilitySpec，旧 Request 不会碰到新物品。
+// 2. Cancel 直接取消该 Ability，让 Task 收尾但不进入扣量提交；正常松开只向该 Spec 投递 GAS 标准 InputReleased 事件。
+// 3. WaitInputRelease 在服务器回调中给出服务器时长并触发最终提交，因此这里既不保存时间也不重读蓄力状态。
 FCatDomainCommandResult UCatFishingCommandComponent::EndChumUseFromInventoryOnAuthority(
 	APlayerController* RequestingController, const FCatInventoryItemUseContext& UseContext, const bool bCancelled)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = UseContext.RequestId;
 	if (!RequestingController || RequestingController != GetOwner() || !RequestingController->HasAuthority()
-		|| ActiveChumUseRequestId != UseContext.RequestId || ActiveChumSourceInventory.Get() != UseContext.SourceInventory
-		|| ActiveChumInventorySlotIndex != UseContext.InventorySlotIndex)
+		|| !UseContext.RequestId.IsValid() || !UseContext.SourceInventory)
 	{
 		Result.Error = ECatDomainCommandError::InvalidPayload;
 		return Result;
 	}
-	const double HeldSeconds = ChumChargeStartServerTime >= 0.0 && GetWorld()
-		? GetWorld()->GetTimeSeconds() - ChumChargeStartServerTime : 0.0;
-	const FGuid ChumItemInstanceId = ActiveChumItemInstanceId;
-	const FName ChumDefinitionId = ActiveChumDefinitionId;
-	ClearChumUseState();
-	if (bCancelled)
+	ACatCharacter* Character = Cast<ACatCharacter>(RequestingController->GetPawn());
+	UCatAbilitySystemComponent* AbilitySystem = Character ? Character->GetCatAbilitySystemComponent() : nullptr;
+	if (!AbilitySystem)
 	{
-		Result.Error = ECatDomainCommandError::Cancelled;
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		return Result;
+	}
+	for (FGameplayAbilitySpec& Spec : AbilitySystem->GetActivatableAbilities())
+	{
+		UCatGA_FishingChum* Ability = Spec.GetPrimaryInstance() ? Cast<UCatGA_FishingChum>(Spec.GetPrimaryInstance()) : nullptr;
+		if (!Ability || !Spec.IsActive() || !Ability->MatchesActiveUseRequest(UseContext.RequestId))
+		{
+			continue;
+		}
+		if (bCancelled)
+		{
+			AbilitySystem->CancelAbilityHandle(Spec.Handle);
+			Result.Error = ECatDomainCommandError::Cancelled;
+		}
+		else
+		{
+			Spec.InputPressed = false;
+			AbilitySystem->AbilitySpecInputReleased(Spec);
+			AbilitySystem->InvokeReplicatedEvent(EAbilityGenericReplicatedEvent::InputReleased, Spec.Handle,
+				Ability->GetCurrentActivationInfo().GetActivationPredictionKey());
+			// 服务器 Task 同步完成投放；回执必须反映实际消费事务，发送了 Release 本身不等于使用成功。
+			FCatPlaceChumResult Committed;
+			if (TryGetPlaceChumResult(UseContext.RequestId, Committed))
+			{
+				Result.bCommitted = Committed.bCommitted;
+				Result.Revision = Committed.ChumFieldSetRevision;
+				Result.Error = MapChumUseErrorToDomain(Committed.Error);
+			}
+			else Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		}
+		return Result;
+	}
+	Result.Error = ECatDomainCommandError::NotFound;
+	return Result;
+}
+
+// 窝料提交流程：
+// 1. 只允许拥有本组件的 authority Controller 和完整的已冻结来源事实进入，防止 Ability 外部伪造扣量。
+// 2. 再复用原有 ThrowChum 计算与精确库存事务，保持距离、数量和所有环境校验的数值规则不变。
+// 3. 最后把正式 PlaceChum 回执映射回 Use 合同；没有回执时视为依赖不可用，不猜测成功。
+FCatDomainCommandResult UCatFishingCommandComponent::CommitChumUseFromAbilityOnAuthority(
+	APlayerController* RequestingController, const FCatInventoryItemUseContext& UseContext,
+	const FGuid ChumItemInstanceId, const FName ChumDefinitionId, const double HeldSeconds)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = UseContext.RequestId;
+	if (!RequestingController || RequestingController != GetOwner() || !RequestingController->HasAuthority()
+		|| !UseContext.RequestId.IsValid() || !UseContext.SourceInventory || !ChumItemInstanceId.IsValid()
+		|| ChumDefinitionId.IsNone() || !FMath::IsFinite(HeldSeconds) || HeldSeconds < 0.0)
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
 		return Result;
 	}
 	ThrowChumFromChargeOnAuthority(RequestingController, UseContext, ChumItemInstanceId, ChumDefinitionId, HeldSeconds);
@@ -204,11 +274,9 @@ FCatDomainCommandResult UCatFishingCommandComponent::EndChumUseFromInventoryOnAu
 		Result.bCommitted = ChumResult.bCommitted;
 		Result.Revision = ChumResult.ChumFieldSetRevision;
 		Result.Error = MapChumUseErrorToDomain(ChumResult.Error);
+		return Result;
 	}
-	else
-	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-	}
+	Result.Error = ECatDomainCommandError::DependencyUnavailable;
 	return Result;
 }
 
@@ -276,6 +344,7 @@ void UCatFishingCommandComponent::DeliverResultFromAuthority(const FCatFishingCo
 	}
 }
 
+// 投放回执流程：权威端先记录终态供同栈 Use 收尾读取，再发给拥有者；远端服务器缓存不触发客户端表现。
 void UCatFishingCommandComponent::DeliverPlaceChumResultFromAuthority(const FCatPlaceChumResult& Result)
 {
 	APlayerController* Controller = Cast<APlayerController>(GetOwner());
@@ -294,8 +363,8 @@ void UCatFishingCommandComponent::DeliverPlaceChumResultFromAuthority(const FCat
 			*UEnum::GetValueAsString(Result.Error), *Result.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
 			*ControllerFields);
 	}
-	if (Controller->IsLocalController()) ReceivePlaceChumResultLocally(Result);
-	else ClientReceivePlaceChumResult(Result);
+	ReceivePlaceChumResultLocally(Result);
+	if (!Controller->IsLocalController()) ClientReceivePlaceChumResult(Result);
 }
 
 void UCatFishingCommandComponent::DeliverBeginCastResultFromAuthority(const FCatBeginCastResult& Result)
@@ -447,29 +516,10 @@ void UCatFishingCommandComponent::ResetTransientCommandState()
 	LocalPitchAimRod.Reset();
 	LocalPitchAimEpoch = 0;
 	bLocalPitchAimInitialized = false;
-	LocalChumChargeStartTime = -1.0; // 关卡/会话切换时收起残留的蓄力预览线。
-	ClearChumUseState();
 	ScoopCooldownGate.Reset(); // 世界时间会在旅行时重建，旧世界的绝对时间戳不能带入新地图。
 	ScoopResults.Reset();
 	PendingScoopRequests.Reset();
 	// This component lives on the Controller across pawn changes. Preserve monotonic sequence fences.
-}
-
-// 本地窝料预览流程：按下立刻记本地世界时间供客户端画蓄力线，松开/取消清空；这份表现状态不参与任何服务器裁决。
-void UCatFishingCommandComponent::SetChumUsePreviewActiveLocally(const bool bActive)
-{
-	LocalChumChargeStartTime = bActive && GetWorld() ? GetWorld()->GetTimeSeconds() : -1.0;
-}
-
-// 权威窝料会话清理流程：统一失效时间戳与 Begin 固定的请求、实例、定义、来源和槽位，防止生命周期或取消留下旧会话阻塞下一次 Use。
-void UCatFishingCommandComponent::ClearChumUseState()
-{
-	ChumChargeStartServerTime = -1.0;
-	ActiveChumUseRequestId.Invalidate();
-	ActiveChumItemInstanceId.Invalidate();
-	ActiveChumDefinitionId = NAME_None;
-	ActiveChumSourceInventory.Reset();
-	ActiveChumInventorySlotIndex = INDEX_NONE;
 }
 
 bool UCatFishingCommandComponent::TryGetHeldFightInputStateFromAuthority(bool& OutPrimaryHeld,
@@ -505,7 +555,6 @@ void UCatFishingCommandComponent::ClearHeldInputForLifecycle(const FName Reason)
 	StopLocalRodAimInput();
 	PrimaryActivationCorrelationId.Invalidate();
 	bLocalSlackHeld = false;
-	LocalChumChargeStartTime = -1.0;
 	NextInputSequence = FMath::Max(NextInputSequence, LastServerHeldInputSequence);
 	FCatFishingInputEdge Edge = MakeDiscreteEdge();
 	Edge.InputSequence = ++NextInputSequence; // Two distinct runner edges clear primary and slack atomically in this RPC.
@@ -530,7 +579,6 @@ void UCatFishingCommandComponent::ServerClearHeldInputForLifecycle_Implementatio
 	}
 	const bool bCancelledAim = ServerAimingCorrelationId.IsValid();
 	ServerAimingCorrelationId.Invalidate();
-	ClearChumUseState();
 	bServerPrimaryHeld = false;
 	bServerSlackHeld = false;
 	LastServerHeldInputSequence = Edge.InputSequence;
@@ -884,23 +932,6 @@ FCatFishingInputEdge UCatFishingCommandComponent::SubmitSlackReleased()
 	return Edge;
 }
 
-FCatFishingInputEdge UCatFishingCommandComponent::SubmitChumPressed()
-{
-	FCatFishingInputEdge Edge = MakeDiscreteEdge();
-	// 本地蓄力起点只供抛物线预览用：这一行在主机和客户端都会执行，而权威那份只在服务器上写。
-	LocalChumChargeStartTime = GetWorld() ? GetWorld()->GetTimeSeconds() : -1.0;
-	DispatchAbilityCommand(ECatFishingCommandType::ChumPressed, Edge);
-	return Edge;
-}
-
-FCatFishingInputEdge UCatFishingCommandComponent::SubmitChumReleased()
-{
-	FCatFishingInputEdge Edge = MakeDiscreteEdge();
-	LocalChumChargeStartTime = -1.0; // 松开即收起预览；真正的蓄力时长由服务器那份时间戳换算。
-	DispatchAbilityCommand(ECatFishingCommandType::ChumReleased, Edge);
-	return Edge;
-}
-
 FCatFishingInputEdge UCatFishingCommandComponent::SubmitCancel()
 {
 	FCatFishingInputEdge Edge = MakeDiscreteEdge();
@@ -929,13 +960,6 @@ FCatFishingInputEdge UCatFishingCommandComponent::SubmitScoop()
 	Edge.bHasCastViewRay = UCatFishingAimLibrary::TryGetLocalCastViewRay(Controller, Edge.CastViewOrigin, Edge.CastViewDirection);
 	Edge.FishingTarget = Edge.bHasCastViewRay ? UCatFishingAimLibrary::ResolveFishingViewTarget(Controller, Edge.CastViewOrigin, Edge.CastViewDirection) : nullptr;
 	DispatchAbilityCommand(ECatFishingCommandType::RequestScoop, Edge);
-	return Edge;
-}
-
-FCatFishingInputEdge UCatFishingCommandComponent::SubmitChum()
-{
-	FCatFishingInputEdge Edge = MakeDiscreteEdge();
-	DispatchAbilityCommand(ECatFishingCommandType::PlaceChum, Edge);
 	return Edge;
 }
 
@@ -1079,15 +1103,6 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 	}
 	// 只有当前操竿权下的边沿才能改持续按键；无竿时仍接受 Release 清除物理持有状态。
 	TrackHeldFightInputFromAuthority(CommandType, Edge);
-	if (CommandType == ECatFishingCommandType::CancelFishing)
-	{
-		// X 先作为通用身体动作取消键处理：只取消还停在 GAS 提交窗口里的 BodyAction，不会吞掉后续 Fishing 收竿/会话取消语义。
-		if (UCatAbilitySystemComponent* AbilitySystem =
-			UCatAbilitySystemComponent::FindCatAbilitySystemFromActor(Controller->GetPawn()))
-		{
-			AbilitySystem->CancelBodyActionAbilitiesFromAuthority();
-		}
-	}
 	if (const ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(Controller);
 		!CatController || !CatController->CanForwardFishingCommand())
 	{
@@ -1253,40 +1268,6 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 			PlaceCommand.ExpectedEquipmentRevision = Character && Character->GetEquipmentComponent()
 				? Character->GetEquipmentComponent()->GetSnapshot().Revision : 0;
 			DeliverResultFromAuthority(Fishing->PlaceRod(Controller, PlaceCommand));
-			return;
-		}
-		// Q 打窝蓄力：没有会话、飞行中和等口都可以补窝；咬钩成立之后本人不能再掏窝料，
-		// 补窝与背包里掏别的道具走同一条主动道具闸门（钓鱼规则 §2.1、§3.3），权威拒绝点在 UCatChumPlacementService::PlaceChum。
-		// 这里先拦一道，是为了不让被闸门挡住的猫先进蓄力预览再在松手时被拒。按下只记时刻，松开才投放。
-		if (CommandType == ECatFishingCommandType::ChumPressed
-			|| CommandType == ECatFishingCommandType::ChumReleased)
-		{
-			if (Fishing->IsActiveItemUseBlockedForController(Controller))
-			{
-				ChumChargeStartServerTime = -1.0; // 闸门期间不留蓄力残留，恢复后不会用到过期的按下时刻。
-				UE_LOG(LogCatFishing, Warning,
-					TEXT("Event=chum_rejected Reason=ActiveFishingItemGate Type=%s Request=%s %s"),
-					*UEnum::GetValueAsString(CommandType),
-					*Edge.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-					*CatLogContext::BuildControllerFields(Controller));
-				// 与 PlaceChum 的闸门拒绝用同一个错误码；ECatChumFieldError 没有 InvalidPhase，两端统一收敛到 CommandsClosed。
-				Result.Error = ECatFishingCommandError::CommandsClosed;
-				DeliverResultFromAuthority(Result);
-				return;
-			}
-		}
-		if (CommandType == ECatFishingCommandType::ChumPressed)
-		{
-			// 旧打窝输入不再允许脱离选中库存实例启动蓄力；正式入口由物品 Use 写入固定实例后才会记录服务器时间。
-			Result.Error = ECatFishingCommandError::InvalidPayload;
-			DeliverResultFromAuthority(Result);
-			return;
-		}
-		if (CommandType == ECatFishingCommandType::ChumReleased)
-		{
-			// 旧松开边沿没有 Begin 固定的实例身份，明确拒绝，不能回退到“扫描第一份可用窝料”的历史行为。
-			Result.Error = ECatFishingCommandError::InvalidPayload;
-			DeliverResultFromAuthority(Result);
 			return;
 		}
 		FGuid SessionId;
@@ -1821,6 +1802,7 @@ void UCatFishingCommandComponent::ReceiveResultLocally(const FCatFishingCommandR
 	OnResultReceived.Broadcast(Result);
 }
 
+// 接收流程：各端以同一请求缓存一次终态；服务器的远端 Controller 只缓存，拥有者再投影并广播 UI 结果。
 void UCatFishingCommandComponent::ReceivePlaceChumResultLocally(const FCatPlaceChumResult& Result)
 {
 	if (!IsSupportedOwner() || !Result.RequestId.IsValid()
@@ -1834,6 +1816,8 @@ void UCatFishingCommandComponent::ReceivePlaceChumResultLocally(const FCatPlaceC
 		PlaceChumResultOrder.RemoveAt(0);
 		PlaceChumResultsByRequestId.Remove(Evicted);
 	}
+	const APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	if (Controller && Controller->HasAuthority() && !Controller->IsLocalController()) return;
 	// 同时投影出一份“通用命令结果”；打窝版本来自窝料场集合。
 	FCatFishingCommandResult Common;
 	Common.CommandType = ECatFishingCommandType::PlaceChum;

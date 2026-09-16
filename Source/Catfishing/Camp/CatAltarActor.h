@@ -4,14 +4,16 @@
 #include "GameFramework/Actor.h"
 #include "Interaction/CatInteractable.h"
 #include "Framework/Core/CatRunContracts.h"
+#include "Inventory/CatInventoryComponent.h"
 #include "CatAltarActor.generated.h"
 
 class ACatFishPickupActor;
+class ACatFishGuardActor;
 class ACatCampHubActor;
 class UCatAltarWorldInfoComponent;
 class UStaticMeshComponent;
 
-/** 营地献祭交互点；只负责现场发起与冻结供品，全队确认、GAS 与阶段仍由 GameMode 裁决。 */
+/** 营地献祭交互点；只负责现场发起、预览和冻结现场供品，全队确认、结算写口与阶段切换仍由 GameMode 裁决。 */
 UCLASS()
 class CATFISHING_API ACatAltarActor : public AActor, public ICatInteractable
 {
@@ -36,13 +38,13 @@ public:
 
 	/** 发起确认与冻结供品前验证当前日参数及重量档配置；只读检查，不冻结鱼或消费实物。 */
 	bool CanPrepareOffering(FText& OutError) const;
-	/** 供品集合固定在过渡开始时；仅服务器调用，输出来自落地鱼事实而非客户端数量。 */
+	/** 供品集合固定在过渡开始时；仅服务器调用，输出来自散鱼与地面鱼护内鱼的服务器事实，而非客户端数量。 */
 	bool FreezeOffering(AController* Controller, FGuid RequestId, FCatOfferingSettlementCommand& OutCommand, FText& OutError);
-	/** 黑屏提交前复核同一批鱼；不消费、不修改 GAS，也不再重复裁决全队确认。 */
+	/** 黑屏提交前复核同一批供品；不消费、不写结算，也不再重复裁决全队确认。 */
 	bool ValidateFrozenOffering(AController* Controller, FGuid RequestId, FText& OutError);
-	/** GAS 接受后消费已复核的同一批供品；只由 GameMode 的同步提交段调用。 */
-	bool ConsumeFrozenOffering(AController* Controller, FGuid RequestId);
-	/** 清除本轮冻结供品引用；确认结果归 GameMode 的公开快照，不在祭坛保存第二份状态。 */
+	/** 同步提交段内先预留同一批供品，再执行结算回调；回调接受才真正清空散鱼和鱼护内鱼。 */
+	bool ConsumeFrozenOffering(AController* Controller, FGuid RequestId, TFunction<bool()> CommitSettlement = {});
+	/** 清除本轮冻结供品引用；确认和结算结果归 GameMode 的公开快照，不在祭坛保存第二份状态。 */
 	void ResetOffering();
 
 	/** 读取服务器地面预览；未就绪或配置无效时返回 false 并清零输出，调用方只有在 true 时才能把零解释为空供品。 */
@@ -53,7 +55,7 @@ public:
 	UPROPERTY(EditInstanceOnly, ReplicatedUsing=OnRep_InfoChanged, Category="Altar")
 	TObjectPtr<ACatCampHubActor> CampHub;
 
-	/** 摆鱼范围，单位厘米；设计者按祭坛实例配置，服务器只收范围内地面鱼。 */
+	/** 摆鱼范围，单位厘米；设计者按祭坛实例配置，服务器收范围内散鱼和地面鱼护内的鱼。 */
 	UPROPERTY(EditAnywhere, Category="Altar", meta=(ClampMin="1", Units="cm"))
 	float OfferingRadiusCentimeters = 200.0f;
 	/** 淡出持续秒数；GameMode 在开始时冻结配置，完全遮黑后结算。 */
@@ -67,9 +69,9 @@ public:
 	float FadeInSeconds = 0.4f;
 
 private:
-	/** 冻结与预览共用的服务器地面供品筛选；输出鱼引用、分类数量和点数，不锁鱼或消费；false 时输出可能仅含部分结果，不得提交。 */
-	bool CollectOffering(TArray<TWeakObjectPtr<ACatFishPickupActor>>& OutFish, FCatOfferingSettlementCommand& OutCommand, int32& OutPoints, FText& OutError) const;
-	/** 服务器低频发布实际地面点数；只有值或就绪状态变化时复制并通知本地视图。 */
+	/** 冻结与预览共用的服务器现场供品筛选；输出散鱼引用、鱼护槽快照、分类数量和点数，不锁鱼或消费；false 时不得提交。 */
+	bool CollectOffering(TArray<TWeakObjectPtr<ACatFishPickupActor>>& OutFish, TMap<TWeakObjectPtr<ACatFishGuardActor>, TArray<FCatInventoryEntry>>& OutGuards, FCatOfferingSettlementCommand& OutCommand, int32& OutPoints, FText& OutError) const;
+	/** 服务器低频发布实际现场点数；只有值或就绪状态变化时复制并通知本地视图。 */
 	void RefreshGroundOfferingPreview();
 	/** 展示字段复制到达时通知只读组件；不重新计算客户端供品或人数。 */
 	UFUNCTION()
@@ -77,10 +79,10 @@ private:
 	/** 祭坛自己的只读数据适配器；构造时创建并挂到雕像，字段变化回调通知它刷新，控制器读取其内容，蓝图可调整展示配置。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Altar", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<UCatAltarWorldInfoComponent> WorldInfo;
-	/** 最近一次服务器地面预览是否有效；RefreshGroundOfferingPreview 写入并复制，getter 用它决定能否读取点数，默认 false 表示暂不可用。 */
+	/** 最近一次服务器现场供品预览是否有效；RefreshGroundOfferingPreview 写入并复制，getter 用它决定能否读取点数，默认 false 表示暂不可用。 */
 	UPROPERTY(ReplicatedUsing=OnRep_InfoChanged)
 	bool bGroundOfferingReady = false;
-	/** 当前地面候选供品的总点数；服务器预览入口写入并复制，getter 仅在就绪时公开，不代表已提交或缸内储备，无效时保存零。 */
+	/** 当前散鱼和地面鱼护内候选供品的总点数；服务器预览入口写入并复制，getter 仅在就绪时公开，不代表已提交或缸内储备，无效时保存零。 */
 	UPROPERTY(ReplicatedUsing=OnRep_InfoChanged)
 	int32 GroundOfferingPoints = 0;
 	/** 可由关卡设置雕像网格的根组件；负责通用交互射线命中，不生成替代美术。 */
@@ -88,6 +90,10 @@ private:
 	TObjectPtr<UStaticMeshComponent> StatueMesh;
 	/** 同一批供品的关联标识；由冻结入口写入，消费与清理必须匹配它。 */
 	FGuid OfferingRequestId;
-	/** 过渡开始时范围内落地鱼的弱引用；不拥有鱼生命周期，也不复制或建立新库存。 */
+	/** 过渡开始时范围内散鱼的弱引用；不拥有鱼生命周期，也不复制或建立新库存。 */
 	TArray<TWeakObjectPtr<ACatFishPickupActor>> FrozenFish;
+	/** 正式过场开始时各地面鱼护的原槽快照；记录护内鱼实例和数量用于复核与整批移除，不构成另一份可操作库存。 */
+	TMap<TWeakObjectPtr<ACatFishGuardActor>, TArray<FCatInventoryEntry>> FrozenGuards;
+	/** 本祭坛是否正在同步提交冻结批次；阻止结算回调重入同一批或 ResetOffering 清掉正在配对完成的预留。 */
+	bool bOfferingCommitInProgress = false;
 };

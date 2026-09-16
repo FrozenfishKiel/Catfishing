@@ -5,6 +5,8 @@
 
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Camp/CatAltarActor.h"
+#include "FishContainers/CatFishGuardActor.h"
+#include "Inventory/CatFishOnlyInventoryComponent.h"
 #include "Character/CatCharacter.h"
 #include "Components/Border.h"
 #include "Components/PrimitiveComponent.h"
@@ -92,6 +94,7 @@ namespace CatAltarConfirmationTests
 		~FVerifyAltarConfirmation() override
 		{
 			if (OfferingFish.IsValid()) OfferingFish->Destroy();
+			if (OfferingGuard.IsValid()) OfferingGuard->Destroy();
 			if (Altar.IsValid()) Altar->Destroy();
 			if (ServerShopKiosk.IsValid()) ServerShopKiosk->Destroy();
 		}
@@ -553,7 +556,7 @@ namespace CatAltarConfirmationTests
 			return false;
 		}
 
-		/** 等待既有过场自行提交和收口，检查同一请求只消费一次并释放两端输入锁；随后让最后远端正式离局，验证单人发起会立即接受。 */
+		/** 等待既有过场自行提交和收口，检查同一请求只消费一次、散鱼消失、两端鱼护库存清空并释放输入锁；随后让最后远端正式离局，验证单人发起会立即接受。 */
 		bool VerifyCommittedTransitionAndBeginSinglePlayerRequest()
 		{
 			WaitingFor = TEXT("existing day transition commit, fish consumption, phase advance and local input-lock release");
@@ -563,6 +566,14 @@ namespace CatAltarConfirmationTests
 			if (!Run.DayTransition.bCommitted || Run.DayTransition.RequestId != FinalRequestId || Run.DayTransition.bActive
 				|| OfferingFish.IsValid() || !ClientState || ClientState->GetRunPublicState().DayTransition.bActive
 				|| HostController->IsDayTransitionInputBlocked() || ClientOneController->IsDayTransitionInputBlocked()) return false;
+			// 等服务器鱼护和按同名 Actor 找到的远端鱼护库存一起清空，不能用结算回执代替库存复制到达。
+			if (!OfferingGuard.IsValid() || !OfferingGuard->IsGrounded() || OfferingGuard->GetFishInventoryComponent()->HasItemAtSlot(0)) return false;
+			bool bRemoteGuardEmpty = false;
+			for (TActorIterator<ACatFishGuardActor> It(ClientOneController->GetWorld()); It; ++It)
+			{
+				if (It->GetFName() == OfferingGuard->GetFName()) bRemoteGuardEmpty = It->IsGrounded() && !It->GetFishInventoryComponent()->HasItemAtSlot(0);
+			}
+			if (!bRemoteGuardEmpty) return false;
 			if (!bIssuedSinglePlayerLogout)
 			{
 				if (!Test->TestTrue(TEXT("committed transition reaches the next playable day or an explicit settlement end state"),
@@ -598,19 +609,20 @@ namespace CatAltarConfirmationTests
 			return false;
 		}
 
-		/** 等待单人轮沿同一条既有过场完成提交；测试在祭坛和供品仍有效时收口，避免 EndPIE 销毁 Actor 被误记成业务失败。 */
+		/** 等待单人轮沿同一条既有过场完成提交；测试在散鱼已消费、鱼护本体仍有效且库存清空时收口，避免 EndPIE 销毁 Actor 被误记成业务失败。 */
 		bool VerifySinglePlayerTransitionCommitted()
 		{
 			WaitingFor = TEXT("single-player day transition commit and cleanup before EndPIE");
 			const FCatRunPublicState& Run = ServerMode->GetRunPublicState();
 			if (!Run.DayTransition.bCommitted || Run.DayTransition.RequestId != SinglePlayerRequestId || Run.DayTransition.bActive
-				|| OfferingFish.IsValid() || HostController->IsDayTransitionInputBlocked()) return false;
+				|| OfferingFish.IsValid() || HostController->IsDayTransitionInputBlocked()
+				|| !OfferingGuard.IsValid() || OfferingGuard->GetFishInventoryComponent()->HasItemAtSlot(0)) return false;
 			Test->AddInfo(FString::Printf(TEXT("Event=formal_altar_confirmation Result=RemoteConfirmWithdrawTimeoutLifecycleCommitAndSinglePlayer RequestId=%s"),
 				*SinglePlayerRequestId.ToString(EGuidFormats::DigitsWithHyphens)));
 			return true;
 		}
 
-		/** 在祭坛供品半径中放入项目真实鱼定义和实例；取消路径每次都以这个同一 Actor 证明没有提前消费。 */
+		/** 在祭坛供品半径中放入项目真实散鱼和带库存鱼护；取消路径以散鱼仍在证明未提前消费，正式提交后用鱼护库存清空证明整批结算。 */
 		bool SeedGroundOffering(ACatAltarActor& InAltar)
 		{
 			UCatFishDefinition* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatFishDefinition>(TEXT("SilvermoonTrout"));
@@ -635,6 +647,17 @@ namespace CatAltarConfirmationTests
 			Fish->bAlwaysRelevant = true;
 			Fish->ForceNetUpdate();
 			OfferingFish = Fish;
+			// 散鱼与鱼护共同参与同一正式结算；每轮复用已清空的鱼护，只新增这一轮要被整批消费的真实鱼实例。
+			// 放在左侧保留玩家到祭坛以及右侧配置失败祭坛的真实视线，不能让测试供品挡住发起交互。
+			if (!OfferingGuard.IsValid()) OfferingGuard = ServerWorld->SpawnActor<ACatFishGuardActor>(InAltar.GetActorLocation() + FVector(0, -120, 40), FRotator::ZeroRotator);
+			if (!Test->TestNotNull(TEXT("正式供品范围内生成地面鱼护"), OfferingGuard.Get())) return false;
+			UCatInventoryComponent* GuardInventory = OfferingGuard->GetFishInventoryComponent();
+			UCatFishInventoryItemInstance* GuardFish = NewObject<UCatFishInventoryItemInstance>(OfferingGuard.Get());
+			GuardFish->SetItemDefinition(Definition);
+			GuardFish->InitializeFishFromAuthority(FGuid::NewGuid(), FGuid::NewGuid(), TEXT("AltarGuardNetwork"), 2.5);
+			if (!Test->TestTrue(TEXT("鱼护装入本轮原鱼实例"), GuardInventory && GuardInventory->AddItemInstance(GuardFish, 1))) return false;
+			OfferingGuard->bAlwaysRelevant = true;
+			OfferingGuard->ForceNetUpdate();
 			return true;
 		}
 
@@ -892,8 +915,10 @@ namespace CatAltarConfirmationTests
 		TWeakObjectPtr<ACatShopKioskActor> ServerShopKiosk;
 		/** 服务器摊位的稳定位置；客户端用复制后的同位置 Actor 查找自己的本地交互组件和 PageController。 */
 		FVector ShopKioskLocation = FVector::ZeroVector;
-		/** 同一条真实地面供品；每次取消后检查它仍有效，最终确认前仍存在以证明等待阶段没有扣鱼。 */
+		/** 同一条真实地面散鱼供品；每次取消后检查它仍有效，最终确认前仍存在以证明等待阶段没有扣鱼。 */
 		TWeakObjectPtr<ACatFishPickupActor> OfferingFish;
+		/** 参与同批献祭的原地面鱼护；正式提交后本体应留在地面且两端真实库存清空，析构只回收这个测试 Actor。 */
+		TWeakObjectPtr<ACatFishGuardActor> OfferingGuard;
 		/** 已取得键盘焦点的正式库存 WBP；首轮通过它的 PreviewKeyDown 把 F8/F9 转交给 Controller，析构时由 LocalPlayer UI 正式回收。 */
 		TWeakObjectPtr<UCatInventoryWidget> InputForwardingInventory;
 		/** 已取得键盘焦点的正式商店 WBP；库存撤回之后由它的 PreviewKeyDown 再转交同一玩家的 F8/F9，不构造替代界面。 */

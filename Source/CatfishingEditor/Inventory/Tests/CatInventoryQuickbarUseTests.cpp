@@ -8,6 +8,8 @@
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "Character/CatCharacter.h"
+#include "AbilitySystem/Fishing/InputAbilities/CatFishingChumAbility.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Inventory/CatBackPackComponent.h"
@@ -16,6 +18,18 @@
 
 namespace CatInventoryQuickbarUseTests
 {
+	/** 读取精确来源实例的活动 Chum Spec 与 WaitInputRelease 状态；测试不再依赖 CommandComponent 的影子蓄力时间。 */
+	bool IsChumUseWaiting(ACatCharacter* Character, UCatInventoryComponent* Inventory, const FGuid InstanceId, const FGuid RequestId)
+	{
+		const FCatInventoryEntry* Entry = Inventory ? Inventory->GetInventoryEntryAtSlot(Inventory->FindInventorySlotIndexFromInstanceId(InstanceId)) : nullptr;
+		const UCatAbilitySystemComponent* ASC = Character ? Character->GetCatAbilitySystemComponent() : nullptr;
+		if (!Entry || !Entry->Instance || !ASC) return false;
+		for (const FGameplayAbilitySpec& Spec : ASC->GetActivatableAbilities())
+			if (Spec.SourceObject.Get() == Entry->Instance && Spec.IsActive())
+				if (const UCatGA_FishingChum* Ability = Cast<UCatGA_FishingChum>(Spec.GetPrimaryInstance()))
+					return (!RequestId.IsValid() || Ability->MatchesActiveUseRequest(RequestId)) && Ability->IsWaitingForInputRelease();
+		return false;
+	}
 	/** PIE 设置恢复命令：保存本测试临时覆盖的网络拓扑，结束后还原编辑器原有运行偏好。 */
 	class FRestoreSettings final : public IAutomationLatentCommand
 	{
@@ -72,9 +86,10 @@ namespace CatInventoryQuickbarUseTests
 			}
 			if (FPlatformTime::Seconds() - StartedAt > 20.0)
 			{
+				ACatCharacter* TimeoutCharacter = HostController.IsValid() ? Cast<ACatCharacter>(HostController->GetPawn()) : nullptr;
 				Test->AddError(FString::Printf(TEXT("Quickbar selected-use formal timeout Stage=%d Server=%s Controller=%s Backpack=%s Charge=%.3f"),
 					Stage, *GetNameSafe(ServerWorld.Get()), *GetNameSafe(HostController.Get()), *GetNameSafe(BackPack.Get()),
-					Commands.IsValid() ? Commands->GetChumChargeStartServerTime() : -1.0));
+					IsChumUseWaiting(TimeoutCharacter, BackPack.Get(), FirstChumId, FirstChumRequestId) ? 1.0 : -1.0));
 				return true;
 			}
 
@@ -177,7 +192,7 @@ namespace CatInventoryQuickbarUseTests
 		bool VerifyMismatchedSlotRejected()
 		{
 			HostController->ServerUseSelectedBackpackItem(FGuid::NewGuid(), FirstChumSlot, SecondChumId);
-			if (!Test->TestTrue(TEXT("slot/item mismatch does not begin a chum use"), Commands->GetChumChargeStartServerTime() < 0.0))
+			if (!Test->TestFalse(TEXT("slot/item mismatch does not begin a source chum ability"), IsChumUseWaiting(Cast<ACatCharacter>(HostController->GetPawn()), BackPack.Get(), FirstChumId, FGuid())))
 			{
 				return true;
 			}
@@ -191,14 +206,14 @@ namespace CatInventoryQuickbarUseTests
 			FirstChumRequestId = FGuid::NewGuid();
 			HostController->ServerUseSelectedBackpackItem(FirstChumRequestId, FirstChumSlot, FirstChumId);
 			if (!Test->TestTrue(TEXT("listen host begins the first formal chum through selected-use gateway"),
-				Commands->GetChumChargeStartServerTime() >= 0.0))
+				IsChumUseWaiting(Cast<ACatCharacter>(HostController->GetPawn()), BackPack.Get(), FirstChumId, FirstChumRequestId)))
 			{
 				return true;
 			}
 			HostController->ServerUseSelectedBackpackItem(FirstChumRequestId, FirstChumSlot, FirstChumId);
 			const FCatInventoryEntry* FirstChumAfterReplay = BackPack->GetInventoryEntryAtSlot(FirstChumSlot);
 			if (!Test->TestTrue(TEXT("replaying the same request keeps one active formal chum session"),
-				Commands->GetChumChargeStartServerTime() >= 0.0)
+				IsChumUseWaiting(Cast<ACatCharacter>(HostController->GetPawn()), BackPack.Get(), FirstChumId, FirstChumRequestId))
 				|| !Test->TestNotNull(TEXT("replay keeps the original formal chum entry readable"), FirstChumAfterReplay)
 				|| !Test->TestEqual(TEXT("replaying continuous Begin does not consume the formal chum twice"),
 					FirstChumAfterReplay->StackCount, FirstChumInitialCount))
@@ -219,13 +234,13 @@ namespace CatInventoryQuickbarUseTests
 			}
 			HostController->ServerUseSelectedBackpackItem(FGuid::NewGuid(), FirstChumSlot, FirstChumId);
 			if (!Test->TestTrue(TEXT("old slot plus original item identity is rejected after the swap"),
-				Commands->GetChumChargeStartServerTime() >= 0.0))
+				IsChumUseWaiting(Cast<ACatCharacter>(HostController->GetPawn()), BackPack.Get(), FirstChumId, FirstChumRequestId)))
 			{
 				return true;
 			}
 			HostController->ServerEndSelectedBackpackItem(FirstChumRequestId, FirstChumId, true);
 			if (!Test->TestTrue(TEXT("changing slots does not redirect cancel and the original chum session closes"),
-				Commands->GetChumChargeStartServerTime() < 0.0))
+				!IsChumUseWaiting(Cast<ACatCharacter>(HostController->GetPawn()), BackPack.Get(), FirstChumId, FirstChumRequestId)))
 			{
 				return true;
 			}
@@ -239,7 +254,7 @@ namespace CatInventoryQuickbarUseTests
 			const int32 CurrentSecondChumSlot = BackPack->FindInventorySlotIndexFromInstanceId(SecondChumId);
 			SecondChumRequestId = FGuid::NewGuid();
 			HostController->ServerUseSelectedBackpackItem(SecondChumRequestId, CurrentSecondChumSlot, SecondChumId);
-			if (!Test->TestTrue(TEXT("the second formal chum begins before removal"), Commands->GetChumChargeStartServerTime() >= 0.0))
+			if (!Test->TestTrue(TEXT("the second formal chum begins before removal"), IsChumUseWaiting(Cast<ACatCharacter>(HostController->GetPawn()), BackPack.Get(), SecondChumId, SecondChumRequestId)))
 			{
 				return true;
 			}
@@ -251,7 +266,7 @@ namespace CatInventoryQuickbarUseTests
 			}
 			HostController->ServerEndSelectedBackpackItem(SecondChumRequestId, SecondChumId, true);
 			if (!Test->TestTrue(TEXT("removed active chum still cancels the original command session"),
-				Commands->GetChumChargeStartServerTime() < 0.0))
+				!IsChumUseWaiting(Cast<ACatCharacter>(HostController->GetPawn()), BackPack.Get(), SecondChumId, SecondChumRequestId)))
 			{
 				return true;
 			}
@@ -269,13 +284,13 @@ namespace CatInventoryQuickbarUseTests
 				return true;
 			}
 			HostController->BeginSelectedItemUseFromInput();
-			if (!Test->TestTrue(TEXT("remaining formal chum can begin after moved-item cancellation"),
-				Commands->GetChumChargeStartServerTime() >= 0.0 && Commands->GetLocalChumChargeStartTime() >= 0.0))
+			if (!Test->TestTrue(TEXT("remaining formal chum activates its source ability after moved-item cancellation"),
+				IsChumUseWaiting(Cast<ACatCharacter>(HostController->GetPawn()), BackPack.Get(), FirstChumId, FGuid())))
 			{
 				return true;
 			}
 			HostController->EndSelectedItemUseFromInput(false);
-			if (!Test->TestTrue(TEXT("listen-host release clears the local chum preview"), Commands->GetLocalChumChargeStartTime() < 0.0)) return true;
+			if (!Test->TestFalse(TEXT("listen-host release ends the source ability task"), IsChumUseWaiting(Cast<ACatCharacter>(HostController->GetPawn()), BackPack.Get(), FirstChumId, FGuid()))) return true;
 			Stage = 7;
 			return false;
 		}
@@ -283,8 +298,8 @@ namespace CatInventoryQuickbarUseTests
 		/** 正常 Release 后只检查连续会话已收口；投放结果继续由正式水域、弹道和库存事务决定，不在测试里伪造。 */
 		bool VerifyNormalReleaseCompleted()
 		{
-			return Test->TestTrue(TEXT("listen-host normal release clears the original continuous chum session"),
-				Commands->GetChumChargeStartServerTime() < 0.0);
+			return Test->TestFalse(TEXT("listen-host normal release clears the original continuous chum session"),
+				IsChumUseWaiting(Cast<ACatCharacter>(HostController->GetPawn()), BackPack.Get(), FirstChumId, FGuid()));
 		}
 
 		/** Automation 断言出口；所有失败都写入同一个测试实例。 */

@@ -38,9 +38,8 @@ public:
 	ECatDomainCommandError ValidateFishGrowth(const UCatFishDefinition* FishDefinition,
 		double WeightKilograms) const;
 
-	/** 实物鱼消费提交后按同一个 RequestId 增加经验（系数×重量）；重复 RequestId 只重放终态，不重复发槽。 */
-	FCatDomainCommandResult ApplyCommittedFish(FGuid RequestId, const UCatFishDefinition* FishDefinition,
-		double WeightKilograms);
+	/** 接收 GE 元属性已经求值的本次整数经验；同一事务只推进一次原有经验槽和三选一流程。 */
+	FCatDomainCommandResult ApplyExperienceFromEffect(FGuid RequestId, int32 ExperienceAmount);
 
 	/**
 	 * 玩家从当前这组三选一里选中一项。只接受拥有本 Character 的 Controller、当前组序号与仍在池里的那三项之一；

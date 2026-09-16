@@ -1,14 +1,22 @@
 ﻿#include "CatInventoryActionsAuthoringLibrary.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetToolsModule.h"
+#include "AbilitySystem/Config/CatAbilitySettings.h"
+#include "AbilitySystem/Config/CatAbilitySet.h"
+#include "AbilitySystem/BodyAction/CatCancelBodyActionAbility.h"
+#include "AbilitySystem/Fishing/InputAbilities/CatFishingChumAbility.h"
+#include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "Data/CatFishDefinition.h"
 #include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentUseItemInstances.h"
 #include "Inventory/CatInventoryItemDefinition.h"
 #include "Inventory/CatInventoryItemInstance.h"
 #include "Misc/PackageName.h"
 #include "Modules/ModuleManager.h"
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
+#include "Factories/DataAssetFactory.h"
 
 /** 库存动作资产迁移的独立日志分类；每个资产都写出推导语义、变更和保存结果，便于审核一次性脚本没有靠 UI 猜测。 */
 DEFINE_LOG_CATEGORY_STATIC(LogCatInventoryActionsAuthoring, Log, All);
@@ -42,6 +50,14 @@ namespace CatInventoryActionsAuthoring
 		return UPackage::SavePackage(Definition.GetOutermost(), &Definition, *Filename, SaveArgs);
 	}
 
+	bool SaveAuthoringAsset(UObject& Asset)
+	{
+		Asset.MarkPackageDirty();
+		FSavePackageArgs Args; Args.TopLevelFlags = RF_Public | RF_Standalone; Args.SaveFlags = SAVE_NoError;
+		const FString Filename = FPackageName::LongPackageNameToFilename(Asset.GetOutermost()->GetName(), FPackageName::GetAssetPackageExtension());
+		return UPackage::SavePackage(Asset.GetOutermost(), &Asset, *Filename, Args);
+	}
+
 	/** 一次性迁移旧资产的操作声明；公共和鱼清单直接取各定义的默认配置，避免迁移器维护另一份动作顺序。 */
 	TArray<FCatInventoryActionDefinition> DetermineActions(const UCatInventoryItemDefinition& Definition, FString& OutKind)
 	{
@@ -62,6 +78,89 @@ namespace CatInventoryActionsAuthoring
 		OutKind = bSupportsUse ? TEXT("EquipmentUseInstance") : TEXT("OrdinaryWorldActions");
 		return Actions;
 	}
+}
+
+// 装备行为实例迁移流程：片段已经是既有资产的功能事实；只为可识别的五种装备写入匹配实例类，普通装备不改 PreferredInstanceType。
+bool UCatInventoryActionsAuthoringLibrary::MigrateFormalEquipmentUseInstanceTypes()
+{
+	FAssetRegistryModule& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+	TArray<FAssetData> Assets;
+	Registry.Get().GetAssetsByClass(UCatEquipmentDefinition::StaticClass()->GetClassPathName(), Assets, true);
+	bool bSucceeded = true;
+	for (const FAssetData& Asset : Assets)
+	{
+		UCatEquipmentDefinition* Definition = Cast<UCatEquipmentDefinition>(Asset.GetAsset());
+		if (!Definition) { bSucceeded = false; continue; }
+		TSubclassOf<UCatInventoryItemInstance> Expected = nullptr;
+		if (Definition->CanServeFishingRod()) Expected = UCatFishingRodEquipmentItemInstance::StaticClass();
+		else if (Definition->CanServeFishingBait() || Definition->CanServeFishingFloat()) Expected = UCatLoadoutEquipmentItemInstance::StaticClass();
+		else if (Definition->CanServeScoopNet()) Expected = UCatScoopNetEquipmentItemInstance::StaticClass();
+		else if (Definition->CanServeChumPlacement()) Expected = UCatChumEquipmentItemInstance::StaticClass();
+		if (!Expected) continue;
+		const ECatEquipmentLoadoutTargetSlot ExpectedSlot = Definition->CanServeFishingBait() ? ECatEquipmentLoadoutTargetSlot::Bait : Definition->CanServeFishingFloat() ? ECatEquipmentLoadoutTargetSlot::Float : ECatEquipmentLoadoutTargetSlot::None;
+		const bool bChanged = Definition->PreferredInstanceType != Expected || Definition->TargetSlot != ExpectedSlot;
+		const bool bSaved = !bChanged || (Definition->Modify(), Definition->PreferredInstanceType = Expected, Definition->TargetSlot = ExpectedSlot, CatInventoryActionsAuthoring::SaveDefinition(*Definition));
+		if (bSaved)
+		{
+			UE_LOG(LogCatInventoryActionsAuthoring, Display, TEXT("Event=equipment_use_instance_migration Asset=%s Class=%s Changed=%d Saved=1"), *Definition->GetPathName(), *GetNameSafe(Expected.Get()), bChanged);
+		}
+		else
+		{
+			UE_LOG(LogCatInventoryActionsAuthoring, Error, TEXT("Event=equipment_use_instance_migration Asset=%s Class=%s Changed=%d Saved=0"), *Definition->GetPathName(), *GetNameSafe(Expected.Get()), bChanged);
+		}
+		bSucceeded &= bSaved;
+	}
+
+	return bSucceeded;
+}
+
+bool UCatInventoryActionsAuthoringLibrary::MigrateEquipmentAbilitySetGrants()
+{
+	// 能力资产迁移流程：默认角色集合从实时 Settings 解析，避免作者器把开发机上的历史路径写回正式资产。
+	const UCatAbilitySettings* Settings = GetDefault<UCatAbilitySettings>();
+	UCatAbilitySet* DefaultSet = Settings ? Settings->DefaultAbilitySet.LoadSynchronous() : nullptr;
+	if (!DefaultSet) return false;
+	IAssetTools& Tools = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get();
+	auto CreateSet = [&Tools](const TCHAR* Name) -> UCatAbilitySet*
+	{
+		const FString PackagePath = TEXT("/Game/Data/Abilities");
+		const FString ObjectPath = PackagePath + TEXT("/") + Name + TEXT(".") + Name;
+		if (UCatAbilitySet* Existing = LoadObject<UCatAbilitySet>(nullptr, *ObjectPath)) return Existing;
+		UDataAssetFactory* Factory = NewObject<UDataAssetFactory>(); Factory->DataAssetClass = UCatAbilitySet::StaticClass();
+		return Cast<UCatAbilitySet>(Tools.CreateAsset(Name, PackagePath, UCatAbilitySet::StaticClass(), Factory));
+	};
+	UCatAbilitySet* RodSet = CreateSet(TEXT("DA_CatAbilitySet_RodOperations"));
+	UCatAbilitySet* ChumSet = CreateSet(TEXT("DA_CatAbilitySet_ChumUse"));
+	if (!RodSet || !ChumSet) return false;
+	const TSet<FGameplayTag> RodTags = { CatFishingAbilityTags::Input_Fishing_Primary, CatFishingAbilityTags::Input_Fishing_Slack, CatFishingAbilityTags::Input_Fishing_Cancel };
+	const TArray<FCatAbilitySetAbility> RodEntries = DefaultSet->GrantedAbilities.FilterByPredicate([&RodTags](const FCatAbilitySetAbility& Entry) { return RodTags.Contains(Entry.InputTag) && Entry.Ability != UCatGA_CancelBodyAction::StaticClass(); });
+	if (RodEntries.Num() == 3) RodSet->GrantedAbilities = RodEntries;
+	else if (!RodEntries.IsEmpty()) return false;
+	ChumSet->GrantedAbilities.Reset();
+	FCatAbilitySetAbility ChumEntry; ChumEntry.Ability = UCatGA_FishingChum::StaticClass(); ChumEntry.Level = 1; ChumEntry.InputTag = FGameplayTag(); ChumEntry.ActivationPolicy = ECatAbilityActivationPolicy::OnInputTriggered;
+	ChumSet->GrantedAbilities.Add(ChumEntry);
+	if (RodSet->GrantedAbilities.Num() != 3) return false;
+	DefaultSet->GrantedAbilities.RemoveAll([&RodTags](const FCatAbilitySetAbility& Entry)
+	{
+		return RodTags.Contains(Entry.InputTag) || Entry.InputTag == CatFishingAbilityTags::Input_Fishing_RodInteract || Entry.Ability == UCatGA_FishingChum::StaticClass();
+	});
+	DefaultSet->GrantedAbilities.RemoveAll([](const FCatAbilitySetAbility& Entry) { return Entry.Ability == UCatGA_CancelBodyAction::StaticClass(); });
+	FCatAbilitySetAbility CancelEntry; CancelEntry.Ability = UCatGA_CancelBodyAction::StaticClass(); CancelEntry.Level = 1;
+	CancelEntry.InputTag = CatFishingAbilityTags::Input_Fishing_Cancel; CancelEntry.ActivationPolicy = ECatAbilityActivationPolicy::OnInputTriggered;
+	DefaultSet->GrantedAbilities.Add(CancelEntry);
+	bool bSucceeded = CatInventoryActionsAuthoring::SaveAuthoringAsset(*DefaultSet) && CatInventoryActionsAuthoring::SaveAuthoringAsset(*RodSet) && CatInventoryActionsAuthoring::SaveAuthoringAsset(*ChumSet);
+	FAssetRegistryModule& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")); TArray<FAssetData> Assets;
+	Registry.Get().GetAssetsByClass(UCatEquipmentDefinition::StaticClass()->GetClassPathName(), Assets, true);
+	for (const FAssetData& Asset : Assets)
+	{
+		UCatEquipmentDefinition* Definition = Cast<UCatEquipmentDefinition>(Asset.GetAsset()); if (!Definition) { bSucceeded = false; continue; }
+		TArray<TSoftObjectPtr<UCatAbilitySet>> Expected;
+		if (Definition->CanServeFishingRod()) Expected.Add(RodSet);
+		if (Definition->CanServeChumPlacement()) Expected.Add(ChumSet);
+		if (Expected.IsEmpty()) continue;
+		if (Definition->AbilitySetsToGrant != Expected) { Definition->Modify(); Definition->AbilitySetsToGrant = Expected; bSucceeded &= CatInventoryActionsAuthoring::SaveDefinition(*Definition); }
+	}
+	return bSucceeded;
 }
 
 // 正式库存动作迁移流程：

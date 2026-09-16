@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Data/CatFishDefinition.h"
@@ -61,18 +61,17 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Fish")
 	FCatFishThrowEffect GetThrowEffect() const;
 
-	/** 鱼 Use 裁决负责确认一格一条鱼且鱼专属字段完整；身体效果在 UseFromInventorySlotFromAuthority 中提交。 */
+	/** 鱼 Use 裁决负责确认一格一条鱼且鱼专属字段完整；GE 效果在 ApplyUseEffectsFromAuthority 中提交。 */
 	virtual ECatDomainCommandError Use(const FCatInventoryEntry& Item, int32 Quantity) const override;
 
 	/** 鱼使用后由库存扣掉这一条；它不会进入 held entry 或部署到世界。 */
 	virtual bool ConsumesInventoryQuantityOnUse() const override;
 
-	/** 只读检查鱼能否被当前角色吃掉；库存 mutation 之前用它询问 Condition。 */
+	/** 只读检查鱼能否被当前角色吃掉；库存事务前只读核对成长与效果配置。 */
 	virtual bool CanUseFromInventory(const FCatInventoryEntry& InventoryEntry, APawn* UserPawn) const override;
 
-	/** authority 从正式库存槽吃鱼；库存先扣掉真实鱼实例，再由 Condition 提交身体效果，失败时库存负责回滚。 */
-	virtual FCatDomainCommandResult UseFromInventorySlotFromAuthority(
-		const FCatInventoryEntry& InventoryEntry, const FCatInventoryItemUseContext& UseContext) override;
+	/** 用冻结重量生成 GE 参数，成功后授予知识并释放载体；不在实例内部扣库存。 */
+	virtual FCatDomainCommandResult ApplyUseEffectsFromAuthority(const FCatInventoryItemUseContext& UseContext) override;
 
 protected:
 	/** 来源 FishingSession ID；服务器捕获时写入，客户端展示和后续保存读取，不作为当前会话恢复入口。 */
