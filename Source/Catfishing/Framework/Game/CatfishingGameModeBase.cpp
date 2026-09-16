@@ -57,6 +57,8 @@ namespace
 {
 	/** PIE 无会话身份的 UE 类型标签；服务器只在受限开发准入中创建，客户端提交同类型身份会被拒绝。 */
 	const FName CatPieNoSessionUniqueIdType(TEXT("CAT_PIE_NOSESSION"));
+	const FName CatLocalUniqueIdType(TEXT("CAT_LOCAL"));
+	bool IsLocalUniqueId(const FUniqueNetIdRepl& Id) { return Id.IsValid() && Id->GetType() == CatLocalUniqueIdType; }
 	/** 祭坛确认允许的服务器秒数；只在 GameMode 设置一次截止，客户端用公开 deadline 本地推算而不接收逐秒复制。 */
 	constexpr double AltarConfirmationDurationSeconds = 30.0;
 
@@ -357,7 +359,7 @@ void ACatfishingGameModeBase::PreLogin(const FString& Options, const FString& Ad
 			*GetNameSafe(GetWorld()), int32(GetNetMode()), HasAuthority());
 		return;
 	}
-	if (IsPieNoSessionUniqueId(UniqueId))
+	if (IsPieNoSessionUniqueId(UniqueId) || IsLocalUniqueId(UniqueId))
 	{
 		ErrorMessage = TEXT("CAT_PIE_ID_MUST_BE_SERVER_GENERATED");
 		UE_LOG(LogCatOnline, Warning, TEXT("Event=identity_prelogin_rejected StableNetId=Valid(Redacted) Address=%s Error=ClientSuppliedPieIdentity"), *Address);
@@ -417,13 +419,25 @@ void ACatfishingGameModeBase::PreLogin(const FString& Options, const FString& Ad
 FString ACatfishingGameModeBase::InitNewPlayer(APlayerController* NewPlayerController, const FUniqueNetIdRepl& UniqueId,
 	const FString& Options, const FString& Portal)
 {
-	if (IsPieNoSessionUniqueId(UniqueId))
+	if (IsPieNoSessionUniqueId(UniqueId) || IsLocalUniqueId(UniqueId))
 	{
 		return TEXT("CAT_PIE_ID_MUST_BE_SERVER_GENERATED");
 	}
 
 	FUniqueNetIdRepl EffectiveUniqueId = UniqueId;
 	bool bGeneratedPieIdentity = false;
+ const UCatOnlineSubsystem* Online = GetGameInstance() ? GetGameInstance()->GetSubsystem<UCatOnlineSubsystem>() : nullptr;
+ const bool bLocalIdentity = Online && Online->GetSnapshot().bLocalRoomActive && GetNetMode() == NM_Standalone
+   && NewPlayerController && NewPlayerController->IsLocalController();
+ if (bLocalIdentity)
+ {
+   // 本地存档绑定 LocalPlayer；此内部键只在无网络的本地世界使用，不作为平台准入凭据。
+   const FUniqueNetIdRef LocalId = FUniqueNetIdString::Create(TEXT("LocalPlayer-0"), CatLocalUniqueIdType);
+   EffectiveUniqueId = FUniqueNetIdRepl(LocalId);
+   UE_LOG(LogCatOnline, Log, TEXT("Event=identity_local_generated World=%s NetMode=%d Authority=%d Controller=%s"),
+     *GetNameSafe(GetWorld()), int32(GetNetMode()), HasAuthority(), *GetNameSafe(NewPlayerController));
+ }
+
 	if (!EffectiveUniqueId.IsValid() && IsPieNoSessionAdmissionAllowed())
 	{
 		const FString GeneratedValue = FString::Printf(TEXT("PIE-%s"),

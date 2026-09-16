@@ -68,6 +68,8 @@ void UCatFrontendRootWidget::RequestCloseRoomDialog()
 void UCatFrontendRootWidget::RequestOpenRoomInvite()
 {
 	if (!IsShowingRoom()) { return; }
+ if (RoomModel && RoomModel->GetSnapshot().bLocalRoomActive)
+ { RoomModel->EnableOnlineRoom(); return; }
 	RequestCloseRoomDialog();
 	if (auto* Layer = CatRoomDialogs::Find<UWidget>(RoomPage, TEXT("RoomDialogLayer"))) { Layer->SetVisibility(ESlateVisibility::Visible); }
 	if (auto* Invite = CatRoomDialogs::Find<UWidget>(RoomPage, TEXT("RoomInviteDialog"))) { Invite->SetVisibility(ESlateVisibility::Visible); }
@@ -140,12 +142,18 @@ void UCatFrontendRootWidget::RefreshRoomDialogPresentation(const FCatOnlineSnaps
 		Feedback->SetText(Result);
 		Feedback->SetVisibility(Result.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
 	}
+ if (auto* Open = CatRoomDialogs::Find<UButton>(RoomPage, TEXT("OpenRoomInviteButton")))
+ {
+   Open->SetIsEnabled(Snapshot.ActiveOperation == ECatOnlineOperation::None);
+   if (auto* Label = Cast<UTextBlock>(Open->GetContent()))
+   { Label->SetText(FText::FromString(Snapshot.bLocalRoomActive ? TEXT("开启联机") : TEXT("邀请好友"))); }
+ }
 	const bool bEditable = Snapshot.bIsHost && Snapshot.WorldState == ECatOnlineWorldState::Frontend && Snapshot.ActiveOperation == ECatOnlineOperation::None && !Snapshot.bIsGameplayLoadPending;
 	if (const auto* Settings = CatRoomDialogs::Find<UWidget>(RoomPage, TEXT("RoomSettingsDialog")); Settings && Settings->GetVisibility() == ESlateVisibility::Visible)
 	{
 		const FString Feedback = RoomModel && !RoomModel->GetLastResultText().IsEmpty() ? RoomModel->GetLastResultText().ToString()
 			: Snapshot.ActiveOperation == ECatOnlineOperation::UpdateRoom ? TEXT("正在保存房间设置…")
-			: Snapshot.bHasPassword ? TEXT("当前已设置密码；留空保留原密码。主动邀请和邀请码免密。") : TEXT("当前无密码；填写后保存即可启用。主动邀请和邀请码免密。");
+			: Snapshot.bLocalRoomActive ? TEXT("当前为本地房间，开启联机后可设置访问权限和密码。") : Snapshot.bHasPassword ? TEXT("当前已设置密码；留空保留原密码。主动邀请和邀请码免密。") : TEXT("当前无密码；填写后保存即可启用。主动邀请和邀请码免密。");
 		CatRoomDialogs::Text(RoomPage, TEXT("RoomSettingsFeedbackText"), Feedback);
 	}
 	for (const TCHAR* Name : {TEXT("RoomNameInput"), TEXT("RoomCapacityInput"), TEXT("RoomAccessInput"), TEXT("RoomPasswordInput"), TEXT("RoomClearPasswordCheckBox")})
@@ -254,9 +262,9 @@ void UCatFrontendRootWidget::RefreshRoomScene(const FCatOnlineSnapshot& Snapshot
 			if (auto* Texture = Cast<UTexture2D>(Source->GetBrush().GetResourceObject()); Texture && Background->GetBrush().GetResourceObject() != Texture) { Background->SetBrushFromTexture(Texture); }
 		}
 	}
-	FString SaveTitle = Snapshot.bIsHost ? TEXT("当前存档") : TEXT("房主的存档");
-	FString SaveMeta = Snapshot.bIsHost ? TEXT("准备出发") : TEXT("跟随房主一起出发");
-	if (Snapshot.bIsHost && SaveModel)
+	FString SaveTitle = (Snapshot.bIsHost || Snapshot.bLocalRoomActive) ? TEXT("当前存档") : TEXT("房主的存档");
+	FString SaveMeta = (Snapshot.bIsHost || Snapshot.bLocalRoomActive) ? TEXT("准备出发") : TEXT("跟随房主一起出发");
+	if ((Snapshot.bIsHost || Snapshot.bLocalRoomActive) && SaveModel)
 	{
 		const FName ActiveId = SaveModel->GetActiveSlotId();
 		if (const auto* Save = SaveModel->GetSlotSummaries().FindByPredicate([&](const auto& Item) { return Item.SlotId == ActiveId; }))

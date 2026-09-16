@@ -26,6 +26,7 @@ public:
 
 	/** 在前台提交创建当前房间的产品意图；最终创建结果仍通过 Online 快照和 OnChanged 返回。 */
 	FCatOnlineResult CreateRoom();
+	FCatOnlineResult EnableOnlineRoom();
 
 	/** 提交离开当前房间的产品意图；Host 的玩法内保存收口由 Online 层处理，前台新局不触发保存。 */
 	FCatOnlineResult LeaveRoom();

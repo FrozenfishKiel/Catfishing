@@ -47,7 +47,7 @@ void UCatOnlineSubsystem::PollCodeSearch()
 }
 FCatOnlineResult UCatOnlineSubsystem::JoinCodeCandidate(uint64 LobbyId)
 {
- if (WorldState != ECatOnlineWorldState::Frontend || SessionRole != ECatOnlineSessionRole::None || SearchInviteCode.IsEmpty())
+ if (WorldState != ECatOnlineWorldState::Frontend || SessionRole != ECatOnlineSessionRole::None || bLocalRoomActive || SearchInviteCode.IsEmpty())
  { return RejectRequest(ECatOnlineError::InvalidState); }
  FCatOnlineResult Result = BeginOperation(ECatOnlineOperation::ResolveJoin, ECatOnlineSessionState::Searching);
  if (!Result.bAccepted) { return Result; }

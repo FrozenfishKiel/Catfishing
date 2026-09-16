@@ -45,6 +45,8 @@ public:
 	/** 在 Frontend 原地启动 UE Listen 后提交 CreateSession；失败释放本次监听，成功留在房间，Host Start 另行预载并切换玩法图。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Online")
 	FCatOnlineResult RequestCreateSession();
+	/** 存档加载后建立本地准备，不依赖 Steam 或监听。 */
+	FCatOnlineResult RequestPrepareLocalRoom();
 
 	/** 在 Frontend 提交 FindSessions；重复请求优先返回 CommandAlreadyPending 且不覆盖活动关联键，结果只通过 opaque 句柄和公开摘要进入 Snapshot。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Online")
@@ -357,6 +359,11 @@ private:
 
 	/** 当前复合操作冻结的会话角色；Create/Join 成功或 Leave 开始时写入，使 SessionRole 在 Destroy 成功清空后仍能选择正确旅行 API，Finish/Deinitialize 清空。 */
 	ECatOnlineSessionRole OperationRole = ECatOnlineSessionRole::None;
+
+	bool bLocalRoomActive = false;
+	bool bLocalOperation = false;
+	FGuid LocalRoomMemberId;
+	bool IsAuthorityOperation() const { return bLocalOperation || OperationRole == ECatOnlineSessionRole::Host; }
 
 	/** 最近一次结构化错误；不承担 World、Session 或 Transport 真相。 */
 	ECatOnlineError LastError = ECatOnlineError::None;

@@ -12,6 +12,7 @@ namespace CatFrontendRoomModelText
 	{
 		switch (Error)
 		{
+		case ECatOnlineError::OnlineHostingUnavailable: return FText::FromString(TEXT("联机需要登录 Steam，并在独立游戏中运行。当前仍可单人开始。"));
 		case ECatOnlineError::PasswordRequired: return FText::FromString(TEXT("此房间需要密码。"));
 		case ECatOnlineError::PasswordIncorrect: return FText::FromString(TEXT("密码不正确，请重新输入。"));
 		case ECatOnlineError::AdmissionUnavailable: return FText::FromString(TEXT("房主暂时无法接受加入，可能正在开始游戏，请稍后重试。"));
@@ -114,7 +115,7 @@ void UCatFrontendRoomModel::Shutdown()
 	LastResultText = FText::GetEmpty();
 }
 
-// 创建房间流程：先取得已初始化的 Online 来源；来源缺失时生成与 Online 一致的同步拒绝，否则只转交产品语义 Create 请求并记录可展示结果，异步终态交由快照通知更新。
+// 存档加载后建立本地准备；平台房间只由显式 EnableOnlineRoom 创建，失败不丢失本地载荷。
 FCatOnlineResult UCatFrontendRoomModel::CreateRoom()
 {
 	UCatOnlineSubsystem* OnlineSubsystem = Online.Get();
@@ -126,9 +127,19 @@ FCatOnlineResult UCatFrontendRoomModel::CreateRoom()
 		CaptureResult(Result);
 		return Result;
 	}
-	Result = OnlineSubsystem->RequestCreateSession();
+	Result = OnlineSubsystem->RequestPrepareLocalRoom();
 	CaptureResult(Result);
 	return Result;
+}
+
+FCatOnlineResult UCatFrontendRoomModel::EnableOnlineRoom()
+{
+ FCatOnlineResult Result;
+ UCatOnlineSubsystem* Source = Online.Get();
+ if (!Source) { Result.Error = ECatOnlineError::OnlineSubsystemUnavailable; }
+ else if (!Source->GetSnapshot().bLocalRoomActive) { Result.Error = ECatOnlineError::InvalidState; }
+ else { Result = Source->RequestCreateSession(); }
+ CaptureResult(Result); return Result;
 }
 
 bool UCatFrontendRoomModel::CanCancelAdmission() const
@@ -244,6 +255,9 @@ bool UCatFrontendRoomModel::CanStartGame() const
 
 bool UCatFrontendRoomModel::CanStartSnapshot(const FCatOnlineSnapshot& Snapshot)
 {
+ if (Snapshot.bLocalRoomActive)
+ { return Snapshot.WorldState == ECatOnlineWorldState::Frontend && Snapshot.SessionState == ECatOnlineSessionState::NoSession
+     && Snapshot.ActiveOperation == ECatOnlineOperation::None && !Snapshot.bIsGameplayLoadPending; }
 	return Snapshot.bIsHost
 		&& Snapshot.WorldState == ECatOnlineWorldState::Frontend
 		&& Snapshot.SessionState == ECatOnlineSessionState::Host

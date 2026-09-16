@@ -589,8 +589,8 @@ void UCatLakeMainMenuController::UpdateView()
 	const bool bCanReturnToMainMenu = Online && !bReturnToMainMenuPending
 		&& OnlineSnapshot.ActiveOperation == ECatOnlineOperation::None
 		&& OnlineSnapshot.WorldState == ECatOnlineWorldState::Lake
-		&& OnlineSnapshot.SessionRole != ECatOnlineSessionRole::None
-		&& OnlineSnapshot.SessionState != ECatOnlineSessionState::NoSession;
+		&& (OnlineSnapshot.bLocalRoomActive || (OnlineSnapshot.SessionRole != ECatOnlineSessionRole::None
+		&& OnlineSnapshot.SessionState != ECatOnlineSessionState::NoSession));
 	FCatLakeMainMenuViewState ViewState;
 	ViewState.StatusText = LastStatusText;
 	ViewState.bSettingsEnabled = SettingsModel != nullptr && !bReturnToMainMenuPending;

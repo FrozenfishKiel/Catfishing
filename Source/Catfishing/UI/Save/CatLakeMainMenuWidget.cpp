@@ -879,10 +879,10 @@ void UCatLakeMainMenuWidget::RefreshPartyPanel()
 	const bool bCanInvite = Snapshot.bIsHost && Snapshot.ActiveOperation == ECatOnlineOperation::None;
 	if (PartyCountText) { PartyCountText->SetText(FText::FromString(Snapshot.MaxPlayers > 0
 		? FString::Printf(TEXT("当前队伍 %d / %d"), Snapshot.CurrentPlayers, Snapshot.MaxPlayers) : TEXT("正在确认队伍信息"))); }
-	if (PartyAccessText) { PartyAccessText->SetText(FText::FromString(Snapshot.SessionAccess == ECatSessionAccessPolicy::FriendsOnly ? TEXT("加入权限：仅好友")
+	if (PartyAccessText) { PartyAccessText->SetText(FText::FromString(Snapshot.bLocalRoomActive ? TEXT("单人游戏") : Snapshot.SessionAccess == ECatSessionAccessPolicy::FriendsOnly ? TEXT("加入权限：仅好友")
 		: Snapshot.SessionAccess == ECatSessionAccessPolicy::InviteOnly ? TEXT("加入权限：仅邀请") : Snapshot.SessionAccess == ECatSessionAccessPolicy::Public ? TEXT("加入权限：公开") : TEXT("加入权限：待确认"))); }
 	if (PartyCopyLinkButton) { PartyCopyLinkButton->SetIsEnabled(!Snapshot.JoinLobbyUri.IsEmpty()); }
-	if (PartyStatusText) { PartyStatusText->SetText(Model ? Model->GetLastResultText() : FText::FromString(TEXT("组队服务暂不可用"))); }
+	if (PartyStatusText) { PartyStatusText->SetText(Snapshot.bLocalRoomActive ? FText::FromString(TEXT("当前为单人游戏，请保存返回准备房间后开启联机。")) : Model ? Model->GetLastResultText() : FText::FromString(TEXT("组队服务暂不可用"))); }
 	if (PartyFriendsScrollBox)
 	{
 		PartyFriendsScrollBox->ClearChildren();

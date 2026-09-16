@@ -1036,21 +1036,21 @@ void UCatFrontendRootWidget::RenderRoomSnapshot(const FCatOnlineSnapshot& Snapsh
 {
 	if (RoomInviteCodeText)
 	{
-		RoomInviteCodeText->SetText(FText::FromString(Snapshot.LobbyId.IsEmpty() ? TEXT("房间 ID 暂不可用") : Snapshot.LobbyId));
+		RoomInviteCodeText->SetText(FText::FromString(Snapshot.bLocalRoomActive ? TEXT("本地房间 · 未开启联机") : Snapshot.LobbyId.IsEmpty() ? TEXT("房间 ID 暂不可用") : Snapshot.LobbyId));
 	}
 	if (RoomAccessPolicyText)
 	{
 		const TCHAR* AccessText = Snapshot.SessionAccess == ECatSessionAccessPolicy::Public ? TEXT("公开")
 			: Snapshot.SessionAccess == ECatSessionAccessPolicy::FriendsOnly ? TEXT("仅好友")
 			: Snapshot.SessionAccess == ECatSessionAccessPolicy::InviteOnly ? TEXT("仅邀请") : TEXT("访问方式未确认");
-		RoomAccessPolicyText->SetText(FText::FromString(AccessText));
+		RoomAccessPolicyText->SetText(FText::FromString(Snapshot.bLocalRoomActive ? TEXT("单人") : AccessText));
 	}
 	if (StartRoomGameButton) { StartRoomGameButton->SetIsEnabled(UCatFrontendRoomModel::CanStartSnapshot(Snapshot)); }
-	if (StartRoomGameButton) { StartRoomGameButton->SetVisibility(Snapshot.bIsHost ? ESlateVisibility::Visible : ESlateVisibility::Collapsed); }
+	if (StartRoomGameButton) { StartRoomGameButton->SetVisibility((Snapshot.bIsHost || Snapshot.bLocalRoomActive) ? ESlateVisibility::Visible : ESlateVisibility::Collapsed); }
 	const auto* Local = Snapshot.RoomMembers.FindByPredicate([](const auto& M) { return M.bIsLocalPlayer; });
 	if (ReadyRoomButton)
 	{
-		ReadyRoomButton->SetVisibility(!Snapshot.bIsHost ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+		ReadyRoomButton->SetVisibility(!(Snapshot.bIsHost || Snapshot.bLocalRoomActive) ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 		ReadyRoomButton->SetIsEnabled(Local && Snapshot.WorldState == ECatOnlineWorldState::Frontend && Snapshot.ActiveOperation == ECatOnlineOperation::None);
 		if (auto* Label = Cast<UTextBlock>(RoomPage->GetWidgetFromName(TEXT("ReadyRoomButtonLabel"))))
 		{
@@ -1059,7 +1059,7 @@ void UCatFrontendRootWidget::RenderRoomSnapshot(const FCatOnlineSnapshot& Snapsh
 	}
 	if (auto* Hint = RoomPage ? Cast<UTextBlock>(RoomPage->GetWidgetFromName(TEXT("RoomReadinessHint"))) : nullptr)
 	{
-		Hint->SetText(FText::FromString(Snapshot.bIsHost
+		Hint->SetText(FText::FromString(Snapshot.bLocalRoomActive ? TEXT("可直接单人开始；开启联机后可邀请好友。") : (Snapshot.bIsHost || Snapshot.bLocalRoomActive)
 			? (UCatFrontendRoomModel::CanStartSnapshot(Snapshot) ? TEXT("队员已准备，出发吧。") : TEXT("等待其他队员准备 · 房主点击开始即视为准备"))
 			: TEXT("准备好后，等待房主开始游戏")));
 	}

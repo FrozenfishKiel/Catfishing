@@ -261,6 +261,7 @@ void UCatOnlineSubsystem::Deinitialize()
 	PendingHostExitAckRequestId.Invalidate();
 	ActiveOperation = ECatOnlineOperation::None;
 	OperationRole = ECatOnlineSessionRole::None;
+	bLocalOperation = false;
 	DeferredFailureAfterDestroy = ECatOnlineError::None;
 	DeferredFailureAfterTravel = ECatOnlineError::None;
 	OnSnapshotChanged.Clear();
@@ -1199,7 +1200,7 @@ FCatOnlineResult UCatOnlineSubsystem::RequestRefreshFriends()
 FCatOnlineResult UCatOnlineSubsystem::RequestJoinFriend(const FCatOnlineFriendHandle FriendHandle)
 {
 	if (ActiveOperation != ECatOnlineOperation::None || PendingAcceptedInvite.IsValid()) { return RejectRequest(ECatOnlineError::CommandAlreadyPending); }
-	if (WorldState != ECatOnlineWorldState::Frontend || SessionState != ECatOnlineSessionState::NoSession) { return RejectRequest(ECatOnlineError::InvalidState); }
+	if (WorldState != ECatOnlineWorldState::Frontend || SessionState != ECatOnlineSessionState::NoSession || bLocalRoomActive) { return RejectRequest(ECatOnlineError::InvalidState); }
 	const FUniqueNetIdPtr* Id = FriendsByHandle.Find(FriendHandle.Value);
 	if (!Id || !Id->IsValid()) { return RejectRequest(ECatOnlineError::InvalidHandle); }
 	const FUniqueNetIdPtr FriendId = *Id;
@@ -1236,7 +1237,7 @@ void UCatOnlineSubsystem::HandleFindJoinFriendComplete(int32 LocalUserNum, bool 
 FCatOnlineResult UCatOnlineSubsystem::RequestJoinLink(const FString& Input)
 {
 	if (ActiveOperation != ECatOnlineOperation::None || PendingAcceptedInvite.IsValid()) { return RejectRequest(ECatOnlineError::CommandAlreadyPending); }
-	if (WorldState != ECatOnlineWorldState::Frontend || SessionState != ECatOnlineSessionState::NoSession) { return RejectRequest(ECatOnlineError::InvalidState); }
+	if (WorldState != ECatOnlineWorldState::Frontend || SessionState != ECatOnlineSessionState::NoSession || bLocalRoomActive) { return RejectRequest(ECatOnlineError::InvalidState); }
 	FString Code;
 	if (UCatRoomAdmission::NormalizeCode(Input, Code)) { return RequestFindSessions(Code); }
 	JoinCredential.Reset(); bJoinWithCode = false; CancelRoomPassword();
@@ -1360,6 +1361,21 @@ FCatOnlineResult UCatOnlineSubsystem::RequestStartHostedGame()
 	{
 		return RejectRequest(ECatOnlineError::CommandAlreadyPending);
 	}
+ if (bLocalRoomActive && SessionState == ECatOnlineSessionState::NoSession && SessionRole == ECatOnlineSessionRole::None)
+ {
+   const UCatSaveSubsystem* Save = GetGameInstance()->GetSubsystem<UCatSaveSubsystem>();
+   if (WorldState != ECatOnlineWorldState::Frontend || !GetWorld() || GetWorld()->GetNetMode() != NM_Standalone || GameplayMapPackage.IsEmpty())
+   { return RejectRequest(ECatOnlineError::InvalidState); }
+   if (!Save || !Save->HasLoadedRunForTravel()) { return RejectRequest(ECatOnlineError::SaveNotLoaded); }
+   FCatOnlineResult Result = BeginOperation(ECatOnlineOperation::Start, ECatOnlineSessionState::NoSession);
+   if (!Result.bAccepted) { return Result; }
+   bLocalOperation = true;
+   const uint64 Epoch = OperationEpoch;
+   if (!BeginGameplayStartPreloadPipeline(Epoch) && ActiveOperation == ECatOnlineOperation::Start && OperationEpoch == Epoch)
+   { FinishOperationFailure(ECatOnlineError::GameplayPreloadFailed); }
+   if (ActiveOperation == ECatOnlineOperation::None && LastError != ECatOnlineError::None) { Result.bAccepted = false; Result.Error = LastError; }
+   return Result;
+ }
 	if (WorldState != ECatOnlineWorldState::Frontend || SessionRole != ECatOnlineSessionRole::Host
 		|| SessionState != ECatOnlineSessionState::Host || GameplayMapPackage.IsEmpty()
 		|| GameplayPreloadRequestId != INDEX_NONE)
@@ -1420,7 +1436,7 @@ void UCatOnlineSubsystem::HandleGameplayPackagePreloadComplete(const FName& Pack
 	const EAsyncLoadingResult::Type Result, const uint64 CallbackEpoch)
 {
 	if (ActiveOperation != ECatOnlineOperation::Start
-		|| (OperationRole != ECatOnlineSessionRole::Host && OperationRole != ECatOnlineSessionRole::Client)
+		|| (!bLocalOperation && OperationRole != ECatOnlineSessionRole::Host && OperationRole != ECatOnlineSessionRole::Client)
 		|| CallbackEpoch != OperationEpoch || PackageName.ToString() != GameplayMapPackage)
 	{
 		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_callback_ignored Callback=GameplayPreload Epoch=%llu CurrentEpoch=%llu"), CallbackEpoch, OperationEpoch);
@@ -1447,6 +1463,16 @@ void UCatOnlineSubsystem::HandleGameplayPackagePreloadComplete(const FName& Pack
 	UE_LOG(LogCatOnline, Log, TEXT("Event=online_map_preload_world_retained RequestId=%s Epoch=%llu Package=%s RetainedWorld=%s World=%s NetMode=%d Role=%s"),
 		*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch, *PackageName.ToString(), *LoadedWorld->GetPathName(),
 		*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1, *UEnum::GetValueAsString(OperationRole));
+ if (bLocalOperation)
+ {
+   UWorld* World = GetWorld();
+   if (!World || World->GetNetMode() != NM_Standalone || !World->ServerTravel(GameplayMapPackage, true))
+   { PreloadedGameplayWorld = nullptr; FinishOperationFailure(ECatOnlineError::TravelRejected); return; }
+   ExpectedPackage = GameplayMapPackage; WorldState = ECatOnlineWorldState::TravelingToLake;
+   TransportState = ECatOnlineTransportState::TravelQueued;
+   BroadcastSnapshot(TEXT("online_local_travel_queued"));
+   return;
+ }
 	if (OperationRole == ECatOnlineSessionRole::Host)
 	{
 		RefreshRoomSnapshotFacts();
@@ -1505,6 +1531,7 @@ FCatOnlineResult UCatOnlineSubsystem::BeginOperation(const ECatOnlineOperation O
 	SessionState = PendingSessionState;
 	LastError = ECatOnlineError::None;
 	OperationRole = ECatOnlineSessionRole::None;
+	bLocalOperation = false;
 	DeferredFailureAfterDestroy = ECatOnlineError::None;
 	DeferredFailureAfterTravel = ECatOnlineError::None;
 	bReleaseActiveRunOnFrontend = false;
@@ -1571,6 +1598,23 @@ FCatOnlineResult UCatOnlineSubsystem::RejectRequest(const ECatOnlineError Error)
 
 // Create 流程：先以 CommandAlreadyPending 拒绝活动操作且不覆盖其关联键，再依次检查前台、SessionAccess 策略、World-aware Session 接口和匹配合同；创建平台设置时把公开容量对齐营地自动出生容量，最后绑定携带 epoch 的回调后提交平台请求。
 // UE 5.8 的 OSS 允许在 API 返回前同步触发完成委托，因此返回后必须同时复核 operation、epoch 与句柄；只有回调尚未消费本次提交时，false 才发布一次 RequestRejected。
+FCatOnlineResult UCatOnlineSubsystem::RequestPrepareLocalRoom()
+{
+ if (ActiveOperation != ECatOnlineOperation::None) { return RejectRequest(ECatOnlineError::CommandAlreadyPending); }
+ const UCatSaveSubsystem* Save = GetGameInstance()->GetSubsystem<UCatSaveSubsystem>();
+ if (bLocalRoomActive || WorldState != ECatOnlineWorldState::Frontend || SessionState != ECatOnlineSessionState::NoSession
+   || SessionRole != ECatOnlineSessionRole::None || GetSnapshot().bIsAcceptedInvitePending
+   || !GetWorld() || GetWorld()->GetNetMode() != NM_Standalone || !GetWorld()->GetAuthGameMode<ACatFrontendGameMode>())
+ { return RejectRequest(ECatOnlineError::InvalidState); }
+ if (!Save || !Save->HasLoadedRunForTravel()) { return RejectRequest(ECatOnlineError::SaveNotLoaded); }
+ FCatOnlineResult Result = BeginOperation(ECatOnlineOperation::PrepareLocal, ECatOnlineSessionState::NoSession);
+ if (!Result.bAccepted) { return Result; }
+ bLocalRoomActive = true; LocalRoomMemberId = FGuid::NewGuid();
+ BroadcastSnapshot(TEXT("online_local_room_prepared"));
+ FinishOperationSuccess();
+ return Result;
+}
+
 FCatOnlineResult UCatOnlineSubsystem::RequestCreateSession()
 {
 	if (ActiveOperation != ECatOnlineOperation::None)
@@ -1585,6 +1629,15 @@ FCatOnlineResult UCatOnlineSubsystem::RequestCreateSession()
 	{
 		return RejectRequest(ECatOnlineError::InvalidState);
 	}
+ // PIE 使用本地准备；不能把 Null OSS 的成功解释成 Steam 房间。
+ IOnlineSubsystem* Platform = Online::GetSubsystem(GetWorld());
+ const bool bSteamWorld = GetWorld()->WorldType != EWorldType::PIE && Platform && Platform->GetSubsystemName() == FName(TEXT("STEAM"));
+#if WITH_STEAMWORKS
+ if (!bSteamWorld || !SteamAPI_IsSteamRunning() || !SteamUser() || !SteamUser()->BLoggedOn())
+#else
+ if (true)
+#endif
+ { return RejectRequest(ECatOnlineError::OnlineHostingUnavailable); }
 	const UCatOnlineSettings* Settings = GetDefault<UCatOnlineSettings>();
 	if (Settings->SessionAccess == ECatSessionAccessPolicy::Undecided)
 	{
@@ -1677,7 +1730,7 @@ FCatOnlineResult UCatOnlineSubsystem::RequestFindSessions(const FString& InviteC
 	{
 		return RejectRequest(ECatOnlineError::CommandAlreadyPending);
 	}
-	if (WorldState != ECatOnlineWorldState::Frontend || SessionRole != ECatOnlineSessionRole::None)
+	if (WorldState != ECatOnlineWorldState::Frontend || SessionRole != ECatOnlineSessionRole::None || bLocalRoomActive)
 	{
 		return RejectRequest(ECatOnlineError::InvalidState);
 	}
@@ -1792,7 +1845,7 @@ FCatOnlineResult UCatOnlineSubsystem::RequestAcceptInvite(const FCatSessionInvit
 // OSS 可能在返回前同步完成，故返回后只有 operation、epoch 与句柄仍指向本次提交时，false 才能结束操作；回调产生的 JoinFailed 或旅行状态不得被覆盖。
 FCatOnlineResult UCatOnlineSubsystem::RequestJoinInternal(const FOnlineSessionSearchResult& SearchResult, bool bAdmissionGranted)
 {
-	if (WorldState != ECatOnlineWorldState::Frontend || SessionRole != ECatOnlineSessionRole::None)
+	if (WorldState != ECatOnlineWorldState::Frontend || SessionRole != ECatOnlineSessionRole::None || bLocalRoomActive)
 	{
 		return RejectRequest(ECatOnlineError::InvalidState);
 	}
@@ -1859,7 +1912,7 @@ FCatOnlineResult UCatOnlineSubsystem::RequestLeave()
 		return RejectRequest(ECatOnlineError::CommandAlreadyPending);
 	}
 	if ((WorldState != ECatOnlineWorldState::Lake && WorldState != ECatOnlineWorldState::Frontend)
-		|| SessionRole == ECatOnlineSessionRole::None)
+		|| (SessionRole == ECatOnlineSessionRole::None && !bLocalRoomActive))
 	{
 		return RejectRequest(ECatOnlineError::InvalidState);
 	}
@@ -1882,8 +1935,9 @@ FCatOnlineResult UCatOnlineSubsystem::RequestLeave()
 		return Result;
 	}
 	OperationRole = SessionRole;
+	bLocalOperation = bLocalRoomActive && SessionRole == ECatOnlineSessionRole::None;
 	bReleaseActiveRunOnFrontend = WorldState == ECatOnlineWorldState::Frontend || SessionRole == ECatOnlineSessionRole::Client;
-	const bool bLeaveSubmitted = OperationRole == ECatOnlineSessionRole::Host && WorldState == ECatOnlineWorldState::Lake
+	const bool bLeaveSubmitted = IsAuthorityOperation() && WorldState == ECatOnlineWorldState::Lake
 		? BeginHostLeaveSave()
 		: BeginDestroySession(ECatOnlineError::None);
 	if (!bLeaveSubmitted)
@@ -1899,7 +1953,7 @@ bool UCatOnlineSubsystem::BeginHostLeaveSave()
 {
 	UCatSaveSubsystem* SaveSubsystem = GetGameInstance() ? GetGameInstance()->GetSubsystem<UCatSaveSubsystem>() : nullptr;
 	if (!SaveSubsystem || ActiveOperation != ECatOnlineOperation::Leave
-		|| OperationRole != ECatOnlineSessionRole::Host || WorldState != ECatOnlineWorldState::Lake)
+		|| !IsAuthorityOperation() || WorldState != ECatOnlineWorldState::Lake)
 	{
 		FinishOperationFailure(ECatOnlineError::HostSaveFailed);
 		return false;
@@ -1944,7 +1998,7 @@ bool UCatOnlineSubsystem::BeginHostLeaveSave()
 // 保存完成流程：按 Save RequestId、Online epoch、活动角色和订阅句柄拒绝失效通知；匹配后先解绑；持久化失败记录警告后仍授予回前台后的载荷释放许可并提交 Run teardown，沿用同一次 Leave 关联键。
 void UCatOnlineSubsystem::HandleHostLeaveSaveCompleted(const FGuid SaveRequestId, const bool bSuccess, const uint64 CallbackEpoch)
 {
-	if (ActiveOperation != ECatOnlineOperation::Leave || OperationRole != ECatOnlineSessionRole::Host
+	if (ActiveOperation != ECatOnlineOperation::Leave || !IsAuthorityOperation()
 		|| CallbackEpoch != OperationEpoch || !HostLeaveSaveHandle.IsValid() || SaveRequestId != HostLeaveSaveRequestId)
 	{
 		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_callback_ignored Callback=HostLeaveSave SaveRequestId=%s Epoch=%llu CurrentEpoch=%llu"),
@@ -2043,6 +2097,7 @@ void UCatOnlineSubsystem::FinishLeaveAfterRunRelease()
 		FinishOperationFailure(ECatOnlineError::ActiveRunReleaseFailed);
 		return;
 	}
+	bLocalRoomActive = false; LocalRoomMemberId.Invalidate();
 	UE_LOG(LogCatOnline, Log, TEXT("Event=online_run_release_completed RequestId=%s Epoch=%llu World=%s NetMode=%d"),
 		*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch, *GetNameSafe(GetWorld()),
 		GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1);
@@ -2072,7 +2127,7 @@ bool UCatOnlineSubsystem::BeginHostRunTeardown()
 {
 	UWorld* World = GetWorld();
 	ACatfishingGameModeBase* GameMode = World ? World->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
-	if (!GameMode || ActiveOperation != ECatOnlineOperation::Leave || OperationRole != ECatOnlineSessionRole::Host)
+	if (!GameMode || ActiveOperation != ECatOnlineOperation::Leave || !IsAuthorityOperation())
 	{
 		FinishOperationFailure(ECatOnlineError::RunTeardownFailed);
 		return false;
@@ -2089,7 +2144,7 @@ bool UCatOnlineSubsystem::BeginHostRunTeardown()
 	const FCatRunTeardownResult Result = GameMode->RequestRunTeardown(Request);
 
 	const bool bStillCurrent = ActiveOperation == ECatOnlineOperation::Leave
-		&& OperationRole == ECatOnlineSessionRole::Host
+		&& IsAuthorityOperation()
 		&& ActiveRequestId == SubmittedRequestId
 		&& OperationEpoch == SubmittedEpoch
 		&& RunTeardownHandle.IsValid();
@@ -2160,6 +2215,15 @@ FCatOnlineSnapshot UCatOnlineSubsystem::GetSnapshot() const
 	Snapshot.MaxPlayers = RoomMaxPlayers;
 	Snapshot.CurrentPlayers = RoomCurrentPlayers;
 	Snapshot.bIsHost = SessionRole == ECatOnlineSessionRole::Host;
+ Snapshot.bLocalRoomActive = bLocalRoomActive;
+ if (bLocalRoomActive && SessionRole == ECatOnlineSessionRole::None)
+ {
+   Snapshot.RoomName = TEXT("本地准备房间"); Snapshot.CurrentPlayers = 1; Snapshot.MaxPlayers = 1;
+   Snapshot.RoomMembers.Reset();
+   FCatOnlineRoomMember& Local = Snapshot.RoomMembers.AddDefaulted_GetRef();
+   Local.MemberId = LocalRoomMemberId; Local.bIsLocalPlayer = true; Local.bIsReady = true; Local.DisplayName = TEXT("我");
+ }
+
 	Snapshot.bIsGameplayStartupAssetLoadPending = bGameplayStartupAssetLoadPending;
 	Snapshot.bHasGameplayStartupAssetLoadProgress = bGameplayStartupAssetLoadProgressAvailable;
 	Snapshot.GameplayStartupAssetLoadProgressPercent = CurrentGameplayStartupAssetLoadProgressPercent;
@@ -2178,6 +2242,13 @@ FCatOnlineSnapshot UCatOnlineSubsystem::GetSnapshot() const
 bool UCatOnlineSubsystem::BeginDestroySession(const ECatOnlineError FailureAfterDestroy)
 {
 	DeferredFailureAfterDestroy = FailureAfterDestroy;
+ if (bLocalOperation)
+ {
+   DeferredFailureAfterTravel = FailureAfterDestroy;
+   if (!BeginTravelToFrontend()) { FinishOperationFailure(ECatOnlineError::TravelRejected); return false; }
+   return true;
+ }
+
 	StopLobbyFactPolling();
 	if (FailureAfterDestroy != ECatOnlineError::None)
 	{
@@ -2342,7 +2413,7 @@ void UCatOnlineSubsystem::HandleFrontendPackagePreloadComplete(const FName& Pack
 	const EAsyncLoadingResult::Type Result, const uint64 CallbackEpoch)
 {
 	if (ActiveOperation == ECatOnlineOperation::None
-		|| (OperationRole != ECatOnlineSessionRole::Host && OperationRole != ECatOnlineSessionRole::Client)
+		|| (!bLocalOperation && OperationRole != ECatOnlineSessionRole::Host && OperationRole != ECatOnlineSessionRole::Client)
 		|| CallbackEpoch != OperationEpoch || PackageName.ToString() != CatOnlineNames::Frontend)
 	{
 		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_callback_ignored Callback=FrontendPreload Epoch=%llu CurrentEpoch=%llu"), CallbackEpoch, OperationEpoch);
@@ -2402,7 +2473,7 @@ bool UCatOnlineSubsystem::BeginTravelToFrontend()
 	}
 
 	if (ActiveOperation == ECatOnlineOperation::None
-		|| (OperationRole != ECatOnlineSessionRole::Host && OperationRole != ECatOnlineSessionRole::Client))
+		|| (!bLocalOperation && OperationRole != ECatOnlineSessionRole::Host && OperationRole != ECatOnlineSessionRole::Client))
 	{
 		return false;
 	}
@@ -2447,7 +2518,7 @@ bool UCatOnlineSubsystem::CommitFrontendTravelAfterPreload()
 	{
 		return false;
 	}
-	if (OperationRole == ECatOnlineSessionRole::Host)
+	if (IsAuthorityOperation())
 	{
 		if (World->GetNetMode() == NM_Client || !World->ServerTravel(CatOnlineNames::Frontend, true))
 		{
@@ -2511,6 +2582,7 @@ void UCatOnlineSubsystem::HandleCreateSessionComplete(const FName SessionName, c
 		BeginDestroySession(ECatOnlineError::AdmissionUnavailable);
 		return;
 	}
+	bLocalRoomActive = false; LocalRoomMemberId.Invalidate();
 	PendingHostCode.Reset();
 	StartLobbyFactPolling();
 	FinishOperationSuccess();
@@ -2693,7 +2765,7 @@ void UCatOnlineSubsystem::HandleDestroySessionComplete(const FName SessionName, 
 void UCatOnlineSubsystem::HandleRunTeardownCompleted(const FCatRunTeardownResult& Result)
 {
 	if (ActiveOperation != ECatOnlineOperation::Leave
-		|| OperationRole != ECatOnlineSessionRole::Host
+		|| !IsAuthorityOperation()
 		|| Result.RequestId != ActiveRequestId
 		|| Result.OperationEpoch != static_cast<int64>(OperationEpoch))
 	{
@@ -2748,7 +2820,7 @@ void UCatOnlineSubsystem::HandleSessionUserInviteAccepted(const bool bWasSuccess
 	{
 		Error = ECatOnlineError::InviteAcceptanceBusy;
 	}
-	else if (SessionState != ECatOnlineSessionState::NoSession || SessionRole != ECatOnlineSessionRole::None
+	else if (bLocalRoomActive || SessionState != ECatOnlineSessionState::NoSession || SessionRole != ECatOnlineSessionRole::None
 		|| (Sessions.IsValid() && Sessions->GetNamedSession(CatOnlineNames::GameSession)))
 	{
 		Error = ECatOnlineError::InviteSessionConflict;
@@ -2825,7 +2897,7 @@ bool UCatOnlineSubsystem::TickPlatformInvites(float DeltaSeconds)
 	{
 		Error = ECatOnlineError::InviteAcceptanceBusy;
 	}
-	else if (SessionState != ECatOnlineSessionState::NoSession || SessionRole != ECatOnlineSessionRole::None
+	else if (bLocalRoomActive || SessionState != ECatOnlineSessionState::NoSession || SessionRole != ECatOnlineSessionRole::None
 		|| (Sessions.IsValid() && Sessions->GetNamedSession(CatOnlineNames::GameSession)))
 	{
 		Error = ECatOnlineError::InviteSessionConflict;
@@ -3177,6 +3249,8 @@ void UCatOnlineSubsystem::FinishOperationSuccess()
 		return;
 	}
 	const bool bFinishingGameplayStart = ActiveOperation == ECatOnlineOperation::Start;
+ if (ActiveOperation == ECatOnlineOperation::Leave && WorldState == ECatOnlineWorldState::Frontend)
+ { bLocalRoomActive = false; LocalRoomMemberId.Invalidate(); }
 	bReleaseActiveRunOnFrontend = false;
 	ClearRunReleaseDelegate();
 	ClearHostLeaveSaveDelegate();
@@ -3187,6 +3261,7 @@ void UCatOnlineSubsystem::FinishOperationSuccess()
 	ExpectedPackage.Reset();
 	ActiveOperation = ECatOnlineOperation::None;
 	OperationRole = ECatOnlineSessionRole::None;
+	bLocalOperation = false;
 	DeferredFailureAfterDestroy = ECatOnlineError::None;
 	DeferredFailureAfterTravel = ECatOnlineError::None;
 	PendingHostExitAckRequestId.Invalidate();
@@ -3233,6 +3308,7 @@ void UCatOnlineSubsystem::FinishOperationFailure(const ECatOnlineError Error)
 	ExpectedPackage.Reset();
 	ActiveOperation = ECatOnlineOperation::None;
 	OperationRole = ECatOnlineSessionRole::None;
+	bLocalOperation = false;
 	DeferredFailureAfterDestroy = ECatOnlineError::None;
 	DeferredFailureAfterTravel = ECatOnlineError::None;
 	PendingHostExitAckRequestId.Invalidate();
@@ -3345,6 +3421,12 @@ void UCatOnlineSubsystem::ClearInviteDelegate()
 void UCatOnlineSubsystem::BroadcastSnapshot(const TCHAR* EventName)
 {
 	RefreshRoomSnapshotFacts();
+ if (bLocalRoomActive || bLocalOperation)
+ {
+   UE_LOG(LogCatOnline, Log, TEXT("Event=local_room_state Cause=%s RequestId=%s Epoch=%llu World=%s NetMode=%d LocalRoom=%d LocalOperation=%d Operation=%s Result=%s"),
+     EventName, *ActiveRequestId.ToString(), OperationEpoch, *GetNameSafe(GetWorld()), GetWorld() ? int32(GetWorld()->GetNetMode()) : -1,
+     bLocalRoomActive, bLocalOperation, *UEnum::GetValueAsString(ActiveOperation), *UEnum::GetValueAsString(LastError));
+ }
 	const UWorld* World = GetWorld();
 	UE_LOG(LogCatOnline, Log, TEXT("Event=%s RequestId=%s Epoch=%llu Operation=%s Session=%s Role=%s WorldState=%s Transport=%s World=%s NetMode=%d Error=%s"),
 		EventName,

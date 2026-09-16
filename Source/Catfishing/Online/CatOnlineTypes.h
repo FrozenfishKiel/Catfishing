@@ -101,7 +101,9 @@ enum class ECatOnlineOperation : uint8
 	Leave,
 	/** 定向查询好友房间或等待 Steam 链接回调；尚未提交 Join。 */
 	ResolveJoin,
-	UpdateRoom
+	UpdateRoom,
+	/** 同步建立本地准备房间，不请求平台会话。 */
+	PrepareLocal
 };
 
 /** 本地 NamedSession 角色；离局入口用它选择 Host 与 Client 的不同旅行方式。 */
@@ -204,7 +206,8 @@ enum class ECatOnlineError : uint8
 	/** 入房连接或授权回执等待超时；与房主当前不接受入房分开。 */
 	AdmissionTimedOut,
 	/** 入房传输失败或连接初始化失败；不表示房主主动拒绝。 */
-	AdmissionConnectionFailed
+	AdmissionConnectionFailed,
+	OnlineHostingUnavailable
 };
 
 /** 对 UI 暴露的搜索句柄；Value 只在当前 GameInstance 的 Online 子系统内部可解析。 */
@@ -358,6 +361,9 @@ struct FCatOnlineSnapshot
 {
 	GENERATED_BODY()
 
+	/** 本地准备/单人生命周期；为真时成员摘要来自本地玩家，Session 事实仍独立。 */
+	UPROPERTY(BlueprintReadOnly) bool bLocalRoomActive = false;
+
 	/** 当前 World 事实。 */
 	UPROPERTY(BlueprintReadOnly)
 	ECatOnlineWorldState WorldState = ECatOnlineWorldState::Unknown;
@@ -409,7 +415,7 @@ struct FCatOnlineSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatOnlineFriendSummary> Friends;
 
-	/** 当前 Lobby 的真实成员记录；只有 Steam SDK 确认本地是该 Lobby 成员时填充。 */
+	/** 成员摘要；本地房间仅含本地玩家，在线房间仅含 Steam 确认的真实成员。 */
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatOnlineRoomMember> RoomMembers;
 
@@ -433,11 +439,11 @@ struct FCatOnlineSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	FString JoinLobbyUri;
 
-	/** 当前 Session 设置报告的最大公开连接数；不是 UI 默认值，无法读取时保留零。 */
+	/** 本地房间为 1；在线房间来自 Session 设置，无法读取时为零。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 MaxPlayers = 0;
 
-	/** 当前 Session 设置报告的已占用公开连接数；成员列表无法读取时仍不把这个值展开成伪成员。 */
+	/** 本地房间为 1；在线房间来自 Session 已占用连接数，不据此生成成员。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 CurrentPlayers = 0;
 

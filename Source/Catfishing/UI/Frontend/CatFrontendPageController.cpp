@@ -330,7 +330,7 @@ void UCatFrontendPageController::RequestCancel()
 			SetLocalResultText(FText::FromString(TEXT("房间操作正在进行，暂时不能取消。")), RootWidget.IsValid() ? RootWidget->GetVisibleFeedbackSource() : nullptr);
 			return;
 		}
-		if (Snapshot.SessionState == ECatOnlineSessionState::Host || Snapshot.SessionState == ECatOnlineSessionState::Client)
+		if (Snapshot.bLocalRoomActive || Snapshot.SessionState == ECatOnlineSessionState::Host || Snapshot.SessionState == ECatOnlineSessionState::Client)
 		{
 			RequestLeaveRoom();
 			return;
@@ -568,7 +568,7 @@ void UCatFrontendPageController::HandleRoomModelChanged()
 		{
 			bWaitingForRoomCreation = false;
 			PendingRoomCreationRequestId.Invalidate();
-			if (Snapshot.SessionState != ECatOnlineSessionState::Host)
+			if (!Snapshot.bLocalRoomActive && Snapshot.SessionState != ECatOnlineSessionState::Host)
 			{
 				ReleaseUnjoinedSave();
 				SetLocalResultText(Room->GetLastResultText(), SaveModel.Get());
@@ -584,7 +584,7 @@ void UCatFrontendPageController::HandleRoomModelChanged()
 		&& Snapshot.SessionState == ECatOnlineSessionState::NoSession)
 	{ Root->ShowJoin(); }
 	const bool bHasFrontendRoom = Snapshot.WorldState == ECatOnlineWorldState::Frontend
-		&& ((Snapshot.SessionState == ECatOnlineSessionState::Host && Snapshot.SessionRole == ECatOnlineSessionRole::Host)
+		&& (Snapshot.bLocalRoomActive || (Snapshot.SessionState == ECatOnlineSessionState::Host && Snapshot.SessionRole == ECatOnlineSessionRole::Host)
 			|| (Snapshot.SessionState == ECatOnlineSessionState::Client && Snapshot.SessionRole == ECatOnlineSessionRole::Client));
 	const bool bGameplayStartInProgress = Snapshot.ActiveOperation == ECatOnlineOperation::Start
 		&& Snapshot.LastError == ECatOnlineError::None && Snapshot.RequestId.IsValid()
@@ -657,7 +657,7 @@ void UCatFrontendPageController::HandleRoomModelChanged()
 	{
 		return;
 	}
-	if (Snapshot.SessionState == ECatOnlineSessionState::NoSession && Snapshot.ActiveOperation == ECatOnlineOperation::None
+	if (!Snapshot.bLocalRoomActive && Snapshot.SessionState == ECatOnlineSessionState::NoSession && Snapshot.ActiveOperation == ECatOnlineOperation::None
 		&& Snapshot.LastError == ECatOnlineError::None && !bWaitingForSaveLoad && !bWaitingForRoomCreation)
 	{
 		SetLocalResultText(FText::GetEmpty());
@@ -698,7 +698,7 @@ bool UCatFrontendPageController::ReleaseUnjoinedSave()
 	if (UCatFrontendRoomModel* Room = RoomModel.Get())
 	{
 		const FCatOnlineSnapshot Snapshot = Room->GetSnapshot();
-		if (Snapshot.SessionRole != ECatOnlineSessionRole::None || Snapshot.ActiveOperation != ECatOnlineOperation::None
+		if (Snapshot.bLocalRoomActive || Snapshot.SessionRole != ECatOnlineSessionRole::None || Snapshot.ActiveOperation != ECatOnlineOperation::None
 			|| (Snapshot.SessionState != ECatOnlineSessionState::NoSession && Snapshot.SessionState != ECatOnlineSessionState::Error)) { return false; }
 	}
 	if (Save->GetActiveSlotId().IsNone() && !Save->HasLoadedRunForTravel()) { return true; }
