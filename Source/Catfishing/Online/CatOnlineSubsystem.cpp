@@ -23,6 +23,8 @@
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Framework/Game/CatFrontendGameMode.h"
 #include "Engine/Engine.h"
+#include "UObject/StrongObjectPtr.h"
+#include "UObject/UObjectIterator.h"
 #include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/NetDriver.h"
@@ -247,9 +249,9 @@ void UCatOnlineSubsystem::Deinitialize()
 	CurrentRoomName.Reset();
 	CurrentSessionAccess = ECatSessionAccessPolicy::Undecided;
 	GameplayPreloadRequestId = INDEX_NONE;
-	PreloadedGameplayWorld = nullptr;
+	ReleasePreloadedMapWorld(PreloadedGameplayWorld, TEXT("Gameplay"));
 	FrontendPreloadRequestId = INDEX_NONE;
-	PreloadedFrontendWorld = nullptr;
+	ReleasePreloadedMapWorld(PreloadedFrontendWorld, TEXT("Frontend"));
 	bIsEngineLoadMapPending = false;
 	EngineLoadMapName.Reset();
 	SearchResultsByHandle.Reset();
@@ -1440,6 +1442,8 @@ void UCatOnlineSubsystem::HandleGameplayPackagePreloadComplete(const FName& Pack
 		|| CallbackEpoch != OperationEpoch || PackageName.ToString() != GameplayMapPackage)
 	{
 		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_callback_ignored Callback=GameplayPreload Epoch=%llu CurrentEpoch=%llu"), CallbackEpoch, OperationEpoch);
+		TObjectPtr<UWorld> UnusedWorld = LoadedPackage ? UWorld::FindWorldInPackage(LoadedPackage) : nullptr;
+		ReleasePreloadedMapWorld(UnusedWorld, TEXT("GameplayIgnoredCallback"));
 		return;
 	}
 	UWorld* LoadedWorld = Result == EAsyncLoadingResult::Succeeded && LoadedPackage
@@ -1451,7 +1455,7 @@ void UCatOnlineSubsystem::HandleGameplayPackagePreloadComplete(const FName& Pack
 			*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1, *UEnum::GetValueAsString(OperationRole));
 		GameplayPreloadRequestId = INDEX_NONE;
 		StopMapPreloadProgressTracking();
-		PreloadedGameplayWorld = nullptr;
+		ReleasePreloadedMapWorld(PreloadedGameplayWorld, TEXT("Gameplay"));
 		FinishOperationFailure(ECatOnlineError::GameplayPreloadFailed);
 		return;
 	}
@@ -1467,7 +1471,7 @@ void UCatOnlineSubsystem::HandleGameplayPackagePreloadComplete(const FName& Pack
  {
    UWorld* World = GetWorld();
    if (!World || World->GetNetMode() != NM_Standalone || !World->ServerTravel(GameplayMapPackage, true))
-   { PreloadedGameplayWorld = nullptr; FinishOperationFailure(ECatOnlineError::TravelRejected); return; }
+   { ReleasePreloadedMapWorld(PreloadedGameplayWorld, TEXT("Gameplay")); FinishOperationFailure(ECatOnlineError::TravelRejected); return; }
    ExpectedPackage = GameplayMapPackage; WorldState = ECatOnlineWorldState::TravelingToLake;
    TransportState = ECatOnlineTransportState::TravelQueued;
    BroadcastSnapshot(TEXT("online_local_travel_queued"));
@@ -1478,13 +1482,13 @@ void UCatOnlineSubsystem::HandleGameplayPackagePreloadComplete(const FName& Pack
 		RefreshRoomSnapshotFacts();
 		if (!CatOnlineRoomReadiness::CanHostStart(RoomMembers, RoomCurrentPlayers, RoomMaxPlayers))
 		{
-			PreloadedGameplayWorld = nullptr;
+			ReleasePreloadedMapWorld(PreloadedGameplayWorld, TEXT("Gameplay"));
 			FinishOperationFailure(ECatOnlineError::RoomMembersNotReady);
 			return;
 		}
 		if (!BeginHostTravelToGameplayMap())
 		{
-			PreloadedGameplayWorld = nullptr;
+			ReleasePreloadedMapWorld(PreloadedGameplayWorld, TEXT("Gameplay"));
 			FinishOperationFailure(ECatOnlineError::TravelRejected);
 		}
 		return;
@@ -1492,7 +1496,7 @@ void UCatOnlineSubsystem::HandleGameplayPackagePreloadComplete(const FName& Pack
 
 	if (!IsCurrentLobbyReady())
 	{
-		PreloadedGameplayWorld = nullptr;
+		ReleasePreloadedMapWorld(PreloadedGameplayWorld, TEXT("Gameplay"));
 		FinishOperationFailure(ECatOnlineError::LobbyReadyPublishFailed);
 		return;
 	}
@@ -1502,7 +1506,7 @@ void UCatOnlineSubsystem::HandleGameplayPackagePreloadComplete(const FName& Pack
 		|| !OperationSessionInterface->GetResolvedConnectString(CatOnlineNames::GameSession, ConnectString)
 		|| ConnectString.IsEmpty())
 	{
-		PreloadedGameplayWorld = nullptr;
+		ReleasePreloadedMapWorld(PreloadedGameplayWorld, TEXT("Gameplay"));
 		FinishOperationFailure(ECatOnlineError::ConnectStringUnavailable);
 		return;
 	}
@@ -2417,6 +2421,8 @@ void UCatOnlineSubsystem::HandleFrontendPackagePreloadComplete(const FName& Pack
 		|| CallbackEpoch != OperationEpoch || PackageName.ToString() != CatOnlineNames::Frontend)
 	{
 		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_callback_ignored Callback=FrontendPreload Epoch=%llu CurrentEpoch=%llu"), CallbackEpoch, OperationEpoch);
+		TObjectPtr<UWorld> UnusedWorld = LoadedPackage ? UWorld::FindWorldInPackage(LoadedPackage) : nullptr;
+		ReleasePreloadedMapWorld(UnusedWorld, TEXT("FrontendIgnoredCallback"));
 		return;
 	}
 	UWorld* LoadedWorld = Result == EAsyncLoadingResult::Succeeded && LoadedPackage
@@ -2428,7 +2434,7 @@ void UCatOnlineSubsystem::HandleFrontendPackagePreloadComplete(const FName& Pack
 			*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1, *UEnum::GetValueAsString(OperationRole));
 		FrontendPreloadRequestId = INDEX_NONE;
 		StopMapPreloadProgressTracking();
-		PreloadedFrontendWorld = nullptr;
+		ReleasePreloadedMapWorld(PreloadedFrontendWorld, TEXT("Frontend"));
 		FinishOperationFailure(ECatOnlineError::TravelRejected);
 		return;
 	}
@@ -2442,7 +2448,7 @@ void UCatOnlineSubsystem::HandleFrontendPackagePreloadComplete(const FName& Pack
 		*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1, *UEnum::GetValueAsString(OperationRole));
 	if (!CommitFrontendTravelAfterPreload())
 	{
-		PreloadedFrontendWorld = nullptr;
+		ReleasePreloadedMapWorld(PreloadedFrontendWorld, TEXT("Frontend"));
 		FinishOperationFailure(ECatOnlineError::TravelRejected);
 	}
 }
@@ -2457,7 +2463,7 @@ bool UCatOnlineSubsystem::BeginTravelToFrontend()
 	{
 		FrontendListener.Stop(TEXT("ReturnedToFrontend"), ActiveRequestId, OperationEpoch);
 		FrontendPreloadRequestId = INDEX_NONE;
-		PreloadedFrontendWorld = nullptr;
+		ReleasePreloadedMapWorld(PreloadedFrontendWorld, TEXT("Frontend"));
 		StopMapPreloadProgressTracking();
 		TransportState = ECatOnlineTransportState::Idle;
 		if (DeferredFailureAfterTravel != ECatOnlineError::None)
@@ -3237,6 +3243,40 @@ bool UCatOnlineSubsystem::SetWorldStateForPackage(const FString& PackageName)
 	return false;
 }
 
+// 预载释放：PIE 使用原地图的副本，编辑器却会初始化原 Inactive World 的子系统。
+// 必须在 GC 标记不可达之前清理闲置原图；活动世界由引擎旅行管理，共享预载交给最后一个持有者清理。
+void UCatOnlineSubsystem::ReleasePreloadedMapWorld(TObjectPtr<UWorld>& PreloadedWorld, const TCHAR* Purpose)
+{
+	TStrongObjectPtr<UWorld> World(PreloadedWorld.Get());
+	PreloadedWorld = nullptr;
+	if (!World.IsValid()) { return; }
+	const TCHAR* Result = TEXT("EngineOwnedOrUninitialized");
+#if WITH_EDITOR
+	if (World->WorldType == EWorldType::Inactive && World->IsInitialized() && !World->HasBegunPlay()
+		&& !World->IsRooted() && !World->GetGameInstance() && GEngine && !GEngine->GetWorldContextFromWorld(World.Get()))
+	{
+		bool bAnotherPreloadOwner = false;
+		for (TObjectIterator<UCatOnlineSubsystem> It; It; ++It)
+		{
+			if (It->PreloadedGameplayWorld == World.Get() || It->PreloadedFrontendWorld == World.Get())
+			{
+				bAnotherPreloadOwner = true;
+				break;
+			}
+		}
+		if (bAnotherPreloadOwner) { Result = TEXT("SharedPreloadRetained"); }
+		else
+		{
+			World->CleanupWorld();
+			Result = TEXT("InactiveWorldCleaned");
+		}
+	}
+#endif
+	UE_LOG(LogCatOnline, Log, TEXT("Event=online_map_preload_world_released RequestId=%s Epoch=%llu Purpose=%s ReleasedWorld=%s WorldType=%d Initialized=%d World=%s NetMode=%d Result=%s"),
+		*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch, Purpose, *World->GetPathName(),
+		int32(World->WorldType), World->IsInitialized(), *GetNameSafe(GetWorld()), GetWorld() ? int32(GetWorld()->GetNetMode()) : -1, Result);
+}
+
 // 成功结案流程：获准释放的 Leave 先确认无会话且回到 Frontend，再交给释放收口；busy 时不提前宣告退出完成。
 // 释放已完成或无需释放时，撤销许可并解绑两类 Save、Run 与平台回调；Start 成功只清地图包请求并保留玩法预热 handle，回到 Frontend 的终态才释放本局预热资源；最后推进 epoch 并广播成功，不改真实 Session/World/Transport。
 void UCatOnlineSubsystem::FinishOperationSuccess()
@@ -3268,14 +3308,14 @@ void UCatOnlineSubsystem::FinishOperationSuccess()
 	if (bFinishingGameplayStart)
 	{
 		GameplayPreloadRequestId = INDEX_NONE;
-		PreloadedGameplayWorld = nullptr;
+		ReleasePreloadedMapWorld(PreloadedGameplayWorld, TEXT("Gameplay"));
 	}
 	if (WorldState == ECatOnlineWorldState::Frontend)
 	{
 		ClearGameplayStartupAssetsPreload(true);
 	}
 	FrontendPreloadRequestId = INDEX_NONE;
-	PreloadedFrontendWorld = nullptr;
+	ReleasePreloadedMapWorld(PreloadedFrontendWorld, TEXT("Frontend"));
 	LastError = ECatOnlineError::None;
 	++OperationEpoch;
 	BroadcastSnapshot(TEXT("online_operation_succeeded"));
@@ -3316,14 +3356,14 @@ void UCatOnlineSubsystem::FinishOperationFailure(const ECatOnlineError Error)
 	{
 		ClearGameplayStartupAssetsPreload(true);
 		GameplayPreloadRequestId = INDEX_NONE;
-		PreloadedGameplayWorld = nullptr;
+		ReleasePreloadedMapWorld(PreloadedGameplayWorld, TEXT("Gameplay"));
 	}
 	else if (WorldState == ECatOnlineWorldState::Frontend)
 	{
 		ClearGameplayStartupAssetsPreload(true);
 	}
 	FrontendPreloadRequestId = INDEX_NONE;
-	PreloadedFrontendWorld = nullptr;
+	ReleasePreloadedMapWorld(PreloadedFrontendWorld, TEXT("Frontend"));
 	LastError = Error;
 	++OperationEpoch;
 	BroadcastSnapshot(TEXT("online_operation_failed"));

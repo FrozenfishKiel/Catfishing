@@ -22,6 +22,7 @@
 #include "UI/Save/CatLakeMainMenuController.h"
 #include "UI/Save/CatLakeMainMenuWidget.h"
 #include "Tests/AutomationCommon.h"
+#include "UObject/GarbageCollection.h"
 #if WITH_EDITOR
 #include "Editor.h"
 #include "Tests/AutomationEditorCommon.h"
@@ -157,6 +158,10 @@ public:
      Save->ReleaseActiveRun();
      Test->TestTrue(TEXT("Delete only the generated test slot"), Save->RequestDeleteSlot(SlotId).bAccepted);
      ++Phase; break;
+   case 12:
+     // 旅行本身结束不代表闲置地图的子系统已收尾；在同一用例中回收，不能把 ensure 留给下一项测试。
+     CollectGarbage(RF_NoFlags, true);
+     ++Phase; break;
    default: Test->AddInfo(TEXT("Offline prepare/promotion failure/cancel/reload/start/spawn/UI/save/return/reload completed")); return true;
    }
    return false;
@@ -191,6 +196,11 @@ bool FCatLocalRoomTravelTest::RunTest(const FString& Parameters)
    ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
    ADD_LATENT_AUTOMATION_COMMAND(FCatLocalTravelCommand(this, nullptr));
    ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
+   ADD_LATENT_AUTOMATION_COMMAND(FFunctionLatentCommand([]()
+   {
+     CollectGarbage(RF_NoFlags, true);
+     return true;
+   }));
    ADD_LATENT_AUTOMATION_COMMAND(FFunctionLatentCommand([OldMode, OldCount, OldOneProcess]()
    {
      auto* Restore = GetMutableDefault<ULevelEditorPlaySettings>();

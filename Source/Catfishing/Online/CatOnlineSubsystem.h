@@ -447,6 +447,9 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UWorld> PreloadedGameplayWorld;
 
+	/** 释放预载引用前清理闲置编辑器原图，不接管实际游戏或共享预载世界。 */
+	void ReleasePreloadedMapWorld(TObjectPtr<UWorld>& PreloadedWorld, const TCHAR* Purpose);
+
 	/** 当前回主菜单流程对应的前台地图 LoadPackageAsync 请求 ID；非 INDEX_NONE 表示返回主菜单仍在真实包预载阶段。 */
 	int32 FrontendPreloadRequestId = INDEX_NONE;
 
