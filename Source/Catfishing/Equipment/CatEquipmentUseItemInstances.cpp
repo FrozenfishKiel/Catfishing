@@ -9,6 +9,9 @@
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "TimerManager.h"
+#include "Engine/World.h"
+#include "Logging/CatLog.h"
+#include "Logging/CatLogContext.h"
 
 namespace CatEquipmentUseItemInstances
 {
@@ -118,6 +121,38 @@ FCatDomainCommandResult UCatChumEquipmentItemInstance::UseFromInventorySlotFromA
 
 // 输入生命周期声明：左键的松开仍回到启动实例；选择其他格不会结束或改写这次使用。
 bool UCatChumEquipmentItemInstance::UsesContinuousInput() const { return true; }
+
+void UCatChumEquipmentItemInstance::SetUseInputActiveLocally(APlayerController* Controller, const bool bActive)
+{
+	if (bActive)
+	{
+		if (!Controller || !Controller->IsLocalController() || !Controller->GetPawn() || !Controller->GetWorld()) return;
+		if (LocalPreviewController == Controller && LocalPreviewPawn == Controller->GetPawn() && LocalPreviewStartSeconds >= 0.0) return;
+		LocalPreviewController = Controller;
+		LocalPreviewPawn = Controller->GetPawn();
+		LocalPreviewStartSeconds = Controller->GetWorld()->GetTimeSeconds();
+	}
+	else
+	{
+		if (LocalPreviewStartSeconds < 0.0 || LocalPreviewController != Controller) return;
+		LocalPreviewController.Reset();
+		LocalPreviewPawn.Reset();
+		LocalPreviewStartSeconds = -1.0;
+	}
+	UE_LOG(LogCatFishing, Log, TEXT("Event=chum_local_preview_changed InstanceId=%s World=%s Authority=%d Active=%d %s"),
+		*GetItemInstanceId().ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(Controller ? Controller->GetWorld() : nullptr),
+		Controller && Controller->HasAuthority() ? 1 : 0, bActive ? 1 : 0, *CatLogContext::BuildControllerFields(Controller));
+}
+
+bool UCatChumEquipmentItemInstance::TryGetLocalChargePreview(APlayerController* Controller, float& OutHeldSeconds) const
+{
+	OutHeldSeconds = 0.0f;
+	if (!Controller || !Controller->IsLocalController() || LocalPreviewController != Controller
+		|| !LocalPreviewPawn.IsValid() || LocalPreviewPawn != Controller->GetPawn()
+		|| !Controller->GetWorld() || LocalPreviewStartSeconds < 0.0) return false;
+	OutHeldSeconds = FMath::Max(0.0, Controller->GetWorld()->GetTimeSeconds() - LocalPreviewStartSeconds);
+	return true;
+}
 
 // 库存影响声明：只有能力真正提交投放时按已有规则扣量，开始等待和取消都不进入扣量事务。
 bool UCatChumEquipmentItemInstance::ConsumesInventoryQuantityOnUse() const { return true; }

@@ -23,6 +23,9 @@
 #include "Environment/Tests/CatWaterTestFixtures.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/Integration/CatFishingAimLibrary.h"
+#include "Fishing/Debug/CatFishingDebugSubsystem.h"
+#include "Components/LineBatchComponent.h"
+#include "HAL/IConsoleManager.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Fishing/CatFishingService.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
@@ -121,6 +124,9 @@ namespace CatInventoryQuickbarRemoteUseTests
 				FCatSelectedUseInputTestAccess::Release(ClientController.Get());
 				Stage=16; return false;
 			case 16: return VerifyRemoteScoop();
+			case 17: return BeginRemoteChumCancellation();
+			case 18: return CancelRemoteChum();
+			case 19: return VerifyRemoteChumCancellation();
 			default: Test->AddError(TEXT("Remote quickbar use test reached an unknown stage.")); return true;
 			}
 		}
@@ -252,7 +258,9 @@ namespace CatInventoryQuickbarRemoteUseTests
 		{
 			if (!VerifyFixtureChumLineOfSight()) return true;
 			if (!Test->TestTrue(TEXT("remote selects second chum locally"), ClientController->RequestSelectQuickbarSlotFromInput(SecondChumSlot))) return true;
+			if (!VerifyLocalChumPreview(false)) return true;
 			FCatSelectedUseInputTestAccess::Press(ClientController.Get());
+			if (!VerifyLocalChumPreview(true)) return true;
 			const FCatInventoryEntry* SourceChum = ServerBackpack->GetInventoryEntryAtSlot(SecondChumSlot);
 			ActiveChumSource = SourceChum ? SourceChum->Instance : nullptr;
 			if (!Test->TestTrue(TEXT("remote left click retains the selected source chum identity before RPC arrives"), ActiveChumSource.IsValid())) return true;
@@ -278,8 +286,52 @@ namespace CatInventoryQuickbarRemoteUseTests
 			ActiveChumRequestId = ActiveUseContext.RequestId;
 			if (!Test->TestTrue(TEXT("remote source chum keeps a valid Begin request for Release receipt"), ActiveChumRequestId.IsValid())) return true;
 			if (!Test->TestTrue(TEXT("remote slot change keeps the original source ability active"), IsChumUseWaiting(ServerCharacter.Get(), ActiveChumSource.Get()))) return true;
+			if (!VerifyLocalChumPreview(true)) return true;
 			FCatSelectedUseInputTestAccess::Release(ClientController.Get());
+			if (!VerifyLocalChumPreview(false)) return true;
 			Stage = 5; return false;
+		}
+		/** 在真实输入/RPC 链路上核对本地实例及线批次；关闭总调试开关仍须绘制，松开当帧不得再提交曲线。 */
+		bool VerifyLocalChumPreview(const bool bExpectedActive)
+		{
+			const FCatInventoryEntry* Entry = ClientBackpack->GetInventoryEntryAtSlot(SecondChumSlot);
+			const UCatChumEquipmentItemInstance* Chum = Entry ? Cast<UCatChumEquipmentItemInstance>(Entry->Instance) : nullptr;
+			UCatFishingDebugSubsystem* Preview = ClientWorld->GetSubsystem<UCatFishingDebugSubsystem>();
+			ULineBatchComponent* Lines = ClientWorld->GetLineBatcher(UWorld::ELineBatcherType::World);
+			IConsoleVariable* Debug = IConsoleManager::Get().FindConsoleVariable(TEXT("cat.Fishing.Debug"));
+			IConsoleVariable* Enabled = IConsoleManager::Get().FindConsoleVariable(TEXT("cat.Fishing.ChumPreview"));
+			if (!Test->TestTrue(TEXT("remote preview has local source, subsystem, line batch and switches"), Chum && Preview && Lines && Debug && Enabled)) return false;
+			float HeldSeconds = 0.0f;
+			bool bPassed = Test->TestEqual(TEXT("local chum preview follows actual left click lifecycle before server receipt"),
+				Chum->TryGetLocalChargePreview(ClientController.Get(), HeldSeconds), bExpectedActive);
+			const FCatInventoryEntry* OtherEntry = ClientBackpack->GetInventoryEntryAtSlot(FirstChumSlot);
+			const UCatChumEquipmentItemInstance* OtherChum = OtherEntry ? Cast<UCatChumEquipmentItemInstance>(OtherEntry->Instance) : nullptr;
+			float OtherHeld = 0.0f;
+			bPassed &= Test->TestTrue(TEXT("unselected chum never owns the preview"), OtherChum && !OtherChum->TryGetLocalChargePreview(ClientController.Get(), OtherHeld));
+			const int32 PreviousDebug = Debug->GetInt(), PreviousPreview = Enabled->GetInt();
+			Debug->SetWithCurrentPriority(0); Enabled->SetWithCurrentPriority(1);
+			const int32 LinesBefore = Lines->BatchedLines.Num();
+			Preview->Tick(0.0f);
+			const int32 AddedLines = Lines->BatchedLines.Num() - LinesBefore;
+			if (bExpectedActive)
+			{
+				TArray<FVector> Path; FVector Landing; FCatWaterRegionHandle Region; bool bHitWater = false;
+				UCatFishingAimLibrary::PredictChumThrow(ClientWorld.Get(), ClientController->GetPawn()->GetActorLocation(),
+					ClientController->GetControlRotation(), UCatFishingAimLibrary::ChargeAlphaFromHeldSeconds(HeldSeconds), Path, Landing, Region, bHitWater);
+				bPassed &= Test->TestTrue(TEXT("preview submits arc and landing marker with main fishing debug disabled"), Path.Num() > 1 && AddedLines > Path.Num() - 1);
+				for (int32 Index = 1; Index < Path.Num() && Index <= AddedLines; ++Index)
+				{
+					const FBatchedLine& Line = Lines->BatchedLines[LinesBefore + Index - 1];
+					bPassed &= Test->TestTrue(TEXT("drawn arc uses shared throw prediction points"), Line.Start.Equals(Path[Index - 1]) && Line.End.Equals(Path[Index]));
+				}
+			}
+			else bPassed &= Test->TestEqual(TEXT("inactive preview submits no lines"), AddedLines, 0);
+			Enabled->SetWithCurrentPriority(0);
+			const int32 DisabledBefore = Lines->BatchedLines.Num();
+			Preview->Tick(0.0f);
+			bPassed &= Test->TestEqual(TEXT("preview toggle suppresses line submission"), Lines->BatchedLines.Num(), DisabledBefore);
+			Debug->SetWithCurrentPriority(PreviousDebug); Enabled->SetWithCurrentPriority(PreviousPreview);
+			return bPassed;
 		}
 		/** 使用与正式 PlaceChum 相同的抛物线、水域吸附和 Visibility 射线预检测试场景；命中时记录精确遮挡物，避免把固定夹具问题误报为 RPC 超时。 */
 		bool VerifyFixtureChumLineOfSight()
@@ -340,6 +392,31 @@ namespace CatInventoryQuickbarRemoteUseTests
 			const bool bClientReceiptMatches = Test->TestTrue(TEXT("remote owning client receives the matching successful PlaceChum receipt"),
 				ClientPlaceResult.RequestId == ActiveChumRequestId && ClientPlaceResult.bCommitted && ClientPlaceResult.Error == ECatChumFieldError::None);
 			if (!bFirstChumUnchanged || !bSecondChumConsumed || !bServerReceiptMatches || !bClientReceiptMatches) return true;
+			Stage = 17; return false;
+		}
+		/** 正常投放后再走一次真实按住/取消，验证预览不会因原请求收尾而残留。 */
+		bool BeginRemoteChumCancellation()
+		{
+			const FCatInventoryEntry* Entry = ClientBackpack->GetInventoryEntryAtSlot(SecondChumSlot);
+			if (!Entry || Entry->StackCount != SecondChumCount - 1) return false;
+			FCatSelectedUseInputTestAccess::Press(ClientController.Get());
+			if (!VerifyLocalChumPreview(true)) return true;
+			Stage = 18; return false;
+		}
+		bool CancelRemoteChum()
+		{
+			if (!IsChumUseWaiting(ServerCharacter.Get(), ActiveChumSource.Get())) return false;
+			ClientController->ClearPhysicalControlInput(TEXT("ChumPreviewTestCancel"));
+			FCatSelectedUseInputTestAccess::Release(ClientController.Get());
+			if (!VerifyLocalChumPreview(false)) return true;
+			Stage = 19; return false;
+		}
+		bool VerifyRemoteChumCancellation()
+		{
+			if (IsChumUseWaiting(ServerCharacter.Get(), ActiveChumSource.Get())) return false;
+			const FCatInventoryEntry* Entry = ServerBackpack->GetInventoryEntryAtSlot(SecondChumSlot);
+			if (!Test->TestTrue(TEXT("cancelling preview does not consume another chum"), Entry && Entry->StackCount == SecondChumCount - 1)) return true;
+			if (!VerifyLocalChumPreview(false)) return true;
 			Stage = bToolsOnly ? 13 : 6; return false;
 		}
 		/** 打窝完成后沿同一左键入口选择抄网；使用正式库存与真实可叼鱼验证网络终态。 */

@@ -1,5 +1,23 @@
 # 鱼运动与遛鱼逻辑：设计与实现
 
+## 2026-09-16 窝料左键投掷预判曲线修复
+
+统一库存 Use 迁移曾清空 `DrawChumChargePreview`，但 `UCatGA_FishingChum` 为 ServerOnly，客户端没有接收替代预览。当前修复把本地输入表现接在原窝料实例上：选窝料按住左键显示曲线和落点，松开/取消清理；服务器仍用自己的 WaitInputRelease 时间、弹道和原库存事务完成投放。客户端按住秒数仅供表现，不复制、不上传、不扣量。弱网下本地时间及位置与服务器裁决可能有偏差，预判不保证最终放置成功。
+
+基线：开始时 `Source/Catfishing/Fishing/Simulation/CatFishingFightSimulator.cpp` 有并行改动，本轮未编辑或提交它。初次 Editor 链接被用户打开的编辑器占用 DLL 阻塞，不能将该次编译当成完整构建通过。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 本地输入及生命周期 | `Source/Catfishing/Framework/Game/CatfishingPlayerController.cpp` 的 BeginSelectedItemUseFromInput/ClearSelectedItemUseInput/ClientReceiveDomainCommandResult 调用实例 SetUseInputActiveLocally | 现有窝料继承空实现；目标按住即预览，释放、取消、拒绝及换 Pawn 失效 | `Source/Catfishing/Equipment/CatEquipmentUseItemInstances.h/.cpp` 新增本地覆写及 TryGetLocalChargePreview；弱引用原 Controller/Pawn、记录本地世界秒数 | 保留 Controller 对称通知，先实现来源状态，再衔接绘制 | 普通与弱网真实左键、精确实例、释放/取消；拒绝/换 Pawn 另核对调用链 | 已实现；ChumPreview-01 普通/弱网预览与释放/取消通过；拒绝和换 Pawn 仅核对调用链，未做专门运行用例 |
+| 曲线、落点和提示 | `Source/Catfishing/Fishing/Debug/CatFishingDebugSubsystem.cpp` Tick 在总调试开关前调用 DrawChumChargePreview；此前函数为空 | 目标在本地绘制轨迹、落点球及左键蓄力提示 | 读取当前背包原实例的预览状态，复用 CatFishingAimLibrary::PredictChumThrow/ChargeAlphaFromHeldSeconds；帧级线段不持久保留 | 不等待服务器 Ability 激活或回执，关闭 cat.Fishing.Debug 仍显示 | 线批次必须与共享预测路径相同；未按/松开/取消不提交，独立预览开关可关闭 | 已替换空实现并更新旧 G 补窝提示；实际线批次与共享预测点一致，独立开关及停止绘制断言通过；真人画面待验 |
+| 权威、资源、复制/回执 | `Source/Catfishing/AbilitySystem/Fishing/InputAbilities/CatFishingChumAbility.cpp` WaitInputRelease→`CatFishingCommandComponent::CommitChumUseFromAbilityOnAuthority` | 保留服务器按住秒数、力度映射、库存精确实例扣量和同请求结果 | 不修改权威接口、Ability、持久化或复制字段；本地状态不作为提交参数 | 只读表现与原事务并行，不增加第二个投放入口 | 原份窝料扣一次、取消不扣；核对房主与客户端同请求回执 | 无权威行为改动；普通/弱网投放两端同请求成功、原实例扣量、取消不额外扣量通过 |
+| 配置、资产、Cook 和旧路径 | `Source/Catfishing/Fishing/CatFishingSettings.h::ChumChargeMaxSeconds=1.5`；原生 cat.Fishing.ChumPreview 默认1；正式 IMC 左键已由前轮迁移 | 保留秒→0..1映射、现有投掷参数与正式输入；无需新资产 | 不改 BP/WBP/DataAsset、生成脚本、Cook入口；保留公开本地输入虚函数，仅覆写窝料 | 无资产迁移；二进制其他消费者未全量确认，因此不删除兼容入口 | Development 编译；Shipping 仍受 ENABLE_DRAW_DEBUG 限制，正式视觉替换尚未交付 | 不涉及新持久化/资产迁移；修正 ChumThrowQuantity 的旧 Q 注释；Editor/Game Development 已构建通过，Shipping 曲线和新包真人验收未完成 |
+| 测试与日志 | `Source/CatfishingEditor/Inventory/Tests/CatInventoryQuickbarRemoteUseTests.cpp` 真实左键普通/弱网状态机；`LogCatFishing` | 测试原来只验证投放，没有预览消费者证据 | 加入原实例本地状态、实际线批次、释放及取消检查；仅输入边沿记录 chum_local_preview_changed 与 InstanceId、World/Authority、Controller/NetMode/PawnRole | 同一客户端输入贯通至原服务器投放回执；CVar 测试后恢复 | Editor/Game 构建、定向 Automation；打包默认落盘需独立验收 | ChumPreview-01 三项全部通过（均带警告）；日志有主机/远端输入、原实例 Begin、投放回执与取消；诊断不会每 Tick 输出 |
+
+操作指南 `Docs/FishingMVPOperationGuide_zh-CN.md` §4、§5.3 和旧问题记录已按当前左键、来源实例、ServerOnly Ability/本地预览分工更新，移除旧 Q 打窝和另建蓝图 PressTime 的操作指引。
+
+证据分层：`contract`：Editor 构建 `Saved/Logs/ChumPreview-EditorFinal2.log`、Game 构建 `Saved/Logs/ChumPreview-Game.log` 成功，diff 检查通过。首轮 DLL 占用失败后用户关闭编辑器；新增测试误调私有清理入口的编译错误已改为正式公开 ClearPhysicalControlInput 并复编通过。`runtime_behavior`：`Saved/Automation/ChumPreview-01/Report/index.json` 三项成功，日志 `Saved/Automation/ChumPreview-01/Automation.log`；覆盖普通与两端各 100ms±30ms/5%丢包、实际左键、渲染线批次、释放/取消、原份窝料扣量及双方成功回执。三项均有警告，含既有 HUD/Collection 资产、地图静态灯光、鱼护旧容量及用例预期拒绝/取消分支，未将其写成全库无警告。随后只统一日志关联字段和清理注释，不改变玩法或测试断言；最终交付 Editor/Game 构建分别见 `Saved/Logs/ChumPreview-EditorDelivery.log`、`Saved/Logs/ChumPreview-GameDelivery.log`，均成功。`presentation_delivery` 未进行真人画面、新 Cook/打包双端验收。正式包应从 `<打包根目录>/Catfishing/Saved/Logs` 分别核对两端 `LogCatFishing` 与库存请求日志，此处不以编辑器日志替代包端证据。此修复不关闭 Fishing/UI/Delivery 模块。
+
 ## 2026-09-16 选格取竿与钓鱼生命周期修复
 
 当前输入：选中鱼竿立即装备；左键沿用瞄准/松开抛钩、真咬提钩及收线；未抛钩可换格，抛钩后到终局锁定。R 架竿保留会话并释放格位，E 操作同一世界竿，X 收回当前手持竿。其他选中物品使用左键。空手 X 不承担统一拾取入口；地面竿的通用拾取权限仍待定。下节力量碾压删除结果仍有效，竿强断竿规则保留。

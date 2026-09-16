@@ -49,6 +49,10 @@ public:
 	virtual FCatDomainCommandResult UseFromInventorySlotFromAuthority(const FCatInventoryEntry& InventoryEntry, const FCatInventoryItemUseContext& UseContext) override;
 	/** 窝料声明连续输入；输入 Ability 用它固定 Begin 的实例和请求，Release 不会读取新选中格。 */
 	virtual bool UsesContinuousInput() const override;
+	/** 本地输入只驱动投掷预览；不参与服务器蓄力和扣量。 */
+	virtual void SetUseInputActiveLocally(APlayerController* RequestingController, bool bActive) override;
+	/** 只为启动输入的本地 Controller/Pawn 返回预览按住秒数，换 Pawn 后立即失效。 */
+	bool TryGetLocalChargePreview(APlayerController* RequestingController, float& OutHeldSeconds) const;
 	/** 窝料提交由既有 End 事务扣除一份数量；库存 Use 预检通过此声明保持数量物契约。 */
 	virtual bool ConsumesInventoryQuantityOnUse() const override;
 	/** 窝料 Release/Cancel；调用既有 End API 后清理保存的上下文，重复结束保持无可用上下文。 */
@@ -59,6 +63,10 @@ public:
 	void AbortActiveUseFromAbility(FGuid RequestId, UCatAbilitySystemComponent* SourceAbilitySystem);
 
 private:
+	/** 预览生命周期随原本地输入清理，不复制，也不作为玩法权威状态。 */
+	TWeakObjectPtr<APlayerController> LocalPreviewController;
+	TWeakObjectPtr<APawn> LocalPreviewPawn;
+	double LocalPreviewStartSeconds = -1.0;
 	/** 当前窝料实例尚未结束的唯一 Use 上下文；服务器 Begin 写入、来源 Ability 读取、End 无论结果都清空。 */
 	FCatInventoryItemUseContext ActiveUseContext;
 	/** ActiveUseContext 是否对应尚未结束的权威请求；防止默认构造的空 Request 被 Ability 当成有效命令。 */

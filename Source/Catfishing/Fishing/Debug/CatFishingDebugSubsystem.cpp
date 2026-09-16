@@ -23,6 +23,7 @@
 #include "Data/CatFishDefinition.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
+#include "Equipment/CatEquipmentUseItemInstances.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
@@ -647,11 +648,33 @@ void UCatFishingDebugSubsystem::DrawCastAimPoint(APlayerController* Controller) 
 #endif
 }
 
-// 窝料蓄力预览保留调用点，具体本地表现将由 G Use 的来源物品 Ability 承担；命令组件不再保存影子计时。
+// 只读原窝料实例的本地按住状态，复用权威投掷的弹道计算；不依赖 ServerOnly Ability 在客户端激活。
 void UCatFishingDebugSubsystem::DrawChumChargePreview(APlayerController* Controller) const
 {
 #if ENABLE_DRAW_DEBUG
-	(void)Controller;
+	UWorld* World = GetWorld();
+	const ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
+	const UCatInventoryComponent* Inventory = Character ? Character->GetInventoryComponent() : nullptr;
+	if (!World || !Inventory) return;
+	for (const FCatInventoryEntry& Entry : Inventory->GetInventoryEntries())
+	{
+		const UCatChumEquipmentItemInstance* Chum = Cast<UCatChumEquipmentItemInstance>(Entry.Instance);
+		float HeldSeconds = 0.0f;
+		if (!Chum || Entry.StackCount <= 0 || !Chum->TryGetLocalChargePreview(Controller, HeldSeconds)) continue;
+		const float Alpha = UCatFishingAimLibrary::ChargeAlphaFromHeldSeconds(HeldSeconds);
+		TArray<FVector> Path;
+		FVector Landing = FVector::ZeroVector;
+		FCatWaterRegionHandle Region;
+		bool bHitWater = false;
+		UCatFishingAimLibrary::PredictChumThrow(World, Character->GetActorLocation(), Controller->GetControlRotation(),
+			Alpha, Path, Landing, Region, bHitWater);
+		const FColor PathColor = bHitWater ? FColor::Yellow : FColor::Red;
+		for (int32 Index = 1; Index < Path.Num(); ++Index)
+			DrawDebugLine(World, Path[Index - 1], Path[Index], PathColor, false, -1.0f, 0, 2.0f);
+		if (!Path.IsEmpty()) DrawDebugSphere(World, Landing, 24.0f, 12, bHitWater ? FColor::Green : FColor::Red, false, -1.0f, 0, 2.0f);
+		PushStatus(0, FColor::Yellow, FString::Printf(TEXT("窝料蓄力 %.0f%%  松开左键投出"), Alpha * 100.0f));
+		return;
+	}
 #endif
 }
 
@@ -741,7 +764,7 @@ void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const
 		}
 		else
 		{
-			PushStatus(2, FColor::Silver, TEXT("等待咬钩…（选中窝料后 G 补窝 / X 收竿零损失）"));
+			PushStatus(2, FColor::Silver, TEXT("等待咬钩…（R 架竿后可切换窝料 / X 收竿零损失）"));
 		}
 		break;
 	case ECatFishingPhase::Probe:

@@ -238,23 +238,20 @@ FishingSessionStateTree=/Game/Data/StateTrees/ST_FishingSession.ST_FishingSessio
 
 ---
 
-## 步骤 4：按键分配（鱼竿与通用交互分离）
+## 步骤 4：当前按键与物品栏
 
-钓鱼 Ability 继续复用原有 InputAction；通用拾取交互新增一个 `IA_Interact`。可以执行《InteractionInputPythonSetup_zh-CN.md》中的脚本自动完成接线：
+当前输入由正式物品栏迁移和原左键路由维护，勿按历史方案重新绑定 Q/F/G。详细生命周期见[选格取竿与投掷预览修复](FishFightImplementationGuide_zh-CN.md)。
 
-| 键 | InputAction | 用途 | 走哪条路 |
-|---|---|---|---|
-| **R** | `IA_PutDownFishingRod` | 取出自己的竿并成为主控；主控再次按下放竿。抓回本人竿后按R恢复主控 | C++ 按服务器事实分派 |
-| **E** | `IA_Interact` | 准星交互/拾取；本地只选择 Current Target，真正拾取由服务器复核距离、视线和物品状态 | ✅ C++ 已实现，走 Native InputTag 而不是 Gameplay Ability |
-| **左键** | `IA_LMB` | 空手/辅助：按住伸左爪抓握；主位：按住瞄准、松手抛竿，真咬窗提竿，遛鱼时按住收线 | 输入层按按下时身份固定接收方，正常松开回到原接收方 |
-| **右键** | `IA_RMB` | 空手/辅助：按住伸右爪抓握；主位：遛鱼时按住松开线杯 | 抓握或原 `UCatGA_FishingSlack` 路由 |
-| **Q** | `IA_BaitSpot` | **长按蓄力打窝**：抛物线越蓄越远，松手投出 | ✅ C++ 已接管提交；蓝图只保留可选预览 |
-| **F** | `IA_CatchFish` | 抢抄 | ✅ C++ |
-| **X** | `IA_CancelFishing` | 取消当前会话 | ✅ C++ |
+| 输入 | 用途 | 实际接收方 |
+| --- | --- | --- |
+| 选中鱼竿格 | 自动拿起该实例；抛钩后使用中锁定切换 | 物品栏选择及鱼竿部署事务 |
+| **R** | 架竿，保留世界竿和会话，随后可切换物品 | `IA_ParkHeldFishingRod` |
+| **X** | 收竿归还原库存实例 | `IA_PackHeldFishingRod` |
+| **左键** | 选中窝料按住蓄力、松开投放；选中抄网使用；持竿时瞄准/抛竿、提竿/收线 | 原 `Cat.Input.Fishing.Primary` 路由按本次输入身份分派 |
+| **右键** | 主位搏斗松线；其他身体交互沿现有路由 | 原 `Cat.Input.Fishing.Slack` / 抓握路由 |
+| **E** | 对准世界物品交互；服务器复核目标和权限 | 原通用交互入口 |
 
-`DA_CatAbilityInputConfig.AbilityInputActions` 是 **6 条 Fishing InputTag**（含 `Cat.Input.Fishing.Slack` → `IA_RMB`）；`DA_CatAbilitySet_Default` 包含 6 个 Fishing Ability + 6 个无输入 BodyAction 专用 Ability。另有 `NativeInputActions`：`Cat.Input.Interact` → `IA_Interact`，它不授予额外 Ability。
-
-> 左键若仍保留蓝图抛竿提交，要注意它会和 GAS 的提竿/收线 Ability 同时监听同一个 InputAction；UI 监听 `OnResultReceived` 弹失败提示时仍要按 `CommandType` 过滤。Q 打窝当前由 `UCatGA_FishingChum` 提交按下/松开边沿，不再有占位空命令。
+旧的 Q 打窝、F 抄网和 G 取出物品映射已退役。打窝能力由原窝料实例的 AbilitySet 在服务器授予，客户端预览不依赖它在本机激活。不要再额外从蓝图提交一遍投放。
 
 ---
 
@@ -324,23 +321,18 @@ BeginCast 要用这两个值做乐观锁；OperateRod 成功后 `RodActorRevisio
 
 ---
 
-### 5.3 打窝 —— 已由 Q 键 C++ 接管，**不用做蓝图**（蓄力预览可选）
+### 5.3 打窝：选中窝料后按住左键，松开投放
 
-规格 3.1 打窝：蓄力抛掷、抛物线预览。现在的实现：
+- **按下左键**：Controller 固定选中的窝料实例；本地 `SetUseInputActiveLocally` 开始预览，服务器来源 `UCatGA_FishingChum` 等待 Release。
+- **松开左键**：本地预览结束；服务器按自己的按住秒数计算 `ChargeAlpha = clamp(held / ChumChargeMaxSeconds, 0, 1)`，用共享弹道预测求落点，原实例通过库存/环境事务验证并扣量，不再自动寻找另一份窝料。
+- **取消、拒绝或换 Pawn**：原 Controller 输入清理通知同一实例停止预览；取消不投放、不扣量。
+- 参数仍在 `Project Settings → Catfishing Fishing → Chum|Throw`：满蓄力 `1.5 s`、初速范围 `600–1400 cm/s`、基础仰角 `35°`、每次 `1` 份。
 
-- **Q 按下**：服务器记时刻
-- **Q 松开**：服务器按按住时长算 `ChargeAlpha = clamp(held / ChumChargeMaxSeconds)`，初速 `Lerp(Min, Max, Alpha)`，用引擎 `PredictProjectilePath` 得到落点，选一份足量窝料实例（优先 `StarterChumDefinitionId` 对应实例），把 `ChumItemInstanceId` 交给 `PlaceChum` 做全部校验（射程/夹角/视线/库存/水域）
-- 参数在 `Project Settings → Catfishing Fishing → Chum|Throw`：`ChumChargeMaxSeconds=1.5`、`Min/MaxSpeed=600/1400`、`Elevation=35°`、`ThrowQuantity=1`
+Development 的原生预览由 `CatFishingDebugSubsystem` 绘制，`cat.Fishing.ChumPreview=1` 默认开启，独立于 `cat.Fishing.Debug`。按住期间读取该实例的 `TryGetLocalChargePreview` 秒数，经 `ChargeAlphaFromHeldSeconds` 和 `PredictChumThrow` 生成曲线与落点；命中可解析水域时黄线/绿球，否则红线/红球。松开或取消后停止逐帧提交线段。客户端和服务器复用弹道数学，但弱网时间、位置及场景状态可能不同，预判落水不代表最终事务一定成功。
 
-结果日志：`Event=chum_throw Held=.. Alpha=.. Landing=.. ChumItem=..` + `Event=place_chum_result Committed=...`
+无需另建蓝图预览或第二份 PressTime。将来替换正式 Spline/Niagara 表现时，复用同一实例只读状态及弹道函数，关闭原生预览，避免重复绘制。当前绘制体受 `ENABLE_DRAW_DEBUG` 限制，Shipping 正式表现尚未交付。
 
-**可选的客户端蓄力预览蓝图**：Q 按下记 `PressTime`，按住期间每帧：
-```
-Alpha   = ChargeAlphaFromHeldSeconds(Now - PressTime)                         ← UCatFishingAimLibrary
-PredictChumThrow(CharacterLocation, ControlRotation, Alpha) → Path, Landing, bHitWater
-Draw Debug Line 逐段画 Path；Draw Debug Sphere 画 Landing（bHitWater 绿 / 否则红）
-```
-同样是服务器同一份数学，预览线 = 真实弹道。
+日志过滤：`LogCatFishing` 的 `chum_local_preview_changed`（来源 InstanceId 和本地状态）、`chum_source_ability_begin`、`chum_throw`、`place_chum_result`；投放与回执继续按原 Request/RequestId 关联。
 
 ---
 
@@ -424,11 +416,9 @@ Event BeginPlay
 
 > 没有直接给组件方法加 `BlueprintCallable`，而是走 Controller RPC 转发 —— 和 `ServerConfigureEquipment` / `ServerRepairRodAtCamp` 保持一致的权限边界，避免任何蓝图都能直接摸到域写入口。
 
-### 3. `IA_BaitSpot`(Q) 那个 Chum Ability 是输入壳
+### 3. 窝料来源能力与本地预览分工
 
-`UCatGA_FishingChum` 不直接写库存，也不自己创建窝点；它只在按下/松开时提交 `ChumPressed` / `ChumReleased`，服务器根据按住时长预测落点，再从正式库存选一份可用窝料交给 `PlaceChum`。
-
-也就是说，Ability 只负责输入生命周期；窝料数量仍由库存组件扣，窝点仍由环境服务提交。自定义 UI 如果要指定目标点、窝料或数量，才需要走 `SubmitPlaceChum` 的 payload 版本。
+`UCatGA_FishingChum` 只在服务器运行，从来源实例冻结 Use 上下文并通过 `WaitInputRelease` 接收结束输入，再调用 `CommitChumUseFromAbilityOnAuthority`。扣量由原库存事务完成，窝点由环境服务创建。本地预览由该物品实例的输入通知和原生绘制消费者提供，不能依赖 ServerOnly Ability 在客户端激活。具体入口见 §5.3。
 
 ---
 
