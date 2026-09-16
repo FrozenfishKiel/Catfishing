@@ -198,9 +198,9 @@ namespace CatFishingGroupNetwork
 				Primary->SetControlRotation(FRotator::ZeroRotator);
 				Equipment = PrimaryCat->GetEquipmentComponent();
 				if (!Equipment.IsValid()) return true;
-				for (const FName Id : {FName(TEXT("StarterRodT1")), FName(TEXT("FeatherFloat"))})
+				for (const int32 Id : {37, 9})
 					Equipment->GrantEquipmentFromAuthority(FGuid::NewGuid(), Equipment->GetSnapshot().Revision, Id);
-				Equipment->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(), Equipment->GetSnapshot().Revision, TEXT("BugBait"), 4);
+				Equipment->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(), Equipment->GetSnapshot().Revision, 4, 4);
 				FCatPlaceRodCommand Place;
 				Place.RequestId = FGuid::NewGuid();
 				Place.ExpectedEquipmentRevision = Equipment->GetSnapshot().Revision;
@@ -219,8 +219,7 @@ namespace CatFishingGroupNetwork
                     const FVector At(ShaftPoint.X + 40, ShaftPoint.Y - 6.8 + I * 64.4, HelperBody->GetStandRootHeightCm());
                     HelperBody->TeleportBodyFromAuthority(FTransform(FRotator(0, I == 0 ? 180 : -90, 0), At), TEXT("UprightGroundGripFixture"));
                 }
-				// Leave the real rod at its authored hold pose;
-				// this four-player case grips cats in sequence; the separate LightProps network case covers shaft grips.
+				// 实物鱼竿保持资产设定的持握姿态；本四人场景验证依次抓住猫的协作链，抓竿身由独立 LightProps 联机场景覆盖。
 				Stage = 1;
 				StageStarted = Now;
 			}
@@ -386,7 +385,7 @@ namespace CatFishingGroupNetwork
 				for (const auto& Reference : Catalog->Definitions)
 				{
 					const UCatFishDefinition* Definition = Reference.LoadSynchronous();
-					if (Definition && Catalog->FindRuntimeDefinition(Definition->FishDefinitionId) == Definition
+					if (Definition && Catalog->FindRuntimeDefinition(Definition->ItemId) == Definition
 						&& !Definition->RegionIds.IsEmpty())
 					{
 						Region->RegionId = Definition->RegionIds[0];

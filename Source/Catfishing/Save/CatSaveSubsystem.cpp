@@ -110,13 +110,13 @@ namespace
 	{
 		FCatSavedEquipmentLoadout Saved;
 		Saved.Revision = Snapshot.Revision;
-		Saved.RodDefinitionId = Snapshot.RodDefinitionId;
+		Saved.RodItemId = Snapshot.RodItemId;
 		Saved.RodItemInstanceId = Snapshot.RodItemInstanceId;
-		Saved.BaitDefinitionId = Snapshot.BaitDefinitionId;
+		Saved.BaitItemId = Snapshot.BaitItemId;
 		Saved.BaitItemInstanceId = Snapshot.BaitItemInstanceId;
-		Saved.FloatDefinitionId = Snapshot.FloatDefinitionId;
+		Saved.FloatItemId = Snapshot.FloatItemId;
 		Saved.FloatItemInstanceId = Snapshot.FloatItemInstanceId;
-		Saved.ScoopNetDefinitionId = Snapshot.ScoopNetDefinitionId;
+		Saved.ScoopNetItemId = Snapshot.ScoopNetItemId;
 		Saved.ScoopNetItemInstanceId = Snapshot.ScoopNetItemInstanceId;
 		Saved.RodSkinDefinitionId = Snapshot.RodSkinDefinitionId;
 		Saved.RodDurability = Snapshot.RodDurability;
@@ -129,13 +129,13 @@ namespace
 	{
 		FCatEquipmentLoadoutSnapshot Snapshot;
 		Snapshot.Revision = Saved.Revision;
-		Snapshot.RodDefinitionId = Saved.RodDefinitionId;
+		Snapshot.RodItemId = Saved.RodItemId;
 		Snapshot.RodItemInstanceId = Saved.RodItemInstanceId;
-		Snapshot.BaitDefinitionId = Saved.BaitDefinitionId;
+		Snapshot.BaitItemId = Saved.BaitItemId;
 		Snapshot.BaitItemInstanceId = Saved.BaitItemInstanceId;
-		Snapshot.FloatDefinitionId = Saved.FloatDefinitionId;
+		Snapshot.FloatItemId = Saved.FloatItemId;
 		Snapshot.FloatItemInstanceId = Saved.FloatItemInstanceId;
-		Snapshot.ScoopNetDefinitionId = Saved.ScoopNetDefinitionId;
+		Snapshot.ScoopNetItemId = Saved.ScoopNetItemId;
 		Snapshot.ScoopNetItemInstanceId = Saved.ScoopNetItemInstanceId;
 		Snapshot.RodSkinDefinitionId = Saved.RodSkinDefinitionId;
 		Snapshot.RodDurability = Saved.RodDurability;
@@ -159,10 +159,10 @@ namespace
 		TSet<FGuid> SeenInstanceIds;
 		for (const FCatSavedRunInventorySlot& Slot : InventorySlots)
 		{
-			const bool bOccupied = !Slot.DefinitionId.IsNone() && Slot.Quantity > 0;
+			const bool bOccupied = !(Slot.ItemId == 0) && Slot.Quantity > 0;
 			if (!bOccupied)
 			{
-				if (!Slot.DefinitionId.IsNone() || Slot.ItemInstanceId.IsValid() || Slot.Quantity != 0
+				if (!(Slot.ItemId == 0) || Slot.ItemInstanceId.IsValid() || Slot.Quantity != 0
 					|| Slot.RodDurability != 0.0 || Slot.bRodBroken || !Slot.FishGuardHostName.IsNone()
 					|| Slot.FishSessionId.IsValid() || Slot.FishWeightKilograms != 0.0 || !Slot.FishOwnerStableNetId.IsEmpty())
 				{
@@ -172,7 +172,7 @@ namespace
 				continue;
 			}
 			const UCatInventoryItemDefinition* InventoryDefinition =
-				InventorySettings->FindRuntimeDefinition(Slot.DefinitionId);
+				InventorySettings->FindRuntimeDefinition(Slot.ItemId);
 			const UCatEquipmentDefinition* EquipmentDefinition = Cast<UCatEquipmentDefinition>(InventoryDefinition);
 			const int32 StackLimit = InventoryDefinition != nullptr ? InventoryDefinition->GetMaxStackCount() : 0;
 			if (!Slot.ItemInstanceId.IsValid() || SeenInstanceIds.Contains(Slot.ItemInstanceId) || !InventoryDefinition
@@ -246,7 +246,7 @@ namespace
 				Saved.FishWeightKilograms = Fish->GetFishWeightKilograms();
 				Saved.FishOwnerStableNetId = Fish->GetFishOwnerStableNetId();
 			}
-			Saved.DefinitionId = Entry.Instance->GetItemDefinitionId();
+			Saved.ItemId = Entry.Instance->GetItemId();
 			if (const auto* Guard = Cast<UCatFishGuardInventoryItemInstance>(Entry.Instance))
 				if (const auto* Host = Guard->GetWorldActor()) Saved.FishGuardHostName = Host->GetFName();
 			Saved.ItemInstanceId = Entry.Instance->GetItemInstanceId();
@@ -280,11 +280,11 @@ namespace
 		for (const FCatSavedRunInventorySlot& Slot : Saved)
 		{
 			FCatInventoryEntry& Entry = OutEntries.Emplace_GetRef(&Inventory);
-			if (Slot.DefinitionId.IsNone() || Slot.Quantity <= 0)
+			if ((Slot.ItemId == 0) || Slot.Quantity <= 0)
 			{
 				continue;
 			}
-			UCatInventoryItemDefinition* Definition = Settings->FindRuntimeDefinition(Slot.DefinitionId);
+			UCatInventoryItemDefinition* Definition = Settings->FindRuntimeDefinition(Slot.ItemId);
 			const TSubclassOf<UCatInventoryItemInstance> InstanceClass = UCatInventoryItemDefinition::ResolveItemInstanceClass(Definition);
 			UCatInventoryItemInstance* Instance = NewObject<UCatInventoryItemInstance>(Owner, InstanceClass);
 			Instance->SetRuntimeOwnerActor(Owner);
@@ -348,29 +348,29 @@ namespace
 			OutFailure = FText::FromString(TEXT("存档钓具目录不可用。"));
 			return false;
 		}
-		const auto HasSelectedInstance = [&InventorySlots, InventorySettings](const FName DefinitionId,
+		const auto HasSelectedInstance = [&InventorySlots, InventorySettings](const int32  ItemId,
 			const FGuid InstanceId, const FName ExpectedSlotId)
 		{
-			if (DefinitionId.IsNone())
+			if ((ItemId == 0))
 			{
 				return !InstanceId.IsValid();
 			}
 			return InstanceId.IsValid() && InventorySlots.ContainsByPredicate(
-				[DefinitionId, InstanceId, ExpectedSlotId, InventorySettings](const FCatSavedRunInventorySlot& Slot)
+				[ItemId, InstanceId, ExpectedSlotId, InventorySettings](const FCatSavedRunInventorySlot& Slot)
 				{
 					const UCatEquipmentDefinition* Definition =
-						Cast<UCatEquipmentDefinition>(InventorySettings->FindRuntimeDefinition(Slot.DefinitionId));
-					return Slot.DefinitionId == DefinitionId && Slot.ItemInstanceId == InstanceId && Definition
+						Cast<UCatEquipmentDefinition>(InventorySettings->FindRuntimeDefinition(Slot.ItemId));
+					return Slot.ItemId == ItemId && Slot.ItemInstanceId == InstanceId && Definition
 						&& Definition->CanServeFishingLoadoutSlot(ExpectedSlotId);
 				});
 		};
-		if (!HasSelectedInstance(Snapshot.RodDefinitionId, Snapshot.RodItemInstanceId,
+		if (!HasSelectedInstance(Snapshot.RodItemId, Snapshot.RodItemInstanceId,
 				UCatEquipmentDefinition::FishingRodLoadoutSlotId())
-			|| !HasSelectedInstance(Snapshot.BaitDefinitionId, Snapshot.BaitItemInstanceId,
+			|| !HasSelectedInstance(Snapshot.BaitItemId, Snapshot.BaitItemInstanceId,
 				UCatEquipmentDefinition::FishingBaitLoadoutSlotId())
-			|| !HasSelectedInstance(Snapshot.FloatDefinitionId, Snapshot.FloatItemInstanceId,
+			|| !HasSelectedInstance(Snapshot.FloatItemId, Snapshot.FloatItemInstanceId,
 				UCatEquipmentDefinition::FishingFloatLoadoutSlotId())
-			|| !HasSelectedInstance(Snapshot.ScoopNetDefinitionId, Snapshot.ScoopNetItemInstanceId,
+			|| !HasSelectedInstance(Snapshot.ScoopNetItemId, Snapshot.ScoopNetItemInstanceId,
 				UCatEquipmentDefinition::ScoopNetLoadoutSlotId()))
 		{
 			OutFailure = FText::FromString(TEXT("存档钓具选择没有指向同一库存中的合法实例。"));
@@ -378,9 +378,9 @@ namespace
 		}
 		const FCatSavedRunInventorySlot* SelectedRod = InventorySlots.FindByPredicate(
 			[&Snapshot](const FCatSavedRunInventorySlot& Slot) { return Slot.ItemInstanceId == Snapshot.RodItemInstanceId; });
-		if ((!Snapshot.RodDefinitionId.IsNone() && (!SelectedRod || Snapshot.RodDurability != SelectedRod->RodDurability
+		if ((!(Snapshot.RodItemId == 0) && (!SelectedRod || Snapshot.RodDurability != SelectedRod->RodDurability
 			|| Snapshot.bRodBroken != SelectedRod->bRodBroken))
-			|| (Snapshot.RodDefinitionId.IsNone() && (Snapshot.RodItemInstanceId.IsValid()
+			|| ((Snapshot.RodItemId == 0) && (Snapshot.RodItemInstanceId.IsValid()
 				|| Snapshot.RodDurability != 0.0 || Snapshot.bRodBroken)))
 		{
 			OutFailure = FText::FromString(TEXT("存档鱼竿选择状态与库存实例不一致。"));

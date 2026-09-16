@@ -47,6 +47,7 @@
 
 # Precompiled Assets
 SourceArt/**/*.png
+!SourceArt/UI/Collection/CollectionBook.png
 SourceArt/**/*.tga
 
 # Binary Files

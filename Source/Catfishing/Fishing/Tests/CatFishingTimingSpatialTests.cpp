@@ -99,13 +99,13 @@ namespace CatR3Tests
 			Cat->SetPlayerState(Player);
 			Cat->SetActorTickEnabled(false);
 			Equipment = Cat->GetEquipmentComponent();
-			for (const FName Id : {FName(TEXT("StarterRodT1")), FName(TEXT("FeatherFloat"))})
+			for (const int32 Id : {37, 9})
 				if (!Test.TestTrue(TEXT("正式钓具入库"), Equipment->GrantEquipmentFromAuthority(FGuid::NewGuid(), Equipment->GetSnapshot().Revision, Id).bCommitted)) return false;
-			if (!Equipment->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(), Equipment->GetSnapshot().Revision, TEXT("BugBait"), 2).bCommitted) return false;
+			if (!Equipment->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(), Equipment->GetSnapshot().Revision, 4, 2).bCommitted) return false;
 			if (!Equipment->Use(FGuid::NewGuid(), Equipment->GetSnapshot().Revision, Equipment->GetSnapshot().RodItemInstanceId).bCommitted) return false;
 			const auto Loadout = Equipment->GetSnapshot();
 			return Equipment->BeginFishingUse(SessionId, Loadout.RodItemInstanceId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId,
-				Loadout.RodDefinitionId, Loadout.BaitDefinitionId, Loadout.FloatDefinitionId, Loadout.Revision).bUseAccepted;
+				Loadout.RodItemId, Loadout.BaitItemId, Loadout.FloatItemId, Loadout.Revision).bUseAccepted;
 		}
 	};
 }
@@ -119,15 +119,15 @@ bool FCatFishingR3BaitDistanceTest::RunTest(const FString& Parameters)
 	{
 		CatR3Tests::FFixture F;
 		if (!F.Init(*this, true)) return false;
-		TestTrue(TEXT("另一款真实鱼饵入库"), F.Equipment->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(), F.Equipment->GetSnapshot().Revision, TEXT("FruitBait"), 2).bCommitted);
+		TestTrue(TEXT("另一款真实鱼饵入库"), F.Equipment->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(), F.Equipment->GetSnapshot().Revision, 16, 2).bCommitted);
 		auto* Inventory = F.Cat->GetInventoryComponent();
-		const auto* Bait = Inventory->GetInventoryEntryAtSlot(Inventory->FindFirstInventorySlotIndexByDefinitionId(TEXT("FruitBait")));
+		const auto* Bait = Inventory->GetInventoryEntryAtSlot(Inventory->FindFirstInventorySlotIndexByItemId(16));
 		if (!TestNotNull(TEXT("换饵实例存在"), Bait)) return false;
 		const auto L = F.Equipment->GetSnapshot();
 		TestTrue(TEXT("等待期真实换饵"), F.Equipment->ConfigureLoadoutFromAuthority(FGuid::NewGuid(), L.Revision,
-			L.RodDefinitionId, TEXT("FruitBait"), L.FloatDefinitionId, L.ScoopNetDefinitionId, L.RodSkinDefinitionId,
+			L.RodItemId, 16, L.FloatItemId, L.ScoopNetItemId, L.RodSkinDefinitionId,
 			L.RodItemInstanceId, Bait->Instance->GetItemInstanceId(), L.FloatItemInstanceId, L.ScoopNetItemInstanceId).bCommitted);
-		TestEqual(TEXT("抽魚入口读当前饵"), F.Equipment->GetCurrentFishingBaitDefinitionId(F.SessionId), FName(TEXT("FruitBait")));
+		TestEqual(TEXT("抽魚入口读当前饵"), F.Equipment->GetCurrentFishingBaitItemId(F.SessionId), 16);
 		auto* World = F.Wrapper.GetTestWorld();
 		auto* Session = World->SpawnActor<ACatFishingSession>();
 		Session->Snapshot.FishingSessionId = F.SessionId;
@@ -138,12 +138,12 @@ bool FCatFishingR3BaitDistanceTest::RunTest(const FString& Parameters)
 		Session->SelectionResolution = ECatFishSelectionResolution::Selected;
 		// T10 夹具迁移墓碑（钓鱼规则 §3.4）：选鱼边界现在必须提供鱼种普通响应窗；原扣饵/距离断言全部保留。
 		Session->FishDefinition = NewObject<UCatFishDefinition>();
-		Session->FishDefinition->FishDefinitionId = TEXT("TestTimingFish");
+		Session->FishDefinition->ItemId = 1186446;
 		Session->FishDefinition->TrueBiteWindowSeconds = 12.0;
 
 		Session->CastEquipment = F.Equipment;
 		Session->FisherCharacter = F.Cat;
-		Session->AttemptSnapshot.RodDefinitionId = L.RodDefinitionId;
+		Session->AttemptSnapshot.RodItemId = L.RodItemId;
 		Session->AttemptSnapshot.RodItemInstanceId = L.RodItemInstanceId;
 		Session->bStartupInProgress = true;
 		F.Cat->SetActorLocation(FVector(300, 0, 0));
@@ -151,8 +151,8 @@ bool FCatFishingR3BaitDistanceTest::RunTest(const FString& Parameters)
 		const bool bOpened = Session->OpenTrueBiteWindowFromAuthority();
 		TestNull(TEXT("真咬距离门不依赖提前生成鱼"), Session->Snapshot.FishEncounterActor.Get());
 		TestEqual(TEXT("真咬超 Lmax 不进入合法窗口"), bOpened, !bOverlong);
-		TestEqual(TEXT("抛竿时旧饵从未预扣，无需退款"), Inventory->CountVisibleInventoryQuantityByDefinitionId(TEXT("BugBait")), 2);
-		TestEqual(TEXT("只扣真咬当前一份饵"), Inventory->CountVisibleInventoryQuantityByDefinitionId(TEXT("FruitBait")), 1);
+		TestEqual(TEXT("抛竿时旧饵从未预扣，无需退款"), Inventory->CountVisibleInventoryQuantityByItemId(4), 2);
+		TestEqual(TEXT("只扣真咬当前一份饵"), Inventory->CountVisibleInventoryQuantityByItemId(16), 1);
 		if (bOverlong) TestEqual(TEXT("超长鱼逃"), Session->GetSnapshot().Outcome, ECatFishingOutcome::Escaped);
 		else
 		{
@@ -164,7 +164,7 @@ bool FCatFishingR3BaitDistanceTest::RunTest(const FString& Parameters)
 			F.Cat->SetActorLocation(FVector(500, 0, 0));
 			TestEqual(TEXT("响应窗移动不改冻结 D0"), Session->TrueBiteDistanceCentimeters, 700.0);
 			F.Equipment->CommitFishingBaitDeferred(F.SessionId);
-			TestEqual(TEXT("真咬重放不重复扣饵"), Inventory->CountVisibleInventoryQuantityByDefinitionId(TEXT("FruitBait")), 1);
+			TestEqual(TEXT("真咬重放不重复扣饵"), Inventory->CountVisibleInventoryQuantityByItemId(16), 1);
 		}
 	}
 	return !HasAnyErrors();
@@ -242,7 +242,7 @@ bool FCatFishingR3HoldTest::RunTest(const FString& Parameters)
 	const auto L = F.Equipment->GetSnapshot();
 	// 禁止无地板夹具自由坠落；停运动会释放握持，必须放在真实握竿之前。
 	F.Cat->GetCharacterMovement()->DisableMovement();
-	if (!Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(), L.RodItemInstanceId, L.RodDefinitionId, NAME_None, F.Player, F.Player, true, false)) return false;
+	if (!Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(), L.RodItemInstanceId, L.RodItemId, NAME_None, F.Player, F.Player, true, false)) return false;
 	if (!TestTrue(TEXT("真实握竿先于保持计时"), Rod->BeginPhysicalHoldFromAuthority(F.Player, true)
 		&& Rod->SetPrimaryOperatorFromAuthority(F.Player, Rod->GetPresentationState().RodActorRevision)
 		&& Rod->GetPhysicalRodComponent()->CommitPrimaryHold(F.Player))) return false;
@@ -334,7 +334,7 @@ bool FCatGrowthWearDeliveryTest::RunTest(const FString&)
 	double Before = 0.0, After = 0.0;
 	bool Broken = false;
 	TestFalse(TEXT("未真咬不能在收鱼阶段补扣鱼饵"), Session->CommitCatchEquipmentFromAuthority());
-	TestEqual(TEXT("拒绝收鱼保持原鱼饵数量"), F.Cat->GetInventoryComponent()->CountVisibleInventoryQuantityByDefinitionId(TEXT("BugBait")), 2);
+	TestEqual(TEXT("拒绝收鱼保持原鱼饵数量"), F.Cat->GetInventoryComponent()->CountVisibleInventoryQuantityByItemId(4), 2);
 	if (!TestTrue(TEXT("真咬前置只扣一份饵"), F.Equipment->CommitFishingBaitDeferred(F.SessionId).bApplied)) return false;
 	TestTrue(TEXT("真实竿耐久可读取"), F.Equipment->GetFishingRodDurability(F.SessionId, Before, Broken));
 	TestTrue(TEXT("收鱼生产扣费成功"), Session->CommitCatchEquipmentFromAuthority());
@@ -359,7 +359,7 @@ bool FCatFishingCatalogTimingTimersTest::RunTest(const FString& Parameters)
 		if (!Fish || !Session) return false;
 		Session->FishDefinition = Fish;
 		Session->Snapshot.FishingSessionId = F.SessionId;
-		Session->Snapshot.FishDefinitionId = Fish->FishDefinitionId;
+		Session->Snapshot.ItemId = Fish->ItemId;
 		Session->Snapshot.Phase = ECatFishingPhase::Probe;
 		Session->Snapshot.HookActor = World->SpawnActor<ACatFishingHookActor>();
 		Session->Snapshot.CastAttemptId = FGuid::NewGuid();
@@ -367,7 +367,7 @@ bool FCatFishingCatalogTimingTimersTest::RunTest(const FString& Parameters)
 		Session->SelectionResolution = ECatFishSelectionResolution::Selected;
 		Session->CastEquipment = F.Equipment;
 		Session->FisherCharacter = F.Cat;
-		Session->AttemptSnapshot.RodDefinitionId = F.Equipment->GetSnapshot().RodDefinitionId;
+		Session->AttemptSnapshot.RodItemId = F.Equipment->GetSnapshot().RodItemId;
 		Session->AttemptSnapshot.RodItemInstanceId = F.Equipment->GetSnapshot().RodItemInstanceId;
 		Session->bStartupInProgress = true;
 		F.Cat->SetActorLocation(FVector(0, 0, 100));
@@ -380,7 +380,7 @@ bool FCatFishingCatalogTimingTimersTest::RunTest(const FString& Parameters)
 		const auto View = FCatFishingViewState::FromSnapshot(Session->Snapshot);
 		TestEqual(TEXT("UI收到同一响应截止时间"), View.WindowEndsServerTime, Session->Snapshot.WindowEndsServerTime);
 		TestEqual(TEXT("UI收到独立完美截止时间"), View.PerfectWindowEndsServerTime, Session->Snapshot.PerfectWindowEndsServerTime);
-		TestEqual(TEXT("真咬成立只扣一份饵"), F.Cat->GetInventoryComponent()->CountVisibleInventoryQuantityByDefinitionId(TEXT("BugBait")), 1);
+		TestEqual(TEXT("真咬成立只扣一份饵"), F.Cat->GetInventoryComponent()->CountVisibleInventoryQuantityByItemId(4), 1);
 		World->GetTimerManager().ClearTimer(Session->TrueBiteTimerHandle);
 		F.Equipment->ReleaseFishingUse(F.SessionId);
 	}
@@ -412,16 +412,16 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 		Boundary.BoundaryId = TEXT("TimingLineWater");
 		Boundary.Vertices = {{-5000, -5000}, {5000, -5000}, {5000, 5000}, {-5000, 5000}};
 		const auto L = F.Equipment->GetSnapshot();
-		const auto* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(L.RodDefinitionId);
+		const auto* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(L.RodItemId);
 		// 两条正式鱼提供不同游速系数，防止模板基速误读被系数1的样本掩盖。
-		const auto* Fish = Catalog->FindRuntimeDefinition(bPerfect ? TEXT("LittleSilverFish") : TEXT("RiverPatternFish"));
+		const auto* Fish = Catalog->FindRuntimeDefinition(bPerfect ? 22 : 30);
 		const auto* Balance = GetDefault<UCatFishingSettings>()->LoadFightBalanceDefinition();
 		if (!TestTrue(TEXT("正式鱼、竿、平衡资产齐全"), RodDefinition && Fish && Balance)) return false;
 		auto* Rod = World->SpawnActor<ACatFishingRodActor>(RodDefinition->UseActorClass.LoadSynchronous());
 		F.Cat->GetCharacterMovement()->DisableMovement();
 		F.Cat->SetActorLocation(FVector(0, 0, 100));
 		if (!TestTrue(TEXT("真实鱼竿绑定并建立握持"), Rod && Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(), L.RodItemInstanceId,
-			L.RodDefinitionId, NAME_None, F.Player, F.Player, true, false)
+			L.RodItemId, NAME_None, F.Player, F.Player, true, false)
 			&& Rod->BeginPhysicalHoldFromAuthority(F.Player, true)
 			&& Rod->GetPhysicalRodComponent()->CommitPrimaryHold(F.Player))) return false;
 		// 竿尖与水面同高，隔离水面吸附补足物理线长的既有安全修正，直接验证倍率消费。
@@ -444,7 +444,7 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 		Session->FishWeightKilograms = 2.0;
 		Session->Snapshot.FishingSessionId = F.SessionId;
 		Session->Snapshot.CastAttemptId = CastId;
-		Session->Snapshot.FishDefinitionId = Fish->FishDefinitionId;
+		Session->Snapshot.ItemId = Fish->ItemId;
 		Session->Snapshot.HookActor = Hook;
 		Session->Snapshot.RodActor = Rod;
 		Session->Snapshot.FisherPlayerState = F.Player;
@@ -459,7 +459,7 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 		Session->FrozenSelectionResult.BaseFishStrength = 20.0;
 		Session->FrozenSelectionContext.StrengthPerKilogram = Balance->StrengthPerKilogram;
 		Session->AttemptSnapshot.RodActor = Rod;
-		Session->AttemptSnapshot.RodDefinitionId = L.RodDefinitionId;
+		Session->AttemptSnapshot.RodItemId = L.RodItemId;
 		Session->AttemptSnapshot.RodItemInstanceId = L.RodItemInstanceId;
 		Session->AttemptSnapshot.CastAttemptId = CastId;
 		Session->AttemptSnapshot.WaterRegion = Built.Cache.Handle;
@@ -510,7 +510,7 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("有效提钩生成实体并启动真实Runner"), Session->RequestHookFromAuthority(HookRequestId).bCommitted && Session->IsFightRunnerRunning())) return false;
 		auto* Encounter = Session->Snapshot.FishEncounterActor.Get();
 		if (!TestNotNull(TEXT("有效提钩绑定实体"), Encounter)) return false;
-		TestEqual(TEXT("生成鱼沿用已选鱼种"), Encounter->GetPresentationState().FishDefinitionId, Fish->FishDefinitionId);
+		TestEqual(TEXT("生成鱼沿用已选鱼种"), Encounter->GetPresentationState().ItemId, Fish->ItemId);
 		TestEqual(TEXT("生成鱼沿用冻结比例"), Encounter->GetPresentationState().VisualScale, Session->FishVisualScale);
 		TestEqual(TEXT("提钩判定仍区分普通和完美"), Session->Snapshot.bPerfectHook, bPerfect);
 		TestTrue(TEXT("同一提钩请求重放返回原回执"), Session->RequestHookFromAuthority(HookRequestId).bCommitted);
@@ -625,10 +625,10 @@ bool FCatScoopInventoryDeferredUseTest::RunTest(const FString& Parameters)
 		auto* Inventory = F.Cat->FindComponentByClass<UCatBackPackComponent>();
 		if (!TestNotNull(TEXT("正式背包"), Inventory)) return false;
 		if (!TestTrue(TEXT("正式抄网入库"), F.Equipment->GrantEquipmentFromAuthority(FGuid::NewGuid(),
-			F.Equipment->GetSnapshot().Revision, TEXT("StarterScoopNet")).bCommitted)) return false;
+			F.Equipment->GetSnapshot().Revision, 38).bCommitted)) return false;
 		int32 Slot = INDEX_NONE;
 		for (int32 I=0; I<Inventory->GetInventorySlotCount(); ++I)
-			if (const auto* E=Inventory->GetInventoryEntryAtSlot(I); E && E->Instance && E->Instance->GetItemDefinitionId()==TEXT("StarterScoopNet")) { Slot=I; break; }
+			if (const auto* E=Inventory->GetInventoryEntryAtSlot(I); E && E->Instance && E->Instance->GetItemId()==38) { Slot=I; break; }
 		if (!TestTrue(TEXT("抄网实例在正式格中"), Slot!=INDEX_NONE)) return false;
 		const FGuid ItemId = Inventory->GetInventoryEntryAtSlot(Slot)->Instance->GetItemInstanceId();
 		UCatFishDefinition* Definition = nullptr;
@@ -698,15 +698,15 @@ bool FCatFishingSessionScoopMouthCarryTest::RunTest(const FString& Parameters)
 	Floor->GetStaticMeshComponent()->SetStaticMesh(LoadObject<UStaticMesh>(nullptr,TEXT("/Engine/BasicShapes/Cube")));
 	Floor->SetActorTransform(FTransform(FRotator::ZeroRotator,FVector(0,0,-20),FVector(10,10,0.2)));
 	Floor->GetStaticMeshComponent()->SetCollisionProfileName(TEXT("BlockAll"));
-	auto* Definition=GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(TEXT("LittleSilverFish"));
+	auto* Definition=GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(22);
 	if (!TestNotNull(TEXT("正式鱼定义"),Definition)) return false;
 	auto* Session=World->SpawnActor<ACatFishingSession>();
 	auto* Encounter=World->SpawnActor<ACatFishEncounterActor>(FVector(120,0,0),FRotator::ZeroRotator);
 	const FGuid CastId=FGuid::NewGuid();
-	if (!TestTrue(TEXT("上钩鱼身份"),Encounter->InitializeAuthoritativeIdentity(F.SessionId,CastId,Definition->FishDefinitionId,120,1))) return false;
+	if (!TestTrue(TEXT("上钩鱼身份"),Encounter->InitializeAuthoritativeIdentity(F.SessionId,CastId,Definition->ItemId,120,1))) return false;
 	Session->Snapshot.FishingSessionId=F.SessionId; Session->Snapshot.CastAttemptId=CastId;
 	Session->Snapshot.Phase=ECatFishingPhase::HookedFight; Session->Snapshot.Revision=1;
-	Session->Snapshot.FishEncounterActor=Encounter; Session->Snapshot.FishDefinitionId=Definition->FishDefinitionId;
+	Session->Snapshot.FishEncounterActor=Encounter; Session->Snapshot.ItemId=Definition->ItemId;
 	Session->Snapshot.FisherPlayerState=F.Player; Session->Snapshot.FishFightStaminaRemaining=100;
 	Session->FishDefinition=Definition; Session->FishWeightKilograms=1; Session->FishVisualScale=1;
 	Session->FisherCharacter=F.Cat; Session->CastEquipment=F.Equipment; Session->CatchFisherStableNetId=TEXT("R3Primary");
@@ -714,9 +714,9 @@ bool FCatFishingSessionScoopMouthCarryTest::RunTest(const FString& Parameters)
 	Session->AttemptSnapshot.RodItemInstanceId=F.Equipment->GetSnapshot().RodItemInstanceId;
 	World->GetSubsystem<UCatFishingService>()->Sessions.Add(F.SessionId,Session);
 	if (!TestTrue(TEXT("真咬已扣一份鱼饵"),F.Equipment->CommitFishingBaitDeferred(F.SessionId).bApplied)) return false;
-	if (!TestTrue(TEXT("正式抄网入库"),F.Equipment->GrantEquipmentFromAuthority(FGuid::NewGuid(),F.Equipment->GetSnapshot().Revision,TEXT("StarterScoopNet")).bCommitted)) return false;
+	if (!TestTrue(TEXT("正式抄网入库"),F.Equipment->GrantEquipmentFromAuthority(FGuid::NewGuid(),F.Equipment->GetSnapshot().Revision,38).bCommitted)) return false;
 	auto* Inventory=F.Cat->GetInventoryComponent();
-	const int32 Slot=Inventory->FindFirstInventorySlotIndexByDefinitionId(TEXT("StarterScoopNet"));
+	const int32 Slot=Inventory->FindFirstInventorySlotIndexByItemId(38);
 	const FGuid Item=Inventory->GetInventoryEntryAtSlot(Slot)->Instance->GetItemInstanceId();
 	FCatInventoryItemUseContext Context;
 	Context.RequestId=FGuid::NewGuid(); Context.RequestingController=F.Controller; Context.UserPawn=F.Cat; Context.SourceInventory=Inventory; Context.InventorySlotIndex=Slot;
@@ -730,7 +730,7 @@ bool FCatFishingSessionScoopMouthCarryTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("统一Use最终成功"),Final.bCommitted && Completed==1);
 	TestEqual(TEXT("会话捕获终态"),Session->GetSnapshot().Outcome,ECatFishingOutcome::Caught);
 	TestNotNull(TEXT("满体力上钩鱼直接叼嘴"),ACatFishPickupActor::FindCarriedFish(F.Cat));
-	TestEqual(TEXT("抄鱼不重复扣饵"),Inventory->CountVisibleInventoryQuantityByDefinitionId(TEXT("BugBait")),1);
+	TestEqual(TEXT("抄鱼不重复扣饵"),Inventory->CountVisibleInventoryQuantityByItemId(4),1);
 	const auto Replay=Inventory->ExecuteItemActionFromAuthority(Context,Item,CatInventoryActionTags::Use,1);
 	TestTrue(TEXT("终态重放不重复结算"),Replay.bTerminalReplay && Replay.bReplayedTerminalCommitted && Completed==1);
 	return !HasAnyErrors();

@@ -21,7 +21,7 @@ public:
 	void SynchronizeRunFromAuthority(const FCatRunPublicState& Run);
 
 	/** 只消费正式捕获事实；按实物鱼 ID 幂等，不接受客户端写口，也不依赖个人 Grant/ACK。 */
-	bool RecordCaptureFromAuthority(FGuid FishInstanceId, FName FishDefinitionId, const FString& HookerStableNetId);
+	bool RecordCaptureFromAuthority(FGuid FishInstanceId, int32  ItemId, const FString& HookerStableNetId);
 
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Collection|Run")
 	const FCatRunFishCollectionSnapshot& GetSnapshot() const { return Snapshot; }

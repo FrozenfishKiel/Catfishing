@@ -74,7 +74,7 @@ namespace
 	bool CanFishBeDisplayedInTank(const FCatFishInstance& Fish)
 	{
 		const UCatFishDefinition* Definition = GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(
-			Fish.FishDefinitionId);
+			Fish.ItemId);
 		return Definition && Definition->bTankDisplayEligible;
 	}
 
@@ -117,8 +117,8 @@ namespace
 		FText& OutFailure)
 	{
 		const UCatFishDefinition* Definition = GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(
-			Fish.FishDefinitionId);
-		if (!Fish.FishInstanceId.IsValid() || Fish.FishDefinitionId.IsNone() || Fish.OwnerStableNetId.IsEmpty()
+			Fish.ItemId);
+		if (!Fish.FishInstanceId.IsValid() || (Fish.ItemId == 0) || Fish.OwnerStableNetId.IsEmpty()
 			|| !FMath::IsFinite(Fish.WeightKilograms) || Fish.WeightKilograms <= 0.0
 			|| !Definition || SeenFishInstanceIds.Contains(Fish.FishInstanceId))
 		{
@@ -274,7 +274,7 @@ FCatFishConsumeResult UCatFishContainerService::ConsumeReachableFish(AController
 			// Command.Context.StableNetId 上面刚从 RequestingController 的 PlayerState 重建过，不是客户端载荷。
 			if (UCatRunImprintService* Imprint = GetWorld() ? GetWorld()->GetSubsystem<UCatRunImprintService>() : nullptr)
 			{
-				Imprint->RecordFishKnowledge(Definition->FishDefinitionId, Command.Context.StableNetId);
+				Imprint->RecordFishKnowledge(Definition->ItemId, Command.Context.StableNetId);
 			}
 		}
 		if (!CatIsAcceptedDomainCommandResult(Result.Body))
@@ -346,7 +346,7 @@ FCatFishConsumeResult UCatFishContainerService::ConsumeReachableFish(AController
 		Result.Command.Error = ECatDomainCommandError::NotFound;
 		return Result;
 	}
-	UCatFishDefinition* Definition = GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(Fish->FishDefinitionId);
+	UCatFishDefinition* Definition = GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(Fish->ItemId);
 	if (!Definition)
 	{
 		Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
@@ -638,7 +638,7 @@ bool UCatFishContainerService::ValidatePersistedWorldFishContainersForRestore(
 		{
 			if (!IsValidFishSlot(Fish))
 			{
-				if (!Fish.FishDefinitionId.IsNone() || !Fish.OwnerStableNetId.IsEmpty() || Fish.SourceFishingSessionId.IsValid()
+				if (!(Fish.ItemId == 0) || !Fish.OwnerStableNetId.IsEmpty() || Fish.SourceFishingSessionId.IsValid()
 					|| Fish.WeightKilograms != 0.0)
 				{
 					OutFailure = FText::FromString(TEXT("鱼容器空格包含残留实例字段。"));

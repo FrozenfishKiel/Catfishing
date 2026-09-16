@@ -56,14 +56,14 @@ void UCatRunFishCollectionComponent::SynchronizeRunFromAuthority(const FCatRunPu
 }
 
 bool UCatRunFishCollectionComponent::RecordCaptureFromAuthority(const FGuid FishInstanceId,
-	const FName FishDefinitionId, const FString& HookerStableNetId)
+	const int32  ItemId, const FString& HookerStableNetId)
 {
 	if (!GetOwner() || !GetOwner()->HasAuthority() || !bAcceptingCaptures)
 	{
 		LogRejected(TEXT("CommandsClosedOrNotAuthority"), FishInstanceId);
 		return false;
 	}
-	if (!FishInstanceId.IsValid() || FishDefinitionId.IsNone() || HookerStableNetId.IsEmpty())
+	if (!FishInstanceId.IsValid() || (ItemId == 0) || HookerStableNetId.IsEmpty())
 	{
 		LogRejected(TEXT("InvalidCapture"), FishInstanceId);
 		return false;
@@ -71,13 +71,13 @@ bool UCatRunFishCollectionComponent::RecordCaptureFromAuthority(const FGuid Fish
 	if (const FCatRunFishCollectionCapture* Existing = Captures.FindByPredicate(
 		[FishInstanceId](const auto& Record) { return Record.FishInstanceId == FishInstanceId; }))
 	{
-		const bool bSame = Existing->FishDefinitionId == FishDefinitionId && Existing->HookerStableNetId == HookerStableNetId;
+		const bool bSame = Existing->ItemId == ItemId && Existing->HookerStableNetId == HookerStableNetId;
 		if (!bSame) LogRejected(TEXT("CaptureIdentityConflict"), FishInstanceId);
 		return bSame;
 	}
 	FCatRunFishCollectionCapture Capture;
 	Capture.FishInstanceId = FishInstanceId;
-	Capture.FishDefinitionId = FishDefinitionId;
+	Capture.ItemId = ItemId;
 	Capture.HookerStableNetId = HookerStableNetId;
 	if (const auto* Existing = Captures.FindByPredicate(
 		[&HookerStableNetId](const auto& Record) { return Record.HookerStableNetId == HookerStableNetId; }))
@@ -102,9 +102,9 @@ bool UCatRunFishCollectionComponent::RecordCaptureFromAuthority(const FGuid Fish
 	Captures.Add(Capture);
 	RebuildPages();
 	UE_LOG(LogCatRun, Log,
-		TEXT("Event=run_collection_capture_recorded World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s RunId=%s FishInstanceId=%s FishDefinitionId=%s RegistrantId=%s DisplayNameResolved=%d"),
+		TEXT("Event=run_collection_capture_recorded World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s RunId=%s FishInstanceId=%s ItemId=%s RegistrantId=%s DisplayNameResolved=%d"),
 		*GetNameSafe(GetWorld()), GetWorld()->GetNetMode(), GetOwner()->HasAuthority(), GetOwner()->GetLocalRole(),
-		*GetNameSafe(GetOwner()), *Snapshot.RunId.ToString(), *FishInstanceId.ToString(), *FishDefinitionId.ToString(),
+		*GetNameSafe(GetOwner()), *Snapshot.RunId.ToString(), *FishInstanceId.ToString(), *FString::FromInt(ItemId),
 		*Capture.Pawprint.RegistrantId.ToString(), !Capture.Pawprint.DisplayName.IsEmpty());
 	Publish(TEXT("run_collection_published"));
 	return true;
@@ -117,7 +117,7 @@ bool UCatRunFishCollectionComponent::ValidateCaptures(const TArray<FCatRunFishCo
 	TMap<FGuid, FString> Identities;
 	for (const auto& Capture : SavedCaptures)
 	{
-		if (!Capture.FishInstanceId.IsValid() || Capture.FishDefinitionId.IsNone()
+		if (!Capture.FishInstanceId.IsValid() || (Capture.ItemId == 0)
 			|| Capture.HookerStableNetId.IsEmpty() || !Capture.Pawprint.RegistrantId.IsValid()
 			|| FishIds.Contains(Capture.FishInstanceId)) return false;
 		const FGuid* Registrant = Registrants.Find(Capture.HookerStableNetId);
@@ -152,11 +152,11 @@ void UCatRunFishCollectionComponent::RebuildPages()
 	for (const auto& Capture : Captures)
 	{
 		auto* Page = Snapshot.Pages.FindByPredicate(
-			[&Capture](const auto& Entry) { return Entry.FishDefinitionId == Capture.FishDefinitionId; });
+			[&Capture](const auto& Entry) { return Entry.ItemId == Capture.ItemId; });
 		if (!Page)
 		{
 			Page = &Snapshot.Pages.AddDefaulted_GetRef();
-			Page->FishDefinitionId = Capture.FishDefinitionId;
+			Page->ItemId = Capture.ItemId;
 		}
 		if (!Page->Pawprints.ContainsByPredicate([&Capture](const auto& Pawprint)
 			{ return Pawprint.RegistrantId == Capture.Pawprint.RegistrantId; }))

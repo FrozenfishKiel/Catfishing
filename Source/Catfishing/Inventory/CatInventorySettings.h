@@ -3,24 +3,22 @@
 #include "CoreMinimal.h"
 #include "Engine/DeveloperSettings.h"
 #include "Inventory/CatInventoryItemDefinition.h"
+#include "Engine/DataTable.h"
 #include "CatInventorySettings.generated.h"
 
-/** 库存目录中的一条稳定 ID 到物品定义资产映射；所有入库、移动、保存和加载都通过这里解析定义。 */
+/** 全项目物品的数字身份索引；定义资产持有内容，总表仅关联编号与资产。 */
 USTRUCT(BlueprintType)
-struct FCatInventoryCatalogDefinition
+struct CATFISHING_API FCatItemCatalogRow : public FTableRowBase
 {
 	GENERATED_BODY()
 
-	/** 项目内稳定物品 ID；商店、存档和 Equipment 读模型都用它作为跨系统钥匙。 */
-	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Inventory")
-	FName DefinitionId = NAME_None;
+	/** 永不随名称或排序改变的物品编号；策划登记、数字查询和校验读取，0 不代表任何物品。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Item", meta = (ClampMin = "1"))
+	int32 ItemId = 0;
 
-	/** 这条稳定 ID 对应的库存物品定义资产；资产保存展示、堆叠和片段语义。 */
-	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Inventory")
+	/** 该编号唯一对应的静态定义；策划或迁移脚本登记，查询端读取其内容，总表不重复名字、图标和属性。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Item")
 	TSoftObjectPtr<UCatInventoryItemDefinition> ItemDefinition;
-
-	/** 目录项必须能加载到运行可用定义，且定义自己的稳定 ID 必须与目录 ID 一致。 */
-	bool IsRuntimeReady() const;
 };
 
 /**
@@ -45,6 +43,13 @@ class CATFISHING_API UCatInventorySettings : public UDeveloperSettings
 	GENERATED_BODY()
 
 public:
+	/** 转换旧资产或存档中的英文物品引用；先整体预检，任一未知或冲突身份都会返回原因且不改对象。仅迁移工具与旧档加载调用。 */
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|Migration")
+	static bool MigrateLegacyItemReferences(UObject* Object, FString& OutError);
+
+	/** 枚举经过全表校验的定义并按编号排序；数字目录消费者读取，失败时不返回半份目录。 */
+	bool GetItemDefinitions(TArray<UCatInventoryItemDefinition*>& OutDefinitions, FString& OutError) const;
+
 	/** 玩家随身库存的项目默认格数；角色初始化、保存预检和 UI 空格渲染都读取同一个值。 */
 	static constexpr int32 ProjectDefaultPlayerInventorySlotCapacity = 4;
 
@@ -52,13 +57,13 @@ public:
 	static constexpr int32 ProjectDefaultQuantityStackCapacity = 5;
 
 	/** 按稳定 ID 查找唯一可运行的库存定义资产；重复、缺失或定义配置不一致时返回空。 */
-	UCatInventoryItemDefinition* FindRuntimeDefinition(FName DefinitionId) const;
+	UCatInventoryItemDefinition* FindRuntimeDefinition(int32  ItemId) const;
 
 	/** 按稳定 ID 查找指定定义类型；装备、鱼等上层系统用它从正式库存目录窄化自己认识的定义。 */
 	template <typename DefinitionType>
-	DefinitionType* FindRuntimeDefinition(FName DefinitionId) const
+	DefinitionType* FindRuntimeDefinition(int32  ItemId) const
 	{
-		return Cast<DefinitionType>(FindRuntimeDefinition(DefinitionId));
+		return Cast<DefinitionType>(FindRuntimeDefinition(ItemId));
 	}
 
 	/** 读取玩家随身库存默认格数；角色初始化、保存预检和 UI 等待同步状态用它得到非负容量。 */
@@ -87,9 +92,9 @@ public:
 	int32 GetCarryLimitForCategory(ECatInventoryCarryCategory Category) const;
 
 public:
-	/** 正式库存物品目录；商店、营地和随身物品都从这里读取定义。 */
+	/** 全部物品的数字索引表；项目配置指定，全部物品查询读取；鱼目录仅决定候选鱼集合。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Catalog")
-	TArray<FCatInventoryCatalogDefinition> Definitions;
+	TSoftObjectPtr<UDataTable> ItemCatalog;
 
 	/** 玩家随身库存默认可见格数；服务器初始化正式背包，UI 在复制未到位时也用它渲染空格。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Capacity", meta = (ClampMin = "0"))

@@ -22,7 +22,12 @@ struct FCatChumFieldPublicItem : public FFastArraySerializerItem
 	FCatWaterRegionHandle WaterRegion;
 
 	UPROPERTY(BlueprintReadOnly)
+	int32  ChumItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName ChumDefinitionId = NAME_None;
+
 
 	UPROPERTY(BlueprintReadOnly)
 	FVector CenterWorldPoint = FVector::ZeroVector;

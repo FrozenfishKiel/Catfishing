@@ -79,18 +79,18 @@ namespace CatInventoryWorldActionsTests
 	UCatInventoryItemDefinition* MakeStackDefinition()
 	{
 		UCatInventoryItemDefinition* Definition = NewObject<UCatInventoryItemDefinition>();
-		Definition->InventoryDefinitionId = TEXT("WorldActionsStackContract");
+		Definition->ItemId = 1451040;
 		Definition->InventoryMaxStackCount = 5;
 		Definition->WorldActorClass = ACatItem::StaticClass();
 		return Definition;
 	}
 
 	// 售鱼输入构造：为每条鱼分配独立身份并写入指定鱼种和千克重量；只构造命令，不在测试侧计算价格。
-	FCatShopFishSaleLine MakeFishLine(FName DefinitionId, double Kilograms)
+	FCatShopFishSaleLine MakeFishLine(int32  ItemId, double Kilograms)
 	{
 		FCatShopFishSaleLine Line;
 		Line.FishInstanceId = FGuid::NewGuid();
-		Line.FishDefinitionId = DefinitionId;
+		Line.ItemId = ItemId;
 		Line.WeightKilograms = Kilograms;
 		return Line;
 	}
@@ -124,47 +124,47 @@ bool FCatInventoryFishPriceContractTest::RunTest(const FString& Parameters)
 	Table->RowStruct = FCatShopFishSalePriceRow::StaticStruct();
 	FCatShopFishSalePriceRow Row;
 	Row.MoneyCoefficient = 19.0;
-	Table->AddRow(TEXT("PricedFish"), Row);
+	Table->AddRow(TEXT("1694064"), Row);
 	Row.MoneyCoefficient = 1.0;
-	Table->AddRow(TEXT("BoundaryFish"), Row);
+	Table->AddRow(TEXT("1584929"), Row);
 	int32 Value = -1;
-	TArray<FCatShopFishSaleLine> Fish{MakeFishLine(TEXT("PricedFish"), 2.5)};
+	TArray<FCatShopFishSaleLine> Fish{MakeFishLine(1694064, 2.5)};
 	TestTrue(TEXT("2.5kg 正常估价"), UCatShopEconomyTransactionExecutionCalculation::TryCalculateFishSale(Table.Get(), Fish, Value));
 	TestEqual(TEXT("2.5kg 乘19逐鱼舍入为48"), Value, 48);
-	Fish.Add(MakeFishLine(TEXT("PricedFish"), 2.5));
+	Fish.Add(MakeFishLine(1694064, 2.5));
 	TestTrue(TEXT("两鱼正常估价"), UCatShopEconomyTransactionExecutionCalculation::TryCalculateFishSale(Table.Get(), Fish, Value));
 	TestEqual(TEXT("两鱼分别取整后合计96，不能先合计成95"), Value, 96);
-	Fish = {MakeFishLine(TEXT("BoundaryFish"), 16777216.49)};
+	Fish = {MakeFishLine(1584929, 16777216.49)};
 	TestTrue(TEXT("double 上限内小数舍入后仍可接收"), UCatShopEconomyTransactionExecutionCalculation::TryCalculateFishSale(Table.Get(), Fish, Value));
 	TestEqual(TEXT("最大精确金币数"), Value, 16777216);
 	for (const double InvalidWeight : {0.0, -1.0, std::numeric_limits<double>::quiet_NaN(),
 		std::numeric_limits<double>::infinity(), 16777216.5})
 	{
-		Fish = {MakeFishLine(TEXT("BoundaryFish"), 1.0), MakeFishLine(TEXT("BoundaryFish"), InvalidWeight)};
+		Fish = {MakeFishLine(1584929, 1.0), MakeFishLine(1584929, InvalidWeight)};
 		Value = 123;
 		TestFalse(TEXT("坏重量令整批失败"), UCatShopEconomyTransactionExecutionCalculation::TryCalculateFishSale(Table.Get(), Fish, Value));
 		TestEqual(TEXT("失败不返回部分收入"), Value, 0);
 	}
-	Fish = {MakeFishLine(TEXT("BoundaryFish"), 16777216.0), MakeFishLine(TEXT("BoundaryFish"), 1.0)};
+	Fish = {MakeFishLine(1584929, 16777216.0), MakeFishLine(1584929, 1.0)};
 	TestFalse(TEXT("单鱼合法但总收入越界仍拒绝"), UCatShopEconomyTransactionExecutionCalculation::TryCalculateFishSale(Table.Get(), Fish, Value));
 	TestEqual(TEXT("总额越界输出清零"), Value, 0);
 	for (const double InvalidCoefficient : {0.0, -1.0, std::numeric_limits<double>::quiet_NaN(),
 		std::numeric_limits<double>::infinity(), std::numeric_limits<double>::max()})
 	{
 		Row.MoneyCoefficient = InvalidCoefficient;
-		Table->AddRow(TEXT("InvalidPrice"), Row);
-		Fish = {MakeFishLine(TEXT("PricedFish"), 2.5), MakeFishLine(TEXT("InvalidPrice"), 2.5)};
+		Table->AddRow(TEXT("1751174"), Row);
+		Fish = {MakeFishLine(1694064, 2.5), MakeFishLine(1751174, 2.5)};
 		Value = 123;
 		TestFalse(TEXT("非法系数或乘积溢出整批拒绝"), UCatShopEconomyTransactionExecutionCalculation::TryCalculateFishSale(Table.Get(), Fish, Value));
 		TestEqual(TEXT("非法价格不残留前一条收入"), Value, 0);
 	}
-	Fish = {MakeFishLine(TEXT("MissingPrice"), 2.5)};
+	Fish = {MakeFishLine(1336141, 2.5)};
 	TestFalse(TEXT("缺鱼种行拒绝"), UCatShopEconomyTransactionExecutionCalculation::TryCalculateFishSale(Table.Get(), Fish, Value));
-	Fish = {MakeFishLine(NAME_None, 2.5)};
+	Fish = {MakeFishLine(0, 2.5)};
 	TestFalse(TEXT("空鱼种拒绝"), UCatShopEconomyTransactionExecutionCalculation::TryCalculateFishSale(Table.Get(), Fish, Value));
 	Fish.Reset();
 	TestFalse(TEXT("空批次拒绝"), UCatShopEconomyTransactionExecutionCalculation::TryCalculateFishSale(Table.Get(), Fish, Value));
-	Fish = {MakeFishLine(TEXT("PricedFish"), 0.01)};
+	Fish = {MakeFishLine(1694064, 0.01)};
 	TestTrue(TEXT("正系数正重量允许舍入为零"), UCatShopEconomyTransactionExecutionCalculation::TryCalculateFishSale(Table.Get(), Fish, Value));
 	TestEqual(TEXT("合法零收入"), Value, 0);
 	TestFalse(TEXT("缺整张价格表拒绝"), UCatShopEconomyTransactionExecutionCalculation::TryCalculateFishSale(nullptr, Fish, Value));
@@ -185,13 +185,13 @@ bool FCatInventoryFishSaleGETest::RunTest(const FString& Parameters)
 	const UCatShopEconomySettings* Settings = GetDefault<UCatShopEconomySettings>();
 	UDataTable* Table = Settings->DefaultFishSalePriceTable.LoadSynchronous();
 	if (!TestNotNull(TEXT("正式收购表必须已由资产流程生成"), Table)) return false;
-	FName FishId;
+	int32 FishId = 0;
 	for (FName RowName : Table->GetRowNames())
 	{
 		const FCatShopFishSalePriceRow* Row = Table->FindRow<FCatShopFishSalePriceRow>(RowName, TEXT("WorldActionsTest"));
-		if (Row && Row->MoneyCoefficient == 19.0) { FishId = RowName; break; }
+		if (Row && Row->MoneyCoefficient == 19.0) { FishId = FCString::Atoi(*RowName.ToString()); break; }
 	}
-	if (!TestFalse(TEXT("正式表有系数19的鱼种，才能验证指定48金币案例"), FishId.IsNone())) return false;
+	if (!TestFalse(TEXT("正式表有系数19的鱼种，才能验证指定48金币案例"), FishId == 0)) return false;
 	FTestWorldWrapper Wrapper;
 	if (!StartWorld(*this, Wrapper)) return false;
 	UWorld* World = Wrapper.GetTestWorld();
@@ -249,7 +249,7 @@ bool FCatInventoryFishSaleGETest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("零收入重放不再应用GE"), AppliedEconomicEffects, 3);
 	Command.Context.RequestId = FGuid::NewGuid();
 	Command.InventoryCommitId = Command.Context.RequestId;
-	Command.Fish = {MakeFishLine(FishId, 2.5), MakeFishLine(TEXT("MissingPriceForWorldActions"), 2.5)};
+	Command.Fish = {MakeFishLine(FishId, 2.5), MakeFishLine(1540693, 2.5)};
 	TestFalse(TEXT("GE遇到第二条缺价格整单拒绝"), Shop->ApplyFishSale(Command).Command.bCommitted);
 	TestEqual(TEXT("坏行不提前入账首鱼"), Attributes->GetTeamWalletBalance(), 144.0f);
 	Command.Context.RequestId = FGuid::NewGuid();
@@ -297,7 +297,7 @@ bool FCatInventoryReleaseStackTest::RunTest(const FString& Parameters)
 	UCatInventoryComponent* Inventory = Character->GetInventoryComponent();
 	TStrongObjectPtr<UCatInventoryItemDefinition> Definition(MakeStackDefinition());
 	if (!TestTrue(TEXT("五件入正式背包"), Inventory && Inventory->AddItemDefinition(Definition.Get(), 5))) return false;
-	const int32 Slot = Inventory->FindFirstInventorySlotIndexByDefinitionId(Definition->GetInventoryDefinitionId());
+	const int32 Slot = Inventory->FindFirstInventorySlotIndexByItemId(Definition->GetItemId());
 	UCatInventoryItemInstance* Original = Inventory->GetInventoryEntryAtSlot(Slot)->Instance;
 	const FGuid OriginalId = Original->GetItemInstanceId();
 	const FGuid DropRequest = FGuid::NewGuid();
@@ -378,7 +378,7 @@ bool FCatInventoryReleaseStackTest::RunTest(const FString& Parameters)
 		&& Placed->GetActorScale3D().Equals(OriginalScale));
 	TestEqual(TEXT("原Actor载荷更新为当前数量"), Placed->GetPickupInventory().InstanceEntries[0].Count, 4);
 	TestTrue(TEXT("原Actor重新开放拾取"), Placed->Interact_Implementation(Controller, FGuid::NewGuid()));
-	TestEqual(TEXT("再次拾取不恢复旧数量"), Inventory->CountVisibleInventoryQuantityByDefinitionId(Definition->GetInventoryDefinitionId()), 4);
+	TestEqual(TEXT("再次拾取不恢复旧数量"), Inventory->CountVisibleInventoryQuantityByItemId(Definition->GetItemId()), 4);
 	const int32 WholeDropSlot = Inventory->FindInventorySlotIndexFromInstanceId(OriginalId);
 	if (!TestTrue(TEXT("整堆Drop前可从原GUID定位库存来源"), WholeDropSlot != INDEX_NONE)) return false;
 	const FGuid WholeDropRequest = FGuid::NewGuid();
@@ -428,7 +428,7 @@ bool FCatInventoryReleaseFailureTest::RunTest(const FString& Parameters)
 	UCatInventoryComponent* Inventory = Character->GetInventoryComponent();
 	TStrongObjectPtr<UCatInventoryItemDefinition> Definition(MakeStackDefinition());
 	if (!TestTrue(TEXT("原堆五件入库"), Inventory && Inventory->AddItemDefinition(Definition.Get(), 5))) return false;
-	const int32 Slot = Inventory->FindFirstInventorySlotIndexByDefinitionId(Definition->GetInventoryDefinitionId());
+	const int32 Slot = Inventory->FindFirstInventorySlotIndexByItemId(Definition->GetItemId());
 	UCatInventoryItemInstance* Original = Inventory->GetInventoryEntryAtSlot(Slot)->Instance;
 	const FGuid Id = Original->GetItemInstanceId();
 	for (const int32 Quantity : {0, -1, 6})
@@ -576,7 +576,7 @@ bool FCatInventoryFishGuardRoundTripTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("填满背包以验证失败"), Inventory->AddItemDefinition(FishDefinition, Capacity))) return false;
 	TestFalse(TEXT("满包拾取鱼护失败"), Guard->PickUpFromAuthority(Controller, FGuid::NewGuid()));
 	TestTrue(TEXT("满包失败仍在地面"), Guard->IsGrounded());
-	TestEqual(TEXT("满包失败不扣背包数量"), Inventory->CountVisibleInventoryQuantityByDefinitionId(FishDefinition->GetInventoryDefinitionId()), Capacity);
+	TestEqual(TEXT("满包失败不扣背包数量"), Inventory->CountVisibleInventoryQuantityByItemId(FishDefinition->GetItemId()), Capacity);
 	for (int32 Index = 0; Index < FishIds.Num(); ++Index)
 	{
 		const FCatInventoryEntry* Entry = FishInventory->GetInventoryEntryAtSlot(FishInventory->FindInventorySlotIndexFromInstanceId(FishIds[Index]));
@@ -600,7 +600,7 @@ bool FCatInventoryFishGuardRoundTripTest::RunTest(const FString& Parameters)
 			const FCatInventoryEntry* FishEntry = FishInventory->GetInventoryEntryAtSlot(FishInventory->FindInventorySlotIndexFromInstanceId(FishIds[Index]));
 			TestTrue(TEXT("携带期间每条内鱼仍是原实例"), FishEntry && FishEntry->Instance == FishInstances[Index] && FishEntry->StackCount == 1);
 		}
-		const int32 Slot = Inventory->FindFirstInventorySlotIndexByDefinitionId(GuardDefinition->GetInventoryDefinitionId());
+		const int32 Slot = Inventory->FindFirstInventorySlotIndexByItemId(GuardDefinition->GetItemId());
 		const FCatInventoryEntry* Entry = Inventory->GetInventoryEntryAtSlot(Slot);
 		UCatFishGuardInventoryItemInstance* Item = Entry ? Cast<UCatFishGuardInventoryItemInstance>(Entry->Instance) : nullptr;
 		if (!TestNotNull(TEXT("背包持有鱼护实例"), Item)) return false;
@@ -618,7 +618,7 @@ bool FCatInventoryFishGuardRoundTripTest::RunTest(const FString& Parameters)
 		UPrimitiveComponent* Body = Cast<UPrimitiveComponent>(Guard->GetRootComponent());
 		TestTrue(TEXT("鱼护物理模式对应Drop或Place"), Body && Body->IsSimulatingPhysics() == (Action == ECatInventoryWorldAction::Drop));
 		TestTrue(TEXT("内部库存组件没有重建"), Guard->GetFishInventoryComponent() == FishInventory);
-		TestEqual(TEXT("内鱼总数量保持两条"), FishInventory->CountVisibleInventoryQuantityByDefinitionId(FishDefinition->GetInventoryDefinitionId()), 2);
+		TestEqual(TEXT("内鱼总数量保持两条"), FishInventory->CountVisibleInventoryQuantityByItemId(FishDefinition->GetItemId()), 2);
 		for (int32 Index = 0; Index < FishIds.Num(); ++Index)
 		{
 			const FCatInventoryEntry* FishEntry = FishInventory->GetInventoryEntryAtSlot(FishInventory->FindInventorySlotIndexFromInstanceId(FishIds[Index]));
@@ -628,7 +628,7 @@ bool FCatInventoryFishGuardRoundTripTest::RunTest(const FString& Parameters)
 	}
 	// 无主生命周期流程：旧鱼护在 UnPossess 时必须先从原背包注销并落地；随后另一只鱼护取得嘴部后，销毁旧 Actor 只能按 expected actor 清理，不能误清新认领。
 	if (!TestTrue(TEXT("退出前再次拾取原鱼护"), Guard->PickUpFromAuthority(Controller, FGuid::NewGuid()))) return false;
-	const int32 HeldGuardSlot = Inventory->FindFirstInventorySlotIndexByDefinitionId(GuardDefinition->GetInventoryDefinitionId());
+	const int32 HeldGuardSlot = Inventory->FindFirstInventorySlotIndexByItemId(GuardDefinition->GetItemId());
 	const FCatInventoryEntry* HeldGuardEntry = Inventory->GetInventoryEntryAtSlot(HeldGuardSlot);
 	UCatFishGuardInventoryItemInstance* HeldGuardItem = HeldGuardEntry ? Cast<UCatFishGuardInventoryItemInstance>(HeldGuardEntry->Instance) : nullptr;
 	if (!TestTrue(TEXT("退出前背包持有原鱼护实例"), HeldGuardItem && HeldGuardItem->GetWorldActor() == Guard)) return false;
@@ -708,7 +708,7 @@ bool FCatWorldFishMouthDropTest::RunTest(const FString& Parameters)
 	USkeletalMeshComponent* FishMesh = Fish->FindComponentByClass<USkeletalMeshComponent>();
 	UCatInventoryComponent* Inventory = Character->GetInventoryComponent();
 	if (!TestTrue(TEXT("鱼物理根、正式网格及玩家库存就绪"), Body && FishMesh && FishMesh->GetSkeletalMeshAsset() && Inventory)) return false;
-	const int32 InitialInventoryFish = Inventory->CountVisibleInventoryQuantityByDefinitionId(Definition->GetInventoryDefinitionId());
+	const int32 InitialInventoryFish = Inventory->CountVisibleInventoryQuantityByItemId(Definition->GetItemId());
 	const FVector FishWorldScale(0.7, 0.8, 0.9);
 	Fish->SetActorScale3D(FishWorldScale);
 	const FVector FishVisualScale = FishMesh->GetComponentScale();
@@ -741,8 +741,8 @@ bool FCatWorldFishMouthDropTest::RunTest(const FString& Parameters)
 		TestEqual(Prefix + TEXT("原实例GUID不变"), Item->GetItemInstanceId(), FishId);
 		TestEqual(Prefix + TEXT("原实例重量不变"), Item->GetFishWeightKilograms(), WeightKilograms);
 		TestTrue(Prefix + TEXT("原实例运行宿主仍是原鱼"), Item->GetRuntimeOwnerActor() == Fish);
-		TestEqual(Prefix + TEXT("没有经背包收货"), Inventory->CountVisibleInventoryQuantityByDefinitionId(
-			Definition->GetInventoryDefinitionId()), InitialInventoryFish);
+		TestEqual(Prefix + TEXT("没有经背包收货"), Inventory->CountVisibleInventoryQuantityByItemId(
+			Definition->GetItemId()), InitialInventoryFish);
 	};
 	// 拒绝后读取真实嘴部附件、归属、几何与模拟状态；期望变换在请求前捕获，任何副作用都会留下断言失败。
 	// 变换比较容差为位置0.001厘米、缩放及四元数分量0.001；盒尺寸容差为0.001厘米，不允许可见位移或切换姿态。

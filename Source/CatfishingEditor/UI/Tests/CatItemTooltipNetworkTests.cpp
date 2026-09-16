@@ -153,8 +153,8 @@ namespace CatItemTooltipNetwork
 				ServerCamp = Camp;
 				ServerCampName = Camp->GetFName();
 
-				UCatFishDefinition* FishDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatFishDefinition>(TEXT("SilvermoonTrout"));
-				UCatEquipmentDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(TEXT("StarterRodT1"));
+				UCatFishDefinition* FishDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatFishDefinition>(35);
+				UCatEquipmentDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(37);
 				if (!Test->TestNotNull(TEXT("formal SilvermoonTrout definition resolves"), FishDefinition)
 					|| !Test->TestNotNull(TEXT("formal StarterRodT1 definition resolves"), RodDefinition)) return true;
 				UCatFishInventoryItemInstance* Fish = NewObject<UCatFishInventoryItemInstance>(Camp);
@@ -172,10 +172,10 @@ namespace CatItemTooltipNetwork
 
 			ClientCamp = FindCamp(*ClientWorld, ServerCampName);
 			if (!ClientCamp.IsValid()) return false;
-			if (!FindDefinitionSlot(ServerCamp->GetInventoryComponent()->GetInventoryEntries(), TEXT("SilvermoonTrout"), ServerFishSlot)
-				|| !FindDefinitionSlot(ServerCharacter->GetInventoryComponent()->GetInventoryEntries(), TEXT("StarterRodT1"), ServerRodSlot)) return false;
-			if (!FindDefinitionSlot(ClientCamp->GetInventoryComponent()->GetInventoryModel()->GetInventoryList(), TEXT("SilvermoonTrout"), ClientFishSlot)
-				|| !FindDefinitionSlot(ClientCharacter->GetInventoryComponent()->GetInventoryModel()->GetInventoryList(), TEXT("StarterRodT1"), ClientRodSlot)) return false;
+			if (!FindDefinitionSlot(ServerCamp->GetInventoryComponent()->GetInventoryEntries(), 35, ServerFishSlot)
+				|| !FindDefinitionSlot(ServerCharacter->GetInventoryComponent()->GetInventoryEntries(), 37, ServerRodSlot)) return false;
+			if (!FindDefinitionSlot(ClientCamp->GetInventoryComponent()->GetInventoryModel()->GetInventoryList(), 35, ClientFishSlot)
+				|| !FindDefinitionSlot(ClientCharacter->GetInventoryComponent()->GetInventoryModel()->GetInventoryList(), 37, ClientRodSlot)) return false;
 			Stage = 1;
 			return false;
 		}
@@ -362,11 +362,11 @@ namespace CatItemTooltipNetwork
 		}
 
 		/** 在复制数组或 Model 数组中查找指定正式定义的格位；找不到说明客户端仍未完成真实入库同步。 */
-		static bool FindDefinitionSlot(const TArray<FCatInventoryEntry>& Entries, const FName DefinitionId, int32& OutSlot)
+		static bool FindDefinitionSlot(const TArray<FCatInventoryEntry>& Entries, const int32  ItemId, int32& OutSlot)
 		{
 			for (int32 Index = 0; Index < Entries.Num(); ++Index)
 			{
-				if (Entries[Index].Instance && Entries[Index].StackCount > 0 && Entries[Index].Instance->GetItemDefinitionId() == DefinitionId)
+				if (Entries[Index].Instance && Entries[Index].StackCount > 0 && Entries[Index].Instance->GetItemId() == ItemId)
 				{
 					OutSlot = Index;
 					return true;

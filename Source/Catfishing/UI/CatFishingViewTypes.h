@@ -30,7 +30,12 @@ struct CATFISHING_API FCatFishingViewState
 	UPROPERTY(BlueprintReadOnly) double PerfectWindowEndsServerTime = 0.0;
 
 	/** 当前鱼种定义 ID；会话快照提供它，UI 用来显示鱼种文本，图鉴记录仍由 Profile/Collection 的正式链路负责。 */
-	UPROPERTY(BlueprintReadOnly) FName FishDefinitionId = NAME_None;
+	UPROPERTY(BlueprintReadOnly) int32  ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
+	FName FishDefinitionId = NAME_None;
+
 	UPROPERTY(BlueprintReadOnly) double CancelHoldStartedServerTime = 0.0;
 	UPROPERTY(BlueprintReadOnly) double CancelHoldEndsServerTime = 0.0;
 

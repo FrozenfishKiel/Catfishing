@@ -28,8 +28,8 @@ public:
 
 private:
 	friend class FCatFishingDebugFishTypeLineTest;
-	/** 把复制快照中的稳定 FishDefinitionId 格式化为右上角鱼种行；没有当前鱼时显式显示 --。 */
-	static FString FormatFishTypeLine(FName FishDefinitionId);
+	/** 把复制快照中的稳定 ItemId 格式化为右上角鱼种行；没有当前鱼时显式显示 --。 */
+	static FString FormatFishTypeLine(int32  ItemId);
 	/** 独立于世界调试标记的右上角三方数值面板；Canvas 回调只读本地已复制事实。 */
 	void DrawFishingStats(UCanvas* Canvas, APlayerController* Controller);
 	void DrawWaterRegions() const;

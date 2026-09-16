@@ -76,7 +76,7 @@ namespace CatRodBendNetwork
 				const FTransform Transform(FVector(0, 0, 200));
 				ServerRod = Server->SpawnActorDeferred<ACatFishingRodActor>(RodClass, Transform);
 				ServerRod->ConfigureCanonicalAnchorsFromAuthority(FTransform(FVector(161.52, -1.30, 151.89)), FTransform::Identity, FTransform::Identity);
-				ServerRod->InitializeAuthoritativeIdentity(RodId, FGuid::NewGuid(), TEXT("Rod_Basic"), NAME_None,
+				ServerRod->InitializeAuthoritativeIdentity(RodId, FGuid::NewGuid(), 31, NAME_None,
 					Server->GetFirstPlayerController()->PlayerState, nullptr, true, false);
 				ServerRod->bAlwaysRelevant = true;
 				ServerRod->FinishSpawning(Transform);

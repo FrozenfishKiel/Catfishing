@@ -23,7 +23,12 @@ struct FCatRunFishCollectionPage
 	GENERATED_BODY()
 
 	UPROPERTY(BlueprintReadOnly)
+	int32  ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName FishDefinitionId = NAME_None;
+
 
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatRunFishCollectionPawprint> Pawprints;
@@ -55,7 +60,12 @@ struct FCatRunFishCollectionCapture
 	FGuid FishInstanceId;
 
 	UPROPERTY(SaveGame)
+	int32  ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName FishDefinitionId = NAME_None;
+
 
 	/** 归属沿用捕获链的上钩者；断线重连仍复用同一爪印，不能用显示名或拾取者替代。 */
 	UPROPERTY(SaveGame)

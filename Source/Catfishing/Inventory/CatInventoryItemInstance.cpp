@@ -135,9 +135,9 @@ UCatInventoryItemDefinition* UCatInventoryItemInstance::GetItemDefinition() cons
 }
 
 // 稳定定义 ID 读取流程：实例自己不缓存第二份 ID，避免定义资产改口径时出现双事实。
-FName UCatInventoryItemInstance::GetItemDefinitionId() const
+int32  UCatInventoryItemInstance::GetItemId() const
 {
-	return ItemDefinition != nullptr ? ItemDefinition->GetInventoryDefinitionId() : NAME_None;
+	return ItemDefinition != nullptr ? ItemDefinition->GetItemId() : 0;
 }
 
 // 实例 ID 读取流程：返回服务器创建时冻结的 ID；无效 ID 表示实例还没有进入正式库存链。
@@ -155,11 +155,11 @@ ECatDomainCommandError UCatInventoryItemInstance::Use(const FCatInventoryEntry& 
 	const int32 Quantity) const
 {
 	const UCatInventoryItemDefinition* Definition = GetItemDefinition();
-	const FName RuntimeDefinitionId =
-		Definition != nullptr ? Definition->GetInventoryDefinitionId() : NAME_None;
+	const int32  RuntimeItemId =
+		Definition != nullptr ? Definition->GetItemId() : 0;
 	if (Item.Instance != this || Item.StackCount <= 0 || Quantity <= 0 || Quantity > Item.StackCount
-		|| !GetItemInstanceId().IsValid() || RuntimeDefinitionId.IsNone()
-		|| GetItemDefinitionId() != RuntimeDefinitionId)
+		|| !GetItemInstanceId().IsValid() || (RuntimeItemId == 0)
+		|| GetItemId() != RuntimeItemId)
 	{
 		return ECatDomainCommandError::InvalidPayload;
 	}
@@ -184,9 +184,9 @@ ECatDomainCommandError UCatInventoryItemInstance::Use(const FCatInventoryEntry& 
 // 库存实例 UnUse 裁决流程：只确认活动记录仍然指向当前实例和定义；子类可在同一入口补热配置或损坏状态检查。
 ECatDomainCommandError UCatInventoryItemInstance::UnUse(const FCatInventoryEntry& Item) const
 {
-	const FName RuntimeDefinitionId = GetItemDefinitionId();
+	const int32  RuntimeItemId = GetItemId();
 	if (Item.Instance != this || Item.StackCount <= 0 || !GetItemInstanceId().IsValid()
-		|| RuntimeDefinitionId.IsNone() || GetItemDefinitionId() != RuntimeDefinitionId)
+		|| (RuntimeItemId == 0) || GetItemId() != RuntimeItemId)
 	{
 		return ECatDomainCommandError::InvalidPayload;
 	}

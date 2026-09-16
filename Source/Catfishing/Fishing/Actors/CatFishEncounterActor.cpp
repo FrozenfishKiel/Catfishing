@@ -57,10 +57,10 @@ void ACatFishEncounterActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty
 }
 
 bool ACatFishEncounterActor::InitializeAuthoritativeIdentity(const FGuid InFishingSessionId, const FGuid InCastAttemptId,
-	const FName InFishDefinitionId, const double InInitialLineLength, const double InVisualScale)
+	const int32  InItemId, const double InInitialLineLength, const double InVisualScale)
 {
 	if (!HasAuthority() || !InFishingSessionId.IsValid() || !InCastAttemptId.IsValid()
-		|| InFishingSessionId == InCastAttemptId || InFishDefinitionId.IsNone()
+		|| InFishingSessionId == InCastAttemptId || (InItemId == 0)
 		|| !FMath::IsFinite(InInitialLineLength) || InInitialLineLength < 0.0
 		|| !FMath::IsFinite(InVisualScale) || InVisualScale <= 0.0)
 	{
@@ -72,13 +72,13 @@ bool ACatFishEncounterActor::InitializeAuthoritativeIdentity(const FGuid InFishi
 		// 身份只能设置一次；重复调用只在传入值与已登记身份完全一致时才算“幂等成功”，否则视为非法覆盖并失败。
 		return PresentationState.FishingSessionId == InFishingSessionId
 			&& PresentationState.CastAttemptId == InCastAttemptId
-			&& PresentationState.FishDefinitionId == InFishDefinitionId;
+			&& PresentationState.ItemId == InItemId;
 	}
 	// 保存旧状态用于表现变化通知（Previous -> Current 对比）。
 	const FCatFishEncounterPresentationState Previous = PresentationState;
 	PresentationState.FishingSessionId = InFishingSessionId;
 	PresentationState.CastAttemptId = InCastAttemptId;
-	PresentationState.FishDefinitionId = InFishDefinitionId;
+	PresentationState.ItemId = InItemId;
 	PresentationState.VisualScale = InVisualScale;
 	PresentationState.MotionIntent = ECatFishMotionIntent::None; // 初始尚未产生任何搏斗运动意图。
 	PresentationState.CurrentLineLength = InInitialLineLength;
@@ -170,8 +170,8 @@ FVector ACatFishEncounterActor::GetVisualWorldLocation() const
 UCatFishDefinition* ACatFishEncounterActor::GetFishDefinition() const
 {
 	const UCatFishCatalogSettings* Catalog = GetDefault<UCatFishCatalogSettings>();
-	return Catalog && !PresentationState.FishDefinitionId.IsNone()
-		? Catalog->FindRuntimeDefinition(PresentationState.FishDefinitionId) : nullptr;
+	return Catalog && !(PresentationState.ItemId == 0)
+		? Catalog->FindRuntimeDefinition(PresentationState.ItemId) : nullptr;
 }
 
 // 表现定义解析流程：沿鱼定义唯一的表现引用取资产；漂讯与水面三个逐鱼槽位由表现层从返回值上读。
@@ -199,14 +199,14 @@ namespace CatFishEncounterPresentationPrivate
 // 鱼种表现解析流程：只从正式鱼目录解析 FishDefinition，再沿其直接引用加载表现资产；不存在任何按 ID 维护的第二张映射表。
 void ACatFishEncounterActor::RefreshFishPresentation()
 {
-	if (!FishMesh || bRefreshingFishPresentation || PresentationState.FishDefinitionId.IsNone()
-		|| AppliedPresentationFishDefinitionId == PresentationState.FishDefinitionId)
+	if (!FishMesh || bRefreshingFishPresentation || (PresentationState.ItemId == 0)
+		|| AppliedPresentationItemId == PresentationState.ItemId)
 	{
 		return;
 	}
 	if (GetNetMode() == NM_DedicatedServer)
 	{
-		AppliedPresentationFishDefinitionId = PresentationState.FishDefinitionId;
+		AppliedPresentationItemId = PresentationState.ItemId;
 		return;
 	}
 	// 更换 Mesh/AnimClass 可同步完成一次骨骼刷新；完成资源和缓存切换前不消费该回调。
@@ -218,7 +218,7 @@ void ACatFishEncounterActor::RefreshFishPresentation()
 
 	const UCatFishCatalogSettings* Catalog = GetDefault<UCatFishCatalogSettings>();
 	const UCatFishDefinition* Definition = Catalog
-		? Catalog->FindRuntimeDefinition(PresentationState.FishDefinitionId) : nullptr;
+		? Catalog->FindRuntimeDefinition(PresentationState.ItemId) : nullptr;
 	UCatFishPresentationDefinition* FishPresentation = Definition
 		? Definition->LoadRuntimePresentationDefinition() : nullptr;
 	USkeletalMesh* Mesh = FishPresentation ? FishPresentation->SkeletalMesh.LoadSynchronous() : nullptr;
@@ -233,7 +233,7 @@ void ACatFishEncounterActor::RefreshFishPresentation()
 		FishMesh->SetSkeletalMeshAsset(nullptr);
 		UE_LOG(LogCatFishing, Warning,
 			TEXT("Event=fish_presentation_rejected FishDefinition=%s Actor=%s NetMode=%s Authority=%s Definition=%s Presentation=%s Mesh=%s AnimClass=%s AnimSkeleton=%s Reason=%s"),
-			*PresentationState.FishDefinitionId.ToString(), *GetNameSafe(this),
+			*FString::FromInt(PresentationState.ItemId), *GetNameSafe(this),
 			CatFishEncounterPresentationPrivate::NetModeValue(GetNetMode()), HasAuthority() ? TEXT("true") : TEXT("false"),
 			*GetNameSafe(Definition), *GetNameSafe(FishPresentation), *GetNameSafe(Mesh), *GetNameSafe(AnimClass),
 			*GetNameSafe(AnimSkeleton), FishPresentation ? TEXT("AssetOrSkeletonMismatch") : TEXT("DefinitionChainMissing"));
@@ -246,7 +246,7 @@ void ACatFishEncounterActor::RefreshFishPresentation()
 	FishMesh->SetSkeletalMeshAsset(Mesh);
 	FishMesh->SetAnimationMode(EAnimationMode::AnimationBlueprint);
 	FishMesh->SetAnimInstanceClass(AnimClass);
-	AppliedPresentationFishDefinitionId = PresentationState.FishDefinitionId;
+	AppliedPresentationItemId = PresentationState.ItemId;
 
 	// MouthLocal 是经过表现基础变换后的参考骨架点，无需维护第二份逐鱼骨名配置。
 	// 只在资源切换时遍历参考骨架，逐帧使用缓存骨名读取最终动画姿态。
@@ -276,9 +276,9 @@ void ACatFishEncounterActor::RefreshFishPresentation()
 		AnimatedMouthMesh = Mesh;
 		AnimatedMouthBone = ReferenceSkeleton.GetBoneName(AnimatedMouthBoneIndex);
 		UE_LOG(LogCatFishing, Log,
-			TEXT("Event=fish_animated_mouth_bone_resolved SessionId=%s CastAttemptId=%s FishActor=%s FishDefinitionId=%s Mesh=%s Bone=%s ReferenceErrorCm=%.6f Result=Cached World=%s NetMode=%d Authority=%d LocalRole=%d"),
+			TEXT("Event=fish_animated_mouth_bone_resolved SessionId=%s CastAttemptId=%s FishActor=%s ItemId=%s Mesh=%s Bone=%s ReferenceErrorCm=%.6f Result=Cached World=%s NetMode=%d Authority=%d LocalRole=%d"),
 			*PresentationState.FishingSessionId.ToString(), *PresentationState.CastAttemptId.ToString(), *GetName(),
-			*PresentationState.FishDefinitionId.ToString(), *GetNameSafe(Mesh), *AnimatedMouthBone.ToString(), FMath::Sqrt(ClosestDistanceSquared),
+			*FString::FromInt(PresentationState.ItemId), *GetNameSafe(Mesh), *AnimatedMouthBone.ToString(), FMath::Sqrt(ClosestDistanceSquared),
 			*GetNameSafe(GetWorld()), int32(GetNetMode()), HasAuthority(), int32(GetLocalRole()));
 	}
 	else
@@ -288,7 +288,7 @@ void ACatFishEncounterActor::RefreshFishPresentation()
 	}
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fish_presentation_applied FishDefinition=%s Actor=%s NetMode=%s Authority=%s Presentation=%s Mesh=%s Skeleton=%s AnimClass=%s VisualScale=%.3f"),
-		*PresentationState.FishDefinitionId.ToString(), *GetNameSafe(this),
+		*FString::FromInt(PresentationState.ItemId), *GetNameSafe(this),
 		CatFishEncounterPresentationPrivate::NetModeValue(GetNetMode()), HasAuthority() ? TEXT("true") : TEXT("false"),
 		*GetNameSafe(FishPresentation), *GetNameSafe(Mesh), *GetNameSafe(Mesh->GetSkeleton()), *GetNameSafe(AnimClass),
 		PresentationState.VisualScale);
@@ -367,9 +367,9 @@ void ACatFishEncounterActor::LogAnimatedMouthFallback(const TCHAR* Reason)
 	if (bLoggedAnimatedMouthFallback) return;
 	bLoggedAnimatedMouthFallback = true;
 	UE_LOG(LogCatFishing, Warning,
-		TEXT("Event=fish_animated_mouth_fallback SessionId=%s CastAttemptId=%s FishActor=%s FishDefinitionId=%s Mesh=%s Bone=%s Reason=%s Result=StaticMouthFallback World=%s NetMode=%d Authority=%d LocalRole=%d"),
+		TEXT("Event=fish_animated_mouth_fallback SessionId=%s CastAttemptId=%s FishActor=%s ItemId=%s Mesh=%s Bone=%s Reason=%s Result=StaticMouthFallback World=%s NetMode=%d Authority=%d LocalRole=%d"),
 		*PresentationState.FishingSessionId.ToString(), *PresentationState.CastAttemptId.ToString(), *GetName(),
-		*PresentationState.FishDefinitionId.ToString(), *GetNameSafe(FishMesh ? FishMesh->GetSkeletalMeshAsset() : nullptr),
+		*FString::FromInt(PresentationState.ItemId), *GetNameSafe(FishMesh ? FishMesh->GetSkeletalMeshAsset() : nullptr),
 		*AnimatedMouthBone.ToString(), Reason, *GetNameSafe(GetWorld()), int32(GetNetMode()), HasAuthority(), int32(GetLocalRole()));
 }
 
@@ -420,12 +420,12 @@ bool ACatFishEncounterActor::ApplyFightStepFromAuthority(const ECatFishMotionInt
 	if (Previous.Behavior != PresentationState.Behavior || Previous.MotionIntent != PresentationState.MotionIntent)
 	{
 		UE_LOG(LogCatFishing, Log,
-			TEXT("Event=fishing_behavior_applied SessionId=%s CastAttemptId=%s FishActor=%s FishDefinitionId=%s "
+			TEXT("Event=fishing_behavior_applied SessionId=%s CastAttemptId=%s FishActor=%s ItemId=%s "
 				"Behavior=%s MotionIntent=%s ActualEffort=%.3f SwimHeading=%s IntendedSwimSpeedCmPerSec=%.3f "
 				"Result=Applied World=%s NetMode=%d Authority=%s LocalRole=%d"),
 			*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 			*PresentationState.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens), *GetName(),
-			*PresentationState.FishDefinitionId.ToString(), *UEnum::GetValueAsString(PresentationState.Behavior),
+			*FString::FromInt(PresentationState.ItemId), *UEnum::GetValueAsString(PresentationState.Behavior),
 			*UEnum::GetValueAsString(PresentationState.MotionIntent), PresentationState.FishEffortRatio,
 			*PresentationState.SwimHeading.ToCompactString(), PresentationState.IntendedSwimSpeedCentimetersPerSecond,
 			*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority() ? TEXT("true") : TEXT("false"),
@@ -503,12 +503,12 @@ void ACatFishEncounterActor::OnRep_PresentationState(const FCatFishEncounterPres
 	if (Previous.Behavior != PresentationState.Behavior || Previous.MotionIntent != PresentationState.MotionIntent)
 	{
 		UE_LOG(LogCatFishing, Log,
-			TEXT("Event=fishing_behavior_received SessionId=%s CastAttemptId=%s FishActor=%s FishDefinitionId=%s "
+			TEXT("Event=fishing_behavior_received SessionId=%s CastAttemptId=%s FishActor=%s ItemId=%s "
 				"Behavior=%s MotionIntent=%s ActualEffort=%.3f SwimHeading=%s IntendedSwimSpeedCmPerSec=%.3f "
 				"Result=Applied World=%s NetMode=%d Authority=%s LocalRole=%d"),
 			*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 			*PresentationState.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens), *GetName(),
-			*PresentationState.FishDefinitionId.ToString(), *UEnum::GetValueAsString(PresentationState.Behavior),
+			*FString::FromInt(PresentationState.ItemId), *UEnum::GetValueAsString(PresentationState.Behavior),
 			*UEnum::GetValueAsString(PresentationState.MotionIntent), PresentationState.FishEffortRatio,
 			*PresentationState.SwimHeading.ToCompactString(), PresentationState.IntendedSwimSpeedCentimetersPerSecond,
 			*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority() ? TEXT("true") : TEXT("false"),

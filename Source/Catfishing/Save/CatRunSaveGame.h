@@ -15,7 +15,12 @@ struct FCatSavedRunInventorySlot
 
 	/** 物品运行定义键；恢复时由领域目录重新验证，未知定义不能进入库存。 */
 	UPROPERTY(SaveGame)
+	int32  ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName DefinitionId = NAME_None;
+
 
 	/** 该格物品的稳定实例键；玩家、营地库存和世界鱼容器之间不能重复，跨容器移动仍保留同一身份。 */
 	UPROPERTY(SaveGame)
@@ -59,33 +64,53 @@ struct FCatSavedEquipmentLoadout
 	UPROPERTY(SaveGame)
 	int64 Revision = 0;
 
-	/** 当前选中鱼竿的定义键与实例键；必须引用同一已保存库存格。 */
+	/** 保存时选中鱼竿的数字物品编号，0 表示未选择；采样写入，恢复时与鱼竿实例 GUID 一起验证同一库存格。 */
 	UPROPERTY(SaveGame)
+	int32  RodItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName RodDefinitionId = NAME_None;
+
 
 	/** 当前选中鱼竿的实例键；没有选择时保持无效 GUID。 */
 	UPROPERTY(SaveGame)
 	FGuid RodItemInstanceId;
 
-	/** 当前选中鱼饵的定义键与实例键；恢复前必须匹配库存中的可装备定义。 */
+	/** 保存时选中鱼饵的数字物品编号，0 表示未选择；采样写入，恢复时与鱼饵实例 GUID 一起验证同一可装备库存格。 */
 	UPROPERTY(SaveGame)
+	int32  BaitItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName BaitDefinitionId = NAME_None;
+
 
 	/** 当前选中鱼饵的实例键；没有选择时保持无效 GUID。 */
 	UPROPERTY(SaveGame)
 	FGuid BaitItemInstanceId;
 
-	/** 当前选中浮漂的定义键与实例键；恢复前必须匹配库存中的可装备定义。 */
+	/** 保存时选中浮漂的数字物品编号，0 表示未选择；采样写入，恢复时与浮漂实例 GUID 一起验证同一可装备库存格。 */
 	UPROPERTY(SaveGame)
+	int32  FloatItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName FloatDefinitionId = NAME_None;
+
 
 	/** 当前选中浮漂的实例键；没有选择时保持无效 GUID。 */
 	UPROPERTY(SaveGame)
 	FGuid FloatItemInstanceId;
 
-	/** 当前选中抄网的定义键与实例键；恢复前必须匹配库存中的可装备定义。 */
+	/** 保存时选中抄网的数字物品编号，0 表示未选择；采样写入，恢复时与抄网实例 GUID 一起验证同一可装备库存格。 */
 	UPROPERTY(SaveGame)
+	int32  ScoopNetItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName ScoopNetDefinitionId = NAME_None;
+
 
 	/** 当前选中抄网的实例键；没有选择时保持无效 GUID。 */
 	UPROPERTY(SaveGame)
@@ -251,7 +276,7 @@ public:
 	/** 返回本项目当前载荷版本；引擎在保存前写入 SavedDataVersion，读取方据此拒绝未知格式。 */
 	virtual int32 GetLatestDataVersion() const override;
 
-	/** 读盘后只迁移已知 v5/v6 数据，不访问 World 或角色；库存与位置等到正式宿主就绪后再应用。 */
+	/** 读盘后仅迁移已知 v5/v6/v7 数据：先保留原始字节备份，身份转换成功才升级版本，失败保持旧版本；宿主恢复另行执行。 */
 	virtual void HandlePostLoad() override;
 
 	/** 写盘完成后接收引擎真实结果，并消费一次完成委托；不会把受理成功当作落盘成功。 */
@@ -260,9 +285,9 @@ public:
 	/** 当前不可变写盘候选的完成接收者；Subsystem 写盘前绑定，完成时清空，不进入磁盘。 */
 	FCatRunSaveFinished OnSaveFinished;
 
-	/** 旧 USaveGame 文件的格式标记；保留字段名以识别 v5/v6，加载时升级为 v7，新文件同时由引擎记录数据版本。 */
+	/** 载荷格式标记；保留字段名以识别 v5/v6/v7，数字身份迁移成功后升级为 v8，新文件同时由引擎记录数据版本。 */
 	UPROPERTY(SaveGame)
-	int32 FormatVersion = 7;
+	int32 FormatVersion = 8;
 
 	/** 是否已采集过正式世界；新建空槽为 false，首次采样后为 true，区分新局和缺失世界载荷。 */
 	UPROPERTY(SaveGame)
@@ -314,13 +339,13 @@ public:
 
 	/** 这一局是否已经终局（毕业或团灭）；由 Run 的 EndReason 写入且只增不减，房主退出不算终局（那是可续的局中断点）。
 	 *  它是「不再提供继续」的唯一磁盘事实；文件本身一个不动，仍可读出来当战绩回看（2026-09-11 拍）。
-	 *  未携带此字段的旧 v6 反序列化后保持 false，表示「没打完、可以继续」；v7 迁移保留已有完成位。 */
+	 *  未携带此字段的旧 v6 反序列化后保持 false，表示「没打完、可以继续」；升级至 v8 时保留已有完成位。 */
 	UPROPERTY(SaveGame)
 	bool bRunCompleted = false;
 
 	/** 写盘时共享鱼缸里那些鱼折算出的可献点数；它只服务加载页摘要，不在恢复时写回任何鱼缸。
 	 *  INDEX_NONE 表示这份存档没记过（旧 v6 文件，或体重档未裁时算不出来），前端显示「未记录」而不是 0 点。
-	 *  未携带此字段的旧文件保持 INDEX_NONE；v7 迁移保留已有摘要。 */
+	 *  未携带此字段的旧文件保持 INDEX_NONE；升级至 v8 时保留已有摘要。 */
 	UPROPERTY(SaveGame)
 	int32 TankOfferingPoints = INDEX_NONE;
 

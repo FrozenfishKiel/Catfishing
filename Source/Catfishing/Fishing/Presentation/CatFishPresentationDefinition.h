@@ -50,7 +50,7 @@ struct FCatFishSurfaceCue
  * 单一鱼种的完整表现定义。
  *
  * 该资产不能被全局目录独立枚举，只能由 UCatFishDefinition::PresentationDefinition 直接引用。
- * 水中 Encounter、力竭落地和嘴叼世界鱼都消费同一份定义，避免按 FishDefinitionId 维护第二张表现表。
+ * 水中 Encounter、力竭落地和嘴叼世界鱼都消费同一份定义，避免按 ItemId 维护第二张表现表。
  */
 UCLASS(BlueprintType)
 class CATFISHING_API UCatFishPresentationDefinition : public UDataAsset

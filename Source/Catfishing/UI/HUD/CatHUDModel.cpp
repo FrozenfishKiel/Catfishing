@@ -1,4 +1,4 @@
-﻿#include "UI/HUD/CatHUDModel.h"
+#include "UI/HUD/CatHUDModel.h"
 
 #include "FishContainers/CatFishContainerSettings.h"
 
@@ -48,21 +48,21 @@ namespace
 
 	// 商品名解析流程：实物读取库存定义；设施没有库存定义，按同一升级配置输出目标容量。
 	// 摊位的展示覆盖仍由商店页绑定；其他缺配定义保留 ID，方便内容交付核对。
-	FText MakePurchaseItemNameText(const FName DefinitionId, const FName EntryId)
+	FText MakePurchaseItemNameText(const int32  ItemId, const FName EntryId)
 	{
 		const auto* Containers = GetDefault<UCatFishContainerSettings>();
-		const int32 Tier = Containers->FindSharedFishTankUpgradeTierByDefinitionId(DefinitionId);
+		const int32 Tier = Containers->FindSharedFishTankUpgradeTierByItemId(ItemId);
 		if (Tier != INDEX_NONE)
 			return FText::FromString(FString::Printf(TEXT("鱼缸容量升级至 %d 条"), Containers->GetSharedFishTankCapacityForTier(Tier)));
 		const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
 		const UCatInventoryItemDefinition* Definition =
-			(InventorySettings && !DefinitionId.IsNone()) ? InventorySettings->FindRuntimeDefinition(DefinitionId) : nullptr;
+			(InventorySettings && !(ItemId == 0)) ? InventorySettings->FindRuntimeDefinition(ItemId) : nullptr;
 		const FText DefinitionNameText = Definition ? Definition->GetInventoryDisplayName() : FText();
 		if (!DefinitionNameText.IsEmpty())
 		{
 			return DefinitionNameText;
 		}
-		return FText::FromName(DefinitionId.IsNone() ? EntryId : DefinitionId);
+		return ItemId == 0 ? FText::FromName(EntryId) : FText::AsNumber(ItemId);
 	}
 }
 
@@ -372,15 +372,15 @@ void UCatHUDModel::Refresh()
 	{
 		const FCatEquipmentLoadoutSnapshot& Loadout = Equipment->GetSnapshot();
 		const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
-		const UCatInventoryItemDefinition* RodDefinition = (InventorySettings && !Loadout.RodDefinitionId.IsNone())
-			? InventorySettings->FindRuntimeDefinition(Loadout.RodDefinitionId) : nullptr;
+		const UCatInventoryItemDefinition* RodDefinition = (InventorySettings && !(Loadout.RodItemId == 0))
+			? InventorySettings->FindRuntimeDefinition(Loadout.RodItemId) : nullptr;
 		const UCatEquipmentFragment_Rod* RodFragment = RodDefinition
 			? RodDefinition->FindFragment<UCatEquipmentFragment_Rod>() : nullptr;
 		const double MaximumDurability = RodFragment ? RodFragment->MaximumRodDurability : 0.0;
 		NewState.bRodBroken = Loadout.bRodBroken;
 		NewState.RodDurability = static_cast<float>(Loadout.RodDurability);
 		NewState.RodDurabilityMaximum = static_cast<float>(MaximumDurability);
-		NewState.bHasRodDurability = !Loadout.RodDefinitionId.IsNone()
+		NewState.bHasRodDurability = !(Loadout.RodItemId == 0)
 			&& FMath::IsFinite(Loadout.RodDurability) && MaximumDurability > 0.0;
 		if (NewState.bHasRodDurability)
 		{
@@ -824,10 +824,10 @@ void UCatHUDModel::RefreshPurchaseBroadcasts()
 		for (const auto& Item : Cart.Items)
 		{
 			Broadcast.ItemCount += Item.Quantity;
-			Names.Add(FString::Printf(TEXT("%s ×%d"), *MakePurchaseItemNameText(Item.DefinitionId, NAME_None).ToString(), Item.Quantity));
+			Names.Add(FString::Printf(TEXT("%s ×%d"), *MakePurchaseItemNameText(Item.ItemId, NAME_None).ToString(), Item.Quantity));
 		}
 		// 旧复制结构或尚未迁移的 Blueprint 消费者保留首项字段；新服务总是提供完整 Items。
-		if (Names.IsEmpty()) Names.Add(MakePurchaseItemNameText(Cart.DefinitionId, Cart.EntryId).ToString());
+		if (Names.IsEmpty()) Names.Add(MakePurchaseItemNameText(Cart.ItemId, Cart.EntryId).ToString());
 		Broadcast.ItemsText = FText::FromString(FString::Join(Names, TEXT("、")));
 		Broadcast.BroadcastText = FText::FromString(Cart.bFishSale
 			? FString::Printf(TEXT("%s 卖出 %s，公款收入 %d%s"), *Broadcast.BuyerNameText.ToString(), *Broadcast.ItemsText.ToString(),

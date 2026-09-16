@@ -191,10 +191,10 @@ namespace CatInventoryQuickbarRemoteUseTests
 				|| !Test->TestTrue(TEXT("remote server backpack resets to four slots"), ServerBackpack->ReplaceInventoryEntriesFromAuthority(Empty, 4))
 				|| !ServerBackpack->AddItemDefinition(A, 2) || !ServerBackpack->AddItemDefinition(B, 2)
 				|| !ServerBackpack->AddItemDefinition(RodA, 1) || !ServerBackpack->AddItemDefinition(RodB, 1)) return true;
-			FirstChumSlot = ServerBackpack->FindFirstInventorySlotIndexByDefinitionId(TEXT("BugChum"));
-			SecondChumSlot = ServerBackpack->FindFirstInventorySlotIndexByDefinitionId(TEXT("FermentedGrainChum"));
-			FirstRodSlot = ServerBackpack->FindFirstInventorySlotIndexByDefinitionId(TEXT("StarterRodT1"));
-			SecondRodSlot = ServerBackpack->FindFirstInventorySlotIndexByDefinitionId(TEXT("ShopRodT2"));
+			FirstChumSlot = ServerBackpack->FindFirstInventorySlotIndexByItemId(5);
+			SecondChumSlot = ServerBackpack->FindFirstInventorySlotIndexByItemId(10);
+			FirstRodSlot = ServerBackpack->FindFirstInventorySlotIndexByItemId(37);
+			SecondRodSlot = ServerBackpack->FindFirstInventorySlotIndexByItemId(34);
 			if (!Test->TestTrue(TEXT("four formal fixture definitions occupy real server backpack slots"),
 				FirstChumSlot != INDEX_NONE && SecondChumSlot != INDEX_NONE && FirstRodSlot != INDEX_NONE && SecondRodSlot != INDEX_NONE)) return true;
 			const FCatInventoryEntry* FirstRod = ServerBackpack->GetInventoryEntryAtSlot(FirstRodSlot);
@@ -427,7 +427,7 @@ namespace CatInventoryQuickbarRemoteUseTests
 			if (!ServerBackpack->RemoveInventoryEntryAtSlotFromAuthority(FirstRodSlot, Removed)) return true;
 			auto* Net=LoadObject<UCatEquipmentDefinition>(nullptr,TEXT("/Game/Catfishing/Data/Equipment/Equip_ScoopNet_Starter.Equip_ScoopNet_Starter"));
 			if (!Test->TestTrue(TEXT("正式抄网填入原空格"), Net && ServerBackpack->AddItemDefinition(Net,1))) return true;
-			ScoopSlot=ServerBackpack->FindFirstInventorySlotIndexByDefinitionId(TEXT("StarterScoopNet"));
+			ScoopSlot=ServerBackpack->FindFirstInventorySlotIndexByItemId(38);
 			ScoopId=ServerBackpack->GetInventoryEntryAtSlot(ScoopSlot)->Instance->GetItemInstanceId();
 			UCatFishDefinition* Definition=nullptr;
 			for (const auto& Ref:GetDefault<UCatFishCatalogSettings>()->Definitions)

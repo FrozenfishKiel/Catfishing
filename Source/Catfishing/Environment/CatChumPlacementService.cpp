@@ -1,4 +1,4 @@
-﻿#include "Environment/CatChumPlacementService.h"
+#include "Environment/CatChumPlacementService.h"
 
 #include "Equipment/Fragments/CatEquipmentFragment_Chum.h"
 
@@ -115,11 +115,11 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 	{
 		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::DependencyUnavailable));
 	}
-	FName ChumDefinitionId = NAME_None;
+	int32  ChumItemId = 0;
 	UCatEquipmentDefinition* Definition = nullptr;
 	int32 FormalChumSlotIndex = INDEX_NONE;
 	// 正式库存复核：
-	// 1. 服务层不信任命令里的 DefinitionId，而是按实例 ID 回到当前正式库存槽位。
+	// 1. 服务层不信任命令里的 ItemId，而是按实例 ID 回到当前正式库存槽位。
 	// 2. 再直接读取库存实例和定义资产，确认它仍是一份运行就绪、由实例声明扣量的 Chum。
 	// 3. 窝点由环境服务裁决，库存变化由 InventoryComponent 执行。
 	FormalChumSlotIndex = OwnerInventory->FindInventorySlotIndexFromInstanceId(Command.ChumItemInstanceId);
@@ -137,9 +137,9 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 		&& Definition->CanServeChumPlacement()
 		&& FormalChumInstance->ConsumesInventoryQuantityOnUse())
 	{
-		ChumDefinitionId = FormalChumInstance->GetItemDefinitionId();
+		ChumItemId = FormalChumInstance->GetItemId();
 	}
-	if (ChumDefinitionId.IsNone())
+	if ((ChumItemId == 0))
 	{
 		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::EquipmentUnavailable));
 	}
@@ -152,7 +152,7 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 	{
 		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::DefinitionUnavailable));
 	}
-	if (!Command.ChumDefinitionId.IsNone() && Command.ChumDefinitionId != ChumDefinitionId)
+	if (!(Command.ChumItemId == 0) && Command.ChumItemId != ChumItemId)
 	{
 		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::InvalidPayload));
 	}
@@ -187,7 +187,7 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::PlacementOccluded));
 	}
 	FCatPlaceChumCommand AuthoritativeCommand = Command;
-	AuthoritativeCommand.ChumDefinitionId = ChumDefinitionId;
+	AuthoritativeCommand.ChumItemId = ChumItemId;
 	FCatPrepareChumFieldRequest PrepareRequest;
 	PrepareRequest.StableNetId = StableNetId;
 	PrepareRequest.Command = AuthoritativeCommand;
@@ -216,7 +216,7 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 	}
 	UE_LOG(LogCatEnvironment, Log,
 		TEXT("Event=chum_inventory_consumed RequestId=%s Definition=%s ItemInstance=%s Quantity=%d"),
-		*Command.RequestId.ToString(EGuidFormats::DigitsWithHyphensLower), *ChumDefinitionId.ToString(),
+		*Command.RequestId.ToString(EGuidFormats::DigitsWithHyphensLower), *FString::FromInt(ChumItemId),
 		*Command.ChumItemInstanceId.ToString(EGuidFormats::DigitsWithHyphensLower), Command.Quantity);
 	const FCatPlaceChumResult Activated = Fields->ActivatePreparedFieldDeferred(
 		Prepared.CommitToken);

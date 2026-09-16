@@ -153,7 +153,7 @@ bool FCatPhysicalInputRouteTest::RunTest(const FString& Parameters)
 
 	UCatEquipmentComponent* Equipment = Cat->GetEquipmentComponent();
 	if (!TestTrue(TEXT("主控拥有正式鱼竿库存实例"),Equipment->GrantEquipmentFromAuthority(
-		FGuid::NewGuid(),Equipment->GetSnapshot().Revision,TEXT("StarterRodT1")).bCommitted)) return false;
+		FGuid::NewGuid(),Equipment->GetSnapshot().Revision,37).bCommitted)) return false;
 	UCatFishingCommandComponent* Commands = Controller->GetFishingCommandComponent();
 	const FCatFishingInputEdge RodPress = Commands->SubmitRodInteract();
 	FCatFishingCommandResult RodResult;
@@ -244,9 +244,9 @@ bool FCatPhysicalInputRouteTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("原鼠标松键及真实物理步后仍握同一条 R 约束"), Grab->IsGripping(true) && Grab->GetGripState(true).GripId==RetakeGripId)) return false;
 	TestEqual(TEXT("交接后的旧 Grab release 不进入 GAS"), ASC->GetReleasedInputCount(),0);
 	if (!TestTrue(TEXT("抛竿使用真实正式浮标装备"), Equipment->GrantEquipmentFromAuthority(
-		FGuid::NewGuid(),Equipment->GetSnapshot().Revision,TEXT("FeatherFloat")).bCommitted)) return false;
+		FGuid::NewGuid(),Equipment->GetSnapshot().Revision,9).bCommitted)) return false;
 	if (!TestTrue(TEXT("抛竿使用真实消耗品事务发放鱼饵"), Equipment->GrantInventoryQuantityFromAuthority(
-		FGuid::NewGuid(),Equipment->GetSnapshot().Revision,TEXT("BugBait"),1).bCommitted)) return false;
+		FGuid::NewGuid(),Equipment->GetSnapshot().Revision,4,1).bCommitted)) return false;
 	FVector InitialViewOrigin;
 	FRotator InitialViewRotation;
 	Controller->GetPlayerViewPoint(InitialViewOrigin,InitialViewRotation);

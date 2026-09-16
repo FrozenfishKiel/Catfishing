@@ -495,7 +495,7 @@ namespace CatFishSaleNetwork
 		}
 
 		/** 从指定鱼护的实际组件读取所有格子，核对唯一 GUID、正式库存定义 RiverPatternFish、数量和冻结重量；
-		 * 库存 ID 来自鱼定义的 GetInventoryDefinitionId/FishDefinitionId，不使用表现字段 FishId。
+		 * 库存 ID 来自鱼定义的 GetItemId/ItemId，不使用表现字段 FishId。
 		 * 空目标要求没有任何剩余实物，实例尚未复制完整时返回 false，让调用方继续等待。 */
 		static bool InventoryMatches(const ACatFishGuardActor* Guard, const TArray<FGuid>& ExpectedIds)
 		{
@@ -506,7 +506,7 @@ namespace CatFishSaleNetwork
 				if (!Entry.Instance && Entry.StackCount == 0) continue;
 				const UCatFishInventoryItemInstance* Fish = Cast<UCatFishInventoryItemInstance>(Entry.Instance);
 				if (!Fish || Entry.StackCount != 1 || !ExpectedIds.Contains(Fish->GetItemInstanceId())
-					|| Seen.Contains(Fish->GetItemInstanceId()) || Fish->GetItemDefinitionId() != TEXT("RiverPatternFish")
+					|| Seen.Contains(Fish->GetItemInstanceId()) || Fish->GetItemId() != 30
 					|| Fish->GetFishWeightKilograms() != 2.5) return false;
 				Seen.Add(Fish->GetItemInstanceId());
 			}

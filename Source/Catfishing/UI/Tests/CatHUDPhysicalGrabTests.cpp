@@ -1,4 +1,4 @@
-﻿#if WITH_DEV_AUTOMATION_TESTS
+#if WITH_DEV_AUTOMATION_TESTS
 
 #include "AbilitySystemComponent.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
@@ -135,7 +135,7 @@ bool FCatHUDFishingOwnerBindingTest::RunTest(const FString& Parameters)
 	if (!Rod || !Snapshot || !Primary || !Helper || !Controller) return false;
 	Controller->PlayerState = Helper;
 	TestTrue(TEXT("初始化正式鱼竿身份"), Rod->InitializeAuthoritativeIdentity(
-		FGuid::NewGuid(), FGuid::NewGuid(), TEXT("TestRod"), NAME_None, Primary, Primary, true, false));
+		FGuid::NewGuid(), FGuid::NewGuid(), 1566736, NAME_None, Primary, Primary, true, false));
 	TestTrue(TEXT("发布唯一鱼竿所有者操作位"), Rod->SetPrimaryOperatorFromAuthority(Primary,
 		Rod->GetPresentationState().RodActorRevision));
 	Snapshot->FishingSessionId = FGuid::NewGuid();
@@ -254,7 +254,7 @@ bool FCatHUDPhysicalGrabProjectionTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("伸手不冒充接触成功"),Model->GetViewState().bRightHandGripped);
 	TestTrue(TEXT("右爪伸手文本进入 View"),Model->GetViewState().PhysicalHandStateText.ToString().Contains(TEXT("右爪：伸手中")));
 	ACatFishingRodActor* Rod=World->SpawnActor<ACatFishingRodActor>();
-	if (!Rod || !Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(),FGuid::NewGuid(),TEXT("HUDTestRod"),NAME_None,Primary,Primary,true,false)) return false;
+	if (!Rod || !Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(),FGuid::NewGuid(),1553506,NAME_None,Primary,Primary,true,false)) return false;
 	if (UCatFishingService* Service=World->GetSubsystem<UCatFishingService>())
 		if (!Service->RegisterDeployedRod(Primary,Rod)) return false;
 	Rod->SetPrimaryOperatorFromAuthority(Primary,Rod->GetPresentationState().RodActorRevision);

@@ -53,7 +53,7 @@ namespace CatInventoryActionsTests
 	UCatInventoryItemDefinition* MakeActionDefinition()
 	{
 		UCatInventoryItemDefinition* Definition = NewObject<UCatInventoryItemDefinition>();
-		Definition->InventoryDefinitionId = TEXT("InventoryActionContract");
+		Definition->ItemId = 1514057;
 		Definition->InventoryMaxStackCount = 3;
 		Definition->WorldActorClass = ACatItem::StaticClass();
 		Definition->InventoryActions = {
@@ -107,7 +107,7 @@ bool FCatInventoryActionAuthorityContractTest::RunTest(const FString& Parameters
 	{
 		return false;
 	}
-	const int32 Slot = Inventory->FindFirstInventorySlotIndexByDefinitionId(Definition->GetInventoryDefinitionId());
+	const int32 Slot = Inventory->FindFirstInventorySlotIndexByItemId(Definition->GetItemId());
 	const FCatInventoryEntry* Entry = Inventory->GetInventoryEntryAtSlot(Slot);
 	if (!TestTrue(TEXT("定位动作测试槽位和实例"), Entry != nullptr && Entry->Instance != nullptr))
 	{

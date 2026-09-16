@@ -18,7 +18,12 @@ struct FCatShopCatalogEntry
 
 	/** 订单交付给下游库存时使用的定义 ID；具体定义是否能入库由营地公共仓库和装备定义裁决。 */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Catalog")
+	int32  ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName DefinitionId = NAME_None;
+
 
 	/** 商品在商店页里归属的展示分类；空值只出现在“全部”，非空值由 WBP 分类按钮按同一个 FName 过滤。 */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Presentation")
@@ -80,7 +85,7 @@ struct FCatShopCatalogEntry
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Presentation", meta = (MultiLine = "true"))
 	FText DescriptionOverride;
 
-	/** 商店图标覆盖；为空时 UI 可使用装备定义图标，后端库存只保存 DefinitionId 和数量。 */
+	/** 商店图标覆盖；为空时 UI 可使用装备定义图标，后端库存只保存 ItemId 和数量。 */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Presentation")
 	TSoftObjectPtr<UTexture2D> IconOverride;
 
@@ -107,7 +112,12 @@ struct FCatShopCatalogTableRow : public FTableRowBase
 
 	/** 订单交付给下游库存时使用的定义 ID；商店只保存引用，不在表里复制装备定义本身。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Catalog")
+	int32  ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName DefinitionId = NAME_None;
+
 
 	/** 商品页展示分类；鱼竿、鱼饵、鱼窝等分类都由这列决定，程序不内置分类枚举。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Presentation")

@@ -55,7 +55,7 @@ bool FCatFishingRodEffortSnapshotLifecycleTest::RunTest(const FString& Parameter
 		Cats.Add(Cat); Players.Add(Player);
 	}
 	auto* Rod=World->SpawnActor<ACatFishingRodActor>();
-	if (!Rod || !Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(),FGuid::NewGuid(),TEXT("EffortRod"),NAME_None,Players[0],nullptr,true,false)
+	if (!Rod || !Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(),FGuid::NewGuid(),1038809,NAME_None,Players[0],nullptr,true,false)
 		|| !Rod->BeginPhysicalHoldFromAuthority(Players[0],true)
 		|| !Rod->SetPrimaryOperatorFromAuthority(Players[0],Rod->GetPresentationState().RodActorRevision) || !Rod->GetPhysicalRodComponent()->CommitPrimaryHold(Players[0])) return false;
 	if (!TestTrue(TEXT("real primary rod constraint exists"),Cats[0]->GetPhysicalBodyComponent()->GetGrab()->IsGripping(true))) return false;

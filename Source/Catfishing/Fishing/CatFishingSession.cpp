@@ -688,7 +688,7 @@ void ACatFishingSession::RefreshBiteAvailabilityFromAuthority()
 			UE_LOG(LogCatFishing, Log,
 				TEXT("Event=fishing_probe_recalled SessionId=%s Opportunity=%u Fish=%s Result=NightfallEmptyHook"),
 				*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), BiteOpportunitySequence,
-				*Snapshot.FishDefinitionId.ToString());
+				*FString::FromInt(Snapshot.ItemId));
 			FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::EmptyHook,
 				TEXT("Nightfall recalled the probing rod as an empty hook"));
 		}
@@ -755,7 +755,7 @@ bool ACatFishingSession::ScheduleWaitingProbeFromStateTree()
 	FishVisualScale = 1.0;
 	Snapshot.WindowEndsServerTime = 0.0;
 	Snapshot.PerfectWindowEndsServerTime = 0.0;
-	Snapshot.FishDefinitionId = NAME_None;
+	Snapshot.ItemId = 0;
 	Snapshot.FishWeightKilograms = 0.0;
 	Snapshot.FishStrength = 0.0;
 	Snapshot.bGiant = false;
@@ -956,7 +956,7 @@ bool ACatFishingSession::TryResolveProbeDurationSeconds(double& OutProbeSeconds,
 		OutProbeSeconds = Resolved;
 		if (OutSource)
 		{
-			const auto* Override = GetDefault<UCatFishCatalogSettings>()->BiteTimingOverridesByFishDefinitionId.Find(FishDefinition->FishDefinitionId);
+			const auto* Override = GetDefault<UCatFishCatalogSettings>()->BiteTimingOverridesByItemId.Find(FishDefinition->ItemId);
 			*OutSource = FishDefinition->ProbeDurationSeconds != 0.0 ? TEXT("Asset")
 				: Override && Override->ProbeDurationSeconds != 0.0 ? TEXT("FishOverride") : TEXT("RarityDefault");
 		}
@@ -983,7 +983,7 @@ bool ACatFishingSession::TryResolveTrueBiteWindowSeconds(double& OutSeconds, con
 		OutSeconds = Resolved;
 		if (OutSource)
 		{
-			const auto* Override = GetDefault<UCatFishCatalogSettings>()->BiteTimingOverridesByFishDefinitionId.Find(FishDefinition->FishDefinitionId);
+			const auto* Override = GetDefault<UCatFishCatalogSettings>()->BiteTimingOverridesByItemId.Find(FishDefinition->ItemId);
 			*OutSource = FishDefinition->TrueBiteWindowSeconds != 0.0 ? TEXT("Asset")
 				: Override && Override->TrueBiteWindowSeconds != 0.0 ? TEXT("FishOverride") : TEXT("RarityDefault");
 		}
@@ -1054,34 +1054,26 @@ bool ACatFishingSession::BeginProbeFromStateTree()
 	{
 		UE_LOG(LogCatFishing, Warning,
 			TEXT("Event=fishing_bite_timing_rejected SessionId=%s Fish=%s RarityTierId=%s Window=Probe Result=InvalidDuration World=%s NetMode=%d Authority=1 LocalRole=%d"),
-			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *FishDefinition->FishDefinitionId.ToString(), *FishDefinition->RarityTierId.ToString(),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *FString::FromInt(FishDefinition->ItemId), *FishDefinition->RarityTierId.ToString(),
 			*GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()));
 		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated,
 			TEXT("Probe duration invalid or unavailable"));
 		return false;
 	}
 
-	// 图鉴剪影层在咬钩成立这一刻揭开、永不撤销（钓鱼规则 §5.6:285、图鉴 §3.1.3:98）。
-	// 放在这里而不是各个失败出口，正是因为「试探期空竿同揭」「真咬超时同揭」「断竿放弃也不回滚」
-	// 说的都是同一件事：你碰到过这条鱼。揭给这一竿的钓手，围观看见了不算。
-	if (UCatRunImprintService* Imprint = World->GetSubsystem<UCatRunImprintService>())
-	{
-		Imprint->RecordFishEncounterSilhouette(Snapshot.FishDefinitionId, CatchFisherStableNetId,
-			CurrentBiteEncounterId);
-	}
-	if (IsTerminal() || Snapshot.Phase != ECatFishingPhase::Probe || !IsValid(FishDefinition)) return false;
+	// 图鉴只在成功收鱼并持久化后解锁；试探和失败不会产生图鉴授予。
 
 	GetWorldTimerManager().ClearTimer(ProbeStayTimerHandle);
 	UE_CLOG(FCString::Strcmp(ProbeSource, TEXT("LegacyFallback")) == 0, LogCatFishing, Warning,
 		TEXT("Event=fish_probe_duration_unconfigured SessionId=%s Fish=%s RarityTierId=%s FallbackSeconds=%.3f Reason=MissingAssetAndRarityDefault World=%s NetMode=%d Authority=1 LocalRole=%d"),
-		*Snapshot.FishingSessionId.ToString(), *FishDefinition->FishDefinitionId.ToString(), *FishDefinition->RarityTierId.ToString(),
+		*Snapshot.FishingSessionId.ToString(), *FString::FromInt(FishDefinition->ItemId), *FishDefinition->RarityTierId.ToString(),
 		ProbeSeconds, *GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()));
 	GetWorldTimerManager().SetTimer(ProbeStayTimerHandle, this, &ThisClass::HandleProbeStayTimer, ProbeSeconds, false);
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_probe_started SessionId=%s Opportunity=%u Fish=%s WeightKg=%.3f VisualScale=%.3f ")
 		TEXT("ProbeSeconds=%.3f TimeOfDay=%s Weather=%s RarityTierId=%s ProbeSource=%s World=%s NetMode=%d Authority=1 LocalRole=%d"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), BiteOpportunitySequence,
-		*Snapshot.FishDefinitionId.ToString(), FishWeightKilograms, FishVisualScale, ProbeSeconds,
+		*FString::FromInt(Snapshot.ItemId), FishWeightKilograms, FishVisualScale, ProbeSeconds,
 		*UEnum::GetValueAsString(BiteTimeOfDay), *UEnum::GetValueAsString(BiteWeather),
 		*FishDefinition->RarityTierId.ToString(), ProbeSource, *GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()));
 	// 先建立完整计时事实，再发布。观察者可以同步取消或入夜，退出路径会清除计时器；此后不再重建。
@@ -1126,7 +1118,7 @@ bool ACatFishingSession::OpenTrueBiteWindowFromAuthority()
 	if (!TryResolveTrueBiteWindowSeconds(ResponseSeconds, &ResponseSource))
 	{
 		UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_bite_timing_rejected SessionId=%s Fish=%s Window=TrueBite Reason=InvalidDuration World=%s NetMode=%d Authority=1 LocalRole=%d"),
-			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *Snapshot.FishDefinitionId.ToString(), *GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()));
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *FString::FromInt(Snapshot.ItemId), *GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()));
 		return false;
 	}
 	TGuardValue<bool> OpeningGuard(bOpeningTrueBiteWindow, true);
@@ -1159,7 +1151,7 @@ bool ACatFishingSession::OpenTrueBiteWindowFromAuthority()
 	}
 	// 扣饵通知可能同步结束/迁移会话；不得用已经失效的资源继续打开窗口。
 	if (IsTerminal() || Snapshot.Phase != ECatFishingPhase::Probe || !IsValid(Snapshot.HookActor)) return false;
-	const UCatEquipmentDefinition* BiteRod = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(AttemptSnapshot.RodDefinitionId);
+	const UCatEquipmentDefinition* BiteRod = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(AttemptSnapshot.RodItemId);
 	const UCatEquipmentFragment_Rod* RodFragment = BiteRod ? BiteRod->FindFragment<UCatEquipmentFragment_Rod>() : nullptr;
 	if (!RodFragment || !FMath::IsFinite(TrueBiteDistanceCentimeters) || TrueBiteDistanceCentimeters < 0.0
 		|| !FMath::IsFinite(RodFragment->MaximumLineLengthCentimeters) || RodFragment->MaximumLineLengthCentimeters <= 0.0)
@@ -1181,11 +1173,11 @@ bool ACatFishingSession::OpenTrueBiteWindowFromAuthority()
 	Snapshot.PerfectWindowEndsServerTime = World->GetTimeSeconds() + FMath::Min(ResponseSeconds,
 		1.0 + GetFisherGrowthMagnitude(ECatGrowthOptionId::PerfectWindow));
 	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_windows_resolved SessionId=%s Fish=%s ResponseSeconds=%.3f PerfectSeconds=%.3f ResponseSource=%s World=%s NetMode=%d Authority=1 LocalRole=%d"),
-		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *Snapshot.FishDefinitionId.ToString(), ResponseSeconds,
+		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *FString::FromInt(Snapshot.ItemId), ResponseSeconds,
 		Snapshot.PerfectWindowEndsServerTime - World->GetTimeSeconds(), ResponseSource, *GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()));
 	UE_CLOG(FCString::Strcmp(ResponseSource, TEXT("LegacyFallback")) == 0, LogCatFishing, Warning,
 		TEXT("Event=fish_response_window_unconfigured SessionId=%s Fish=%s FallbackSeconds=%.3f World=%s NetMode=%d Authority=1 LocalRole=%d"),
-		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *Snapshot.FishDefinitionId.ToString(), ResponseSeconds, *GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()));
+		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *FString::FromInt(Snapshot.ItemId), ResponseSeconds, *GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()));
 	if (!EnterPhaseFromStateTree(ECatFishingPhase::TrueBiteWindow).bApplied)
 	{
 		Snapshot.WindowEndsServerTime = PreviousWindowEnd;
@@ -1206,7 +1198,7 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 {
 	FCatFishSelectionCommitResult Result;
 	Result.Resolution = SelectionResolution;
-	Result.FishDefinitionId = FrozenSelectionResult.FishDefinitionId;
+	Result.ItemId = FrozenSelectionResult.ItemId;
 	if (SelectionResolution == ECatFishSelectionResolution::Selected)
 	{
 		// 已经选出鱼种：直接幂等返回缓存的结果，不重新选择。
@@ -1254,7 +1246,7 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 		AttemptSnapshot.WaterRegion, World->GetTimeSeconds());
 	FrozenSelectionContext.TimeOfDay = BiteTimeOfDay;
 	FrozenSelectionContext.Weather = BiteWeather;
-	FrozenSelectionContext.BaitDefinitionId = Equipment->GetCurrentFishingBaitDefinitionId(Snapshot.FishingSessionId);
+	FrozenSelectionContext.BaitItemId = Equipment->GetCurrentFishingBaitItemId(Snapshot.FishingSessionId);
 	FrozenSelectionContext.ActivePlayerCount = PlayerCount;
 	FrozenSelectionContext.CombinedFishingStrength = FishingStrength;
 	FrozenSelectionContext.CombinedFightStamina = FightStamina;
@@ -1272,7 +1264,7 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 		TEXT("Event=fishing_fish_selection_resolved SessionId=%s Selected=%s FishId=%s FightBalanceId=%s WeightKg=%.3f BaseFishStrength=%.3f CatConversionPerKg=%.3f EligibleCandidates=%d PositiveWeightCandidates=%d NormalizedProbability=%.6f ChumClass=%d ClassProbability=%.6f TimeFilter=%s WeatherFilter=%s TimeOfDay=%s Weather=%s ActivePlayers=%d ChumFields=%d FromBasePool=%d RandomSeed=%d Region=%s World=%s NetMode=%d Authority=1 LocalRole=%d"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphensLower),
 		FrozenSelectionResult.bSelected ? TEXT("true") : TEXT("false"),
-		*FrozenSelectionResult.FishDefinitionId.ToString(),
+		*FString::FromInt(FrozenSelectionResult.ItemId),
 		FightBalance ? *FightBalance->BalanceDefinitionId.ToString() : TEXT("None"),
 		FrozenSelectionResult.WeightKilograms, FrozenSelectionResult.BaseFishStrength,
 		FrozenSelectionContext.StrengthPerKilogram, FrozenSelectionResult.EligibleCandidateCount,
@@ -1287,7 +1279,7 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 		FrozenSelectionContext.RandomSeed, *FrozenSelectionContext.WaterRegion.RegionId.ToString(), *GetNameSafe(World),
 		int32(GetNetMode()), int32(GetLocalRole()));
 	UCatFishDefinition* SelectedDefinition = FrozenSelectionResult.bSelected
-		? Catalog->FindRuntimeDefinition(FrozenSelectionResult.FishDefinitionId) : nullptr;
+		? Catalog->FindRuntimeDefinition(FrozenSelectionResult.ItemId) : nullptr;
 	// T10：鱼种时间字段/明确兜底接替 Bite 模板，不再以模板存在性阻断生产。
 	const UCatFightPersonalityDefinition* Fight = SelectedDefinition && Settings
 		? Settings->FindFightPersonality(SelectedDefinition->FightPersonalityId) : nullptr;
@@ -1307,7 +1299,7 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 	FishDefinition = SelectedDefinition;
 	FishWeightKilograms = FrozenSelectionResult.WeightKilograms;
 	FishVisualScale = SelectedVisualScale;
-	Snapshot.FishDefinitionId = SelectedDefinition->FishDefinitionId;
+	Snapshot.ItemId = SelectedDefinition->ItemId;
 	Snapshot.FishWeightKilograms = FrozenSelectionResult.WeightKilograms;
 	Snapshot.FishStrength = FrozenSelectionResult.BaseFishStrength;
 	Snapshot.bGiant = SelectedDefinition->BodyClass == ECatFishBodyClass::Giant;
@@ -1319,7 +1311,7 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 	Snapshot.NormalizedFishStamina = FishFightStaminaInitial > 0.0 ? 1.0 : 0.0;
 	SelectionResolution = ECatFishSelectionResolution::Selected;
 	Result.Resolution = SelectionResolution;
-	Result.FishDefinitionId = SelectedDefinition->FishDefinitionId;
+	Result.ItemId = SelectedDefinition->ItemId;
 	Result.Error = ECatDomainCommandError::None;
 	return Result;
 }
@@ -1332,7 +1324,7 @@ bool ACatFishingSession::SpawnHookedFishFromAuthority(const FGuid RequestId)
 		UE_LOG(LogCatFishing, Warning,
 			TEXT("Event=fishing_hook_fish_spawn_rejected RequestId=%s SessionId=%s CastAttemptId=%s Fish=%s Reason=%s World=%s NetMode=%d Authority=%d LocalRole=%d %s"),
 			*RequestId.ToString(), *Snapshot.FishingSessionId.ToString(), *Snapshot.CastAttemptId.ToString(),
-			*Snapshot.FishDefinitionId.ToString(), Reason, *GetNameSafe(World), int32(GetNetMode()), HasAuthority(), int32(GetLocalRole()),
+			*FString::FromInt(Snapshot.ItemId), Reason, *GetNameSafe(World), int32(GetNetMode()), HasAuthority(), int32(GetLocalRole()),
 			*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
 		return false;
 	};
@@ -1353,7 +1345,7 @@ bool ACatFishingSession::SpawnHookedFishFromAuthority(const FGuid RequestId)
 	// 身份先于构造写入；首次表现事件等搏斗初始化后再放行。
 	Encounter->DeferInitialPresentationFromAuthority();
 	if (!Encounter->InitializeAuthoritativeIdentity(Snapshot.FishingSessionId, Snapshot.CastAttemptId,
-		Snapshot.FishDefinitionId, 0.0, FishVisualScale))
+		Snapshot.ItemId, 0.0, FishVisualScale))
 	{
 		Encounter->Destroy();
 		return Reject(TEXT("FishIdentityFailed"));
@@ -1363,7 +1355,7 @@ bool ACatFishingSession::SpawnHookedFishFromAuthority(const FGuid RequestId)
 	const FCatFishEncounterPresentationState& State = Encounter->GetPresentationState();
 	if (IsTerminal() || Snapshot.Phase != ECatFishingPhase::TrueBiteWindow
 		|| State.FishingSessionId != Snapshot.FishingSessionId || State.CastAttemptId != Snapshot.CastAttemptId
-		|| State.FishDefinitionId != Snapshot.FishDefinitionId || !FMath::IsNearlyEqual(State.VisualScale, FishVisualScale)
+		|| State.ItemId != Snapshot.ItemId || !FMath::IsNearlyEqual(State.VisualScale, FishVisualScale)
 		|| !Encounter->GetActorLocation().Equals(FishLocation, 1.0))
 	{
 		Encounter->Destroy();
@@ -1373,7 +1365,7 @@ bool ACatFishingSession::SpawnHookedFishFromAuthority(const FGuid RequestId)
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_hook_fish_spawned RequestId=%s SessionId=%s CastAttemptId=%s Fish=%s FishActor=%s WeightKg=%.3f VisualScale=%.3f World=%s NetMode=%d Authority=1 LocalRole=%d %s"),
 		*RequestId.ToString(), *Snapshot.FishingSessionId.ToString(), *Snapshot.CastAttemptId.ToString(),
-		*Snapshot.FishDefinitionId.ToString(), *GetNameSafe(Encounter), FishWeightKilograms, FishVisualScale,
+		*FString::FromInt(Snapshot.ItemId), *GetNameSafe(Encounter), FishWeightKilograms, FishVisualScale,
 		*GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()),
 		*CatLogContext::BuildControllerFields(FisherCharacter->GetController()));
 	return true;
@@ -1399,7 +1391,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		? Settings->FindFightPersonality(FishDefinition->FightPersonalityId) : nullptr;
 	UStateTree* FishBehaviorStateTree = Settings ? Settings->FishBehaviorStateTree.LoadSynchronous() : nullptr;
 	const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(
-		AttemptSnapshot.RodDefinitionId);
+		AttemptSnapshot.RodItemId);
 	UCatEquipmentComponent* Equipment = CastEquipment.Get(); // 钓鱼使用记录及扣饵来源始终绑定原始抛竿者，物理抓握不改变结算对象。
 	UCatAbilitySystemComponent* AbilitySystem = FisherCharacter.IsValid()
 		? FisherCharacter->GetCatAbilitySystemComponent() : nullptr;
@@ -1427,7 +1419,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	{
 		UE_LOG(LogCatFishing, Warning,
 			TEXT("Event=fishing_fight_start_rejected SessionId=%s Reason=FishBehaviorUnresolved Fish=%s %s"),
-			*Snapshot.FishingSessionId.ToString(), *FishDefinition->FishDefinitionId.ToString(),
+			*Snapshot.FishingSessionId.ToString(), *FString::FromInt(FishDefinition->ItemId),
 			*CatLogContext::BuildControllerFields(FisherCharacter->GetController()));
 		return false;
 	}
@@ -1477,8 +1469,8 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	Config.FishBody.MaximumBodyTurnRateDegreesPerSecond = FMath::Max(240.0, Config.FishBody.MaximumSwimTurnRateDegreesPerSecond);
 	if (!Config.FishBody.Geometry.HasMouthLever())
 	{
-		UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_fight_start_rejected SessionId=%s FishDefinitionId=%s Reason=FishBodyGeometryMissing %s"),
-			*Snapshot.FishingSessionId.ToString(), *FishDefinition->FishDefinitionId.ToString(),
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_fight_start_rejected SessionId=%s ItemId=%s Reason=FishBodyGeometryMissing %s"),
+			*Snapshot.FishingSessionId.ToString(), *FString::FromInt(FishDefinition->ItemId),
 			*CatLogContext::BuildControllerFields(FisherCharacter->GetController()));
 		return false;
 	}
@@ -1619,8 +1611,8 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 			return false;
 		}
 	}
-	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_fish_body_bound SessionId=%s FishActor=%s FishDefinitionId=%s MouthLocalCm=%s CenterLocalCm=%s YawRadiusCm=%.4f World=%s NetMode=%d Authority=1 LocalRole=%d"),
-		*Snapshot.FishingSessionId.ToString(), *GetNameSafe(Encounter), *FishDefinition->FishDefinitionId.ToString(),
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_fish_body_bound SessionId=%s FishActor=%s ItemId=%s MouthLocalCm=%s CenterLocalCm=%s YawRadiusCm=%.4f World=%s NetMode=%d Authority=1 LocalRole=%d"),
+		*Snapshot.FishingSessionId.ToString(), *GetNameSafe(Encounter), *FString::FromInt(FishDefinition->ItemId),
 		*Config.FishBody.Geometry.MouthLocalPositionCentimeters.ToCompactString(), *Config.FishBody.Geometry.CenterOfMassLocalPositionCentimeters.ToCompactString(),
 		Config.FishBody.Geometry.YawRadiusOfGyrationCentimeters, *GetNameSafe(GetWorld()), int32(GetNetMode()), int32(GetLocalRole()));
 
@@ -1696,8 +1688,8 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		TEXT("Event=fishing_fight_started SessionId=%s FightBalanceId=%s FishDefinition=%s RodDefinition=%s PerfectHook=%s PrimaryStrength=%.2f OperatorBodyMassKg=%.2f FishMassKg=%.2f MassMode=IndependentCatBodyMass FishStrengthBase=%.2f FishStrengthEffective=%.2f StrengthPerKg=%.2f ForcePerStrengthN=%.2f ExhaustedReelForceN=%.2f CatStamina=%.2f FishStamina=%.2f RodDurability=%.2f RodPhysicsLengthCm=%.2f InitialLineLengthCm=%.2f MaximumLineLengthCm=%.2f RodPose=%s CatLinearWorkCost=%.5f FishStaminaPerUnfulfilledMeter=%.5f FishFullEffortSpeedCmPerSec=%.2f FixedStepSeconds=%.3f MinimumLeverage=%.3f MaximumEndpointCorrectionSpeed=%.2f StrengthResolution=CommonLineForce StrongConfrontationRole=PresentationOnly RodFailure=DurabilityDepleted World=%s NetMode=%d Authority=%s LocalRole=%d RodActor=%s"),
 		*Snapshot.FishingSessionId.ToString(),
 		*FightBalance->BalanceDefinitionId.ToString(),
-		*FishDefinition->FishDefinitionId.ToString(),
-		*RodDefinition->EquipmentDefinitionId.ToString(),
+		*FString::FromInt(FishDefinition->ItemId),
+		*FString::FromInt(RodDefinition->ItemId),
 		bPerfect ? TEXT("true") : TEXT("false"),
 		Config.PrimaryOperatorCatStrength,
 		Config.PrimaryOperatorMassKilograms,
@@ -2244,7 +2236,7 @@ void ACatFishingSession::PublishBiteSignalFromAuthority()
 		return;
 	}
 	const UCatEquipmentDefinition* FloatDefinition = GetDefault<UCatInventorySettings>()
-		->FindRuntimeDefinition<UCatEquipmentDefinition>(AttemptSnapshot.FloatDefinitionId);
+		->FindRuntimeDefinition<UCatEquipmentDefinition>(AttemptSnapshot.FloatItemId);
 	const UCatEquipmentFragment_Float* FloatFragment = FloatDefinition
 		? FloatDefinition->FindFragment<UCatEquipmentFragment_Float>() : nullptr;
 	if (FloatFragment == nullptr || !FloatFragment->IsRuntimeReady())
@@ -2252,7 +2244,7 @@ void ACatFishingSession::PublishBiteSignalFromAuthority()
 		UE_LOG(LogCatFishing, Log,
 			TEXT("Event=fishing_bite_signal SessionId=%s Float=%s Result=FloatFragmentUnavailable"),
 			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-			*AttemptSnapshot.FloatDefinitionId.ToString());
+			*FString::FromInt(AttemptSnapshot.FloatItemId));
 		return;
 	}
 	const double Stability = FMath::Clamp(FloatFragment->BiteSignalStability, 0.0, 1.0);
@@ -2275,7 +2267,7 @@ void ACatFishingSession::PublishBiteSignalFromAuthority()
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_bite_signal SessionId=%s Float=%s Stability=%.3f Threshold=%.3f Worldwide=%s"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-		*AttemptSnapshot.FloatDefinitionId.ToString(), Stability, Threshold,
+		*FString::FromInt(AttemptSnapshot.FloatItemId), Stability, Threshold,
 		bWorldwide ? TEXT("true") : TEXT("false"));
 }
 
@@ -2287,7 +2279,7 @@ bool ACatFishingSession::TryResolveRodStrength(double& OutRodStrength) const
 {
 	OutRodStrength = 0.0;
 	const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatInventorySettings>()
-		->FindRuntimeDefinition<UCatEquipmentDefinition>(AttemptSnapshot.RodDefinitionId);
+		->FindRuntimeDefinition<UCatEquipmentDefinition>(AttemptSnapshot.RodItemId);
 	const UCatEquipmentFragment_Rod* RodFragment = RodDefinition
 		? RodDefinition->FindFragment<UCatEquipmentFragment_Rod>() : nullptr;
 	if (!RodFragment || !FMath::IsFinite(RodFragment->FishingStrength) || RodFragment->FishingStrength <= 0.0)
@@ -2325,7 +2317,7 @@ bool ACatFishingSession::EvaluateRodStrengthFromAuthority(const TCHAR* Trigger)
 				"FishStrength=%.3f Phase=%s RodDefinition=%s %s"),
 			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), Trigger ? Trigger : TEXT("None"),
 			RodStrength, PrimaryStrength, FishStrength, *UEnum::GetValueAsString(Snapshot.Phase),
-			*AttemptSnapshot.RodDefinitionId.ToString(),
+			*FString::FromInt(AttemptSnapshot.RodItemId),
 			*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
 		// 2026-09-12 拍：瞬断和耐久归零一样**报废鱼竿**。设计对两条路用的是同一个词「断竿」、
 		// 同一套表现（爪里只剩半截竿）、同一个结局类（器材失败）；不报废，强度门槛就没有牙齿——
@@ -2379,7 +2371,7 @@ void ACatFishingSession::ScheduleExhaustedRevivalTimerFromAuthority()
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_exhausted_revival_armed SessionId=%s RevivalSeconds=%.2f FishDefinition=%s"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), GetDefault<UCatFishingSettings>()->GetExhaustedFishRevivalSeconds(),
-		FishDefinition ? *FishDefinition->FishDefinitionId.ToString() : TEXT("None"));
+		FishDefinition ? *FString::FromInt(FishDefinition->ItemId) : TEXT("None"));
 }
 
 void ACatFishingSession::HandleExhaustedRevivalTimer()
@@ -2413,7 +2405,7 @@ void ACatFishingSession::HandleExhaustedRevivalTimer()
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_exhausted_fish_revived SessionId=%s RevivalSeconds=%.2f FishDefinition=%s Result=Escaped %s"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), GetDefault<UCatFishingSettings>()->GetExhaustedFishRevivalSeconds(),
-		FishDefinition ? *FishDefinition->FishDefinitionId.ToString() : TEXT("None"),
+		FishDefinition ? *FString::FromInt(FishDefinition->ItemId) : TEXT("None"),
 		*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
 	TerminateSession(ECatFishingOutcome::Escaped, TEXT("Exhausted fish revived before reaching the shore"));
 }
@@ -2537,7 +2529,7 @@ void ACatFishingSession::RecordRunCollectionCaptureFromAuthority(const ACatFishP
 	const auto& Fish = Pickup.GetPresentationState();
 	const ACatfishingGameState* GameState = GetWorld() ? GetWorld()->GetGameState<ACatfishingGameState>() : nullptr;
 	UCatRunFishCollectionComponent* Collection = GameState ? GameState->GetRunFishCollection() : nullptr;
-	if (!Collection || !Collection->RecordCaptureFromAuthority(Fish.FishInstanceId, Fish.FishDefinitionId, CatchFisherStableNetId))
+	if (!Collection || !Collection->RecordCaptureFromAuthority(Fish.FishInstanceId, Fish.ItemId, CatchFisherStableNetId))
 	{
 		UE_LOG(LogCatRun, Warning,
 			TEXT("Event=run_collection_capture_delivery_failed World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s SessionId=%s FishInstanceId=%s HasCollection=%d HasHooker=%d"),
@@ -2871,7 +2863,7 @@ void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, cons
 	// 鱼/竿/钩当时分别在哪里，而不能依赖已经被清空的运行时引用。
 	const FString FisherFields = CatLogContext::BuildControllerFields(
 		FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr);
-	const FString FishDefinitionValue = FishDefinition ? FishDefinition->FishDefinitionId.ToString() : TEXT("None");
+	const FString FishDefinitionValue = FishDefinition ? FString::FromInt(FishDefinition->ItemId) : TEXT("None");
 	const FString EncounterValue = GetNameSafe(Snapshot.FishEncounterActor);
 	const FVector FishLocation = Snapshot.FishEncounterActor
 		? Snapshot.FishEncounterActor->GetActorLocation() : FVector::ZeroVector;
@@ -3072,7 +3064,7 @@ void ACatFishingSession::OnRep_Snapshot()
 	{
 		LastReceivedWindowPhaseEpoch = Snapshot.PhaseEpoch;
 		UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_window_received SessionId=%s Fish=%s Phase=%s ResponseEnds=%.3f PerfectEnds=%.3f World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s"),
-			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *Snapshot.FishDefinitionId.ToString(), *UEnum::GetValueAsString(Snapshot.Phase),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *FString::FromInt(Snapshot.ItemId), *UEnum::GetValueAsString(Snapshot.Phase),
 			Snapshot.WindowEndsServerTime, Snapshot.PerfectWindowEndsServerTime, *GetNameSafe(World), int32(GetNetMode()), HasAuthority(), int32(GetLocalRole()), *GetName());
 	}
 

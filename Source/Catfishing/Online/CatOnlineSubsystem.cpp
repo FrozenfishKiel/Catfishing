@@ -818,9 +818,16 @@ void UCatOnlineSubsystem::CollectGameplayStartupAssetPaths(TArray<FSoftObjectPat
 	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
 	if (InventorySettings)
 	{
-		for (const FCatInventoryCatalogDefinition& Definition : InventorySettings->Definitions)
+		// 总表是唯一物品索引；预加载登记表和每个软引用，不再读取已废弃的配置数组。
+		AddUniquePath(OutAssetPaths, InventorySettings->ItemCatalog.ToSoftObjectPath());
+		if (const UDataTable* Table = InventorySettings->ItemCatalog.LoadSynchronous();
+			Table && Table->GetRowStruct() == FCatItemCatalogRow::StaticStruct())
 		{
-			AddUniquePath(OutAssetPaths, Definition.ItemDefinition.ToSoftObjectPath());
+			for (const auto& Pair : Table->GetRowMap())
+			{
+				const auto* Row = reinterpret_cast<const FCatItemCatalogRow*>(Pair.Value);
+				AddUniquePath(OutAssetPaths, Row->ItemDefinition.ToSoftObjectPath());
+			}
 		}
 	}
 

@@ -301,10 +301,10 @@ void UCatLocalPlayerUISubsystem::RefreshHUDAfterPageVisibilityChanged()
 // 1. 事实已经 durable——Profile 在第二次落盘成功之后才广播，所以这里弹出来的东西一定已经写进图鉴。
 // 2. 从正式鱼目录取展示名、介绍与彩页图；鱼种没登记时仍然弹，名字退回鱼种 ID，不静默吞掉一次首解锁。
 // 3. 浮层 WBP 资产不在本轮范围：类没配置时只记一次诊断，不创建原生白盒替身，也不影响已经写好的图鉴记录。
-void UCatLocalPlayerUISubsystem::HandleLocalFishSpeciesFirstRecorded(const FName FishDefinitionId,
+void UCatLocalPlayerUISubsystem::HandleLocalFishSpeciesFirstRecorded(const int32  ItemId,
 	const double WeightKilograms)
 {
-	if (FishDefinitionId.IsNone())
+	if ((ItemId == 0))
 	{
 		return;
 	}
@@ -319,9 +319,9 @@ void UCatLocalPlayerUISubsystem::HandleLocalFishSpeciesFirstRecorded(const FName
 		if (!bHasLoggedMissingFishRevealWidget)
 		{
 			UE_LOG(LogCatUI, Warning,
-				TEXT("Event=ui_fish_reveal_class_missing Class=%s FishDefinitionId=%s Result=RevealSkippedCollectionStillRecorded"),
+				TEXT("Event=ui_fish_reveal_class_missing Class=%s ItemId=%s Result=RevealSkippedCollectionStillRecorded"),
 				Settings ? *Settings->FishRevealWidgetClass.ToSoftObjectPath().ToString() : TEXT("None"),
-				*FishDefinitionId.ToString());
+				*FString::FromInt(ItemId));
 			bHasLoggedMissingFishRevealWidget = true;
 		}
 		return;
@@ -352,10 +352,10 @@ void UCatLocalPlayerUISubsystem::HandleLocalFishSpeciesFirstRecorded(const FName
 		});
 	}
 	const UCatFishCatalogSettings* Catalog = GetDefault<UCatFishCatalogSettings>();
-	const UCatFishDefinition* Definition = Catalog ? Catalog->FindRuntimeDefinition(FishDefinitionId) : nullptr;
+	const UCatFishDefinition* Definition = Catalog ? Catalog->FindRuntimeDefinition(ItemId) : nullptr;
 	FCatFishRevealViewData ViewData;
 	const FText DisplayName = Definition ? Definition->GetInventoryDisplayName() : FText();
-	ViewData.NameText = DisplayName.IsEmpty() ? FText::FromName(FishDefinitionId) : DisplayName;
+	ViewData.NameText = DisplayName.IsEmpty() ? FText::AsNumber(ItemId) : DisplayName;
 	ViewData.DescriptionText = Definition ? Definition->GetInventoryDescription() : FText();
 	if (FMath::IsFinite(WeightKilograms) && WeightKilograms > 0.0)
 	{
@@ -384,8 +384,8 @@ void UCatLocalPlayerUISubsystem::HandleLocalFishSpeciesFirstRecorded(const FName
 			}
 		}), CatLocalPlayerUIFishReveal::AutoDismissSeconds, false);
 	}
-	UE_LOG(LogCatUI, Log, TEXT("Event=ui_fish_reveal_shown FishDefinitionId=%s Weight=%.3f"),
-		*FishDefinitionId.ToString(), WeightKilograms);
+	UE_LOG(LogCatUI, Log, TEXT("Event=ui_fish_reveal_shown ItemId=%s Weight=%.3f"),
+		*FString::FromInt(ItemId), WeightKilograms);
 }
 
 // 他人解锁提示流程：只读 GameState 复制的那一条广播，按 AnnouncementId 去重；本人那条不在这里重复弹。
@@ -412,9 +412,9 @@ void UCatLocalPlayerUISubsystem::HandleFishSpeciesDiscoveryAnnounced()
 		return;
 	}
 	const UCatFishCatalogSettings* Catalog = GetDefault<UCatFishCatalogSettings>();
-	const UCatFishDefinition* Definition = Catalog ? Catalog->FindRuntimeDefinition(Announcement.FishDefinitionId) : nullptr;
+	const UCatFishDefinition* Definition = Catalog ? Catalog->FindRuntimeDefinition(Announcement.ItemId) : nullptr;
 	const FText FishNameText = (Definition && !Definition->GetInventoryDisplayName().IsEmpty())
-		? Definition->GetInventoryDisplayName() : FText::FromName(Announcement.FishDefinitionId);
+		? Definition->GetInventoryDisplayName() : FText::AsNumber(Announcement.ItemId);
 	const FText DiscovererText = Announcement.DiscovererDisplayName.IsEmpty()
 		? NSLOCTEXT("CatFishReveal", "UnknownDiscoverer", "有只猫")
 		: FText::FromString(Announcement.DiscovererDisplayName);
@@ -426,9 +426,9 @@ void UCatLocalPlayerUISubsystem::HandleFishSpeciesDiscoveryAnnounced()
 		HUDWidget->AnnounceFishSpeciesDiscovery(BroadcastText);
 	}
 	UE_LOG(LogCatUI, Log,
-		TEXT("Event=ui_fish_discovery_announced AnnouncementId=%s FishDefinitionId=%s HUDPresent=%d"),
+		TEXT("Event=ui_fish_discovery_announced AnnouncementId=%s ItemId=%s HUDPresent=%d"),
 		*Announcement.AnnouncementId.ToString(EGuidFormats::DigitsWithHyphens),
-		*Announcement.FishDefinitionId.ToString(), HUDWidget != nullptr);
+		*FString::FromInt(Announcement.ItemId), HUDWidget != nullptr);
 }
 
 // 新鱼种广播接线流程：GameState 在客户端可能晚到，所以每次装配与 Controller 变化都重解析一次。

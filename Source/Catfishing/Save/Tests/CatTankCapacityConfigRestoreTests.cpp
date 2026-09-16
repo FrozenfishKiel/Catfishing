@@ -34,7 +34,7 @@ bool FCatTankCapacityConfigRestoreTest::RunTest(const FString&)
 		auto* Tank = World->SpawnActor<ACatFishTankActor>();
 		TStrongObjectPtr<UCatRunSaveGame> Candidate(NewObject<UCatRunSaveGame>());
 		auto* Fish = NewObject<UCatFishInventoryItemInstance>(Tank);
-		Fish->SetItemDefinition(GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(TEXT("LittleSilverFish")));
+		Fish->SetItemDefinition(GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(22));
 		FishId = FGuid::NewGuid();
 		if (!Fish->InitializeFishFromAuthority(FGuid::NewGuid(), FishId, TEXT("CapacityFixture"), 1.0)
 			|| !Tank->GetFishInventoryComponent()->AddItemInstance(Fish, 1)) return false;

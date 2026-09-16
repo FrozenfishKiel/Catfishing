@@ -47,8 +47,8 @@ bool FCatShopWorldCheckpointTest::RunTest(const FString& Parameters)
 		RackName = Rack->GetFName(); StoreName = Store->GetFName(); TankName = Tank->GetFName();
 		TestTrue(TEXT("rack role"), Rack->GetInventoryComponent()->RestoreTeamStorageRoleFromAuthority(ECatTeamStorageRole::EquipmentRack));
 		TestTrue(TEXT("store role"), Store->GetInventoryComponent()->RestoreTeamStorageRoleFromAuthority(ECatTeamStorageRole::SupplyStore));
-		auto* Rod = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(TEXT("StarterRodT1"));
-		auto* Bait = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(TEXT("BugBait"));
+		auto* Rod = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(37);
+		auto* Bait = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(4);
 		if (!TestNotNull(TEXT("formal rod"), Rod) || !TestNotNull(TEXT("formal bait"), Bait)) return false;
 		TestTrue(TEXT("rack owns rod"), Rack->GetInventoryComponent()->AddItemDefinition(Rod, 1));
 		TestTrue(TEXT("store owns bait"), Store->GetInventoryComponent()->AddItemDefinition(Bait, 3));
@@ -56,7 +56,7 @@ bool FCatShopWorldCheckpointTest::RunTest(const FString& Parameters)
 		Guard->SetActorLocation(GuardSavedLocation);
 		GuardName = Guard->GetFName();
 		auto* GuardItem = NewObject<UCatFishGuardInventoryItemInstance>(Store);
-		GuardItem->SetItemDefinition(GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(TEXT("FishGuard")));
+		GuardItem->SetItemDefinition(GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(11));
 		GuardItemId = GuardItem->GetItemInstanceId();
 		if (!Guard->InitializeFromInventoryFromAuthority(GuardItem, 1)
 			|| !Store->GetInventoryComponent()->AddItemInstance(GuardItem, 1)) return false;
@@ -126,8 +126,8 @@ bool FCatShopWorldCheckpointTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("all three hosts recreated"), Rack && Store && Tank)) return false;
 	TestEqual(TEXT("rack role survives"), Rack->GetInventoryComponent()->GetTeamStorageRole(), ECatTeamStorageRole::EquipmentRack);
 	TestEqual(TEXT("store role survives"), Store->GetInventoryComponent()->GetTeamStorageRole(), ECatTeamStorageRole::SupplyStore);
-	TestEqual(TEXT("rod survives"), Rack->GetInventoryComponent()->CountVisibleInventoryQuantityByDefinitionId(TEXT("StarterRodT1")), 1);
-	TestEqual(TEXT("bait survives"), Store->GetInventoryComponent()->CountVisibleInventoryQuantityByDefinitionId(TEXT("BugBait")), 3);
+	TestEqual(TEXT("rod survives"), Rack->GetInventoryComponent()->CountVisibleInventoryQuantityByItemId(37), 1);
+	TestEqual(TEXT("bait survives"), Store->GetInventoryComponent()->CountVisibleInventoryQuantityByItemId(4), 3);
 	TestEqual(TEXT("tier survives"), Tank->GetCapacityTier(), 2);
 	TestEqual(TEXT("thirty real slots survive"), Tank->GetFishInventoryComponent()->GetInventorySlotCount(), 30);
 	const int32 FishSlot = Tank->GetFishInventoryComponent()->FindInventorySlotIndexFromInstanceId(FishId);
@@ -152,7 +152,7 @@ bool FCatShopWorldCheckpointTest::RunTest(const FString& Parameters)
 	FText Failure;
 	for (auto& Host : Disk->WorldInventories)
 	{
-		const int32 EmptySlot = Host.InventorySlots.IndexOfByPredicate([](const auto& Slot) { return Slot.DefinitionId.IsNone(); });
+		const int32 EmptySlot = Host.InventorySlots.IndexOfByPredicate([](const auto& Slot) { return (Slot.ItemId == 0); });
 		if (EmptySlot == INDEX_NONE) continue;
 		Host.InventorySlots[EmptySlot].FishGuardHostName = GuardName;
 		TestFalse(TEXT("empty slot cannot claim a guard host"), Save->ValidateLoadedRunSaveGame(*Disk, SlotId, Failure));

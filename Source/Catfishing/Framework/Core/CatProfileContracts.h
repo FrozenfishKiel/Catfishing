@@ -10,11 +10,7 @@ enum class ECatProfileGrantKind : uint8
 {
 	/** 捕获已提交后记录鱼种、真实重量与首次条件。 */
 	FishRecorded,
-	/**
-	 * 图鉴剪影层：咬钩成立那一刻揭给这一竿的钓手（图鉴 §3.1.3:98、钓鱼规则 §5.6:285）。
-	 * 2026-09-10 删掉的重试预算方案曾经是它唯一的生产者（RecordRetryExhaustedSilhouette），
-	 * 删完之后这个 Kind 有消费者没有生产者；现在的生产者是 UCatRunImprintService::RecordFishEncounterSilhouette。
-	 */
+	/** 历史剪影授予值，仅用于旧存档与待处理账本解释；现有咬钩不再生成，卡片也不凭它开放信息。 */
 	FishSilhouette,
 	/** 图鉴知识层：自己吃过这条鱼才解锁食用效果（图鉴 §3.1.3:92、§3.1.4:124）。谁吃谁记，被拿走吃掉记进吃的人。 */
 	FishKnowledge,
@@ -77,7 +73,12 @@ struct FCatProfileGrant
 
 	/** 鱼图鉴授予对应的 FishDefinition ID；印记/解锁可为 None。FishKnowledge 与 FishSilhouette 只用这一个字段。 */
 	UPROPERTY(BlueprintReadOnly, SaveGame)
+	int32  ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName FishDefinitionId = NAME_None;
+
 
 	/** 捕获真实重量，单位千克；仅 FishRecorded 使用。 */
 	UPROPERTY(BlueprintReadOnly, SaveGame)
@@ -163,7 +164,12 @@ struct FCatFishCollectionRecord
 
 	/** FishDefinition 稳定 ID。 */
 	UPROPERTY(SaveGame)
+	int32  ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName FishDefinitionId = NAME_None;
+
 
 	/** 当前三态；只单向推进。 */
 	UPROPERTY(SaveGame)

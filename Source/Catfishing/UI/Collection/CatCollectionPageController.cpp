@@ -31,7 +31,7 @@ bool UCatCollectionPageController::Bind(ULocalPlayer* InLocalPlayer, APlayerCont
 	}
 	CollectionModelChangedHandle = CollectionModel->OnViewStateChanged.AddUObject(
 		this, &ThisClass::HandleCollectionViewStateChanged);
-	// Profile 未就绪不是装配失败：补一次 Refresh 让 Model 发布 unavailable 投影，页面照常能开，只显示“本地记录未就绪”。
+	// 读源缺失仍允许页面打开：补一次 Refresh 发布不可用投影，显示“图鉴数据未就绪”，不伪造空档案。
 	if (!CollectionModel->Bind(InLocalPlayer))
 	{
 		CollectionModel->Refresh();
@@ -84,11 +84,16 @@ void UCatCollectionPageController::RequestCloseCollectionFromWidget()
 	SetCollectionOpen(false);
 }
 
-// 印记隐藏流程：只转交给 Model（它持有本页面唯一的 Profile 引用）；Model 写盘成功会自己重发投影，
-// 页面不缓存第二份隐藏状态。Model 不在时返回 false，调用方据此不显示成功反馈。
-bool UCatCollectionPageController::RequestSetImprintHiddenFromWidget(const FGuid ImprintId, const bool bHidden)
+// 追踪流程：持久化由 Model 委托给 Profile，控制器不缓存另一份追踪编号。
+bool UCatCollectionPageController::RequestTrackFish(const int32 ItemId)
 {
-	return CollectionModel && CollectionModel->SetImprintHidden(ImprintId, bHidden);
+	return CollectionModel && CollectionModel->SetTrackedFish(ItemId);
+}
+
+// 同源读取流程：库存窗口订阅本页既有 Model；控制器解绑时 Model 生命周期结束。
+UCatCollectionModel* UCatCollectionPageController::GetCollectionModel() const
+{
+	return CollectionModel;
 }
 
 // 打开先重绘再入视口并申请输入锁；关闭先恢复输入再移出页面，两侧都只处理本页面自己申请的那一层。

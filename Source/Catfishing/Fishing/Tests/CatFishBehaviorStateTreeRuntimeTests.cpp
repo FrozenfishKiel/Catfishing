@@ -1,4 +1,5 @@
 #include "Inventory/CatInventorySettings.h"
+#include "Inventory/Tests/CatItemCatalogTestFixture.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Bait.h"
 #include "Fishing/Tests/CatFishingEquipmentTestFixtures.h"
@@ -218,30 +219,30 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 	// 补齐生产消费者：只准备已经中鱼的事务状态，之后由真正的 HandleFixedStep
 	// 执行树、受力、最终水面落位、ASC 付款及 Session 发布，不手工提交 Step 或余额。
 	UCatInventorySettings* EquipmentSettings = GetMutableDefault<UCatInventorySettings>();
-	TGuardValue<TArray<FCatInventoryCatalogDefinition>> SavedDefinitions(EquipmentSettings->Definitions, {});
+	FCatItemCatalogTestFixture Catalog(false);
 	TGuardValue<int32> SavedSlots(EquipmentSettings->PlayerInventorySlotCapacity, 12);
 	TGuardValue<int32> SavedStacks(EquipmentSettings->DefaultQuantityStackCapacity, 20);
 	TArray<TStrongObjectPtr<UCatEquipmentDefinition>> Definitions;
-	const auto AddDefinition = [&](const FName Id, const CatFishingTest::EFixtureKind Kind)
+	const auto AddDefinition = [&](const int32 Id, const CatFishingTest::EFixtureKind Kind)
 	{
 		UCatEquipmentDefinition* Definition = NewObject<UCatEquipmentDefinition>();
 		Definitions.Emplace(Definition);
-		Definition->EquipmentDefinitionId = Id;
-		Definition->FunctionalRouteId = Definition->LoadoutSlotId = Id;
+		Definition->ItemId = Id;
+		Definition->FunctionalRouteId = Definition->LoadoutSlotId = FName(*FString::FromInt(Id));
 		CatFishingTest::Configure(Definition, Kind);
 		Definition->bEnableRuntimeDefinition = true;
-		EquipmentSettings->Definitions.Add({Definition->EquipmentDefinitionId, Definition});
+		Catalog.Add(Definition);
 		return Definition;
 	};
-	UCatEquipmentDefinition* RodDefinition = AddDefinition(TEXT("IntentRuntimeRod"), CatFishingTest::EFixtureKind::Rod);
+	UCatEquipmentDefinition* RodDefinition = AddDefinition(1357733, CatFishingTest::EFixtureKind::Rod);
 	CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->MaximumRodDurability = 1000.0;
 	CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->MaximumLineLengthCentimeters = 1500.0;
 	CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->HighTensionWearMultiplier = 1.0;
 	RodDefinition->UseActorClass = ACatFishingRodActor::StaticClass();
-	UCatEquipmentDefinition* BaitDefinition = AddDefinition(TEXT("IntentRuntimeBait"), CatFishingTest::EFixtureKind::Bait);
+	UCatEquipmentDefinition* BaitDefinition = AddDefinition(1391318, CatFishingTest::EFixtureKind::Bait);
 	BaitDefinition->bRunConsumable = true;
 	CatFishingTest::Fragment<UCatEquipmentFragment_Bait>(BaitDefinition)->BiteRateMultiplier = CatFishingTest::Fragment<UCatEquipmentFragment_Bait>(BaitDefinition)->MinimumBiteDelayMultiplier = 1.0;
-	CatFishingTest::Fragment<UCatEquipmentFragment_Float>(AddDefinition(TEXT("IntentRuntimeFloat"), CatFishingTest::EFixtureKind::Float))->MaximumCastDistanceCentimeters = 1000.0;
+	CatFishingTest::Fragment<UCatEquipmentFragment_Float>(AddDefinition(1821885, CatFishingTest::EFixtureKind::Float))->MaximumCastDistanceCentimeters = 1000.0;
 	for (const TStrongObjectPtr<UCatEquipmentDefinition>& Definition : Definitions)
 		if (!TestTrue(TEXT("生产付款夹具的装备定义完整"), Definition->IsRuntimeDefinitionReady())) return false;
 
@@ -314,11 +315,11 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("生产猫具有有效ASC体力上限"), FMath::IsFinite(CatStaminaMaximum) && CatStaminaMaximum > 0.0f)) return false;
 		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 50.0f);
 		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), CatStaminaMaximum);
-		for (const FName Id : {FName(TEXT("IntentRuntimeRod")), FName(TEXT("IntentRuntimeFloat"))})
+		for (const int32 Id : {1357733, 1821885})
 			if (!TestTrue(TEXT("公开入口授予真实装备实例"), Equipment->GrantEquipmentFromAuthority(
 				FGuid::NewGuid(), Equipment->GetSnapshot().Revision, Id).bCommitted)) return false;
 		if (!TestTrue(TEXT("公开入口授予一份鱼饵"), Equipment->GrantInventoryQuantityFromAuthority(
-			FGuid::NewGuid(), Equipment->GetSnapshot().Revision, TEXT("IntentRuntimeBait"), 1).bCommitted)) return false;
+			FGuid::NewGuid(), Equipment->GetSnapshot().Revision, 1391318, 1).bCommitted)) return false;
 		const FGuid RodItemId = Equipment->GetSnapshot().RodItemInstanceId;
 		if (!TestTrue(TEXT("部署已授予的同一鱼竿实例"), Equipment->Use(
 			FGuid::NewGuid(), Equipment->GetSnapshot().Revision, RodItemId).bCommitted)) return false;
@@ -326,10 +327,10 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		const FGuid SessionId = FGuid::NewGuid();
 		if (!TestTrue(TEXT("会话预留真实鱼竿和饵漂"), Equipment->BeginFishingUse(SessionId,
 			RodItemId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId,
-			Loadout.RodDefinitionId, Loadout.BaitDefinitionId, Loadout.FloatDefinitionId, Loadout.Revision).bUseAccepted)
+			Loadout.RodItemId, Loadout.BaitItemId, Loadout.FloatItemId, Loadout.Revision).bUseAccepted)
 			|| !TestTrue(TEXT("会话完成中鱼扣饵"), Equipment->CommitFishingBaitDeferred(SessionId).bApplied)) return false;
 		if (!TestTrue(TEXT("鱼竿绑定真实操作者及库存实例"), Rod->InitializeAuthoritativeIdentity(
-			FGuid::NewGuid(), RodItemId, Loadout.RodDefinitionId, NAME_None, Player, nullptr, true, false))) return false;
+			FGuid::NewGuid(), RodItemId, Loadout.RodItemId, NAME_None, Player, nullptr, true, false))) return false;
 		UCatFishingService* Service = Payment->GetSubsystem<UCatFishingService>();
 		if (!TestTrue(TEXT("已部署的真实杆进入生产查找索引"), Service && Service->RegisterDeployedRod(Player, Rod))
 			|| !TestTrue(TEXT("规范握点放在实际手爪后经生产校验建约束"), Rod->BeginPhysicalHoldFromAuthority(Player, true))

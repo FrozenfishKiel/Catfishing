@@ -18,12 +18,12 @@ bool UCatShopEconomyTransactionExecutionCalculation::TryCalculateFishSale(const 
 	int64 TotalValue = 0;
 	for (const FCatShopFishSaleLine& Line : Fish)
 	{
-		if (Line.FishDefinitionId.IsNone() || !FMath::IsFinite(Line.WeightKilograms)
+		if ((Line.ItemId == 0) || !FMath::IsFinite(Line.WeightKilograms)
 			|| Line.WeightKilograms <= 0.0)
 		{
 			return false;
 		}
-		const FCatShopFishSalePriceRow* Row = PriceTable->FindRow<FCatShopFishSalePriceRow>(Line.FishDefinitionId,
+		const FCatShopFishSalePriceRow* Row = PriceTable->FindRow<FCatShopFishSalePriceRow>(FName(*FString::FromInt(Line.ItemId)),
 			TEXT("FishSale"), false);
 		if (!Row || !Row->IsRuntimeReady())
 		{

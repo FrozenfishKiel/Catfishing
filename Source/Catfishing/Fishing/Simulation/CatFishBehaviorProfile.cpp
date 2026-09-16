@@ -67,7 +67,7 @@ bool FCatFishBehaviorProfileResolver::Resolve(const UCatFishDefinition& Fish,
 		UE_LOG(LogCatFishing, Warning,
 			TEXT("Event=fish_behavior_profile_unresolved Fish=%s HasTemplate=%s SwimSpeedCoefficient=%.3f ")
 			TEXT("Result=NoUsableFullEffortSpeed"),
-			*Fish.FishDefinitionId.ToString(), TestingTemplate ? TEXT("true") : TEXT("false"),
+			*FString::FromInt(Fish.ItemId), TestingTemplate ? TEXT("true") : TEXT("false"),
 			Fish.SwimSpeedCoefficient);
 		return false;
 	}
@@ -78,7 +78,7 @@ bool FCatFishBehaviorProfileResolver::Resolve(const UCatFishDefinition& Fish,
 		UE_LOG(LogCatFishing, Warning,
 			TEXT("Event=fish_behavior_profile_partial_fish_table Fish=%s FieldsFromFishTable=%d/4 ")
 			TEXT("FallbackTemplate=%s"),
-			*Fish.FishDefinitionId.ToString(), OutBehavior.FieldsTakenFromFishTable,
+			*FString::FromInt(Fish.ItemId), OutBehavior.FieldsTakenFromFishTable,
 			TestingTemplate ? *TestingTemplate->FightPersonalityId.ToString() : TEXT("None"));
 	}
 	return true;

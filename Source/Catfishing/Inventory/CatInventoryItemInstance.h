@@ -81,7 +81,7 @@ public:
 	UCatInventoryItemDefinition* GetItemDefinition() const;
 
 	/** 读取这份实例的稳定定义 ID；日志、读模型和商店回执用它对齐同一种物品。 */
-	FName GetItemDefinitionId() const;
+	int32  GetItemId() const;
 
 	/** 读取这份运行实例自己的稳定 ID；堆叠格共享一个实例 ID，非堆叠物每件各自拥有一个。 */
 	FGuid GetItemInstanceId() const;

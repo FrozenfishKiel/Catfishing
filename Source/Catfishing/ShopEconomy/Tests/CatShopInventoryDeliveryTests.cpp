@@ -58,7 +58,7 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 			&& Shelf->TryGetStockSnapshot(Entry.EntryId, Stock)
 			&& Stock.bUnlimitedStock)
 		{
-			Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(Entry.DefinitionId);
+			Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(Entry.ItemId);
 			if (Definition)
 			{
 				Selected = Entry;
@@ -67,7 +67,7 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 		}
 	}
 	if (!TestNotNull(TEXT("当前正式货架有可付款的物品"), Definition)) return false;
-	const int32 QuantityBefore = Inventory->CountVisibleInventoryQuantityByDefinitionId(Selected.DefinitionId);
+	const int32 QuantityBefore = Inventory->CountVisibleInventoryQuantityByItemId(Selected.ItemId);
 	FCatShopCartCommand Command;
 	Command.Context.RequestId = FGuid::NewGuid();
 	Command.Context.StableNetId = TEXT("InventoryDeliveryRegression");
@@ -96,7 +96,7 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 	}, false));
 	TestTrue(TEXT("容量成立后确实执行了提交回调"), bCommitCalled);
 	TestEqual(TEXT("提交失败恢复原有物品数量"),
-		Inventory->CountVisibleInventoryQuantityByDefinitionId(Selected.DefinitionId), QuantityBefore);
+		Inventory->CountVisibleInventoryQuantityByItemId(Selected.ItemId), QuantityBefore);
 
 	int32 BroadcastCount = 0;
 	// 监听首次成交与随后重放，回调读取通知当刻的钱货和账本；失败提前返回或重放断言结束后均解除绑定。
@@ -105,7 +105,7 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 		{
 			++BroadcastCount;
 			TestEqual(TEXT("成交通知时实物已入库"),
-				Inventory->CountVisibleInventoryQuantityByDefinitionId(Selected.DefinitionId),
+				Inventory->CountVisibleInventoryQuantityByItemId(Selected.ItemId),
 				QuantityBefore + Selected.PurchaseQuantity);
 			TestEqual(TEXT("成交通知时公款已扣除"), Shop->GetWalletSnapshot().Balance,
 				WalletBefore.Balance - Selected.UnitPrice);
@@ -121,7 +121,7 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("购买只扣一次商品价格"), Shop->GetWalletSnapshot().Balance,
 		WalletBefore.Balance - Selected.UnitPrice);
 	TestEqual(TEXT("公共库存收到目录规定数量"),
-		Inventory->CountVisibleInventoryQuantityByDefinitionId(Selected.DefinitionId),
+		Inventory->CountVisibleInventoryQuantityByItemId(Selected.ItemId),
 		QuantityBefore + Selected.PurchaseQuantity);
 	// 同号重放不进入交付回调，不能因收货方已变化再次扣款。
 	const FCatShopCartTransactionResult Replay = Shop->PurchaseCatalogCart(Command, Shelf, [](TFunctionRef<bool()> Pay) { return false; });
@@ -134,14 +134,14 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 		ECatDomainCommandError::InvalidPayload);
 	TestEqual(TEXT("重放不再次扣款"), Shop->GetWalletSnapshot().Balance,
 		WalletBefore.Balance - Selected.UnitPrice);
-	TestEqual(TEXT("重放不再次发货"), Inventory->CountVisibleInventoryQuantityByDefinitionId(Selected.DefinitionId),
+	TestEqual(TEXT("重放不再次发货"), Inventory->CountVisibleInventoryQuantityByItemId(Selected.ItemId),
 		QuantityBefore + Selected.PurchaseQuantity);
 	TestEqual(TEXT("重放不增加交易记录"), Shop->GetTransactionLedgerSnapshot().Num(), 1);
 	TestEqual(TEXT("重放不再次广播"), BroadcastCount, 1);
 	Shop->OnPublicTransactionCommitted.Remove(Handle);
 	const TArray<FCatInventoryEntry> ExistingItems = Inventory->GetInventoryEntries();
 	TestFalse(TEXT("已有物品上追加批次后拒绝仍可恢复"), Inventory->TryAddInventoryBatch(Batch, []() { return false; }, false));
-	TestEqual(TEXT("恢复后数量不变"), Inventory->CountVisibleInventoryQuantityByDefinitionId(Selected.DefinitionId),
+	TestEqual(TEXT("恢复后数量不变"), Inventory->CountVisibleInventoryQuantityByItemId(Selected.ItemId),
 		QuantityBefore + Selected.PurchaseQuantity);
 	TestEqual(TEXT("恢复后保留原槽位数"), Inventory->GetInventoryEntries().Num(), ExistingItems.Num());
 	for (int32 Index = 0; Index < ExistingItems.Num(); ++Index)

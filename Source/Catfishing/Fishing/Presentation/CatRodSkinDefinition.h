@@ -25,6 +25,9 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly) FName AnimationSetId = NAME_None;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly) FTransform VisualRelativeTransform = FTransform::Identity;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly) TMap<FName, FName> VisualSocketMap;
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly) TArray<FName> CompatibleRodDefinitionIds;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly) TArray<int32> CompatibleRodItemIds;
+
+	/** 旧资产的英文鱼竿列表；仅迁移读取并清空，运行查询不使用。 */
+	UPROPERTY() TArray<FName> CompatibleRodDefinitionIds;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly) FName RequiredUnlockId = NAME_None;
 };

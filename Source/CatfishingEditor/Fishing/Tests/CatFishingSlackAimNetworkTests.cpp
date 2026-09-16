@@ -215,7 +215,7 @@ namespace CatFishingSlackAimNetwork
 					ServerRod->ConfigureCanonicalAnchorsFromAuthority(FTransform(FVector(110, 0, 0)),
 						FTransform::Identity, FTransform(FRotator(5, 20, 0), FVector(13, 7, 4))))
 					|| !Test->TestTrue(TEXT("initialize deployed identity before establishing the physical holder"),
-						ServerRod->InitializeAuthoritativeIdentity(RodId, FGuid::NewGuid(), TEXT("MouseDriveNetworkRod"), NAME_None,
+						ServerRod->InitializeAuthoritativeIdentity(RodId, FGuid::NewGuid(), 1757953, NAME_None,
 							RemoteController->PlayerState, nullptr, true, false))) return true;
 				ServerRod->bAlwaysRelevant = true;
 				ServerRod->FinishSpawning(SpawnTransform);

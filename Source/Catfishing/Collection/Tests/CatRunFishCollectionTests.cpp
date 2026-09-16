@@ -61,16 +61,16 @@ bool FCatRunFishCollectionLifecycleTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("创建真实 GameState 默认公共容器"), F.Create(this))) return false;
 	auto* Collection = F.State->GetRunFishCollection();
 	const FGuid FishA = FGuid::NewGuid();
-	TestTrue(TEXT("第一次捕获上页"), Collection->RecordCaptureFromAuthority(FishA, TEXT("FishA"), TEXT("HookerA")));
+	TestTrue(TEXT("第一次捕获上页"), Collection->RecordCaptureFromAuthority(FishA, 1687965, TEXT("HookerA")));
 	const int64 Revision = Collection->GetSnapshot().Revision;
-	TestTrue(TEXT("同一实物重放成功"), Collection->RecordCaptureFromAuthority(FishA, TEXT("FishA"), TEXT("HookerA")));
+	TestTrue(TEXT("同一实物重放成功"), Collection->RecordCaptureFromAuthority(FishA, 1687965, TEXT("HookerA")));
 	TestEqual(TEXT("重放不重复发布"), Collection->GetSnapshot().Revision, Revision);
 	AddExpectedMessage(TEXT("Event=run_collection_rejected"), ELogVerbosity::Warning,
 		EAutomationExpectedMessageFlags::Contains, 2);
-	TestFalse(TEXT("同鱼不能改记拾取者"), Collection->RecordCaptureFromAuthority(FishA, TEXT("FishA"), TEXT("PickerB")));
-	TestTrue(TEXT("同鱼种另一个上钩者加入"), Collection->RecordCaptureFromAuthority(FGuid::NewGuid(), TEXT("FishA"), TEXT("HookerB")));
-	TestTrue(TEXT("同人再钓不重复盖章"), Collection->RecordCaptureFromAuthority(FGuid::NewGuid(), TEXT("FishA"), TEXT("HookerA")));
-	TestTrue(TEXT("新鱼种加入新页"), Collection->RecordCaptureFromAuthority(FGuid::NewGuid(), TEXT("FishB"), TEXT("HookerA")));
+	TestFalse(TEXT("同鱼不能改记拾取者"), Collection->RecordCaptureFromAuthority(FishA, 1687965, TEXT("PickerB")));
+	TestTrue(TEXT("同鱼种另一个上钩者加入"), Collection->RecordCaptureFromAuthority(FGuid::NewGuid(), 1687965, TEXT("HookerB")));
+	TestTrue(TEXT("同人再钓不重复盖章"), Collection->RecordCaptureFromAuthority(FGuid::NewGuid(), 1687965, TEXT("HookerA")));
+	TestTrue(TEXT("新鱼种加入新页"), Collection->RecordCaptureFromAuthority(FGuid::NewGuid(), 1124199, TEXT("HookerA")));
 	const auto Snapshot = Collection->GetSnapshot();
 	TestEqual(TEXT("两鱼种两页"), Snapshot.Pages.Num(), 2);
 	TestEqual(TEXT("同种两登记者"), Snapshot.Pages[0].Pawprints.Num(), 2);
@@ -88,12 +88,12 @@ bool FCatRunFishCollectionLifecycleTest::RunTest(const FString& Parameters)
 	F.Run.EndReason = ECatRunEndReason::Success;
 	F.State->SetRunPublicStateFromAuthority(F.Run);
 	TestTrue(TEXT("自然局末清空"), Board->GetCollectionSnapshot().Pages.IsEmpty());
-	TestFalse(TEXT("终局迟到捕获不能复活板子"), Collection->RecordCaptureFromAuthority(FGuid::NewGuid(), TEXT("FishC"), TEXT("HookerA")));
+	TestFalse(TEXT("终局迟到捕获不能复活板子"), Collection->RecordCaptureFromAuthority(FGuid::NewGuid(), 1442609, TEXT("HookerA")));
 	F.Run.Phase.RunId = FGuid::NewGuid();
 	F.Run.Phase.Phase = ECatRunPhase::DayActive;
 	F.Run.EndReason = ECatRunEndReason::None;
 	F.State->SetRunPublicStateFromAuthority(F.Run);
-	TestTrue(TEXT("新局可独立登记旧实物键"), Collection->RecordCaptureFromAuthority(FishA, TEXT("FishA"), TEXT("HookerA")));
+	TestTrue(TEXT("新局可独立登记旧实物键"), Collection->RecordCaptureFromAuthority(FishA, 1687965, TEXT("HookerA")));
 	TestTrue(TEXT("新局不继承旧爪印身份"), Collection->GetSnapshot().Pages[0].Pawprints[0].RegistrantId != Snapshot.Pages[0].Pawprints[0].RegistrantId);
 	return !HasAnyErrors();
 }
@@ -104,7 +104,7 @@ bool FCatRunFishCollectionSaveTest::RunTest(const FString& Parameters)
 	if (!F.Create(this)) return false;
 	auto* Collection = F.State->GetRunFishCollection();
 	const FGuid FishId = FGuid::NewGuid();
-	Collection->RecordCaptureFromAuthority(FishId, TEXT("FishA"), TEXT("HookerA"));
+	Collection->RecordCaptureFromAuthority(FishId, 1687965, TEXT("HookerA"));
 	F.Run.Phase.Phase = ECatRunPhase::Ending;
 	F.Run.EndReason = ECatRunEndReason::HostExit;
 	F.State->SetRunPublicStateFromAuthority(F.Run);
@@ -115,7 +115,7 @@ bool FCatRunFishCollectionSaveTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("使用引擎 SaveGame 序列化"), UGameplayStatics::SaveGameToMemory(Save, Bytes))) return false;
 	auto* Loaded = Cast<UCatRunSaveGame>(UGameplayStatics::LoadGameFromMemory(Bytes));
 	if (!TestNotNull(TEXT("真实反序列化成功"), Loaded)) return false;
-	TestEqual(TEXT("公共记录随分仓断点写入 v7 格式"), Loaded->FormatVersion, 7);
+	TestEqual(TEXT("公共记录随分仓断点写入 v8 格式"), Loaded->FormatVersion, 8);
 	F.Run = FCatRunPublicState();
 	F.Run.Phase.RunId = FGuid::NewGuid();
 	F.State->SetRunPublicStateFromAuthority(F.Run);
@@ -125,9 +125,9 @@ bool FCatRunFishCollectionSaveTest::RunTest(const FString& Parameters)
 	F.Run.Phase.Phase = ECatRunPhase::DayActive;
 	F.State->SetRunPublicStateFromAuthority(F.Run);
 	const int64 Revision = Collection->GetSnapshot().Revision;
-	TestTrue(TEXT("恢复后的旧捕获仍幂等"), Collection->RecordCaptureFromAuthority(FishId, TEXT("FishA"), TEXT("HookerA")));
+	TestTrue(TEXT("恢复后的旧捕获仍幂等"), Collection->RecordCaptureFromAuthority(FishId, 1687965, TEXT("HookerA")));
 	TestEqual(TEXT("恢复重放不重复上页"), Collection->GetSnapshot().Revision, Revision);
-	TestTrue(TEXT("重连上钩者继续沿用爪印"), Collection->RecordCaptureFromAuthority(FGuid::NewGuid(), TEXT("FishA"), TEXT("HookerA")));
+	TestTrue(TEXT("重连上钩者继续沿用爪印"), Collection->RecordCaptureFromAuthority(FGuid::NewGuid(), 1687965, TEXT("HookerA")));
 	TestEqual(TEXT("恢复后同人同种仍一枚爪印"), Collection->GetSnapshot().Pages[0].Pawprints.Num(), 1);
 	auto Invalid = Loaded->RunFishCollectionCaptures;
 	const auto Duplicate = Invalid[0];
@@ -204,14 +204,14 @@ bool FCatRunFishCollectionHandoffTest::RunTest(const FString& Parameters)
 	LandedSession->AttemptSnapshot.WaterRegion = Session->AttemptSnapshot.WaterRegion;
 	LandedSession->CatchFisherStableNetId = TEXT("HookerA");
 	auto* Equipment = Cat->GetEquipmentComponent();
-	for (const FName Id : {FName(TEXT("StarterRodT1")), FName(TEXT("FeatherFloat"))})
+	for (const int32 Id : {37, 9})
 		if (!Equipment->GrantEquipmentFromAuthority(FGuid::NewGuid(), Equipment->GetSnapshot().Revision, Id).bCommitted) return false;
-	if (!Equipment->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(), Equipment->GetSnapshot().Revision, TEXT("BugBait"), 1).bCommitted) return false;
+	if (!Equipment->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(), Equipment->GetSnapshot().Revision, 4, 1).bCommitted) return false;
 	if (!Equipment->Use(FGuid::NewGuid(), Equipment->GetSnapshot().Revision, Equipment->GetSnapshot().RodItemInstanceId).bCommitted) return false;
 	const auto Loadout = Equipment->GetSnapshot();
 	if (!Equipment->BeginFishingUse(LandedSession->Snapshot.FishingSessionId, Loadout.RodItemInstanceId,
-		Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId, Loadout.RodDefinitionId,
-		Loadout.BaitDefinitionId, Loadout.FloatDefinitionId, Loadout.Revision).bUseAccepted) return false;
+		Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId, Loadout.RodItemId,
+		Loadout.BaitItemId, Loadout.FloatItemId, Loadout.Revision).bUseAccepted) return false;
 	if (!TestTrue(TEXT("落地夹具先完成真咬唯一扣饵"), Equipment->CommitFishingBaitDeferred(
 		LandedSession->Snapshot.FishingSessionId).bApplied)) return false;
 	LandedSession->CastEquipment = Equipment;

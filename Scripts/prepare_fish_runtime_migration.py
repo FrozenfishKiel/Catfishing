@@ -118,10 +118,10 @@ def import_into_editor_memory(patch, unreal_module=None):
     for row in patch["fish"]:
         fish_id = row["AssetName"]
         asset = unreal_module.load_asset(f"/Game/Catfishing/Data/Fish/{fish_id}")
-        if asset is None or str(asset.get_editor_property("fish_definition_id")) in ("", "None"):
+        if asset is None or int(asset.get_editor_property("item_id")) <= 0:
             raise ValueError(f"asset missing or identity mismatch: {fish_id}")
         values = {}
-        runtime_id = str(asset.get_editor_property("fish_definition_id"))
+        runtime_id = int(asset.get_editor_property("item_id"))
         if any(existing_id == runtime_id for _, _, existing_id in loaded):
             raise ValueError(f"duplicate runtime identity: {runtime_id}")
         for source, target in bindings.items():

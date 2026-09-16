@@ -899,8 +899,8 @@ void ACatfishingPlayerController::ServerMoveInventoryItemBetweenHosts_Implementa
 // 3. 校验通过后把装备定义、实例和 Revision 原样提交给 EquipmentComponent 裁决。
 // 4. 最后统一记录结果并回送 owning client，让 UI 只消费服务器确认后的终态。
 void ACatfishingPlayerController::ServerConfigureEquipment_Implementation(const FGuid RequestId,
-	const int64 ExpectedRevision, const FName RodDefinitionId, const FName BaitDefinitionId,
-	const FName FloatDefinitionId, const FName ScoopNetDefinitionId, const FGuid RodItemInstanceId,
+	const int64 ExpectedRevision, const int32  RodItemId, const int32  BaitItemId,
+	const int32  FloatItemId, const int32  ScoopNetItemId, const FGuid RodItemInstanceId,
 	const FGuid BaitItemInstanceId, const FGuid FloatItemInstanceId, const FGuid ScoopNetItemInstanceId)
 {
 	FCatDomainCommandResult Result;
@@ -931,16 +931,16 @@ void ACatfishingPlayerController::ServerConfigureEquipment_Implementation(const 
 	else
 	{
 		Result = Equipment->ConfigureLoadoutFromAuthority(RequestId, ExpectedRevision,
-			RodDefinitionId, BaitDefinitionId, FloatDefinitionId, ScoopNetDefinitionId, NAME_None,
+			RodItemId, BaitItemId, FloatItemId, ScoopNetItemId, NAME_None,
 			RodItemInstanceId, BaitItemInstanceId, FloatItemInstanceId, ScoopNetItemInstanceId);
 	}
 	UE_LOG(LogCatfishing, Log,
 		TEXT("Event=configure_equipment Committed=%s Error=%s Revision=%lld Rod=%s RodItem=%s Bait=%s BaitItem=%s Float=%s FloatItem=%s Net=%s NetItem=%s"),
 		Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error),
-		Result.Revision, *RodDefinitionId.ToString(), *RodItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
-		*BaitDefinitionId.ToString(), *BaitItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
-		*FloatDefinitionId.ToString(), *FloatItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
-		*ScoopNetDefinitionId.ToString(), *ScoopNetItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
+		Result.Revision, *FString::FromInt(RodItemId), *RodItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		*FString::FromInt(BaitItemId), *BaitItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		*FString::FromInt(FloatItemId), *FloatItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		*FString::FromInt(ScoopNetItemId), *ScoopNetItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
 	DeliverCampCommandResultToOwningClient(Result);
 }
 

@@ -64,10 +64,10 @@ bool UCatInventoryItemDefinition::HasSemanticTag(const FGameplayTag Tag, const b
 	return bExactMatch ? Tags.HasTagExact(Tag) : Tags.HasTag(Tag);
 }
 
-// 稳定 ID 读取流程：基础库存资产直接返回自己的目录 ID；装备资产通过覆盖方法返回 EquipmentDefinitionId。
-FName UCatInventoryItemDefinition::GetInventoryDefinitionId() const
+// 数字身份读取流程：返回总表分配给该物品定义的 ItemId，不读取旧英文身份；0 表示尚未登记。
+int32  UCatInventoryItemDefinition::GetItemId() const
 {
-	return InventoryDefinitionId;
+	return ItemId;
 }
 
 // 展示名读取流程：普通库存资产直接返回库存字段；空文本由 UI 再决定是否回退到稳定 ID。
@@ -97,7 +97,7 @@ const FGameplayTagContainer& UCatInventoryItemDefinition::GetInventorySemanticTa
 // 运行目录校验流程：库存定义必须有稳定 ID 和可生成的实例类，避免商店发出无法实例化的物品。
 bool UCatInventoryItemDefinition::IsInventoryRuntimeDefinitionReady() const
 {
-	if (GetInventoryDefinitionId().IsNone() || ResolveItemInstanceClass(this) == nullptr)
+	if ((GetItemId() == 0) || ResolveItemInstanceClass(this) == nullptr)
 	{
 		return false;
 	}
@@ -154,9 +154,9 @@ int32 UCatInventoryItemDefinition::GetMaxStackCount() const
 // 堆叠等价判断流程：稳定 ID 是跨资产主键；没有 ID 时只允许同一资产对象合并，避免同类 DataAsset 串格。
 bool UCatInventoryItemDefinition::CanStackWith(const UCatInventoryItemDefinition& Other) const
 {
-	const FName ThisDefinitionId = GetInventoryDefinitionId();
-	const FName OtherDefinitionId = Other.GetInventoryDefinitionId();
-	if (!ThisDefinitionId.IsNone() && ThisDefinitionId == OtherDefinitionId)
+	const int32  ThisItemId = GetItemId();
+	const int32  OtherItemId = Other.GetItemId();
+	if (!(ThisItemId == 0) && ThisItemId == OtherItemId)
 	{
 		return true;
 	}

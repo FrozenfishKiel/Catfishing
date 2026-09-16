@@ -50,7 +50,7 @@ def serial(value):
     if isinstance(value, (unreal.Array, list, tuple)):
         return [serial(v) for v in value]
     if isinstance(value, unreal.CatBaitWeightMultiplier):
-        return dict(bait=str(value.bait_definition_id), multiplier=value.multiplier)
+        return dict(bait=value.bait_item_id, multiplier=value.multiplier)
     return str(value)
 
 
@@ -71,7 +71,7 @@ def run():
         asset = unreal.load_asset('/Game/Catfishing/Data/Equipment/Equip_Bait_' + suffix)
         if not asset:
             raise ValueError('Missing bait: ' + suffix)
-        bait_ids[name] = str(asset.get_editor_property('equipment_definition_id'))
+        bait_ids[name] = int(asset.get_editor_property('item_id'))
     dirty = {p.get_name() for p in unreal.EditorLoadingAndSavingUtils.get_dirty_content_packages()}
     plan, identities, runtime_ids = [], {}, set()
     for row in rows:
@@ -82,8 +82,8 @@ def run():
         fish = unreal.load_asset(package)
         if not isinstance(fish, unreal.CatFishDefinition) or package in dirty:
             raise ValueError('Missing/wrong type/dirty fish package: ' + package)
-        identity = str(fish.get_editor_property('fish_definition_id'))
-        if not identity or identity == 'None' or identity in runtime_ids:
+        identity = int(fish.get_editor_property('item_id'))
+        if identity <= 0 or identity in runtime_ids:
             raise ValueError('Missing/duplicate runtime ID: ' + package)
         runtime_ids.add(identity)
         identities[name] = identity
@@ -115,12 +115,12 @@ def run():
             raise ValueError('Response window outside approved range: ' + name)
         bait_values=[]
         for bait_name, runtime_bait in bait_ids.items():
-            item=unreal.CatBaitWeightMultiplier(bait_definition_id=runtime_bait,
+            item=unreal.CatBaitWeightMultiplier(bait_item_id=runtime_bait,
                                                multiplier=number(bait_rows[name][bait_name],name))
             bait_values.append(item)
         values['bait_weight_multipliers']=bait_values
         # 食用效果已退役；仅迁移成长系数，保留鱼体标定和表现引用。
-        reference_fields=['fish_definition_id','presentation_definition','thumbnail','fight_personality_id','bite_personality_id','region_ids','fight_body_geometry']
+        reference_fields=['item_id','presentation_definition','thumbnail','fight_personality_id','bite_personality_id','region_ids','fight_body_geometry']
         before={k: serial(fish.get_editor_property(k)) for k in values}
         refs={k: serial(fish.get_editor_property(k)) for k in reference_fields}
         target={k: serial(v) for k,v in values.items()}

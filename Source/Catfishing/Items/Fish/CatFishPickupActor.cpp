@@ -120,7 +120,7 @@ bool ACatFishPickupActor::InitializeFromAuthority(const FGuid InFishingSessionId
 	}
 	PresentationState.FishingSessionId = InFishingSessionId;
 	PresentationState.FishInstanceId = InFishInstanceId;
-	PresentationState.FishDefinitionId = InFishDefinition->FishDefinitionId;
+	PresentationState.ItemId = InFishDefinition->ItemId;
 	PresentationState.WeightKilograms = InWeightKilograms;
 	PresentationState.VisualScale = InVisualScale;
 	PresentationState.GroundNormal = GroundNormal.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, FVector::UpVector);
@@ -174,14 +174,14 @@ namespace CatFishPickupPresentationPrivate
 // 4. 成功后保存落地/嘴叼两套基础相对姿态，冻结落地动画到最后一帧并刷新骨骼；后续只由 RefreshCarryPresentation 选择落地或嘴叼姿态。
 void ACatFishPickupActor::RefreshFishPresentation()
 {
-	if (!FishMesh || PresentationState.FishDefinitionId.IsNone()
-		|| AppliedPresentationFishDefinitionId == PresentationState.FishDefinitionId)
+	if (!FishMesh || (PresentationState.ItemId == 0)
+		|| AppliedPresentationItemId == PresentationState.ItemId)
 	{
 		return;
 	}
 	if (GetNetMode() == NM_DedicatedServer)
 	{
-		AppliedPresentationFishDefinitionId = PresentationState.FishDefinitionId;
+		AppliedPresentationItemId = PresentationState.ItemId;
 		return;
 	}
 
@@ -189,7 +189,7 @@ void ACatFishPickupActor::RefreshFishPresentation()
 	{
 		const UCatFishCatalogSettings* Catalog = GetDefault<UCatFishCatalogSettings>();
 		const UCatFishDefinition* Definition = Catalog
-			? Catalog->FindRuntimeDefinition(PresentationState.FishDefinitionId) : nullptr;
+			? Catalog->FindRuntimeDefinition(PresentationState.ItemId) : nullptr;
 		FishPresentationDefinition = Definition ? Definition->LoadRuntimePresentationDefinition() : nullptr;
 	}
 	USkeletalMesh* Mesh = FishPresentationDefinition
@@ -205,7 +205,7 @@ void ACatFishPickupActor::RefreshFishPresentation()
 		FishMesh->SetSkeletalMeshAsset(nullptr);
 		UE_LOG(LogCatFishContainers, Warning,
 			TEXT("Event=fish_pickup_presentation_rejected FishDefinition=%s FishInstanceId=%s Pickup=%s NetMode=%s Authority=%s Presentation=%s Mesh=%s LandedAnimation=%s AnimationSkeleton=%s Reason=%s"),
-			*PresentationState.FishDefinitionId.ToString(),
+			*FString::FromInt(PresentationState.ItemId),
 			*PresentationState.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(this),
 			CatFishPickupPresentationPrivate::NetModeValue(GetNetMode()), HasAuthority() ? TEXT("true") : TEXT("false"),
 			*GetNameSafe(FishPresentationDefinition), *GetNameSafe(Mesh), *GetNameSafe(LandedAnimation),
@@ -222,10 +222,10 @@ void ACatFishPickupActor::RefreshFishPresentation()
 	// 在第一帧显示前求出冻结姿态，避免用未初始化骨骼的包围盒计算贴地高度。
 	FishMesh->TickAnimation(0.0f, false);
 	FishMesh->RefreshBoneTransforms();
-	AppliedPresentationFishDefinitionId = PresentationState.FishDefinitionId;
+	AppliedPresentationItemId = PresentationState.ItemId;
 	UE_LOG(LogCatFishContainers, Log,
 		TEXT("Event=fish_pickup_presentation_applied FishDefinition=%s FishInstanceId=%s Pickup=%s NetMode=%s Authority=%s Presentation=%s Mesh=%s Skeleton=%s LandedAnimation=%s VisualScale=%.3f State=%s"),
-		*PresentationState.FishDefinitionId.ToString(),
+		*FString::FromInt(PresentationState.ItemId),
 		*PresentationState.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(this),
 		CatFishPickupPresentationPrivate::NetModeValue(GetNetMode()), HasAuthority() ? TEXT("true") : TEXT("false"),
 		*GetNameSafe(FishPresentationDefinition), *GetNameSafe(Mesh), *GetNameSafe(Mesh->GetSkeleton()),
@@ -564,7 +564,7 @@ FCatCaptureCommitResult ACatFishPickupActor::StoreInFishGuardFromAuthority(ACont
 	Result.Committed.CaptureRequestId = RequestId;
 	Result.Committed.FishingSessionId = PresentationState.FishingSessionId;
 	Result.Committed.FishInstance.FishInstanceId = PresentationState.FishInstanceId;
-	Result.Committed.FishInstance.FishDefinitionId = PresentationState.FishDefinitionId;
+	Result.Committed.FishInstance.ItemId = PresentationState.ItemId;
 	Result.Committed.FishInstance.OwnerStableNetId = StableNetId;
 	Result.Committed.FishInstance.SourceFishingSessionId = PresentationState.FishingSessionId;
 	Result.Committed.FishInstance.WeightKilograms = PresentationState.WeightKilograms;
@@ -653,7 +653,7 @@ bool ACatFishPickupActor::CanConsumeFromAuthority(AController* RequestingControl
 	const bool bAvailableWorldFish = PresentationState.State == ECatFishPickupState::Available
 		&& !IsHidden() && (!InventoryItem || InventoryItem->GetRuntimeOwnerActor() == this);
 	return HasAuthority() && !IsActorBeingDestroyed() && !bConsumptionCommitted && bIdentityInitialized
-		&& FishDefinition && PresentationState.FishInstanceId.IsValid() && !PresentationState.FishDefinitionId.IsNone()
+		&& FishDefinition && PresentationState.FishInstanceId.IsValid() && !(PresentationState.ItemId == 0)
 		&& FMath::IsFinite(PresentationState.WeightKilograms) && PresentationState.WeightKilograms > 0.0
 		&& RequestingController && RequestingController->GetWorld() == GetWorld()
 		&& PlayerState && PlayerState->GetUniqueId().IsValid()
@@ -689,7 +689,7 @@ void ACatFishPickupActor::FinishConsumptionFromAuthority(AController* Requesting
 		Capture.CaptureRequestId = PresentationState.FishInstanceId;
 		Capture.FishingSessionId = PresentationState.FishingSessionId;
 		Capture.FishInstance.FishInstanceId = PresentationState.FishInstanceId;
-		Capture.FishInstance.FishDefinitionId = PresentationState.FishDefinitionId;
+		Capture.FishInstance.ItemId = PresentationState.ItemId;
 		Capture.FishInstance.SourceFishingSessionId = PresentationState.FishingSessionId;
 		Capture.FishInstance.OwnerStableNetId = StableNetId;
 		Capture.FishInstance.WeightKilograms = PresentationState.WeightKilograms;
@@ -700,7 +700,7 @@ void ACatFishPickupActor::FinishConsumptionFromAuthority(AController* Requesting
 	SetActorHiddenInGame(true);
 	UE_LOG(LogCatFishContainers, Log,
 		TEXT("Event=world_fish_consumed Request=%s FishInstanceId=%s Definition=%s WeightKg=%.6f Recorded=%d World=%s NetMode=%d Authority=%d LocalRole=%d"),
-		*RequestId.ToString(), *PresentationState.FishInstanceId.ToString(), *PresentationState.FishDefinitionId.ToString(),
+		*RequestId.ToString(), *PresentationState.FishInstanceId.ToString(), *FString::FromInt(PresentationState.ItemId),
 		PresentationState.WeightKilograms, bCaptureRecorded, *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole());
 	if (!Destroy())
 	{
@@ -757,7 +757,7 @@ FText ACatFishPickupActor::GetInteractionPrompt_Implementation() const
 		return FText::GetEmpty();
 	}
 	return FText::Format(NSLOCTEXT("Catfishing", "FishPickupPrompt", "叼起 {0}  {1} kg"),
-		FText::FromName(PresentationState.FishDefinitionId),
+		FText::AsNumber(PresentationState.ItemId),
 		FText::AsNumber(PresentationState.WeightKilograms));
 }
 
@@ -927,7 +927,7 @@ void ACatFishPickupActor::ArchiveCommittedCapture(const FCatCaptureCommittedResu
 		? PickerStableNetId : HookerStableNetId;
 	// 首钓判定必须在写 FishRecorded 之前问：这一份 Grant 自己就会把该鱼种记进本局事实。
 	const bool bFirstRecordOfThisSpecies = Imprint->IsFirstFishRecordForRecipient(
-		CollectionRecipientStableNetId, Committed.FishInstance.FishDefinitionId);
+		CollectionRecipientStableNetId, Committed.FishInstance.ItemId);
 	const FGuid FishRecordedGrantId = Imprint->RecordCommittedCapture(Committed,
 		CollectionRecipientStableNetId, CaptureCondition);
 	bCaptureRecorded = FishRecordedGrantId.IsValid();
@@ -935,7 +935,7 @@ void ACatFishPickupActor::ArchiveCommittedCapture(const FCatCaptureCommittedResu
 		TEXT("Event=fish_capture_archived FishInstanceId=%s Definition=%s RecipientResolved=%s RecipientIsHooker=%s "
 			"FirstRecord=%s Region=%s TimeOfDay=%s Weather=%s Granted=%s"),
 		*Committed.FishInstance.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
-		*Committed.FishInstance.FishDefinitionId.ToString(),
+		*FString::FromInt(Committed.FishInstance.ItemId),
 		CollectionRecipientStableNetId.IsEmpty() ? TEXT("false") : TEXT("true"),
 		HookerStableNetId.IsEmpty() ? TEXT("false") : TEXT("true"),
 		bFirstRecordOfThisSpecies ? TEXT("true") : TEXT("false"),
@@ -954,7 +954,7 @@ void ACatFishPickupActor::ArchiveCommittedCapture(const FCatCaptureCommittedResu
 	}
 	Candidate.EventType = FishDefinition->CaptureImprintEventId;
 	Candidate.SubjectId = Committed.FishInstance.FishInstanceId;
-	Candidate.FishDefinitionId = Committed.FishInstance.FishDefinitionId;
+	Candidate.ItemId = Committed.FishInstance.ItemId;
 	Candidate.ParticipantStableNetIds = FishingParticipantStableNetIds;
 	Candidate.ParticipantStableNetIds.AddUnique(PickerStableNetId);
 	Candidate.ParticipantStableNetIds.Sort();

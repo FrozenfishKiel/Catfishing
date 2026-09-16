@@ -218,7 +218,7 @@ namespace CatFishInventoryConsumePrivate
 		{
 			return;
 		}
-		Imprint->RecordFishKnowledge(Definition->FishDefinitionId, PlayerState->GetUniqueId()->ToString());
+		Imprint->RecordFishKnowledge(Definition->ItemId, PlayerState->GetUniqueId()->ToString());
 	}
 }
 

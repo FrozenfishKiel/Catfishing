@@ -1,4 +1,4 @@
-﻿#include "UI/Inventory/CatInventoryPageController.h"
+#include "UI/Inventory/CatInventoryPageController.h"
 
 #include "Character/CatCharacter.h"
 #include "Framework/Game/CatfishingPlayerController.h"
@@ -11,6 +11,10 @@
 #include "Logging/CatLog.h"
 #include "UI/CatUISettings.h"
 #include "UI/Inventory/CatInventoryWidget.h"
+#include "UI/Inventory/CatCampInventoryWidget.h"
+#include "UI/Collection/CatCollectionModel.h"
+#include "UI/Collection/CatCollectionPageController.h"
+#include "UI/Collection/CatFishCardWidget.h"
 #include "UI/Inventory/CatInventoryModel.h"
 #include "UI/Inventory/CatInventoryContextMenuWidget.h"
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
@@ -394,9 +398,25 @@ void UCatInventoryPageController::SetInventoryOpen(const bool bOpen)
 		}
 		BoundView->AddToViewport(10);
 		bInventoryOpen = true;
+		if (BoundView->IsA<UCatCampInventoryWidget>())
+		{
+			// 只有团队库存订阅既有图鉴 Model；个人背包和其他容器不建立追踪卡，关闭分支从同一对象移除监听。
+			ULocalPlayer* LocalPlayer = Controller->GetLocalPlayer();
+			auto* UI = LocalPlayer ? LocalPlayer->GetSubsystem<UCatLocalPlayerUISubsystem>() : nullptr;
+			auto* Collection = UI ? UI->GetCollectionPageController() : nullptr;
+			TrackingModel = Collection ? Collection->GetCollectionModel() : nullptr;
+			if (TrackingModel.IsValid()) TrackingChangedHandle = TrackingModel->OnViewStateChanged.AddUObject(this, &ThisClass::RefreshTrackedFish);
+			RefreshTrackedFish();
+		}
 		CatUIModalInputMode::Open(Controller, BoundView, ModalInputModeState);
 		return;
 	}
+	// 先撤销追踪监听和视口卡片，再释放库存页；避免关闭后图鉴变化仍重建悬浮卡。
+	if (TrackingModel.IsValid()) TrackingModel->OnViewStateChanged.Remove(TrackingChangedHandle);
+	TrackingChangedHandle.Reset();
+	TrackingModel.Reset();
+	if (TrackedFishCard) TrackedFishCard->RemoveFromParent();
+	TrackedFishCard = nullptr;
 	CancelInventoryContextMenu(false);
 	PendingInventoryActionRequestId.Invalidate();
 	if (ULocalPlayer* LocalPlayer = Controller ? Controller->GetLocalPlayer() : nullptr)
@@ -452,4 +472,35 @@ void UCatInventoryPageController::RemoveInventoryInput()
 	BoundInventoryInputComponent.Reset();
 	InventoryInputBindingHandle = 0;
 	AppliedInventoryToggleAction = nullptr;
+}
+
+// 库存追踪刷新流程：只读图鉴页面已有 Model；未就绪、无追踪或非团队库存时隐藏，不为个人背包和鱼护增加卡片。
+// 位置按视口左下角锚定，数据始终由共享鱼卡绘制，关闭库存的主流程负责移除和取消订阅。
+void UCatInventoryPageController::RefreshTrackedFish()
+{
+	const auto* Model = TrackingModel.Get();
+	const FCatCollectionEntryView* Entry = nullptr;
+	if (bInventoryOpen && BoundView && BoundView->IsA<UCatCampInventoryWidget>() && Model && Model->GetViewState().bAvailable)
+	{
+		const auto& State = Model->GetViewState();
+		Entry = State.Entries.FindByPredicate([&State](const auto& Fish) { return Fish.ItemId == State.TrackedItemId && Fish.bRecordedUnlocked; });
+	}
+	if (!Entry)
+	{
+		if (TrackedFishCard) TrackedFishCard->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+	if (!TrackedFishCard)
+	{
+		TrackedFishCard = CreateWidget<UCatFishCardWidget>(BoundPlayerController.Get());
+		if (!TrackedFishCard) return;
+		TrackedFishCard->AddToViewport(11);
+		TrackedFishCard->SetDesiredSizeInViewport(FVector2D(280, 300));
+		// 设置尺寸和位置都会把锚点重置到左上角；先完成偏移，再锚定左下角，避免负 Y 把整张卡移出屏幕。
+		TrackedFishCard->SetPositionInViewport(FVector2D(28, -28), false);
+		TrackedFishCard->SetAnchorsInViewport(FAnchors(0, 1));
+		TrackedFishCard->SetAlignmentInViewport(FVector2D(0, 1));
+	}
+	TrackedFishCard->RenderCard(*Entry, true);
+	TrackedFishCard->SetVisibility(ESlateVisibility::HitTestInvisible);
 }

@@ -22,16 +22,23 @@ struct CATFISHING_API FCatFishEligibilityPolicy
 	static bool PassesActivePlayerCount(const UCatFishDefinition& Definition, int32 ActivePlayerCount);
 };
 
+/** 本鱼对某种鱼饵的选鱼权重配置；策划按物品总表编号登记，选鱼读取倍率而非改写基础权重。 */
 USTRUCT(BlueprintType)
 struct FCatBaitWeightMultiplier
 {
 	GENERATED_BODY()
 
+	/** 这条倍率配置关联的鱼饵种类编号；策划填写、鱼定义校验和选鱼读取，0 表示未配置且不能通过定义校验。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly)
-	FName BaitDefinitionId = NAME_None;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly)
+	int32  BaitItemId = 0;
+	/** 使用该鱼饵时乘到本鱼权重上的倍率；策划填写、选鱼读取，必须有限且大于 0，1 表示不改变权重。 */
+UPROPERTY(EditDefaultsOnly, BlueprintReadOnly)
 	double Multiplier = 0.0;
+
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
+	FName BaitDefinitionId = NAME_None;
 };
 
 USTRUCT()
@@ -43,7 +50,8 @@ struct FCatFishSelectionContext
 	FCatChumSample ChumSample;
 	ECatEnvironmentTimeOfDay TimeOfDay = ECatEnvironmentTimeOfDay::Unknown;
 	ECatEnvironmentWeather Weather = ECatEnvironmentWeather::Unknown;
-	FName BaitDefinitionId = NAME_None;
+	/** 原抛竿者当前鱼饵的数字物品编号；会话组装输入、选鱼读取，0 无法匹配正式倍率配置而使用中性倍率。 */
+	int32  BaitItemId = 0;
 	int32 ActivePlayerCount = 0;
 	double CombinedFishingStrength = 0.0;
 	double CombinedFightStamina = 0.0;
@@ -63,7 +71,8 @@ struct FCatFishSelectionResult
 	int32 SelectedChumClass = INDEX_NONE;
 	double SelectedChumClassProbability = 0.0;
 	bool bSelected = false;
-	FName FishDefinitionId = NAME_None;
+	/** 本次选中的鱼种数字物品编号；选鱼成功时写入，会话据此解析鱼定义，默认 0 表示尚无选中鱼种，不是实例 GUID。 */
+	int32  ItemId = 0;
 	double WeightKilograms = 0.0;
 	/** 与 WeightKilograms 同一次确定性抽样对应的鱼力量（＝重量 × 该鱼力量系数K），进入搏斗后只再叠加完美中鱼倍率。 */
 	double BaseFishStrength = 0.0;

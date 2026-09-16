@@ -1,4 +1,4 @@
-﻿#include "Fishing/Integration/CatFishingCommandComponent.h"
+#include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Fishing/Integration/CatFishingResolutionSubsystem.h"
 #include "Items/Fish/CatFishPickupActor.h"
 
@@ -142,13 +142,13 @@ FCatDomainCommandResult UCatFishingCommandComponent::PlaceRodFromInventoryUseOnA
 // 3. 最后由服务器激活该 Spec；计时、等待松开和结束提交全部留在 AbilityTask，不在命令组件保存第二份会话状态。
 FCatDomainCommandResult UCatFishingCommandComponent::BeginChumUseFromInventoryOnAuthority(
 	APlayerController* RequestingController, const FCatInventoryItemUseContext& UseContext,
-	const FGuid ChumItemInstanceId, const FName ChumDefinitionId)
+	const FGuid ChumItemInstanceId, const int32  ChumItemId)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = UseContext.RequestId;
 	if (!RequestingController || RequestingController != GetOwner() || !RequestingController->HasAuthority()
 		|| !UseContext.RequestId.IsValid() || !UseContext.SourceInventory || UseContext.InventorySlotIndex == INDEX_NONE
-		|| !ChumItemInstanceId.IsValid() || ChumDefinitionId.IsNone())
+		|| !ChumItemInstanceId.IsValid() || (ChumItemId == 0))
 	{
 		Result.Error = ECatDomainCommandError::InvalidPayload;
 		return Result;
@@ -159,7 +159,7 @@ FCatDomainCommandResult UCatFishingCommandComponent::BeginChumUseFromInventoryOn
 		? UseContext.SourceInventory->GetInventoryEntryAtSlot(UseContext.InventorySlotIndex) : nullptr;
 	UCatInventoryItemInstance* SourceItem = SourceEntry ? SourceEntry->Instance : nullptr;
 	if (!AbilitySystem || !SourceItem || SourceItem->GetItemInstanceId() != ChumItemInstanceId
-		|| SourceItem->GetItemDefinitionId() != ChumDefinitionId)
+		|| SourceItem->GetItemId() != ChumItemId)
 	{
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Result;
@@ -181,13 +181,13 @@ FCatDomainCommandResult UCatFishingCommandComponent::BeginChumUseFromInventoryOn
 		Result.Error = Result.bCommitted ? ECatDomainCommandError::None : ECatDomainCommandError::InvalidPhase;
 		if (Result.bCommitted)
 		{
-			UE_LOG(LogCatFishing, Log, TEXT("Event=chum_source_ability_begin RequestId=%s InstanceId=%s DefinitionId=%s World=%s Authority=1 Result=Activated"),
-				*UseContext.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *ChumItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *ChumDefinitionId.ToString(), *GetNameSafe(GetWorld()));
+			UE_LOG(LogCatFishing, Log, TEXT("Event=chum_source_ability_begin RequestId=%s InstanceId=%s ItemId=%s World=%s Authority=1 Result=Activated"),
+				*UseContext.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *ChumItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *FString::FromInt(ChumItemId), *GetNameSafe(GetWorld()));
 		}
 		else
 		{
-			UE_LOG(LogCatFishing, Warning, TEXT("Event=chum_source_ability_begin RequestId=%s InstanceId=%s DefinitionId=%s World=%s Authority=1 Result=Rejected"),
-				*UseContext.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *ChumItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *ChumDefinitionId.ToString(), *GetNameSafe(GetWorld()));
+			UE_LOG(LogCatFishing, Warning, TEXT("Event=chum_source_ability_begin RequestId=%s InstanceId=%s ItemId=%s World=%s Authority=1 Result=Rejected"),
+				*UseContext.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *ChumItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *FString::FromInt(ChumItemId), *GetNameSafe(GetWorld()));
 		}
 		return Result;
 	}
@@ -257,18 +257,18 @@ FCatDomainCommandResult UCatFishingCommandComponent::EndChumUseFromInventoryOnAu
 // 3. 最后把正式 PlaceChum 回执映射回 Use 合同；没有回执时视为依赖不可用，不猜测成功。
 FCatDomainCommandResult UCatFishingCommandComponent::CommitChumUseFromAbilityOnAuthority(
 	APlayerController* RequestingController, const FCatInventoryItemUseContext& UseContext,
-	const FGuid ChumItemInstanceId, const FName ChumDefinitionId, const double HeldSeconds)
+	const FGuid ChumItemInstanceId, const int32  ChumItemId, const double HeldSeconds)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = UseContext.RequestId;
 	if (!RequestingController || RequestingController != GetOwner() || !RequestingController->HasAuthority()
 		|| !UseContext.RequestId.IsValid() || !UseContext.SourceInventory || !ChumItemInstanceId.IsValid()
-		|| ChumDefinitionId.IsNone() || !FMath::IsFinite(HeldSeconds) || HeldSeconds < 0.0)
+		|| (ChumItemId == 0) || !FMath::IsFinite(HeldSeconds) || HeldSeconds < 0.0)
 	{
 		Result.Error = ECatDomainCommandError::InvalidPayload;
 		return Result;
 	}
-	ThrowChumFromChargeOnAuthority(RequestingController, UseContext, ChumItemInstanceId, ChumDefinitionId, HeldSeconds);
+	ThrowChumFromChargeOnAuthority(RequestingController, UseContext, ChumItemInstanceId, ChumItemId, HeldSeconds);
 	if (FCatPlaceChumResult ChumResult; TryGetPlaceChumResult(UseContext.RequestId, ChumResult))
 	{
 		Result.bCommitted = ChumResult.bCommitted;
@@ -1617,7 +1617,7 @@ void UCatFishingCommandComponent::BeginCastFromViewOnAuthority(APlayerController
 // 服务器打窝流程：按按住时长算蓄力 → 与客户端预览同一套弹道预测得到落点 → 重读 Begin 固定的窝料槽位与实例 → 交给 PlaceChum 做射程、夹角、视线、水域和正式库存提交。
 void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerController* Controller,
 	const FCatInventoryItemUseContext& UseContext, const FGuid ChumItemInstanceId,
-	const FName ChumDefinitionId, const double HeldSeconds)
+	const int32  ChumItemId, const double HeldSeconds)
 {
 	FCatPlaceChumResult Result;
 	Result.RequestId = UseContext.RequestId;
@@ -1638,7 +1638,7 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 		? Cast<UCatEquipmentDefinition>(Instance->GetItemDefinition()) : nullptr;
 	if (!Entry || !Instance || Entry->StackCount < ChumQuantity
 		|| Instance->GetItemInstanceId() != ChumItemInstanceId
-		|| Instance->GetItemDefinitionId() != ChumDefinitionId
+		|| Instance->GetItemId() != ChumItemId
 		|| !Definition || !Definition->IsRuntimeDefinitionReady()
 		|| !Definition->CanServeChumPlacement() || !Instance->ConsumesInventoryQuantityOnUse())
 	{
@@ -1647,8 +1647,8 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 			TEXT("Event=chum_throw_fixed_item_rejected Request=%s Slot=%d RequiredQuantity=%d ExpectedItem=%s ActualItem=%s ExpectedDefinition=%s ActualDefinition=%s"),
 			*UseContext.RequestId.ToString(EGuidFormats::DigitsWithHyphens), UseContext.InventorySlotIndex, ChumQuantity,
 			*ChumItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
-			*GetNameSafe(Instance), *ChumDefinitionId.ToString(),
-			Instance ? *Instance->GetItemDefinitionId().ToString() : TEXT("None"));
+			*GetNameSafe(Instance), *FString::FromInt(ChumItemId),
+			Instance ? *FString::FromInt(Instance->GetItemId()) : TEXT("None"));
 		DeliverPlaceChumResultFromAuthority(Result);
 		return;
 	}
@@ -1671,11 +1671,11 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 	Command.RequestId = UseContext.RequestId;
 	Command.ExpectedWaterRegionHandle = Region;
 	Command.ChumItemInstanceId = ChumItemInstanceId;
-	Command.ChumDefinitionId = ChumDefinitionId;
+	Command.ChumItemId = ChumItemId;
 	Command.Quantity = ChumQuantity;
 	Command.ClientCandidateWorldPoint = Landing;
 	UE_LOG(LogCatFishing, Log, TEXT("Event=chum_throw Held=%.2f Alpha=%.2f Landing=%s Chum=%s ChumItem=%s"),
-		HeldSeconds, Alpha, *Landing.ToString(), *ChumDefinitionId.ToString(),
+		HeldSeconds, Alpha, *Landing.ToString(), *FString::FromInt(ChumItemId),
 		*ChumItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
 	DeliverPlaceChumResultFromAuthority(Service->PlaceChum(Controller, Command));
 }

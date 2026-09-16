@@ -11,7 +11,13 @@ struct FCatQuickbarHeldSlot
 	GENERATED_BODY()
 	UPROPERTY() int32 SlotIndex = INDEX_NONE;
 	UPROPERTY() FGuid ItemInstanceId;
-	UPROPERTY() FName DefinitionId;
+	/** 保留格中的物品种类编号；背包维护占位、恢复手持时读取，零表示尚无物品。 */
+	UPROPERTY() int32 ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
+	FName DefinitionId = NAME_None;
+
 	UPROPERTY() bool bInUse = false;
 };
 

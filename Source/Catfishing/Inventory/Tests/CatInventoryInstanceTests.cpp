@@ -1,4 +1,4 @@
-﻿#if WITH_DEV_AUTOMATION_TESTS
+#if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
@@ -22,7 +22,7 @@ namespace CatInventoryInstanceTests
 	UCatInventoryItemDefinition* CreateOrdinaryDefinition()
 	{
 		UCatInventoryItemDefinition* Definition = NewObject<UCatInventoryItemDefinition>(GetTransientPackage());
-		Definition->InventoryDefinitionId = TEXT("InventoryInstanceBoundaryItem");
+		Definition->ItemId = 1609172;
 		Definition->InventoryMaxStackCount = 1;
 		return Definition;
 	}
@@ -31,7 +31,7 @@ namespace CatInventoryInstanceTests
 	UCatEquipmentDefinition* CreatePickupEquipmentDefinition()
 	{
 		UCatEquipmentDefinition* Definition = NewObject<UCatEquipmentDefinition>(GetTransientPackage());
-		Definition->EquipmentDefinitionId = TEXT("EquipmentPickupBoundaryItem");
+		Definition->ItemId = 1810425;
 		Definition->FunctionalRouteId = TEXT("EquipmentPickupBoundaryRoute");
 		Definition->bEnableRuntimeDefinition = true;
 		return Definition;
@@ -230,7 +230,7 @@ bool FCatEquipmentItemPickupBoundaryTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("正式背包具有可用容量"), SlotCapacity > 0)) return false;
 	UCatInventoryItemDefinition* FillerDefinition = CatInventoryInstanceTests::CreateOrdinaryDefinition();
 	if (!TestTrue(TEXT("预先填满正式背包"), Inventory->AddItemDefinition(FillerDefinition, SlotCapacity))) return false;
-	TestEqual(TEXT("每格都被不可堆叠物品占用"), Inventory->CountVisibleInventoryQuantityByDefinitionId(FillerDefinition->GetInventoryDefinitionId()), SlotCapacity);
+	TestEqual(TEXT("每格都被不可堆叠物品占用"), Inventory->CountVisibleInventoryQuantityByItemId(FillerDefinition->GetItemId()), SlotCapacity);
 	const FCatInventoryEntry* FillerEntry = Inventory->GetInventoryEntryAtSlot(0);
 	if (!TestNotNull(TEXT("满包格存在填充物"), FillerEntry) || !FillerEntry->Instance) return false;
 	UCatInventoryItemInstance* FillerInstance = FillerEntry->Instance;
@@ -238,7 +238,7 @@ bool FCatEquipmentItemPickupBoundaryTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("满包拾取被正式库存拒绝"), ICatInteractable::Execute_Interact(Pickup, Controller, FGuid::NewGuid()));
 	TestTrue(TEXT("满包失败保留世界物"), IsValid(Pickup) && !Pickup->IsActorBeingDestroyed());
 	TestTrue(TEXT("满包失败不产生装备实例"),
-		Inventory->CountVisibleInventoryQuantityByDefinitionId(EquipmentDefinition->GetInventoryDefinitionId()) == 0);
+		Inventory->CountVisibleInventoryQuantityByItemId(EquipmentDefinition->GetItemId()) == 0);
 
 	Inventory->RemoveItemInstance(FillerInstance);
 	if (!TestTrue(TEXT("释放空位后世界物仍可交互"), ICatInteractable::Execute_CanInteract(Pickup, Controller))) return false;
@@ -256,7 +256,7 @@ bool FCatEquipmentItemPickupBoundaryTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("库存变更回调只重入一次拾取"), ReentrantAttemptCount, 1);
 	TestFalse(TEXT("重入拾取被世界物占用状态拒绝"), bReentrantPickupResult);
 	TestEqual(TEXT("成功拾取只入账一件装备"),
-		Inventory->CountVisibleInventoryQuantityByDefinitionId(EquipmentDefinition->GetInventoryDefinitionId()), 1);
+		Inventory->CountVisibleInventoryQuantityByItemId(EquipmentDefinition->GetItemId()), 1);
 	// 2026-09-13 修：原来这里断言「成功拾取销毁世界物」，那是旧生命周期。
 	// 现行链路把原 Actor 交给库存实例保管（CatItem.cpp:126 交接、:154 保留并关掉物理／碰撞／可见性），
 	// 只有没有实例保留它的批次才走 :160 的 Destroy——因为再次丢弃要复用同一个 Actor
@@ -291,7 +291,7 @@ bool FCatInventoryUseAtomicCallbackTest::RunTest(const FString& Parameters)
 	AActor* Owner = WorldWrapper.GetTestWorld()->SpawnActor<AActor>();
 	UCatInventoryComponent* Inventory = CatInventoryInstanceTests::AddInventoryComponent(*Owner, 2);
 	UCatFishDefinition* Definition = NewObject<UCatFishDefinition>();
-	Definition->FishDefinitionId = TEXT("UseCallbackFish");
+	Definition->ItemId = 1183317;
 	UCatFishInventoryItemInstance* Fish = NewObject<UCatFishInventoryItemInstance>(Owner);
 	Fish->SetItemDefinition(Definition);
 	Fish->SetRuntimeOwnerActor(Owner);

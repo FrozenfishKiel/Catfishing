@@ -89,7 +89,7 @@ public:
 	bool HasSemanticTag(FGameplayTag Tag, bool bExactMatch = false) const;
 
 	/** 库存目录稳定 ID；商店、存档和 Equipment 读模型都用它对齐同一种物品。 */
-	virtual FName GetInventoryDefinitionId() const;
+	virtual int32  GetItemId() const;
 
 	/** 玩家可见名称；UI 和日志通过这层虚拟读取普通库存资产与装备资产。 */
 	virtual FText GetInventoryDisplayName() const;
@@ -128,9 +128,14 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Inventory|Actions")
 	TArray<FCatInventoryActionDefinition> InventoryActions;
 
-	/** 物品稳定 ID；普通库存资产直接写它，装备资产会通过覆盖方法返回自己的 EquipmentDefinitionId。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Identity")
+	/** 总表分配的永久数字身份；迁移或策划写入、数字目录查询和校验读取，必须与总表一致，0 表示尚未登记。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Identity", meta = (ClampMin = "0"))
+	int32 ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName InventoryDefinitionId = NAME_None;
+
 
 	/** 玩家可见名称；普通库存资产直接写它，装备资产会通过覆盖方法返回自己的 DisplayName。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation")

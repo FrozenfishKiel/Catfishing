@@ -146,7 +146,7 @@ bool FCatFishingServiceRodOperationsPreserveMovementTest::RunTest(const FString&
 
 	Character->SetPlayerState(PlayerState);
 	TestTrue(TEXT("鱼竿以当前角色占据主位初始化"), Rod->InitializeAuthoritativeIdentity(
-		FGuid::NewGuid(), FGuid::NewGuid(), TEXT("Rod"), TEXT("Skin"), PlayerState, PlayerState, true, false));
+		FGuid::NewGuid(), FGuid::NewGuid(), 1365541, TEXT("Skin"), PlayerState, PlayerState, true, false));
 	TestTrue(TEXT("部署鱼竿登记成功"), Fishing->RegisterDeployedRod(PlayerState, Rod));
 	TestTrue(TEXT("窗口清理契约明确发布本人操作位"),Rod->SetPrimaryOperatorFromAuthority(PlayerState,Rod->GetPresentationState().RodActorRevision));
 	UCharacterMovementComponent* Movement = Character->GetCharacterMovement();
@@ -206,7 +206,7 @@ bool FCatFishingHeldFacingFollowsControlRotationTest::RunTest(const FString& Par
 	Controller->UpdateRotation(1.0f/60.0f);
 	TestEqual(TEXT("free view submits physical motor intent"),Body->GetViewIntent().Yaw,95.0,1.e-6);
 	TestTrue(TEXT("input observation cannot teleport body orientation"),Body->GetBody()->GetComponentTransform().Equals(BodyBefore,1.e-8));
-	if (!Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(),FGuid::NewGuid(),TEXT("FacingRod"),NAME_None,Player,Player,true,false)
+	if (!Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(),FGuid::NewGuid(),1739981,NAME_None,Player,Player,true,false)
 		|| !Fishing->RegisterDeployedRod(Player,Rod)
 		|| !Rod->SetPrimaryOperatorFromAuthority(Player,Rod->GetPresentationState().RodActorRevision)) return false;
 	Character->Jump(); Controller->StartJump();
@@ -270,9 +270,9 @@ bool FCatFishingServiceRodBoundSessionRoutingTest::RunTest(const FString& Parame
 	const FGuid FirstRodItemInstanceId = FGuid::NewGuid();
 	const FGuid SecondRodItemInstanceId = FGuid::NewGuid();
 	TestTrue(TEXT("第一根竿以玩家占据主位初始化"), FirstRod->InitializeAuthoritativeIdentity(
-		FirstRodId, FirstRodItemInstanceId, TEXT("RodA"), TEXT("SkinA"), PlayerState, PlayerState, true, false));
+		FirstRodId, FirstRodItemInstanceId, 1805133, TEXT("SkinA"), PlayerState, PlayerState, true, false));
 	TestTrue(TEXT("第二根竿以空主位初始化"), SecondRod->InitializeAuthoritativeIdentity(
-		SecondRodId, SecondRodItemInstanceId, TEXT("RodB"), TEXT("SkinB"), PlayerState, nullptr, true, false));
+		SecondRodId, SecondRodItemInstanceId, 1610871, TEXT("SkinB"), PlayerState, nullptr, true, false));
 	TestTrue(TEXT("登记第一根竿"), Fishing->RegisterDeployedRod(PlayerState, FirstRod));
 	TestTrue(TEXT("登记第二根竿"), Fishing->RegisterDeployedRod(PlayerState, SecondRod));
 	TestTrue(TEXT("首竿的主控投影明确属于所有者"),FirstRod->SetPrimaryOperatorFromAuthority(PlayerState,FirstRod->GetPresentationState().RodActorRevision));

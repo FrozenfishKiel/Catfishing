@@ -30,7 +30,12 @@ struct FCatFishInstance
 
 	/** 真实鱼表资产中的稳定定义 ID；没有定义时不创建实例。 */
 	UPROPERTY(SaveGame, BlueprintReadOnly)
+	int32  ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName FishDefinitionId = NAME_None;
+
 
 	/** 鱼实例的服务器私有捕获者 StableNetId；仅权威领域与存档读写，RepSkip 排除 FastArray 嵌套复制，不向客户端暴露身份。 */
 	UPROPERTY(SaveGame, NotReplicated)
@@ -123,7 +128,7 @@ struct FCatCaptureCommitCommand
 	FGuid FishInstanceId;
 
 	/** 服务器已解析并通过 runtime gate 的鱼种稳定 ID。 */
-	FName FishDefinitionId = NAME_None;
+	int32  ItemId = 0;
 
 	/** 嘴叼鱼要写入的当前交互地面鱼护 ID；共享鱼缸必须走后续 Transfer。 */
 	FGuid TargetContainerId;

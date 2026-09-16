@@ -106,7 +106,8 @@ public:
 
 	/** 检查该资产是否足以进入运行时捕获与容器事务；任一必需字段 Unset 都返回 false。 */
 	bool IsRuntimeDefinitionReady() const;
-	double FindBaitMultiplierOrNeutral(FName BaitDefinitionId) const;
+	/** 选鱼时按鱼饵的数字物品编号读取本鱼的权重倍率；未配置该鱼饵时返回中性倍率 1.0，不修改配置。 */
+	double FindBaitMultiplierOrNeutral(int32  BaitItemId) const;
 
 	/** 判断该鱼是否具备有限且为正的食用成长系数；进食链在扣鱼前查询，实际重量与运行定义仍由后续预检验证。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Fish")
@@ -131,9 +132,6 @@ public:
 	/** 解析本鱼直接引用且合同完整的表现定义；不会扫描目录或按 ID 查询第二张表。 */
 	UCatFishPresentationDefinition* LoadRuntimePresentationDefinition() const;
 
-	/** 鱼物品稳定 ID 直接复用鱼种稳定 ID；库存、商店和保存不会维护平行鱼物品 ID。 */
-	virtual FName GetInventoryDefinitionId() const override;
-
 	/** 鱼物品展示名直接复用鱼种展示名；UI 不需要为鱼再查第二份物品表。 */
 	virtual FText GetInventoryDisplayName() const override;
 
@@ -157,11 +155,12 @@ public:
 	/** 不允许两条鱼按定义合并；同鱼种不同个体也必须保持两个实例。 */
 	virtual bool CanStackWith(const UCatInventoryItemDefinition& Other) const override;
 
-	/** 鱼种稳定 ID；FishInstance、图鉴候选和日志只引用该值，不把资产对象当永久身份。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Identity")
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName FishDefinitionId = NAME_None;
 
-	/** 玩家可见鱼名；鱼护格、图鉴和提示优先读取它，未配置时回退到 FishDefinitionId。 */
+
+	/** 玩家可见鱼名；鱼护格、图鉴和提示优先读取它，未配置时回退到 ItemId。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation")
 	FText DisplayName;
 
@@ -175,7 +174,7 @@ public:
 
 	/**
 	 * 本鱼唯一的 Mesh / Skeleton / AnimBP / 动画资源入口。
-	 * 运行时表现不得绕过该引用按 FishDefinitionId 维护平行映射。
+	 * 运行时表现不得绕过该引用按 ItemId 维护平行映射。
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation")
 	TSoftObjectPtr<UCatFishPresentationDefinition> PresentationDefinition;

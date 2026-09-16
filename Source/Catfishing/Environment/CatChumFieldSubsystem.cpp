@@ -113,7 +113,7 @@ FCatPrepareChumFieldResult UCatChumFieldSubsystem::PrepareField(const FCatPrepar
 		return MakePrepareError(ECatChumFieldError::InvalidIdentity);
 	}
 	if (!Request.Command.RequestId.IsValid() || !Request.Command.ExpectedWaterRegionHandle.IsValid()
-		|| Request.Command.ChumDefinitionId.IsNone() || Request.Command.Quantity <= 0
+		|| (Request.Command.ChumItemId == 0) || Request.Command.Quantity <= 0
 		|| !FMath::IsFinite(Request.ServerTime)
 		|| !CatChumFieldSubsystemPrivate::IsFiniteVector(Request.ServerCorrectedCenter))
 	{
@@ -199,7 +199,7 @@ FCatPrepareChumFieldResult UCatChumFieldSubsystem::PrepareField(const FCatPrepar
 	Pending.RawContribution = RawContribution; // 记住占用量，Abort 时需要按这个数值回滚配额
 	Pending.State.FieldId = FieldId;
 	Pending.State.WaterRegion = Water.WaterRegion;
-	Pending.State.ChumDefinitionId = Request.Command.ChumDefinitionId;
+	Pending.State.ChumItemId = Request.Command.ChumItemId;
 	Pending.State.CenterWorldPoint = Water.WaterSurfaceWorldPoint; // 用服务器查询到的贴水面坐标，而非客户端原始落点
 	Pending.State.Influence = MoveTemp(RuntimeInfluence);
 	Pending.State.StartServerTime = Request.ServerTime;
@@ -219,7 +219,7 @@ FCatPrepareChumFieldResult UCatChumFieldSubsystem::PrepareField(const FCatPrepar
 		TEXT("Event=chum_field_prepared RequestId=%s FieldId=%s Region=%s Definition=%s Quantity=%d BaseRadiusCm=%.2f EffectiveRadiusCm=%.2f AreaMultiplier=%.3f StartServerTime=%.3f ExpireServerTime=%.3f"),
 		*Request.Command.RequestId.ToString(EGuidFormats::DigitsWithHyphensLower),
 		*FieldId.ToString(EGuidFormats::DigitsWithHyphensLower), *Water.WaterRegion.RegionId.ToString(),
-		*Request.Command.ChumDefinitionId.ToString(), Request.Command.Quantity,
+		*FString::FromInt(Request.Command.ChumItemId), Request.Command.Quantity,
 		DefinitionRadiusCentimeters, Pending.State.Influence.RadiusCentimeters,
 		Settings->InfluenceAreaMultiplier, Pending.State.StartServerTime, Pending.State.ExpireServerTime);
 	return Result;

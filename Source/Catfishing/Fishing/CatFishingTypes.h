@@ -72,7 +72,12 @@ struct FCatFishSelectionCommitResult
 {
 	GENERATED_BODY()
 	UPROPERTY(BlueprintReadOnly) ECatFishSelectionResolution Resolution = ECatFishSelectionResolution::None;
-	UPROPERTY(BlueprintReadOnly) FName FishDefinitionId = NAME_None;
+	UPROPERTY(BlueprintReadOnly) int32  ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
+	FName FishDefinitionId = NAME_None;
+
 	UPROPERTY(BlueprintReadOnly) ECatDomainCommandError Error = ECatDomainCommandError::DependencyUnavailable;
 };
 
@@ -99,9 +104,24 @@ struct FCatFishingAttemptSnapshot
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<ACatFishingRodActor> RodActor = nullptr;
 	/** 本次抛竿绑定的鱼竿物品实例；它来自部署 Actor，用于诊断和后续实例状态回写。 */
 	UPROPERTY(BlueprintReadOnly) FGuid RodItemInstanceId;
-	UPROPERTY(BlueprintReadOnly) FName RodDefinitionId = NAME_None;
-	UPROPERTY(BlueprintReadOnly) FName FloatDefinitionId = NAME_None;
-	UPROPERTY(BlueprintReadOnly) FName BaitDefinitionId = NAME_None;
+	UPROPERTY(BlueprintReadOnly) int32  RodItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
+	FName RodDefinitionId = NAME_None;
+
+	UPROPERTY(BlueprintReadOnly) int32  FloatItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
+	FName FloatDefinitionId = NAME_None;
+
+	UPROPERTY(BlueprintReadOnly) int32  BaitItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
+	FName BaitDefinitionId = NAME_None;
+
 	UPROPERTY(BlueprintReadOnly) int64 EquipmentReservationRevision = 0;
 	UPROPERTY(BlueprintReadOnly) int64 RodActorRevision = 0;
 	UPROPERTY(BlueprintReadOnly) FVector ServerCorrectedLandingWorldPoint = FVector::ZeroVector;
@@ -181,7 +201,12 @@ struct FCatFishingSessionSnapshot
 
 	/** 当前鱼种稳定 ID；表现和图鉴候选据此查询 Data，不持资产指针。 */
 	UPROPERTY(BlueprintReadOnly)
+	int32  ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName FishDefinitionId = NAME_None;
+
 
 	/** 本次服务器实际抽到的鱼重量；力量、视觉和捕获结果都使用这一份个体事实。 */
 	UPROPERTY(BlueprintReadOnly)

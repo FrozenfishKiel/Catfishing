@@ -171,8 +171,8 @@ namespace CatInventoryQuickbarUseTests
 			{
 				return true;
 			}
-			FirstChumSlot = BackPack->FindFirstInventorySlotIndexByDefinitionId(TEXT("BugChum"));
-			SecondChumSlot = BackPack->FindFirstInventorySlotIndexByDefinitionId(TEXT("FermentedGrainChum"));
+			FirstChumSlot = BackPack->FindFirstInventorySlotIndexByItemId(5);
+			SecondChumSlot = BackPack->FindFirstInventorySlotIndexByItemId(10);
 			const FCatInventoryEntry* FirstChum = BackPack->GetInventoryEntryAtSlot(FirstChumSlot);
 			const FCatInventoryEntry* SecondChum = BackPack->GetInventoryEntryAtSlot(SecondChumSlot);
 			if (!Test->TestTrue(TEXT("formal chum entries resolve to distinct live instances"),

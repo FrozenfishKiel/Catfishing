@@ -312,12 +312,12 @@ FCatShopEntryView UCatShopModel::MakeEntryView(const FCatShopCatalogEntry& Entry
 	const UCatShopInventoryComponent* ShopInventory = BoundShopInventory.Get();
 	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
 	const UCatInventoryItemDefinition* Definition =
-		InventorySettings ? InventorySettings->FindRuntimeDefinition(Entry.DefinitionId) : nullptr;
+		InventorySettings ? InventorySettings->FindRuntimeDefinition(Entry.ItemId) : nullptr;
 	const FCatShopStockSnapshot* Stock = bEconomyAvailable && ShopInventory
 		? FindPublicStockSnapshot(Economy, ShopInventory->GetShopInventoryId(), Entry.EntryId) : nullptr;
 	FCatShopEntryView View;
 	View.EntryId = Entry.EntryId;
-	View.DefinitionId = Entry.DefinitionId;
+	View.ItemId = Entry.ItemId;
 	View.DisplayCategoryId = Entry.DisplayCategoryId;
 	View.DisplayCategoryNameText = !Entry.DisplayCategoryNameOverride.IsEmpty()
 		? Entry.DisplayCategoryNameOverride
@@ -340,8 +340,8 @@ FCatShopEntryView UCatShopModel::MakeEntryView(const FCatShopCatalogEntry& Entry
 		{
 			ReportedMissingIconEntryIds.Add(Entry.EntryId);
 			UE_LOG(LogCatUI, Warning,
-				TEXT("Event=ui_shop_icon_missing EntryId=%s DefinitionId=%s HasDefinition=%d"),
-				*Entry.EntryId.ToString(), *Entry.DefinitionId.ToString(), Definition != nullptr ? 1 : 0);
+				TEXT("Event=ui_shop_icon_missing EntryId=%s ItemId=%s HasDefinition=%d"),
+				*Entry.EntryId.ToString(), *FString::FromInt(Entry.ItemId), Definition != nullptr ? 1 : 0);
 		}
 	}
 	else
@@ -352,7 +352,7 @@ FCatShopEntryView UCatShopModel::MakeEntryView(const FCatShopCatalogEntry& Entry
 		? Entry.DisplayNameOverride
 		: (Definition && !Definition->GetInventoryDisplayName().IsEmpty()
 			? Definition->GetInventoryDisplayName()
-			: FText::FromName(Entry.DefinitionId.IsNone() ? Entry.EntryId : Entry.DefinitionId));
+			: (Entry.ItemId == 0 ? FText::FromName(Entry.EntryId) : FText::AsNumber(Entry.ItemId)));
 	View.DescriptionText = !Entry.DescriptionOverride.IsEmpty()
 		? Entry.DescriptionOverride
 		: (Definition ? Definition->GetInventoryDescription() : FText());
@@ -453,7 +453,7 @@ void UCatShopModel::BuildCartViewState(FCatShopViewState& InOutState) const
 				*EntryId.ToString(), CartCount));
 			continue;
 		}
-		CartLine.DefinitionId = Entry->DefinitionId;
+		CartLine.ItemId = Entry->ItemId;
 		CartLine.DisplayCategoryId = Entry->DisplayCategoryId;
 		CartLine.PurchaseQuantity = Entry->PurchaseQuantity;
 		CartLine.UnitPrice = Entry->UnitPrice;

@@ -93,7 +93,7 @@ void UCatGA_FishingChum::HandleInputReleased(const float ServerHeldSeconds)
 	}
 	const FCatDomainCommandResult Result = Commands->CommitChumUseFromAbilityOnAuthority(
 		Cast<APlayerController>(ActorInfo->PlayerController.Get()), ActiveUseContext, SourceItem->GetItemInstanceId(),
-		SourceItem->GetItemDefinitionId(), FMath::Max(0.0f, ServerHeldSeconds));
+		SourceItem->GetItemId(), FMath::Max(0.0f, ServerHeldSeconds));
 	if (Result.bCommitted)
 	{
 		UE_LOG(LogCatFishing, Log, TEXT("Event=chum_source_ability_released RequestId=%s InstanceId=%s HeldSeconds=%.3f Committed=1 Error=%s"),

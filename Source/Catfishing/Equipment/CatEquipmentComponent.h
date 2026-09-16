@@ -51,25 +51,25 @@ public:
 
 	/** 根据正式库存目录、可信解锁证明和随身库存实例设置当前钓鱼选择；每个非空选择都必须指向正式库存里的具体实例。 */
 	FCatDomainCommandResult ConfigureLoadoutFromAuthority(FGuid RequestId, int64 ExpectedRevision,
-		FName RodDefinitionId, FName BaitDefinitionId, FName FloatDefinitionId,
-		FName ScoopNetDefinitionId, FName RodSkinDefinitionId, FGuid RodItemInstanceId,
+		int32  RodItemId, int32  BaitItemId, int32  FloatItemId,
+		int32  ScoopNetItemId, FName RodSkinDefinitionId, FGuid RodItemInstanceId,
 		FGuid BaitItemInstanceId, FGuid FloatItemInstanceId, FGuid ScoopNetItemInstanceId);
 
 #if WITH_DEV_AUTOMATION_TESTS
 	/** 自动化夹具只读预检数量型库存授予；用于构造可复查库存场景，不参与商店或运行时发货入口。 */
-	ECatDomainCommandError ValidateInventoryQuantityGrant(FGuid RequestId, FName DefinitionId,
+	ECatDomainCommandError ValidateInventoryQuantityGrant(FGuid RequestId, int32  ItemId,
 		int32 Quantity) const;
 
 	/** 自动化夹具只读预检非数量库存授予；用于验证装备定义能进入正式库存，不裁决运行时购买流程。 */
-	ECatDomainCommandError ValidateEquipmentGrantFromAuthority(FGuid RequestId, FName DefinitionId) const;
+	ECatDomainCommandError ValidateEquipmentGrantFromAuthority(FGuid RequestId, int32  ItemId) const;
 
 	/** 自动化夹具授予数量型库存物品；先写 InventoryComponent，再刷新 Equipment 钓鱼选择读模型。 */
 	FCatDomainCommandResult GrantInventoryQuantityFromAuthority(FGuid RequestId, int64 ExpectedRevision,
-		FName DefinitionId, int32 Quantity);
+		int32  ItemId, int32 Quantity);
 
 	/** 自动化夹具授予非数量库存物品；先写 InventoryComponent，再刷新 Equipment 读模型和钓鱼选择。 */
 	FCatDomainCommandResult GrantEquipmentFromAuthority(FGuid RequestId, int64 ExpectedRevision,
-		FName DefinitionId);
+		int32  ItemId);
 #endif
 
 	/** 背包点击或玩法入口共用的物品使用入口；InventoryComponent 执行 Use 事务，Equipment 只同步钓鱼选择读模型。 */
@@ -89,8 +89,8 @@ public:
 
 	/** Fishing 会话开始前按 SessionId 申请当前钓鱼选择使用权；Begin 只验有饵，不扣数量，并把世界鱼竿归属库存记录为耐久写回目标。 */
 	FCatFishingUseFreezeResult BeginFishingUse(FGuid FishingSessionId, FGuid RodItemInstanceId,
-		FGuid BaitItemInstanceId, FGuid FloatItemInstanceId, FName RodDefinitionId,
-		FName BaitDefinitionId, FName FloatDefinitionId, int64 ExpectedRevision,
+		FGuid BaitItemInstanceId, FGuid FloatItemInstanceId, int32  RodItemId,
+		int32  BaitItemId, int32  FloatItemId, int64 ExpectedRevision,
 		UCatInventoryComponent* RodInventoryComponent = nullptr);
 	/** 真咬时从原抛竿者当前选中的正式鱼饵实例扣一份；同会话重放不重复扣。 */
 	FCatFishingUseOperationResult CommitFishingBaitDeferred(FGuid FishingSessionId);
@@ -120,7 +120,7 @@ public:
 	/** 捕获收口只检查真咬已扣饵，不允许在捕获时补扣当前选择。 */
 	bool IsFishingBaitCommitted(FGuid FishingSessionId) const;
 	/** 钓鱼选鱼只读原抛竿者当前饵种；托管协调器不改来源，不扣数量。 */
-	FName GetCurrentFishingBaitDefinitionId(FGuid FishingSessionId) const;
+	int32  GetCurrentFishingBaitItemId(FGuid FishingSessionId) const;
 
 	/** 本机随身库存或钓鱼选择变化通知；不携带可写指针或客户端授权。 */
 	FCatEquipmentSnapshotChanged OnSnapshotChanged;
@@ -138,7 +138,7 @@ private:
 		/** Begin 冻结的鱼竿实例 ID；后续磨损必须写回这根正式库存实例，不能按当前选择重新选竿。 */
 		FGuid RodItemInstanceId;
 		/** Begin 冻结的鱼竿定义 ID；耐久写回时和实例 ID 一起复核，防止同实例误挂到别的定义。 */
-		FName RodDefinitionId = NAME_None;
+		int32  RodItemId = 0;
 		/** 世界鱼竿背后的正式库存组件；借竿时属于部署者，磨损查询和写入都只从这里找同一实例。 */
 		TWeakObjectPtr<UCatInventoryComponent> RodInventory;
 		/** 原抛竿者的装备选择来源；托管不复制背包，真咬读取该来源当前的饵。 */
@@ -167,7 +167,7 @@ private:
 	bool HasActiveInventoryItemUse() const;
 	/** 正式库存刷新后校正钓鱼选择；选中实例离开随身库存时换到仍存在的同类实例或清空选择。 */
 	void ReconcileLoadoutSelectionsWithInventory(
-		const UCatEquipmentDefinition* PreferredDefinition, FName PreferredDefinitionId);
+		const UCatEquipmentDefinition* PreferredDefinition, int32  PreferredItemId);
 	/** 组装 Fishing Begin 回包；只读取会话记录和绑定鱼竿实例，不创建新记录或改写库存。 */
 	FCatFishingUseFreezeResult MakeFishingUseFreezeResult(FGuid FishingSessionId,
 		ECatDomainCommandError Error, bool bUseAccepted, const FCatFishingUseRecord* Record = nullptr) const;
@@ -194,13 +194,13 @@ private:
 
 	/** 从 Owner 库存校正当前钓具选择；发货、移动和使用收口都靠它让选择跟随真实背包。 */
 	bool RefreshLoadoutFromInventoryComponentFromAuthority(
-		const UCatEquipmentDefinition* GrantedDefinition, FName GrantedDefinitionId);
+		const UCatEquipmentDefinition* GrantedDefinition, int32  GrantedItemId);
 
-	/** 按实例身份从正式可见库存读取运行格；选择和诊断用它避免只按 DefinitionId 误认同类物品。 */
+	/** 按实例身份从正式可见库存读取运行格；选择和诊断用它避免只按 ItemId 误认同类物品。 */
 	bool TryFindInventorySlotByInstanceId(FGuid ItemInstanceId, FCatInventoryEntry& OutSlot) const;
 
 	/** 按定义和实例身份解析钓鱼选择候选；只从 InventoryComponent 读取可用于选择的库存事实。 */
-	bool TryResolveSelectionInventorySlot(FName DefinitionId, FGuid ItemInstanceId,
+	bool TryResolveSelectionInventorySlot(int32  ItemId, FGuid ItemInstanceId,
 		FCatInventoryEntry& OutSlot) const;
 
 
@@ -224,7 +224,7 @@ private:
 	TMap<FGuid, FCatFishingUseRecord> FishingUseRecords;
 
 	/** 抄网选择复制日志只在定义或实例变化时输出，不参与玩法裁决。 */
-	FName LastLoggedScoopNetDefinitionId = NAME_None;
+	int32  LastLoggedScoopNetItemId = 0;
 	/** 最近一次已记录的抄网实例 ID；只用于减少重复日志，不代表装备选择状态。 */
 	FGuid LastLoggedScoopNetItemInstanceId;
 	/** 最近一次已记录的鱼竿实例 ID；只用于客户端复制诊断限频，不参与耐久或玩法裁决。 */

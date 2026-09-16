@@ -58,7 +58,13 @@ USTRUCT(BlueprintType)
 struct FCatShopPublicItem
 {
 	GENERATED_BODY()
-	UPROPERTY(BlueprintReadOnly) FName DefinitionId;
+	/** 本行商品的数字种类编号；服务器生成交易摘要，客户端只读展示，零不是有效商品。 */
+	UPROPERTY(BlueprintReadOnly) int32 ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
+	FName DefinitionId = NAME_None;
+
 	UPROPERTY(BlueprintReadOnly) int32 Quantity = 0;
 };
 
@@ -100,7 +106,12 @@ struct FCatShopTransactionRecord
 
 	/** 本次购买实际入库的物品定义；经济服务写入供查询，售鱼保持 None。 */
 	UPROPERTY(BlueprintReadOnly)
+	int32  ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName DefinitionId = NAME_None;
+
 
 	/** 本次购买实际入库的物品件数；服务按单份数量乘以选购次数写入，展示和审计读取它。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -178,7 +189,12 @@ struct FCatShopPublicTransaction
 
 	/** 订单指向的下游定义；售鱼保持 None。 */
 	UPROPERTY(BlueprintReadOnly)
+	int32  ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName DefinitionId = NAME_None;
+
 
 	/** 购物车购买实际发放的数量；售鱼保持 0，客户端只能展示，不能据此补发物品。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -317,7 +333,7 @@ struct FCatShopResolvedCart
 	FCatShopWalletSnapshot Wallet;
 };
 
-/** 一条待收购的服务器确认鱼事实；价格只由 FishDefinitionId 和实际千克重量计算，不接受客户端金额。 */
+/** 一条待收购的服务器确认鱼事实；价格只由 ItemId 和实际千克重量计算，不接受客户端金额。 */
 USTRUCT(BlueprintType)
 struct FCatShopFishSaleLine
 {
@@ -329,7 +345,12 @@ struct FCatShopFishSaleLine
 
 	/** 正式鱼种 ID；服务以它查本地收购 DataTable 的金币系数。 */
 	UPROPERTY(BlueprintReadWrite)
+	int32  ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName FishDefinitionId = NAME_None;
+
 
 	/** 服务器冻结的实际重量，单位千克；逐条乘系数并四舍五入后才汇总整单收入。 */
 	UPROPERTY(BlueprintReadWrite)

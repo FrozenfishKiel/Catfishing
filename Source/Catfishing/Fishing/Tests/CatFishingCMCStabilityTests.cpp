@@ -63,7 +63,7 @@ bool FCatFishingCMCStabilityTest::RunTest(const FString& Parameters)
         auto* Rod = World->SpawnActorDeferred<ACatFishingRodActor>(ACatFishingRodActor::StaticClass(),FTransform::Identity);
         if (!Rod || !Rod->ConfigureCanonicalAnchorsFromAuthority(Definition->FindFragment<UCatEquipmentFragment_Rod>()->RodTipLocalTransform,
             Definition->FindFragment<UCatEquipmentFragment_Rod>()->StandLocalTransform,Definition->FindFragment<UCatEquipmentFragment_Rod>()->GripLocalTransform)
-            || !Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(),FGuid::NewGuid(),TEXT("ShortCMC"),NAME_None,Player,nullptr,true,false)) return false;
+            || !Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(),FGuid::NewGuid(),1488158,NAME_None,Player,nullptr,true,false)) return false;
         Rod->FinishSpawning(FTransform::Identity);
         if (!Rod->BeginPhysicalHoldFromAuthority(Player,true)
             || !Rod->SetPrimaryOperatorFromAuthority(Player,Rod->GetPresentationState().RodActorRevision)

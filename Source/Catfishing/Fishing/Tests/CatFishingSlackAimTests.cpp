@@ -93,7 +93,7 @@ namespace CatFishingSlackAimTest
 			Controller->SetControlRotation(FRotator::ZeroRotator);
 			Controller->SetActorTickEnabled(false); // Only explicit input samples drive these command-order fixtures.
 			return Test.TestTrue(TEXT("initialize held rod identity"), Rod->InitializeAuthoritativeIdentity(
-				FGuid::NewGuid(), FGuid::NewGuid(), TEXT("SlackAimRod"), TEXT("Skin"), Player, nullptr, true, false))
+				FGuid::NewGuid(), FGuid::NewGuid(), 1244043, TEXT("Skin"), Player, nullptr, true, false))
 				&& Test.TestTrue(TEXT("register held rod through production lookup"), Fishing->RegisterDeployedRod(Player, Rod));
 		}
 		bool BeginFight(FAutomationTestBase& Test)
