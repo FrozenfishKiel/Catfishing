@@ -1,5 +1,25 @@
 # 钓鱼核心架构（技术文档）
 
+## 2026-09-16：协作网络测试改为抓角色
+
+现行规则来自 `Knowledge/Design/GDD 系统分册/钓鱼系统/多人钓鱼附篇.md` §2.1 的 09-15 裁决：队友抓主控身体，普通伸爪不能抓杆。生产 `UCatPhysicsGrabComponent::IsReachSurface` 已在 `5f3e8ecd` 落实；`GripFromAuthority` 是服务器显式持握接收方，事务内有临时豁免，不能用它证明普通伸爪可以抓杆。此次基线 `e61c6cd1`，前轮 `RodGroundPose/FinalReport` 与 `NetworkBaselineReport` 的相同超时属于旧测试要求错误；不恢复抓杆，不修改生产物理或裁决。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 输入与目标 | `Source/CatfishingEditor/Interaction/Grab/Tests/CatLightPropNetworkTests.cpp::FVerify` → `SetGrabInput` → `CatPhysicsGrabComponent::IsReachSurface` | 旧普通输入等待抓杆，必然被生产门禁拒绝 | 测试真实接触仍拒杆；协作改以正式猫 ModelContact 身体为目标 | 手持拒杆→角色接触→抓握复制 | 禁止使用显式持握豁免来建立助手连接 | 已改；Report2 通过普通伸爪拒手持竿、架竿拒绝和角色接触 |
+| 受力和复制 | 同测试阶段 5/8/9/10；`GetTractionReceiver / GripId / GetGripTarget` | 旧数竿上的两个抓点；目标是一个主控持竿＋猫抓猫连接 | 双端匹配角色目标和 GripId，测实际受力、位移、接触误差与跳跃 | 权威接触→客户端复制→牵引→跳跃 | 单主控保持；原厘米、秒、力量配置和误差门槛不变 | Report2 通过；主控/助手分别向后移动 186.02/170.57cm，手点间距和局部锚点漂移均为 0；HeldCat 双端观察到带起 |
+| 放杆与清理 | 同测试阶段 6/7/10/14；生产 `ReleaseTargetFromAuthority` 只释放其目标 | 旧放杆清助手杆上握点；猫抓猫应独立于杆生命周期 | 放杆后同一个角色 GripId 保持；松键后两端释放并清理牵引 | 放杆→观察角色连接→松键→后续抓跳 | 不自动接任、不遗留抓点；会话/库存/费用/持久化不涉及修改 | Report2 通过放杆保留同一角色 GripId、主动松键双端释放及后续客户端抓跳/释放 |
+| 其他消费者与接口 | `CatFishingGroupNetworkTests` 已使用猫链；PhysicalRod/RodEffort/OwnedRodLifecycle 的直接 `GripFromAuthority` 测试覆盖底层接收和生命周期 | 普通玩家输入与显式服务器接收不能混为一谈 | 保留服务器接口和原接收方测试；三客户端 ReachLimit 失败单独保留 | 先核实入口种类，再归类失败 | 不以本用例替代三客户端、实际搏斗或完整模块验收 | 已核对源码调用；未删除接口 |
+| 资产、文档、日志及交付 | 正式 `/Game/Character/BP_CatCharacter`、`/Game/Blueprint/Actors/BP_CatFishingRodActor` 由既有网络夹具加载；本页、PhysicsGrabPrototype、FishFightImplementationGuide、唯一差距清单 | 旧现行说明仍允许持杆后抓杆，失败归类错误 | 改当前说明；历史报告保留并补解释，测试记录角色抓握与双端测量 | 源码构建→真实网络→查看截图→交付证据 | 配置默认、WBP、动画、资产生成、迁移和 Cook 入口不涉及修改；额外二进制图引用未重审，不删兼容入口 | Editor 编译、完整双端运行通过，已查看真实客户端牵拉与跳跃画面；未运行新 Cook/打包或正式湖岸真人验收 |
+
+工作区保留前端房间聊天、库存/输入与抄网等并行修改，不纳入本次提交。首次链接被其他任务的 `UnrealEditor-Cmd` 验证占用，进程自然退出后已重链成功；期间并行任务提交 `7babf6a1`，本次不改写该检查点。第一轮运行在初始角色碰撞分离后距离不足，夹具现通过正常移动靠近再抓，未调整生产碰撞或臂长。
+
+`contract`：`Saved/Automation/CatOnlyCooperation/EditorBuild2.log` 为 Win64 Development Editor 编译成功。本次只改 Editor 测试与说明，未改 Game 生产代码，不额外运行 Game 构建。
+
+`runtime_behavior`：同目录 `Report2/index.json` 的 `FormalRodReleaseAndSharedPull` 完整通过（带警告，0 fail）；`Tests2.log` 可按 `cat_cooperation_reach_setup`、`light_prop_shared_traction_measured`、`light_prop_opposing_pull`、`cmc_grab_jump_network_verified` 检索。协作者经普通输入抓到 `ModelContact_3_RigChest`，服务器/客户端 GripId 一致；手点间距、局部锚点漂移和架杆客户端漂移均为 0。主控持竿抓猫链跳跃时，助手服务端升高 22.901cm、客户端 23.893cm；后续反向由客户端主动抓猫并跳跃、松键也通过。原关卡载荷、原角色力量和数值阈值未放宽。三客户端 `GroupListenThreeClients` 本轮未重跑，其实际猫链距离超限问题继续保留，不由本次双端成功关闭。
+
+`presentation_delivery`：已查看真实客户端 `Saved/Automation/LightProps/Images/20260916-060716-formal-two-cats-pull-no-fish.png` 与 `20260916-060717-formal-held-cat-grab-jump.png`；有运动模糊，截图仅证明该受控场景画面，接触身份/双端受力以运行日志为证。未运行正式湖岸真人验收、新 Cook 或 Development 包双端落盘；Fishing/PhysicsGrab/Delivery 模块不关闭。
+
 ## 2026-09-16：R 放杆恢复蓝图斜插地面姿态
 
 此前正式杆脱手只停止跟随，保留最后持竿 Transform，因此悬在空中。现在只在真实主控持握退出时，由权威杆体在竿尾下方查找地面，必要时回退到原持竿者脚下；射线沿用部署入口上 100 / 下 250 厘米、法线 Z 至少 0.7 的范围，忽略所有 Pawn 与其他鱼竿。Actor 原点作为已核对的正式蓝图竿尾，恢复模型本地斜角并沿支撑面法线对齐，保留水平指向。无有效支撑时保留上次固定姿态并记录明确警告，不伪造地面。放置完成立即刷新 Actor 并走原移动复制，此后不进行逐帧贴地。
@@ -13,11 +33,11 @@
 | 物理、会话与资源 | `PhysicalRod::PopulateEndpointResponse` → FightRunner；`CatFishingService::RemoveOperatorAndReconcileSession` → Suspend；LightProp/Grab 接收 Parked | 固定支撑、零独立模拟、清除全部手抓点保持；不新建 Session/Hook，不增加扣费/磨损/存档写口 | 保留现有链，仅改变脱手时一次世界姿态 | 放置先于下一次端点求解；Suspend/Resume 保持 | 固定载荷、帮助者、真实 Runner 单一结算、库存身份 | 生产公式和账本未改；最终回归见表后 |
 | 网络、表现与资产 | Rod 原 Actor 移动复制、LightProp 状态复制；`/Game/Blueprint/Actors/BP_CatFishingRodActor` 的 StaticMesh 使用 `/Game/Catfishing/Fishing/Presentation/SM_Rod_BendSource` | 旧客户端看到悬停；目标看到服务器落地斜杆 | 不新增复制字段；`ForceNetUpdate` 通知现有移动复制；资产不保存 | 权威坐标提交→原复制→客户端 Mesh/鱼线/交互观察 | 双端根位置量化、斜角、静止漂移、截图 | 已核对 BP 实例：模型根在原点，Mesh 自带约 45°斜角；原历史 Stand 锚点仍保留，额外二进制图消费者未确认，不删除接口 |
 | 失败、日志与退出清理 | 同组件 `bEndingPlay`、Rod deployed/broken gate、LogCatFishing；原 Pack/Destroy | 找不到地面不能隐式丢失竿或清会话 | 成功 `fishing_rod_ground_parked`；失败 `fishing_rod_ground_park_rejected`，携带 RodActorId/PlayerId/SessionId/World/NetMode/LocalRole；只在退出时记录一次 | 原终局/清理继续负责其状态 | 无地面仍固定、可再次拾回；正常部署和销毁不误触发 | 默认 Log/Warning 可落盘；打包双端本轮未验收 |
-| 测试、文档与交付入口 | `Source/Catfishing/Fishing/Tests/CatFishingFirstRodHeldTests.cpp`、`Source/CatfishingEditor/Interaction/Grab/Tests/CatLightPropNetworkTests.cpp`；本页和 PhysicsGrabPrototype 说明 | 旧测试只断言放下后不漂移，不能发现悬空 | 增加竿尾接触、正式资产斜角、水平朝向、支撑面与客户端断言；更正现行原位架竿说明 | 源码/测试→Editor/Game→真实网络/画面 | 保持原不漂移与资源检查；配置/WBP/动画/资产生成脚本/Cook 入口不涉及修改 | 8 项回归通过，联机放置/同步/重新持握阶段通过，后续协作者抓握失败需保留；无资产迁移或删除 |
+| 测试、文档与交付入口 | `Source/Catfishing/Fishing/Tests/CatFishingFirstRodHeldTests.cpp`、`Source/CatfishingEditor/Interaction/Grab/Tests/CatLightPropNetworkTests.cpp`；本页和 PhysicsGrabPrototype 说明 | 旧测试只断言放下后不漂移，不能发现悬空 | 增加竿尾接触、正式资产斜角、水平朝向、支撑面与客户端断言；更正现行原位架竿说明 | 源码/测试→Editor/Game→真实网络/画面 | 保持原不漂移与资源检查；配置/WBP/动画/资产生成脚本/Cook 入口不涉及修改 | 8 项回归通过，联机放置/同步/重新持握阶段通过，后续旧测试仍要求抓杆，已确认为过期断言而非抓猫故障；原失败结果保留，新验证见顶部修订；无资产迁移或删除 |
 
 `contract`：Editor/Game Win64 Development 编译成功，日志在 `Saved/Automation/RodGroundPose/EditorBuildFinal.log` 与 `GameBuild.log`。基线对照后恢复修复版本的构建另记 `EditorBuildRestoredFinal.log / GameBuildFinal.log`；恢复文件内容与备份 SHA256 一致，并显式更新时间戳触发重新编译，避免旧基线对象因备份时间戳被误复用。本轮新增运行时诊断默认落盘于 `FinalTests.log`，按 `fishing_rod_ground_parked / fishing_rod_ground_park_rejected` 检索；未依赖屏幕提示。
 
-`runtime_behavior`：`Saved/Automation/RodGroundPose/FinalReport/index.json` 共 9 项，8 项通过（1 clean、7 warning），1 项网络长场景失败。通过项包括两种正式鱼竿的真实选格/R/E/X、四种碰撞支撑、65 秒固定/共享取回，以及 6 项 PhysicalRod 和真实 Runner 单 ASC 结算。网络场景的放杆、双端贴地/斜角、静止、Parked 禁抓与同杆重新持握断言已通过，`fishing_parked_replication_measured` 记录根位置差、角差、客户端漂移均为 0；其后协作者普通抓握超时 `grounded helper could not reach the controlled rod`，不能将整项记为通过。以 `11102c04` 的 PhysicalRod 生产文件和原网络测试做同渲染条件对照，`NetworkBaselineReport/index.json` 复现完全相同的唯一失败，属于既有缺口，未放宽断言或改抓握逻辑。
+`runtime_behavior`：`Saved/Automation/RodGroundPose/FinalReport/index.json` 共 9 项，8 项通过（1 clean、7 warning），1 项网络长场景失败。通过项包括两种正式鱼竿的真实选格/R/E/X、四种碰撞支撑、65 秒固定/共享取回，以及 6 项 PhysicalRod 和真实 Runner 单 ASC 结算。网络场景的放杆、双端贴地/斜角、静止、Parked 禁抓与同杆重新持握断言已通过，`fishing_parked_replication_measured` 记录根位置差、角差、客户端漂移均为 0；其后协作者普通抓握超时 `grounded helper could not reach the controlled rod`，不能将整项记为通过。以 `11102c04` 的 PhysicalRod 生产文件和原网络测试做同渲染条件对照，`NetworkBaselineReport/index.json` 复现完全相同的唯一失败。随后核对 09-15 设计与 `IsReachSurface`，确认旧测试仍要求已禁止的普通抓杆，不能将其归类为猫抓猫玩法故障；原报告不改写，新验证见顶部修订。
 
 工作区隔离：验证途中出现前端房间聊天与样式脚本并行修改，保留其内容且不纳入本次提交。首次基线构建被并行 `CatFrontendRootWidget.Chat.cpp` 的 C4458 阻塞；该修改方修正后重试成功。本轮只临时对照自己涉及的两个文件，并已按备份完整恢复；最终构建交付修复版本。
 

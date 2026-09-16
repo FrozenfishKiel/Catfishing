@@ -282,7 +282,7 @@ HUD 原 `FightStamina`/`FightStaminaMaximum`/`NormalizedFightStamina` 继续代�
 
 默认 Development 日志使用 `LogCatPhysicsGrab`，过滤 `physical_effort_connection`、`physical_effort_settled`、`physical_effort_state`、`physical_effort_recovery_gate`、`physical_effort_observed`、`physical_effort_stamina_observed`；网络用例另有 `physical_effort_network_observed`。主控沿 `LogCatFishing/fishing_primary_stamina_settled` 输出 `RecoveryLoaded`。事件含 World/NetMode/Authority/LocalRole、Actor/BodyId/PlayerId 或 SessionId，以及个人余额和结果；结算采样限频，状态与受力恢复门只在变化时记录。真实包应分别核对 `<打包根目录>/Catfishing/Saved/Logs` 房主、客户端新日志；编辑器多 World 日志不能替代该交付层。
 
-正式鱼竿当前只有“主控持竿”和“无人固定架竿”两种端点。持竿仍使用本页的CMC/转杆共同候选与防抖参数；架竿使用原固定竿尖求解，载荷由固定支架承受。R 拿出→R 架住→附近 R 拾回同一竿与会话，原无人值守和重新主控流程不变。架竿不接受手抓；拿起后助手仍可抓人或竿传力，各猫独立支付身体出力，杆操作费用只归主控。实现影响表及本轮验证见[取放与架竿修复](FishingArchitecture_zh-CN.md)。以下各日期章节保留对应历史证据，早期自由落竿/助手脱手后抓竿描述不再是当前规则。
+正式鱼竿当前只有“主控持竿”和“无人固定架竿”两种端点。持竿仍使用本页的CMC/转杆共同候选与防抖参数；架竿使用原固定竿尖求解，载荷由固定支架承受。选格拿竿、R 放杆、E 交互拾回同一竿与会话，原无人值守和重新主控流程不变。普通伸爪在手持和架放状态都不能抓竿；协作者抓住持竿角色传力，各猫独立支付身体出力，杆操作费用只归主控。实现影响表及本轮验证见[取放与架竿修复](FishingArchitecture_zh-CN.md)。以下各日期章节保留对应历史证据，早期自由落竿/助手脱手后抓竿描述不再是当前规则。
 
 
 ## 2026-09-10：恢复 CMC 双主体稳定措施

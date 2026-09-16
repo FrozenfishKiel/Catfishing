@@ -131,6 +131,11 @@ namespace CatLightPropNetwork
 			auto* Body = Cat->GetPhysicalBodyComponent();
 			auto* ClientBody = ClientCat->GetPhysicalBodyComponent();
 			auto* HelperBody = Helper->GetPhysicalBodyComponent();
+			ACatCharacter* HelperReplica = nullptr;
+			for (TActorIterator<ACatCharacter> It(Client); It; ++It)
+				if (It->GetPhysicalBodyComponent()->GetBodyId() == HelperBody->GetBodyId()) HelperReplica = *It;
+			if (!HelperReplica) return false;
+			auto* HelperReplicaGrab = HelperReplica->GetPhysicalBodyComponent()->GetGrab();
 			const double Now = Server->GetTimeSeconds();
 			if (Stage == 0)
 			{
@@ -156,9 +161,8 @@ namespace CatLightPropNetwork
 			ClientBody->SetMoveIntent(Stage == 5 ? -FVector::ForwardVector : FVector::ZeroVector);
 			if (Stage < 11) ClientBody->SetViewIntent(FRotator(0, Stage == 2 ? 40 : 0, 0));
 			HelperBody->SetMoveIntent(Stage == 5 ? FVector::ForwardVector : FVector::ZeroVector);
-			HelperBody->SetViewIntent(Stage >= 5 && Stage <= 10 && Rod ?
-				(Rod->GetGripWorldTransform().GetLocation() + Rod->GetPhysicalRodBody()->GetForwardVector() * 12.0 - HelperBody->GetGrab()->GetShoulderWorldLocation(true)).Rotation()
-				: FRotator(0, 180, 0));
+			if (Stage >= 5 && Stage <= 10) AimAtCharacter(HelperBody, Cat);
+			else if (Stage < 5) HelperBody->SetViewIntent(FRotator(0, 180, 0));
 			if (Stage == 1)
 			{
 				if (Now - StageStarted < 1 || !Body->IsGrounded() || !ClientBody->IsGrounded()) return false;
@@ -261,17 +265,42 @@ namespace CatLightPropNetwork
 				if (!Test->TestTrue(TEXT("retake uses the same physical hold receiver"), Rod->BeginPhysicalHoldFromAuthority(Cat->GetPlayerState(), true)
 					&& FCatLightPropNetworkTestAccess::RetakeControl(Rod, Cat->GetPlayerState())
 					&& Rod->GetPhysicalRodComponent()->CommitPrimaryHold(Cat->GetPlayerState()))) return true;
-				// The helper stands on the floor and reaches up to the handle through normal grab input.
-				// Aim at exposed shaft, beyond the primary kinematic hand covering the handle.
-				const FVector Point = Rod->GetGripWorldTransform().GetLocation() + Rod->GetPhysicalRodBody()->GetForwardVector() * 12.0;
-				HelperBody->TeleportBodyFromAuthority(FTransform(FRotator(0, 180, 0), FVector(Point.X + 40, Point.Y - 6.8, HelperBody->GetStandRootHeightCm())), TEXT("LightPropHelperReachSetup"));
+				// Exercise ordinary reach at actual exposed rod geometry; GripFromAuthority is an explicit-hold receiver.
+				const FVector Point = Rod->GetPhysicalRodBody()->GetComponentTransform().TransformPosition(
+					FVector(Rod->GetPhysicalRodBody()->GetUnscaledBoxExtent().X - 10, 0, .8));
+				HelperBody->TeleportBodyFromAuthority(FTransform(Helper->GetActorRotation(), Helper->GetActorLocation()
+					+ Point - HelperBody->GetHand(true)->GetComponentLocation()), TEXT("HeldRodOrdinaryReachFixture"));
+				Test->TestTrue(TEXT("ordinary reach starts at real held rod geometry"), HelperBody->GetHand(true)->GetComponentLocation().Equals(Point, .01));
+				HelperBody->SetViewIntent((Point - HelperBody->GetGrab()->GetShoulderWorldLocation(true)).Rotation());
+				HelperBody->GetGrab()->SetGrabInput(true, true);
+				Next(15, Now);
+			}
+			else if (Stage == 15)
+			{
+				Test->TestNotEqual(TEXT("ordinary helper reach cannot grab a held rod on authority"), HelperBody->GetGrab()->GetGripTarget(true), static_cast<AActor*>(Rod));
+				Test->TestNotEqual(TEXT("ordinary helper reach cannot grab a held rod on client"), HelperReplicaGrab->GetGripTarget(true), static_cast<AActor*>(ClientRod));
+				if (Now - StageStarted < .5) return false;
+				Test->TestEqual(TEXT("rejected helper reach leaves one rod grip"), Light->GetState().GripCount, 1);
+				HelperBody->GetGrab()->SetGrabInput(true, false);
+				HelperBody->TeleportBodyFromAuthority(FTransform(FRotator(0, -90, 0),
+					Cat->GetActorLocation() + FVector(0, 42, HelperBody->GetStandRootHeightCm() - Cat->GetActorLocation().Z)), TEXT("HeldCatHelperReachSetup"));
+				Next(16, Now);
+			}
+			else if (Stage == 16)
+			{
+				if (Now - StageStarted < .5 || !HelperBody->IsGrounded()) return false;
+				// Articulated body separation can push the initial fixture outside arm reach; approach through normal movement.
+				AimAtCharacter(HelperBody, Cat);
+				Test->AddInfo(FString::Printf(TEXT("Event=cat_cooperation_reach_setup PrimaryCm=%s HelperCm=%s ReachCm=%.3f"),
+					*Cat->GetActorLocation().ToCompactString(), *Helper->GetActorLocation().ToCompactString(), HelperBody->GetGrab()->GetReachLengthCm()));
 				HelperBody->GetGrab()->SetGrabInput(true, true);
 				Next(8, Now);
 			}
 			else if (Stage == 8)
 			{
-				if (Now - StageStarted > 4) { Test->AddError(TEXT("grounded helper could not reach the controlled rod")); return true; }
-				if (HelperBody->GetGrab()->GetGripTarget(true) != Rod) return false;
+				if (Now - StageStarted > 4) { Test->AddError(TEXT("grounded helper could not reach the primary cat")); return true; }
+				HelperBody->SetMoveIntent(HelperBody->GetGrab()->IsGripping(true) ? FVector::ZeroVector : (Cat->GetActorLocation() - Helper->GetActorLocation()).GetSafeNormal2D());
+				if (HelperBody->GetGrab()->GetGripTarget(true) != Cat || HelperReplicaGrab->GetGripTarget(true) != ClientCat) return false;
 				HelperGrip = HelperBody->GetGrab()->GetGripState(true).GripId;
 				HelperLocalContact = HelperBody->GetGrab()->GetGripState(true).TargetLocalPoint;
 				PullStartPrimary = Body->GetBody()->GetComponentLocation();
@@ -281,12 +310,13 @@ namespace CatLightPropNetwork
 			else if (Stage == 5)
 			{
 				auto* HelperGrab = HelperBody->GetGrab();
-				Test->TestEqual(TEXT("helper rod grip applies traction to the primary carrier"), HelperGrab->GetTractionReceiver(true), Body);
+				Test->TestEqual(TEXT("helper cat grip applies traction directly to the primary body"), HelperGrab->GetTractionReceiver(true), Body);
 				MaximumGripForce = FMath::Max(MaximumGripForce, HelperGrab->GetLastTractionForceForDiagnostics(true).Size());
 				MaximumTractionError = FMath::Max(MaximumTractionError, HelperGrab->GetTractionErrorForDiagnostics(true).Size());
 				MaximumHandGap = FMath::Max(MaximumHandGap, FVector::Distance(HelperBody->GetHand(true)->GetComponentLocation(), HelperGrab->GetGripWorldLocation(true)));
 				MaximumAnchorError = FMath::Max(MaximumAnchorError, FVector::Distance(HelperLocalContact, HelperGrab->GetGripState(true).TargetLocalPoint));
-				if (ClientLight->GetState().GripCount == 2) bTwoGripsReplicated = true;
+				if (HelperReplicaGrab->GetGripTarget(true) == ClientCat && HelperReplicaGrab->GetGripState(true).GripId == HelperGrip)
+					bCatGripReplicated = true;
                 if (ObservationCamera.IsValid())
                 {
                     const FVector Centre = (Cat->GetActorLocation() + Helper->GetActorLocation()) * .5;
@@ -295,7 +325,9 @@ namespace CatLightPropNetwork
                 }
 				if (Now - StageStarted < 2.5) return false;
 				Test->AddInfo(FString::Printf(TEXT("Event=light_prop_shared_traction_measured TractionErrorCm=%.3f StateAnchorErrorCm=%.3f ForceKgCmS2=%.3f HandGapCm=%.3f"), MaximumTractionError, MaximumAnchorError, MaximumGripForce, MaximumHandGap));
-				Test->TestTrue(TEXT("both real grips remain during opposing movement"), Light->GetState().GripCount == 2 && bTwoGripsReplicated);
+				Test->TestTrue(TEXT("primary rod hold and helper cat grip remain during opposing movement"),
+					Light->GetState().GripCount == 1 && ClientLight->GetState().GripCount == 1
+					&& HelperGrab->GetGripTarget(true) == Cat && HelperGrab->GetGripState(true).GripId == HelperGrip && bCatGripReplicated);
 				const FVector PrimaryTravel = Body->GetBody()->GetComponentLocation() - PullStartPrimary;
 				const FVector HelperTravel = HelperBody->GetBody()->GetComponentLocation() - PullStartHelper;
 				Test->AddInfo(FString::Printf(TEXT("Event=light_prop_opposing_pull PrimaryTravel=%s HelperTravel=%s PrimaryIntent=%s HelperIntent=%s"), *PrimaryTravel.ToCompactString(), *HelperTravel.ToCompactString(), *Body->GetMoveIntent().ToCompactString(), *HelperBody->GetMoveIntent().ToCompactString()));
@@ -309,14 +341,20 @@ namespace CatLightPropNetwork
 			else if (Stage == 6)
 			{
 				if (Now - StageStarted < 1 || ClientLight->GetState().GripCount != 0) return false;
-				Test->TestFalse(TEXT("parking clears helper's rod grip through the authority cleanup"), HelperBody->GetGrab()->IsGripping(true));
+				Test->TestTrue(TEXT("parking the rod preserves the independent cat grip on both endpoints"),
+					HelperBody->GetGrab()->GetGripTarget(true) == Cat && HelperBody->GetGrab()->GetGripState(true).GripId == HelperGrip
+					&& HelperReplicaGrab->GetGripTarget(true) == ClientCat && HelperReplicaGrab->GetGripState(true).GripId == HelperGrip);
 				Test->TestEqual(TEXT("released rod becomes ungrabbable parked support"), Light->GetState().Mode, ECatLightPropMode::Parked);
 				Test->TestEqual(TEXT("released helper is not promoted"), Rod->GetOperatorCount(), 0);
+				HelperBody->GetGrab()->SetGrabInput(true, false);
 				Next(7, Now);
 			}
 			else if (Stage == 7)
 			{
 				if (Now - StageStarted < 1 || ClientLight->GetState().GripCount != 0 || ClientLight->GetState().Revision != Light->GetState().Revision) return false;
+				if (HelperBody->GetGrab()->IsGripping(true) || HelperReplicaGrab->IsGripping(true)) return false;
+				Test->TestTrue(TEXT("releasing the helper clears cat traction on both authority and client"),
+					HelperBody->GetVerticalGripForceFromAuthority() == 0 && Body->GetVerticalGripForceFromAuthority() == 0);
 				Test->TestEqual(TEXT("parked no-grab state replicates"), ClientLight->GetState().Mode, ECatLightPropMode::Parked);
 				Test->AddInfo(FString::Printf(TEXT("Event=light_prop_formal_network_verified PropId=%s MinBodyZ=%.3f MinUpZ=%.6f MaxBodyZ=%.3f MaxGripForceKgCmS2=%.3f ServerRevision=%u ClientRevision=%u Result=ObservedBothEndpoints"),
 					*Light->GetState().PropId.ToString(), MinimumBodyZ, MinimumUp, MaximumBodyZ, MaximumGripForce, Light->GetState().Revision, ClientLight->GetState().Revision));
@@ -376,18 +414,18 @@ namespace CatLightPropNetwork
                 bObservedClientLift |= !ClientHelper->GetPhysicalBodyComponent()->IsGrounded() && ClientHelper->GetActorLocation().Z>JumpStartB+2;
                 if (!bLiftCaptured && ClientCat->GetActorLocation().Z>JumpStartA+4 && ClientHelper->GetActorLocation().Z>JumpStartB+2)
                 {
-                    Capture(Client,Stage==10 ? TEXT("formal-held-rod-grab-jump") : TEXT("formal-friend-grab-jump"));
+                    Capture(Client,Stage==10 ? TEXT("formal-held-cat-grab-jump") : TEXT("formal-friend-grab-jump"));
                     bLiftCaptured=true;
                 }
                 if (Now-StageStarted<2.5) return false;
                 Test->AddInfo(FString::Printf(TEXT("Event=cmc_grab_jump_network_verified World=%s NetMode=%d Kind=%s JumperBodyId=%s FriendBodyId=%s JumperRiseCm=%.3f FriendRiseCm=%.3f ClientFriendRiseCm=%.3f ClientSawFalling=%d"),
-                    *GetNameSafe(Server),int32(Server->GetNetMode()),Stage==10 ? TEXT("HeldRod") : TEXT("Friend"),*Body->GetBodyId().ToString(),*HelperBody->GetBodyId().ToString(),JumpPeakA,JumpPeakB,ClientJumpPeakB,bObservedClientLift));
+                    *GetNameSafe(Server),int32(Server->GetNetMode()),Stage==10 ? TEXT("HeldCat") : TEXT("Friend"),*Body->GetBodyId().ToString(),*HelperBody->GetBodyId().ToString(),JumpPeakA,JumpPeakB,ClientJumpPeakB,bObservedClientLift));
                 Test->TestTrue(TEXT("client jump lifts the friend on both authority and replica"),JumpPeakA>4 && JumpPeakB>2 && ClientJumpPeakB>2 && bObservedClientLift);
                 Test->TestTrue(TEXT("both cats land upright and no vertical grip force remains"),Body->IsGrounded() && HelperBody->IsGrounded() && ClientBody->IsGrounded() && ClientHelper->GetPhysicalBodyComponent()->IsGrounded()
                     && Cat->GetActorUpVector().Z>.99999 && Helper->GetActorUpVector().Z>.99999 && FMath::Abs(HelperBody->GetVerticalGripForceFromAuthority())<.01);
                 if (Stage==10)
                 {
-                    Test->TestEqual(TEXT("jumping while sharing a rod still has one primary only"),Rod->GetOperatorCount(),1);
+                    Test->TestEqual(TEXT("jumping while a helper grips the primary cat still has one rod operator"),Rod->GetOperatorCount(),1);
                     Test->TestTrue(TEXT("jump keeps the independent helper grip"),HelperBody->GetGrab()->IsGripping(true) && HelperBody->GetGrab()->GetGripState(true).GripId==HelperGrip);
                     Rod->ReleasePhysicalPrimaryHoldFromAuthority(Cat->GetPlayerState(),TEXT("LightPropOwnerLeavesHelper"));
                     Rod->RefreshPrimaryControlFromAuthority();
@@ -409,6 +447,23 @@ namespace CatLightPropNetwork
 			return false;
 		}
 	private:
+		bool AimAtCharacter(UCatPhysicalBodyComponent* Reacher, ACatCharacter* Target)
+		{
+			const auto* Model = Target->FindComponentByClass<UCatModelContactComponent>();
+			if (!Model || !Model->HasModelContacts()) return false;
+			const FVector Shoulder = Reacher->GetGrab()->GetShoulderWorldLocation(true);
+			FVector AimPoint = FVector::ZeroVector;
+			float Nearest = TNumericLimits<float>::Max();
+			for (UCatModelContactBody* Contact : Model->GetBodies())
+			{
+				FVector Point;
+				const float Distance = Contact->GetClosestPointOnCollision(Shoulder, Point);
+				if (Distance >= 0 && Distance < Nearest) { Nearest = Distance; AimPoint = Point; }
+			}
+			if (Nearest == TNumericLimits<float>::Max()) return false;
+			Reacher->SetViewIntent((AimPoint - Shoulder).Rotation());
+			return Nearest < Reacher->GetGrab()->GetReachLengthCm();
+		}
         void BeginJump(ACatCharacter* Jumper, ACatCharacter* Friend)
         {
             JumpStartA=Jumper->GetActorLocation().Z; JumpStartB=Friend->GetActorLocation().Z;
@@ -453,7 +508,7 @@ namespace CatLightPropNetwork
 		FVector HelperLocalContact = FVector::ZeroVector;
 		double MaximumHandGap = 0.0;
 		FVector PullStartPrimary, PullStartHelper;
-		bool bJumpCaptured = false, bDropCaptured = false, bTwoGripsReplicated = false;
+		bool bJumpCaptured = false, bDropCaptured = false, bCatGripReplicated = false;
 	};
 
 }
