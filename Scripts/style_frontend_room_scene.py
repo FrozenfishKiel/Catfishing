@@ -41,8 +41,9 @@ def style(page,row,texture,ui):
     space(page,summary,'RoomSummarySpace')
     chat=ensure(page,'RoomChatSurface',unreal.Border);surface(chat,.002,.012,.010);chat.set_padding(unreal.Margin(12,12,12,12));attach(summary,chat)
     chatcol=ensure(page,'RoomChatColumn',unreal.VerticalBox);chatcol.clear_children();attach(chat,chatcol)
-    attach(chatcol,text(page,'RoomChatTitle','房间聊天',12)).set_padding(unreal.Margin(0,0,0,8))
-    attach(chatcol,text(page,'RoomChatUnavailable','聊天功能尚未开放',11,color(.35,.49,.44)))
+    from pathlib import Path
+    import runpy
+    runpy.run_path(str(Path(__file__).with_name('style_frontend_room_chat.py')))['style'](page,ui)
     players=widget(page,'PlayersColumnSurface');players.set_padding(unreal.Margin(0,0,0,0));players.set_brush_color(color(0,0,0,0));fill(attach(lists,players))
     column=widget(page,'PlayersColumn');column.clear_children()
     playerstitle=widget(page,'PlayersTitleText');playerstitle.set_visibility(unreal.SlateVisibility.COLLAPSED);attach(column,playerstitle)

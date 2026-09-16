@@ -82,7 +82,9 @@ HUD、背包、背包格子、交互提示和局内 ESC 菜单的默认路径来
 
 邀请弹窗设计尺寸为 500×640，名称和状态占据可伸缩区域；头像为通用图形，不是 Steam 头像。`RoomInviteRecentTabButton` 禁用，最近玩家未接入。`CopyRoomLinkButton` 复制真实 `Snapshot.JoinLobbyUri`；`RoomNoticeDialog` 由 `ShowRoomNotice` 统一呈现邀请已发送、ID/链接复制及解散确认。邀请成功提示只在原请求后观察到同一好友 `bHasInvited` 从 false 变 true 且无错误时出现，不表示对方已经加入。`ConfirmRoomNoticeButton` 通常关闭提示；只有房主发起解散确认时才继续原 `RequestLeaveRoom`。`DismissRoomButton` 非房主隐藏，未添加第二套退出入口。
 
-所有房间按钮使用四字段对称 `unreal.Margin(left,top,right,bottom)`、内容槽水平/垂直居中；Python 的 `Margin(14,8)` 不具有 C++ 的水平/垂直简写含义。复制和设置图标使用 UMG 图形，避免字体缺字。好友行“已发送”与离线状态不可再次点击。房间聊天、大厅图鉴、最近玩家和房间语音仍为明确未开放的表现；不生成模拟玩家或聊天内容。Root 的 `RenderRoomSnapshot` 是只读表现入口，生产调用仍来自 RoomModel；`CanStartSnapshot` 与 `CanStartGame` 共用原准备规则，服务端裁决未变。
+所有房间按钮使用四字段对称 `unreal.Margin(left,top,right,bottom)`、内容槽水平/垂直居中；Python 的 `Margin(14,8)` 不具有 C++ 的水平/垂直简写含义。复制和设置图标使用 UMG 图形，避免字体缺字。好友行“已发送”与离线状态不可再次点击。大厅图鉴、最近玩家和房间语音仍为明确未开放的表现；不生成模拟玩家或聊天内容。房间文字聊天于 2026-09-16 接入 Steam Lobby，验收边界见下段。Root 的 `RenderRoomSnapshot` 是只读表现入口，生产调用仍来自 RoomModel；`CanStartSnapshot` 与 `CanStartGame` 共用原准备规则，服务端裁决未变。
+
+房间文字聊天：`style_frontend_room_scene.py` → `style_frontend_room_chat.py::style` 生成原房间 WBP 的 `RoomChatOpenButton`、`RoomChatSummary` 和独立 `RoomChatExpanded`（340×308，底部锚定、向上展开，低于房间模态层）。展开区包含 `RoomChatMessages`、`RoomChatInput`、`RoomChatSendButton`、`RoomChatCloseButton`、`RoomChatLatestButton`、`RoomChatFeedback` 与字体原型 `RoomChatRowStyle`。Root 的 `BindRoomChatControls/RenderRoomChat` 消费 `UCatRoomChatSubsystem` 的真实消息；样例消息仅存在于受控检查脚本。Enter 经原生文本提交发送，失焦不发送；Esc 优先关闭邀请/设置弹层，再收起聊天，最后才进入原房间退出规则。普通消息、系统观察、发送中、未确认送达分别展示；翻看历史时新消息不抢滚动位置。本地单人房间禁用输入。消息不写入 SaveGame，同房换地图保留最近 100 条，离房/换房清空；新加入成员不补发入房前历史。Steam 双账号收发及中文输入法真实选词仍需实测，不能以 UI 样例或协议 Automation 代替。
 
 `RoomInviteCodeText` / `CopyInviteCodeButton` / `RequestCopyRoomInviteCode` 保留现有绑定名，但本轮显示和复制的值明确改为 **Snapshot.LobbyId（完整平台房间 ID 字符串）**，不再是 JoinLobbyUri，也不是免密邀请码。加入页原解析器继续接受完整 ID 和 URI，局内邀请链接入口不变。六位邀请码和准入由 Online 后续实现，不得截断 Lobby ID 伪装短码。
 

@@ -47,6 +47,10 @@ FReply UCatFrontendRootWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometr
 		RequestCloseRoomDialog();
 		return FReply::Handled();
 	}
+	if (InKeyEvent.GetKey() == EKeys::Escape && IsShowingRoom() && HandleRoomChatEscape())
+	{
+		return FReply::Handled();
+	}
 	return Super::NativeOnPreviewKeyDown(InGeometry, InKeyEvent);
 }
 

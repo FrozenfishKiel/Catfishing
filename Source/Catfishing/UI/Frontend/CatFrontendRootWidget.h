@@ -25,6 +25,8 @@ class ACharacter;
 class UAnimSequence;
 class UMaterialInterface;
 class UMaterialInstanceDynamic;
+class UCatRoomChatSubsystem;
+struct FCatRoomChatMessage;
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatRoomFriendInviteRequested, FCatOnlineFriendHandle);
 
 /** 存档列表的一行原生 View；它只保存当前渲染行的稳定 SlotId，并把选择点击原样交给 Root，不保存或修改世界存档。 */
@@ -234,6 +236,25 @@ public:
 	 * 本方法只显式切换 RoomPage，不自行创建 Session 或伪造房间数据。
 	 */
 	void ShowRoom();
+
+	/** 聊天表现入口；仅渲染只读消息，受控 UI 检查也使用同一渲染路径。 */
+	UFUNCTION(BlueprintCallable, Category="Room Presentation")
+	void RenderRoomChat(const TArray<FCatRoomChatMessage>& Messages, bool bAvailable);
+	UFUNCTION(BlueprintCallable, Category="Room Presentation") void RequestToggleRoomChat();
+	UFUNCTION() void RequestSendRoomChat();
+	UFUNCTION() void RequestChatLatest();
+	UFUNCTION() void HandleChatCommitted(const FText& Text, ETextCommit::Type Method);
+	UFUNCTION() void HandleChatScrolled(float Offset);
+	void BindRoomChatControls(bool bBind);
+	void RefreshRoomChat();
+	bool IsRoomChatOpen() const;
+	bool HandleRoomChatEscape();
+	UPROPERTY(Transient) TObjectPtr<UCatRoomChatSubsystem> RoomChat;
+	FDelegateHandle RoomChatHandle;
+	FString ChatRoomKey;
+	FGuid LastChatMessage;
+	int32 ChatUnread = 0;
+	bool bChatAtBottom = true;
 
 	/**
 	 * 显示主界面设置页面；设置草稿、应用与恢复默认全部仍由 SettingsModel 和 Controller 协作处理。

@@ -479,6 +479,12 @@ void UCatFrontendRootWidget::NativeOnInitialized()
 // Escape 输入流程：Root 自身或子控件未消费按键而向上冒泡时，将 Escape 交给 Controller 的取消规则；按钮的 Enter/Space 等其他按键仍由 UMG 原路径处理。
 FReply UCatFrontendRootWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
+	if (InKeyEvent.GetKey() == EKeys::Enter && IsShowingRoom() && !IsRoomDialogOpen())
+	{
+		if (!IsRoomChatOpen()) { RequestToggleRoomChat(); }
+		else if (auto* Input = RoomPage ? Cast<UEditableTextBox>(RoomPage->GetWidgetFromName(TEXT("RoomChatInput"))) : nullptr; Input && Input->GetIsEnabled()) { Input->SetKeyboardFocus(); }
+		return FReply::Handled();
+	}
 	if (InKeyEvent.GetKey() == EKeys::Escape)
 	{
 		RequestCancel();
@@ -636,6 +642,7 @@ void UCatFrontendRootWidget::BindPageControls()
 	if (ReadyRoomButton) { ReadyRoomButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestToggleRoomReady); }
 	if (CopyInviteCodeButton) { CopyInviteCodeButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestCopyRoomInviteCode); }
 	BindRoomDialogControls(true);
+	BindRoomChatControls(true);
 	BindPublicRoomControls(true);
 }
 
@@ -702,6 +709,7 @@ void UCatFrontendRootWidget::UnbindPageControls()
 	if (ReadyRoomButton) { ReadyRoomButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestToggleRoomReady); }
 	if (CopyInviteCodeButton) { CopyInviteCodeButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestCopyRoomInviteCode); }
 	BindRoomDialogControls(false);
+	BindRoomChatControls(false);
 }
 
 // Model 订阅流程：每个 Model 各自只有一个刷新入口；订阅后 Root 更新实际原生控件，并可选调用纯表现扩展，不跨模型归纳业务状态。

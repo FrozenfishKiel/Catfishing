@@ -20,6 +20,12 @@ class CATFISHINGEDITOR_API UCatFrontendWidgetAuthoringLibrary : public UBlueprin
 	GENERATED_BODY()
 
 public:
+	/** 独立 PIE 预览窗口；不改写用户的持久化 Play 配置，供正式 WBP 渲染验收。 */
+	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Preview")
+	static bool BeginFloatingFrontendPreview(int32 Width = 1280, int32 Height = 720);
+	/** 将按键交给真实 Slate 路由；仅用于编辑器内受控 UI 验收。 */
+	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Preview")
+	static void PressFrontendPreviewKey(FName KeyName);
 	/** 仅迁移公开加入页，保留 Root 和房间页正在编辑的布局。 */
 	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Frontend")
 	static bool RebuildPublicRoomBrowser();
