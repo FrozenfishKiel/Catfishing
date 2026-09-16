@@ -21,6 +21,7 @@ class CATFISHING_API UCatFishingService : public UWorldSubsystem
 {
 	GENERATED_BODY()
 	friend class FCatRunTransientCleanupTest;
+	friend class FCatFishingSessionScoopMouthCarryTest;
 
 public:
 	/** 每人场上合计最多两根实体竿；手持和损坏但尚未收回的竿也占名额。 */

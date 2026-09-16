@@ -788,7 +788,7 @@ void ACatfishingPlayerController::ServerRequestCampfirePlayback_Implementation(A
 
 // 公共领域结果客户端流程：
 // 1. 可靠接收结果后按请求落盘并整体替换本机读模型，再广播给 UI；未开界面也保留接收证据，不触发新的领域命令。
-// 2. 若连续 G 的 Begin 被服务器拒绝，本机立刻清掉同 RequestId 的等待记录；否则未松键时不能再次发起 Use。
+// 2. 若连续左键 的 Begin 被服务器拒绝，本机立刻清掉同 RequestId 的等待记录；否则未松键时不能再次发起 Use。
 // 3. 已接受或无关请求绝不触碰当前持续记录，迟到旧回执不能取消后来开始的同类物品。
 void ACatfishingPlayerController::ClientReceiveCampCommandResult_Implementation(
 	const FCatDomainCommandResult& Result)
@@ -1268,7 +1268,7 @@ void ACatfishingPlayerController::BeginSelectedItemUseFromInput()
 		*RequestId.ToString(EGuidFormats::DigitsWithHyphens), SelectedSlotIndex,
 		*Instance->GetItemInstanceId().ToString(EGuidFormats::DigitsWithHyphens), Instance->UsesContinuousInput(),
 		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority(), static_cast<int32>(GetLocalRole()), *GetNameSafe(this));
-	ServerUseSelectedBackpackItem(RequestId, SelectedSlotIndex, Instance->GetItemInstanceId());
+	ServerUseSelectedBackpackItem(RequestId, SelectedSlotIndex, Instance->GetItemInstanceId(), Instance->CaptureUseTarget(this));
 }
 
 // 选中物品左键松开流程：持续 Use 已在按下时冻结了 RequestId、实例和槽位；本地清记录后发送同一组值，普通瞬时物品不会生成结束请求。
@@ -1278,7 +1278,7 @@ void ACatfishingPlayerController::EndSelectedItemUseFromInput(const bool bCancel
 }
 
 // 持续使用清理流程：
-// 1. 没有活动请求时直接返回，普通物品的 G Completed/Canceled 不会制造额外服务器动作。
+// 1. 没有活动请求时直接返回，普通物品的 左键 Completed/Canceled 不会制造额外服务器动作。
 // 2. 有请求时先保存 Begin 固定身份，再在 authority 直接执行或客户端发 RPC，保证 Pawn 切换和旅行也能取消旧效果。
 // 3. 客户端发送后清空自己的记录；authority 交给 End RPC 在身份匹配后清理，避免 listen host 先丢失原实例。
 void ACatfishingPlayerController::ClearSelectedItemUseInput(const bool bCancelled)
@@ -1314,7 +1314,7 @@ void ACatfishingPlayerController::ClearSelectedItemUseInput(const bool bCancelle
 // 2. 再构造同一份库存使用上下文并执行既有 Inventory.Action.Use；客户端本地选中状态不会参与权限判断。
 // 3. 连续实例仅在 Begin 成功后保存固定身份；所有结果写入统一领域回执和 Development 日志。
 void ACatfishingPlayerController::ServerUseSelectedBackpackItem_Implementation(const FGuid RequestId,
-	const int32 ExpectedSelectedSlot, const FGuid ItemInstanceId)
+	const int32 ExpectedSelectedSlot, const FGuid ItemInstanceId, FCatInventoryUseTarget Target)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
@@ -1343,6 +1343,11 @@ void ACatfishingPlayerController::ServerUseSelectedBackpackItem_Implementation(c
 		Context.SourceInventory = BackPack;
 		Context.InventorySlotIndex = ExpectedSelectedSlot;
 		Context.bContinuousInput = Instance->UsesContinuousInput();
+		Context.Target = Target;
+		Context.OnCompleted = [WeakThis = TWeakObjectPtr<ThisClass>(this)](const FCatDomainCommandResult& Final)
+		{
+			if (ThisClass* Controller = WeakThis.Get()) Controller->DeliverCampCommandResultToOwningClient(Final);
+		};
 		Result = BackPack->ExecuteItemActionFromAuthority(Context, ItemInstanceId, CatInventoryActionTags::Use, 1);
 		if (Result.bCommitted && !Result.bTerminalReplay && Instance->UsesContinuousInput())
 		{
@@ -1353,6 +1358,7 @@ void ACatfishingPlayerController::ServerUseSelectedBackpackItem_Implementation(c
 			ActiveSelectedItemUseInstance = Instance;
 		}
 	}
+	if (Result.bPending) return; // 最终回执由库存完成口发送，排队不是失败。
 	const FString UseEvent = FString::Printf(
 		TEXT("Event=selected_inventory_use_result RequestId=%s Slot=%d ItemId=%s Committed=%d Error=%s World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s"),
 		*RequestId.ToString(EGuidFormats::DigitsWithHyphens), ExpectedSelectedSlot,
@@ -1430,7 +1436,7 @@ void ACatfishingPlayerController::ServerEndSelectedBackpackItem_Implementation(c
 // 4. 最后按成功或拒绝的诊断等级落盘并可靠回送 owning client；重放只回显首次终态，不重复执行副作用。
 void ACatfishingPlayerController::ServerExecuteInventoryAction_Implementation(const FGuid RequestId,
 	AActor* SourceInventoryHost, const int32 SourceSlotIndex, const FGuid ItemInstanceId,
-	const FGameplayTag Action, const int32 Quantity)
+	const FGameplayTag Action, const int32 Quantity, FCatInventoryUseTarget Target)
 {
 	FCatDomainCommandResult Result; Result.RequestId = RequestId;
 	UE_LOG(LogCatfishing, Log, TEXT("Event=inventory_action_received World=%s NetMode=%d Authority=%d Player=%s RequestId=%s Host=%s Slot=%d Instance=%s Action=%s Quantity=%d"),
@@ -1438,7 +1444,12 @@ void ACatfishingPlayerController::ServerExecuteInventoryAction_Implementation(co
 		*GetNameSafe(SourceInventoryHost), SourceSlotIndex, *ItemInstanceId.ToString(), *Action.ToString(), Quantity);
 	if (!CanForwardGameplayCommand()) Result.Error = ECatDomainCommandError::CommandsClosed;
 	else Result = UCatInventoryStatics::ExecuteInventoryActionFromAuthority(Cast<ACatCharacter>(GetPawn()),
-		RequestId, SourceInventoryHost, SourceSlotIndex, ItemInstanceId, Action, Quantity);
+		RequestId, SourceInventoryHost, SourceSlotIndex, ItemInstanceId, Action, Quantity, Target,
+		[WeakThis = TWeakObjectPtr<ThisClass>(this)](const FCatDomainCommandResult& Final)
+		{
+			if (ThisClass* Controller = WeakThis.Get()) Controller->DeliverCampCommandResultToOwningClient(Final);
+		});
+	if (Result.bPending) return;
 	const FString Event = FString::Printf(
 		TEXT("Event=inventory_action_result World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s RequestId=%s Host=%s Slot=%d Instance=%s Action=%s Quantity=%d Committed=%d Replay=%d Error=%s"),
 		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority(), static_cast<int32>(GetLocalRole()), *GetName(),
@@ -1732,7 +1743,7 @@ void ACatfishingPlayerController::NativeInputTagPressed(const FGameplayTag Input
 	}
 }
 
-// 松开流程：G 只结束 Begin 固定的持续实例；交互标签仍由目标组件决定短按，翻天锁已接管时取消候选。
+// 松开流程：左键只结束 Begin 固定的持续实例；交互标签仍由目标组件决定短按，翻天锁已接管时取消候选。
 void ACatfishingPlayerController::NativeInputTagReleased(const FGameplayTag InputTag)
 {
 	if (InputTag.MatchesTagExact(CatInventoryInputTags::Input_UseSelectedItem))
@@ -1744,7 +1755,7 @@ void ACatfishingPlayerController::NativeInputTagReleased(const FGameplayTag Inpu
 		InteractionTargetingComponent->EndInteractionInput(IsDayTransitionInputBlocked());
 }
 
-// 取消流程：G 取消会终止同一次持续 Use；交互输入只释放计时器与候选，绝不提交短按或拾取命令。
+// 取消流程：左键取消会终止同一次持续 Use；交互输入只释放计时器与候选，绝不提交短按或拾取命令。
 void ACatfishingPlayerController::NativeInputTagCanceled(const FGameplayTag InputTag)
 {
 	if (InputTag.MatchesTagExact(CatInventoryInputTags::Input_UseSelectedItem))

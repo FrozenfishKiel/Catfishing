@@ -354,7 +354,8 @@ void UCatInventoryPageController::SubmitInventoryContextAction(const FGameplayTa
 	UE_LOG(LogCatUI, Log, TEXT("Event=ui_inventory_action_submitted World=%s NetMode=%d RequestId=%s SourceHost=%s SourceIndex=%d Item=%s Action=%s Quantity=%d"),
 		*GetPathNameSafe(GetWorld()), static_cast<int32>(Controller->GetNetMode()), *RequestId.ToString(), *GetNameSafe(SourceHost),
 		SourceSlotIndex, *ItemInstanceId.ToString(), *Action.ToString(), Quantity);
-	Controller->ServerExecuteInventoryAction(RequestId, SourceHost, SourceSlotIndex, ItemInstanceId, Action, Quantity);
+	Controller->ServerExecuteInventoryAction(RequestId, SourceHost, SourceSlotIndex, ItemInstanceId, Action, Quantity,
+		Action == CatInventoryActionTags::Use ? Instance->CaptureUseTarget(Controller) : FCatInventoryUseTarget());
 }
 
 // 菜单回调流程：取消不恢复旧 Tooltip，只清理控制器保存的来源上下文。

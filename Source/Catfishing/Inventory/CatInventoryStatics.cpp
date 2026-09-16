@@ -361,7 +361,8 @@ FCatDomainCommandResult UCatInventoryStatics::MoveItemBetweenInventoryHostsFromA
 // 菜单路由只解析当前可访问的来源库存；操作内容与实例身份交给该库存唯一入口，成功后刷新既有装备投影。
 FCatDomainCommandResult UCatInventoryStatics::ExecuteInventoryActionFromAuthority(ACatCharacter* Character,
 	const FGuid RequestId, AActor* SourceHost, const int32 SourceSlot, const FGuid ItemInstanceId,
-	const FGameplayTag Action, const int32 Quantity)
+	const FGameplayTag Action, const int32 Quantity, const FCatInventoryUseTarget& Target,
+	TFunction<void(const FCatDomainCommandResult&)> OnCompleted)
 {
 	FCatDomainCommandResult Result; Result.RequestId = RequestId;
 	FCatInventoryHostEndpoint Endpoint;
@@ -371,6 +372,8 @@ FCatDomainCommandResult UCatInventoryStatics::ExecuteInventoryActionFromAuthorit
 	FCatInventoryItemUseContext Context;
 	Context.RequestId = RequestId; Context.RequestingController = Character->GetController();
 	Context.UserPawn = Character; Context.SourceInventory = Endpoint.Inventory; Context.InventorySlotIndex = Endpoint.SlotIndex;
+	Context.Target = Target;
+	Context.OnCompleted = MoveTemp(OnCompleted);
 	Result = Endpoint.Inventory->ExecuteItemActionFromAuthority(Context, ItemInstanceId, Action, Quantity);
 	if (Result.bCommitted && Endpoint.Equipment) Endpoint.Equipment->RefreshLoadoutFromInventoryComponentFromAuthority();
 	return Result;

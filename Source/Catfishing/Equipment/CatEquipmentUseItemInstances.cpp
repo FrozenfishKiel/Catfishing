@@ -1,6 +1,7 @@
 ﻿#include "Equipment/CatEquipmentUseItemInstances.h"
 
 #include "Character/CatCharacter.h"
+#include "Fishing/Integration/CatFishingAimLibrary.h"
 #include "AbilitySystem/Config/CatAbilitySet.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Equipment/CatEquipmentComponent.h"
@@ -57,6 +58,14 @@ FCatDomainCommandResult UCatFishingRodEquipmentItemInstance::UseFromInventorySlo
 // 部署保管策略：鱼竿离开可见背包后仍由 held entry 保存同一实例，收竿必须归还该对象。
 bool UCatFishingRodEquipmentItemInstance::KeepsInventoryInstanceWhileUsed() const { return true; }
 
+FCatInventoryUseTarget UCatScoopNetEquipmentItemInstance::CaptureUseTarget(APlayerController* Controller) const
+{
+	FCatInventoryUseTarget Target;
+	Target.bHasViewRay = UCatFishingAimLibrary::TryGetLocalCastViewRay(Controller, Target.ViewOrigin, Target.ViewDirection);
+	Target.Actor = Target.bHasViewRay ? UCatFishingAimLibrary::ResolveFishingViewTarget(Controller, Target.ViewOrigin, Target.ViewDirection) : nullptr;
+	return Target;
+}
+
 // 抄网流程：验证定义确有抄网能力并解析本人命令组件；只提交这件实例，捕获与 GE 冷却仍由原事务裁决。
 FCatDomainCommandResult UCatScoopNetEquipmentItemInstance::UseFromInventorySlotFromAuthority(const FCatInventoryEntry& Entry, const FCatInventoryItemUseContext& Context)
 {
@@ -102,12 +111,12 @@ FCatDomainCommandResult UCatChumEquipmentItemInstance::UseFromInventorySlotFromA
 	}
 	Result = Commands->BeginChumUseFromInventoryOnAuthority(Controller, Context, GetItemInstanceId(), GetItemDefinitionId());
 	if (!Result.bCommitted) { ActiveUseAbilityHandles.TakeFromAbilitySystem(ASC); bHasActiveUseContext = false; }
-	// 右键菜单没有后续松开输入，沿同一能力立即提交零蓄力投放；G 才等待原请求的 Release。
+	// 右键菜单没有后续松开输入，沿同一能力立即提交零蓄力投放；左键才等待原请求的 Release。
 	if (Result.bCommitted && !Context.bContinuousInput) return EndUseFromInventorySlotFromAuthority(Context, false);
 	return Result;
 }
 
-// 输入生命周期声明：G 的松开仍回到启动实例；选择其他格不会结束或改写这次使用。
+// 输入生命周期声明：左键的松开仍回到启动实例；选择其他格不会结束或改写这次使用。
 bool UCatChumEquipmentItemInstance::UsesContinuousInput() const { return true; }
 
 // 库存影响声明：只有能力真正提交投放时按已有规则扣量，开始等待和取消都不进入扣量事务。

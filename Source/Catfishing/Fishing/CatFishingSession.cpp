@@ -376,18 +376,16 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
 	UCatWaterQuerySubsystem* Water = GetWorld() ? GetWorld()->GetSubsystem<UCatWaterQuerySubsystem>() : nullptr;
 	ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
-	UCatEquipmentComponent* ScooperEquipment = ScoopingCharacter ? ScoopingCharacter->GetEquipmentComponent() : nullptr;
 	double ScoopReachCentimeters = 0.0;
-	// 抄网范围优先绑定统一 Use 指定的本人背包实例；旧入口没有实例时才退回服务器装备投影里的已选抄网定义。
+	// 抄网只使用统一 Use 指定的本人背包实例，不从旧装备投影猜替代品。
 	const UCatInventoryComponent* ScooperInventory = ScoopingCharacter ? ScoopingCharacter->GetInventoryComponent() : nullptr;
 	const FCatInventoryEntry* RequestedScoopEntry = Command.RequestedScoopItemInstanceId.IsValid() && ScooperInventory
 		? ScooperInventory->GetInventoryEntryAtSlot(ScooperInventory->FindInventorySlotIndexFromInstanceId(Command.RequestedScoopItemInstanceId)) : nullptr;
 	const UCatEquipmentDefinition* RequestedScoopDefinition = RequestedScoopEntry && RequestedScoopEntry->Instance
 		&& RequestedScoopEntry->Instance->GetItemInstanceId() == Command.RequestedScoopItemInstanceId
 		? Cast<UCatEquipmentDefinition>(RequestedScoopEntry->Instance->GetItemDefinition()) : nullptr;
-	const bool bScoopReachReady = Command.RequestedScoopItemInstanceId.IsValid()
-		? UCatFishingAimLibrary::TryResolveScoopReach(RequestedScoopDefinition, ScoopReachCentimeters)
-		: UCatFishingAimLibrary::TryResolveScoopReach(ScooperEquipment, ScoopReachCentimeters);
+	const bool bScoopReachReady = RequestedScoopEntry && RequestedScoopEntry->StackCount > 0
+		&& UCatFishingAimLibrary::TryResolveScoopReach(RequestedScoopDefinition, ScoopReachCentimeters);
 	// 这里不再要求"鱼处于近岸带内"：射线∩圆本身就是唯一的范围判定，再叠一层离岸距离等于两套口径，
 	// 会出现"圈画成绿色（够得着）但服务器因为鱼离岸 3.1 米而拒绝"这种表现与判定打架的情况。
 	// 几何上也已经蕴含：抄手必须站在岸上，射线长度有限，所以能被抄到的鱼必然离岸不远。

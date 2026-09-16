@@ -9,6 +9,7 @@
 #include "GameFramework/PlayerController.h"
 #include "GameplayTagContainer.h"
 #include "Inventory/CatInventoryStatics.h"
+#include "Inventory/CatInventoryUseTarget.h"
 #include "ShopEconomy/Trading/CatShopTradingTypes.h"
 #include "Social/CatSocialTypes.h"
 #include "CatfishingPlayerController.generated.h"
@@ -50,7 +51,7 @@ public:
 	/** 本人提交物品操作意图；服务器按宿主、槽位和实例身份重读物品，不接受客户端定义或效果。 */
 	UFUNCTION(Server, Reliable)
 	void ServerExecuteInventoryAction(FGuid RequestId, AActor* SourceInventoryHost, int32 SourceSlotIndex,
-		FGuid ItemInstanceId, FGameplayTag Action, int32 Quantity);
+		FGuid ItemInstanceId, FGameplayTag Action, int32 Quantity, FCatInventoryUseTarget Target = FCatInventoryUseTarget());
 	/** 本机物品栏输入选择一个实际库存槽位；预测焦点并请求服务器切换同一实例，背包窗口不能触发它。 */
 	bool RequestSelectQuickbarSlotFromInput(int32 RequestedSlotIndex);
 	/** 读取物品栏当前焦点；只读背包容量来排除无效槽位，不在背包组件或库存 Model 中保存选择。 */
@@ -67,7 +68,8 @@ public:
 	bool CanUseSelectedBackpackItemFromInput() const;
 	/** 服务器复核当前本人背包槽位和实例身份后执行统一 Use；客户端本地选中不作为服务器状态或权限依据。 */
 	UFUNCTION(Server, Reliable)
-	void ServerUseSelectedBackpackItem(FGuid RequestId, int32 ExpectedSelectedSlot, FGuid ItemInstanceId);
+	void ServerUseSelectedBackpackItem(FGuid RequestId, int32 ExpectedSelectedSlot, FGuid ItemInstanceId,
+		FCatInventoryUseTarget Target = FCatInventoryUseTarget());
 	/** 服务器结束同一个持续使用实例；只接受 Begin 已记录的 RequestId 和实例身份，换格后也不会把结束事件投给新物品。 */
 	UFUNCTION(Server, Reliable)
 	void ServerEndSelectedBackpackItem(FGuid RequestId, FGuid ItemInstanceId, bool bCancelled);

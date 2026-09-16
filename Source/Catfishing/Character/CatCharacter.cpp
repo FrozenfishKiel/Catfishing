@@ -124,12 +124,12 @@ UCatGrowthComponent* ACatCharacter::GetGrowthComponent() const
 	return GrowthComponent;
 }
 
-// 一次性表现广播落地点：挥网仍由本地 Ability 先播，所以发起端跳过；Primary 输入有瞄准/提竿/收线
-// 三种语义，已不再按下即播，因此提竿事件也必须让发起端收到服务器确认后的表现。
+// 一次性表现广播落地点：抄网由统一物品 Use 提交，挥网与提竿等事件都由服务器确认后送达发起端和旁观端。
 void ACatCharacter::Multicast_PlayCosmeticEvent_Implementation(const FGameplayTag EventTag)
 {
-	// 提竿、断线、主动切线和落水都是服务器裁决后才知道的结果，本机玩家也必须收到；只有挥网等预测动作跳过本机重播。
-	const bool bServerConfirmed = EventTag == CatFishingAbilityTags::Cosmetic_Fishing_HookPull
+	// 挥网不再使用旧 Ability 的本地预测；两种角色均由 Blueprint 调用角色 Montage 映射。
+	const bool bServerConfirmed = EventTag == CatFishingAbilityTags::Cosmetic_Fishing_ScoopSwing
+		|| EventTag == CatFishingAbilityTags::Cosmetic_Fishing_HookPull
 		|| EventTag == CatFishingAbilityTags::Cosmetic_Fishing_LineBroken
 		|| EventTag == CatFishingAbilityTags::Cosmetic_Fishing_LineCut
 		|| EventTag == CatFishingAbilityTags::Cosmetic_Fishing_CatInWater;

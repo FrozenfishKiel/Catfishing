@@ -49,7 +49,7 @@ void UCatGA_FishingChum::ActivateAbility(const FGameplayAbilitySpecHandle Handle
 
 bool UCatGA_FishingChum::MatchesActiveUseRequest(const FGuid RequestId) const
 {
-	// 匹配流程：只比较激活时冻结的请求身份；实例和槽位由提交口再复核，防止迟到 End 影响后一次 G Use。
+	// 匹配流程：只比较激活时冻结的请求身份；实例和槽位由提交口再复核，防止迟到 End 影响后一次 左键 Use。
 	return RequestId.IsValid() && RequestId == ActiveUseContext.RequestId && ActiveSourceItem.IsValid();
 }
 

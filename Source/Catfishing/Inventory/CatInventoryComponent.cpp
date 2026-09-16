@@ -65,15 +65,17 @@ FCatDomainCommandResult UCatInventoryComponent::ExecuteItemActionFromAuthority(c
 	if (!GetOwner() || !GetOwner()->HasAuthority() || Context.SourceInventory != this || !Context.RequestId.IsValid())
 	{ Result.Error = ECatDomainCommandError::PermissionDenied; return Result; }
 	const FString Key = MakeTerminalKey(TEXT("ItemAction"), Context.RequestId);
-	const FString Payload = FString::Printf(TEXT("%s|%d|%s|%s|%d|%d"), *GetPathNameSafe(Context.RequestingController),
+	const FString Payload = FString::Printf(TEXT("%s|%d|%s|%s|%d|%d|%d|%s|%s|%s"), *GetPathNameSafe(Context.RequestingController),
 		Context.InventorySlotIndex, *ItemInstanceId.ToString(), *Action.ToString(), Quantity,
-		Context.bContinuousInput ? 1 : 0);
+		Context.bContinuousInput ? 1 : 0, Context.Target.bHasViewRay,
+		*Context.Target.ViewOrigin.ToString(), *Context.Target.ViewDirection.ToString(), *GetPathNameSafe(Context.Target.Actor));
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
 		if (TerminalPayloadByKey.FindRef(Key) == Payload)
 		{
 			// 缓存保存的是首次终态；重试返回前必须改写为只读重放，避免表现层把第二次回执误当成又一次提交。
 			Result = *Cached;
+			if (Result.bPending) return Result;
 			MarkCommandReplayed(Result);
 			return Result;
 		}
@@ -97,15 +99,32 @@ FCatDomainCommandResult UCatInventoryComponent::ExecuteItemActionFromAuthority(c
 		TerminalPayloadByKey.Add(Key, Payload); TerminalCache.Add(Key, Result);
 		// 行为可能删除或移动原槽位；传入稳定副本，不能持有 FastArray 元素引用跨越副作用。
 		const FCatInventoryEntry Entry = *Current;
-		Result = Entry.Instance->ExecuteInventoryActionFromAuthority(Action, Entry, Context, Quantity);
+		FCatInventoryItemUseContext ExecutionContext = Context;
+		ExecutionContext.OnCompleted = [WeakThis = TWeakObjectPtr<ThisClass>(this), Key,
+			Completed = Context.OnCompleted](const FCatDomainCommandResult& Final)
+		{
+			if (ThisClass* Inventory = WeakThis.Get())
+			{
+				const FCatDomainCommandResult* Pending = Inventory->TerminalCache.Find(Key);
+				if (!Pending || !Pending->bPending || Final.bPending) return;
+				Inventory->TerminalCache.Add(Key, Final);
+				const FString CompletionEvent = FString::Printf(TEXT("Event=inventory_action_completed RequestId=%s Committed=%d Error=%s World=%s NetMode=%d Authority=1"),
+					*Final.RequestId.ToString(), Final.bCommitted, *UEnum::GetValueAsString(Final.Error),
+					*GetNameSafe(Inventory->GetWorld()), int32(Inventory->GetNetMode()));
+				if (CatIsAcceptedDomainCommandResult(Final)) { UE_LOG(LogCatInventory, Log, TEXT("%s"), *CompletionEvent); }
+				else { UE_LOG(LogCatInventory, Warning, TEXT("%s"), *CompletionEvent); }
+				if (Completed) Completed(Final);
+			}
+		};
+		Result = Entry.Instance->ExecuteInventoryActionFromAuthority(Action, Entry, ExecutionContext, Quantity);
 		Result.RequestId = Context.RequestId;
 	}
 	TerminalPayloadByKey.Add(Key, Payload); TerminalCache.Add(Key, Result);
 	const FString Event = FString::Printf(
-		TEXT("Event=inventory_action_resolved World=%s NetMode=%d Authority=1 RequestId=%s Instance=%s Action=%s Quantity=%d Committed=%d Replay=%d Error=%s Reason=%s"),
+		TEXT("Event=inventory_action_resolved World=%s NetMode=%d Authority=1 RequestId=%s Instance=%s Action=%s Quantity=%d Committed=%d Replay=%d Pending=%d Error=%s Reason=%s"),
 		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), *Context.RequestId.ToString(), *ItemInstanceId.ToString(),
-		*Action.ToString(), Quantity, Result.bCommitted, Result.bTerminalReplay, *UEnum::GetValueAsString(Result.Error), *Reason.ToString());
-	if (CatIsAcceptedDomainCommandResult(Result))
+		*Action.ToString(), Quantity, Result.bCommitted, Result.bTerminalReplay, Result.bPending, *UEnum::GetValueAsString(Result.Error), *Reason.ToString());
+	if (Result.bPending || CatIsAcceptedDomainCommandResult(Result))
 	{
 		UE_LOG(LogCatInventory, Log, TEXT("%s"), *Event);
 	}

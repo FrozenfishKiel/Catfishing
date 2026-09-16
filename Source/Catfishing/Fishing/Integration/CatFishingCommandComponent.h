@@ -128,7 +128,6 @@ public:
 	FCatFishingInputEdge SubmitCancelReleased();
 	/** 显式切线入口；现有取消键也会在可切线阶段由服务器改派到同一命令。 */
 	FCatFishingInputEdge SubmitCutLine();
-	FCatFishingInputEdge SubmitScoop();
 
 	UPROPERTY(BlueprintAssignable)
 	FCatFishingCommandResultReceived OnResultReceived;
@@ -225,6 +224,8 @@ private:
 	bool bResolvingCatch = false;
 	TSet<FGuid> PendingScoopRequests;
 	TMap<FGuid, FCatFishingCommandResult> ScoopResults;
+	/** 库存异步完成口，仅持有弱对象捕获；重置时取消，终态只消费一次。 */
+	TMap<FGuid, TFunction<void(const FCatDomainCommandResult&)>> ScoopUseCompletions;
 
 public:
 	/** 缓存本端投放终态；拥有者另行广播显示结果，服务器据此返回真实 Use 结果。 */

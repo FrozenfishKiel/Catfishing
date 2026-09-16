@@ -59,8 +59,6 @@ public:
 	 * 解析抄网唯一有效长度：玩家必须选中完整 ScoopNet；有效长度只读全局 Fishing 射程。
 	 * 服务器裁决与 debug 显示共用此入口，避免无装备时仍显示绿色范围。
 	 */
-	static bool TryResolveScoopReach(const UCatEquipmentComponent* Equipment, double& OutReachCentimeters);
-	/** 用已验证的抄网定义计算同一条范围公式；统一 Use 不依赖 Equipment 快照选择另一件抄网。 */
 	static bool TryResolveScoopReach(const UCatEquipmentDefinition* ScoopDefinition, double& OutReachCentimeters);
 
 	/**

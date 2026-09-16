@@ -11,6 +11,11 @@
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Fishing/Integration/CatFishingResolutionSubsystem.h"
 #include "Fishing/Integration/CatFishingAimLibrary.h"
+#include "Fishing/Integration/CatFishingCommandComponent.h"
+#include "Inventory/CatBackPackComponent.h"
+#include "Fishing/CatFishingService.h"
+#include "Engine/StaticMeshActor.h"
+#include "Components/StaticMeshComponent.h"
 #include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
 #include "Character/CatCharacterMovementComponent.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
@@ -604,4 +609,130 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatScoopInventoryDeferredUseTest,
+	"Catfishing.Unit.Fishing.Inventory.ScoopUsePreservesTargetAndCompletesOnce",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FCatScoopInventoryDeferredUseTest::RunTest(const FString& Parameters)
+{
+	for (int32 Scenario = 0; Scenario < 3; ++Scenario)
+	{
+		const bool bExpectedSuccess = Scenario == 0;
+		CatR3Tests::FFixture F;
+		if (!F.Init(*this, true)) return false;
+		F.AdmitController();
+		F.Cat->GetCharacterMovement()->DisableMovement();
+		auto* World = F.Wrapper.GetTestWorld();
+		auto* Inventory = F.Cat->FindComponentByClass<UCatBackPackComponent>();
+		if (!TestNotNull(TEXT("正式背包"), Inventory)) return false;
+		if (!TestTrue(TEXT("正式抄网入库"), F.Equipment->GrantEquipmentFromAuthority(FGuid::NewGuid(),
+			F.Equipment->GetSnapshot().Revision, TEXT("StarterScoopNet")).bCommitted)) return false;
+		int32 Slot = INDEX_NONE;
+		for (int32 I=0; I<Inventory->GetInventorySlotCount(); ++I)
+			if (const auto* E=Inventory->GetInventoryEntryAtSlot(I); E && E->Instance && E->Instance->GetItemDefinitionId()==TEXT("StarterScoopNet")) { Slot=I; break; }
+		if (!TestTrue(TEXT("抄网实例在正式格中"), Slot!=INDEX_NONE)) return false;
+		const FGuid ItemId = Inventory->GetInventoryEntryAtSlot(Slot)->Instance->GetItemInstanceId();
+		UCatFishDefinition* Definition = nullptr;
+		for (const auto& Asset : GetDefault<UCatFishCatalogSettings>()->Definitions)
+			if (auto* Candidate=Asset.LoadSynchronous(); Candidate && Candidate->IsRuntimeDefinitionReady()) { Definition=Candidate; break; }
+		auto* Fish = World->SpawnActor<ACatFishPickupActor>(F.Cat->GetActorLocation()+FVector(100,0,0), FRotator::ZeroRotator);
+		FCatCaptureConditionSnapshot Condition; Condition.RegionId=TEXT("ScoopUseTest");
+		if (!TestTrue(TEXT("真实鱼实体初始化"), Fish && Definition && Fish->InitializeFromAuthority(F.SessionId,
+			FGuid::NewGuid(), Definition, 1, 1, Condition, TEXT("R3Primary"), {}))) return false;
+		FCatInventoryItemUseContext Context;
+		Context.RequestId=FGuid::NewGuid(); Context.RequestingController=F.Controller; Context.UserPawn=F.Cat;
+		Context.SourceInventory=Inventory; Context.InventorySlotIndex=Slot;
+		Context.Target.bHasViewRay=true;
+		Context.Target.ViewOrigin=F.Cat->GetPawnViewLocation();
+		Context.Target.ViewDirection=(Fish->GetFishingCollisionCenter()-Context.Target.ViewOrigin).GetSafeNormal();
+		Context.Target.Actor=Fish;
+		F.Controller->SetControlRotation(Context.Target.ViewDirection.Rotation());
+		int32 Completions=0; FCatDomainCommandResult Final;
+		Context.OnCompleted=[&](const FCatDomainCommandResult& Result) { ++Completions; Final=Result; };
+		const auto Begin=Inventory->ExecuteItemActionFromAuthority(Context, ItemId, CatInventoryActionTags::Use, 1);
+		TestTrue(TEXT("排队不误报失败或成功"), Begin.bPending && !Begin.bCommitted && Begin.Error==ECatDomainCommandError::None);
+		TestNull(TEXT("帧末之前不提前叼鱼"), F.Cat->GetMouthCarriedActor());
+		const auto PendingReplay=Inventory->ExecuteItemActionFromAuthority(Context, ItemId, CatInventoryActionTags::Use, 1);
+		TestTrue(TEXT("处理中重放不重复排队且不伪装终态"), PendingReplay.bPending && !PendingReplay.bTerminalReplay);
+		auto Forged=Context; Forged.Target.Actor=nullptr;
+		TestEqual(TEXT("同请求替换目标被拒"), Inventory->ExecuteItemActionFromAuthority(Forged, ItemId, CatInventoryActionTags::Use, 1).Error, ECatDomainCommandError::InvalidPayload);
+		if (Scenario == 1) F.Controller->GetFishingCommandComponent()->ResetTransientCommandState();
+		if (Scenario == 2)
+		{
+			FCatInventoryEntry Removed;
+			TestTrue(TEXT("帧末之前移走原抄网"), Inventory->RemoveInventoryEntryAtSlotFromAuthority(Slot, Removed));
+		}
+		F.Wrapper.TickTestWorld(0.01f);
+		TestEqual(TEXT("异步完成只回调一次"), Completions, 1);
+		TestEqual(TEXT("成功、取消和失去抄网的事实正确"), Final.bCommitted, bExpectedSuccess);
+		TestEqual(TEXT("原目标成为嘴叼鱼，取消或失去抄网不拾取"), F.Cat->GetMouthCarriedActor(), bExpectedSuccess ? static_cast<AActor*>(Fish) : nullptr);
+		const auto Replay=Inventory->ExecuteItemActionFromAuthority(Context, ItemId, CatInventoryActionTags::Use, 1);
+		TestTrue(TEXT("最终库存结果可重放"), Replay.bTerminalReplay && !Replay.bPending && Replay.bReplayedTerminalCommitted==bExpectedSuccess);
+		F.Wrapper.TickTestWorld(0.01f);
+		TestEqual(TEXT("重放不重复完成"), Completions, 1);
+	}
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingSessionScoopMouthCarryTest,
+	"Catfishing.Unit.Fishing.Inventory.HookedFishUseCarriesAndSettlesExactlyOnce",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FCatFishingSessionScoopMouthCarryTest::RunTest(const FString& Parameters)
+{
+	CatR3Tests::FFixture F;
+	if (!F.Init(*this,true)) return false;
+	F.AdmitController();
+	auto* World=F.Wrapper.GetTestWorld();
+	F.Cat->GetCharacterMovement()->DisableMovement();
+	F.Cat->SetActorLocation(FVector(0,0,40));
+	FCatWaterGeometryBuildInput Geometry;
+	Geometry.RegionId=TEXT("River"); Geometry.WaterPointVerticalToleranceCm=100; Geometry.BankHeightToleranceCm=100;
+	Geometry.BoundaryToleranceCm=1; Geometry.MaxLandingCorrectionCm=100; Geometry.MinimumWaterInsetCm=1;
+	auto& Boundary=Geometry.Boundaries.AddDefaulted_GetRef(); Boundary.BoundaryId=TEXT("ScoopShore");
+	Boundary.Vertices={{50,-500},{1000,-500},{1000,500},{50,500}};
+	const auto Built=FCatWaterGeometry::Build(Geometry);
+	auto* Region=World->SpawnActorDeferred<ACatWaterRegion>(ACatWaterRegion::StaticClass(),FTransform::Identity);
+	if (!TestTrue(TEXT("真实岸线构建"),Built.bSucceeded && Region)) return false;
+	FCatWaterRegionTestAccess::InjectBakedGeometry(*Region,Built.Cache); Region->FinishSpawning(FTransform::Identity);
+	auto* Floor=World->SpawnActor<AStaticMeshActor>();
+	Floor->GetStaticMeshComponent()->SetMobility(EComponentMobility::Movable);
+	Floor->GetStaticMeshComponent()->SetStaticMesh(LoadObject<UStaticMesh>(nullptr,TEXT("/Engine/BasicShapes/Cube")));
+	Floor->SetActorTransform(FTransform(FRotator::ZeroRotator,FVector(0,0,-20),FVector(10,10,0.2)));
+	Floor->GetStaticMeshComponent()->SetCollisionProfileName(TEXT("BlockAll"));
+	auto* Definition=GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(TEXT("LittleSilverFish"));
+	if (!TestNotNull(TEXT("正式鱼定义"),Definition)) return false;
+	auto* Session=World->SpawnActor<ACatFishingSession>();
+	auto* Encounter=World->SpawnActor<ACatFishEncounterActor>(FVector(120,0,0),FRotator::ZeroRotator);
+	const FGuid CastId=FGuid::NewGuid();
+	if (!TestTrue(TEXT("上钩鱼身份"),Encounter->InitializeAuthoritativeIdentity(F.SessionId,CastId,Definition->FishDefinitionId,120,1))) return false;
+	Session->Snapshot.FishingSessionId=F.SessionId; Session->Snapshot.CastAttemptId=CastId;
+	Session->Snapshot.Phase=ECatFishingPhase::HookedFight; Session->Snapshot.Revision=1;
+	Session->Snapshot.FishEncounterActor=Encounter; Session->Snapshot.FishDefinitionId=Definition->FishDefinitionId;
+	Session->Snapshot.FisherPlayerState=F.Player; Session->Snapshot.FishFightStaminaRemaining=100;
+	Session->FishDefinition=Definition; Session->FishWeightKilograms=1; Session->FishVisualScale=1;
+	Session->FisherCharacter=F.Cat; Session->CastEquipment=F.Equipment; Session->CatchFisherStableNetId=TEXT("R3Primary");
+	Session->AttemptSnapshot.WaterRegion=Region->GetWaterRegionHandle();
+	Session->AttemptSnapshot.RodItemInstanceId=F.Equipment->GetSnapshot().RodItemInstanceId;
+	World->GetSubsystem<UCatFishingService>()->Sessions.Add(F.SessionId,Session);
+	if (!TestTrue(TEXT("真咬已扣一份鱼饵"),F.Equipment->CommitFishingBaitDeferred(F.SessionId).bApplied)) return false;
+	if (!TestTrue(TEXT("正式抄网入库"),F.Equipment->GrantEquipmentFromAuthority(FGuid::NewGuid(),F.Equipment->GetSnapshot().Revision,TEXT("StarterScoopNet")).bCommitted)) return false;
+	auto* Inventory=F.Cat->GetInventoryComponent();
+	const int32 Slot=Inventory->FindFirstInventorySlotIndexByDefinitionId(TEXT("StarterScoopNet"));
+	const FGuid Item=Inventory->GetInventoryEntryAtSlot(Slot)->Instance->GetItemInstanceId();
+	FCatInventoryItemUseContext Context;
+	Context.RequestId=FGuid::NewGuid(); Context.RequestingController=F.Controller; Context.UserPawn=F.Cat; Context.SourceInventory=Inventory; Context.InventorySlotIndex=Slot;
+	Context.Target.bHasViewRay=true; Context.Target.Actor=Encounter; Context.Target.ViewOrigin=F.Cat->GetPawnViewLocation();
+	Context.Target.ViewDirection=(Encounter->GetFishingCollisionCenter()-Context.Target.ViewOrigin).GetSafeNormal();
+	F.Controller->SetControlRotation(Context.Target.ViewDirection.Rotation());
+	FCatDomainCommandResult Final; int32 Completed=0;
+	Context.OnCompleted=[&](const FCatDomainCommandResult& Value){Final=Value;++Completed;};
+	TestTrue(TEXT("上钩鱼抄网沿统一库存入队"),Inventory->ExecuteItemActionFromAuthority(Context,Item,CatInventoryActionTags::Use,1).bPending);
+	F.Wrapper.TickTestWorld(0.01f);
+	TestTrue(TEXT("统一Use最终成功"),Final.bCommitted && Completed==1);
+	TestEqual(TEXT("会话捕获终态"),Session->GetSnapshot().Outcome,ECatFishingOutcome::Caught);
+	TestNotNull(TEXT("满体力上钩鱼直接叼嘴"),ACatFishPickupActor::FindCarriedFish(F.Cat));
+	TestEqual(TEXT("抄鱼不重复扣饵"),Inventory->CountVisibleInventoryQuantityByDefinitionId(TEXT("BugBait")),1);
+	const auto Replay=Inventory->ExecuteItemActionFromAuthority(Context,Item,CatInventoryActionTags::Use,1);
+	TestTrue(TEXT("终态重放不重复结算"),Replay.bTerminalReplay && Replay.bReplayedTerminalCommitted && Completed==1);
+	return !HasAnyErrors();
+}
 #endif

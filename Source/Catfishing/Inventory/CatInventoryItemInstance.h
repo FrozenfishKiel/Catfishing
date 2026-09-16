@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Framework/Core/CatDomainCommandTypes.h"
 #include "GameplayTagContainer.h"
+#include "Inventory/CatInventoryUseTarget.h"
 #include "UObject/Object.h"
 #include "CatInventoryItemInstance.generated.h"
 
@@ -32,6 +33,12 @@ struct FCatInventoryItemUseContext
 
 	/** 本次 Use 是否由按住输入发起；物品据此决定 Begin 后等待 End，右键等一次性入口保持 false 并由物品立即收束。 */
 	bool bContinuousInput = false;
+
+	/** 原输入采样；无目标需求的物品忽略，目标型物品在服务器重新验证。 */
+	FCatInventoryUseTarget Target;
+
+	/** 仅服务器异步执行使用；领域完成后由库存缓存终态再通知请求方，禁止裸 UObject 捕获。 */
+	TFunction<void(const FCatDomainCommandResult&)> OnCompleted;
 };
 
 /** 运行期的一份物品身份；库存格保存数量，实例保存这件物品跨移动、使用和复制时不该丢的身份与行为入口。 */
@@ -41,6 +48,8 @@ class CATFISHING_API UCatInventoryItemInstance : public UObject
 	GENERATED_BODY()
 
 public:
+	/** 本地采样入口；默认物品无需目标，各领域实例负责自己的目标解析。 */
+	virtual FCatInventoryUseTarget CaptureUseTarget(APlayerController* Controller) const { return {}; }
 	/** 查询定义声明的操作当前是否可用；客户端只读生成置灰原因，服务器执行前用同一规则复核。 */
 	virtual bool CanExecuteInventoryAction(const FGameplayTag& Action, const FCatInventoryEntry& Entry,
 		APawn* UserPawn, FText& OutReason) const;

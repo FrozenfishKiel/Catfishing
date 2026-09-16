@@ -32,6 +32,7 @@
 #include "Fishing/Presentation/CatFishPresentationDefinition.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/PlayerController.h"
+#include "Framework/Game/CatfishingPlayerController.h"
 #include "GameFramework/PlayerState.h"
 #include "HAL/IConsoleManager.h"
 #include "Inventory/CatInventoryComponent.h"
@@ -273,7 +274,7 @@ static TAutoConsoleVariable<int32> CVarCatFishingDebug(
 	TEXT("cat.Fishing.Debug"), 0,
 	TEXT("钓鱼世界调试可视化：0=全部关闭（默认）；1=全量（水域边界/瞄准落点/窝点/竿尖球/钩鱼球/抄网射线与鱼圈/鱼线/阶段提示）；")
 	TEXT("2=精简（只保留抄网射线、鱼身上的可捞圆圈、鱼线和阶段提示，关闭其余调试球/圈/线）。")
-	TEXT("抄网圆圈绿色=当前抄网判定可触达，红色=够不着；选中抄网后按 G 使用。"),
+	TEXT("抄网圆圈绿色=当前抄网判定可触达，红色=够不着；选中抄网后按左键使用。"),
 	ECVF_Default);
 
 // 三方资源/力量需要默认可见，便于 Development 包里快速核对鱼、竿和猫的运行事实。
@@ -296,6 +297,18 @@ static TAutoConsoleVariable<int32> CVarCatFishingChumPreview(
 
 namespace
 {
+	bool ResolveSelectedScoopReach(const APlayerController* Controller, double& OutReach)
+	{
+		const ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(Controller);
+		const ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
+		const UCatInventoryComponent* Inventory = Character ? Character->GetInventoryComponent() : nullptr;
+		const FCatInventoryEntry* Entry = Inventory && CatController
+			? Inventory->GetInventoryEntryAtSlot(CatController->GetSelectedQuickbarSlotIndex()) : nullptr;
+		const UCatEquipmentDefinition* Definition = Entry && Entry->Instance && Entry->StackCount > 0
+			? Cast<UCatEquipmentDefinition>(Entry->Instance->GetItemDefinition()) : nullptr;
+		return UCatFishingAimLibrary::TryResolveScoopReach(Definition, OutReach);
+	}
+
 	/**
 	 * 竿尖绘制位置：优先蓝图自放的表现标记——在 Rod 蓝图 VisualRoot 下任意加一个 Scene/Arrow 组件，
 	 * Details→Component Tags 加 "RodTipMarker"，调试线/竿尖球就跟随它；没有标记时回退权威竿尖锚点。
@@ -673,7 +686,7 @@ void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const
 
 	if (!Session)
 	{
-		PushStatus(2, FColor::Silver, TEXT("E 准星交互 · 选中鱼竿后 G 部署 · 操作中松开左键抛竿 · 选中窝料后长按 G 打窝"));
+		PushStatus(2, FColor::Silver, TEXT("E 准星交互 · 左键使用当前物品 · 松开左键抛竿/打窝 · R 放杆 · X 收杆"));
 		return;
 	}
 	const FCatFishingSessionSnapshot& Snapshot = Session->GetSnapshot();
@@ -797,9 +810,8 @@ void UCatFishingDebugSubsystem::DrawScoopRange(APlayerController* Controller) co
 	const FVector PawnLocation = Pawn->GetActorLocation();
 	const ACatCharacter* Character = Cast<ACatCharacter>(Pawn);
 	double Reach = 0.0;
-	// 与权威裁决共用同一解析函数：没有服务器认可的已装备抄网时不显示可用范围。
-	if (!UCatFishingAimLibrary::TryResolveScoopReach(
-		Character ? Character->GetEquipmentComponent() : nullptr, Reach)) return;
+	// 与统一 Use 一样读取快捷栏选中实例，不使用旧装备快照的抄网选择。
+	if (!ResolveSelectedScoopReach(Controller, Reach)) return;
 	// 抄网是角色身体动作：范围必须跟 Character 面朝方向一致，镜头自由转动不改变提示方向。
 	const FVector Facing = UCatFishingAimLibrary::ResolveScoopFacingHorizontal(Character);
 	if (Facing.IsNearlyZero()) return;
@@ -831,8 +843,7 @@ void UCatFishingDebugSubsystem::DrawScoopTargetCircle(APlayerController* Control
 
 	const ACatCharacter* Character = Cast<ACatCharacter>(Pawn);
 	double Reach = 0.0;
-	if (!UCatFishingAimLibrary::TryResolveScoopReach(
-		Character ? Character->GetEquipmentComponent() : nullptr, Reach)) return;
+	if (!ResolveSelectedScoopReach(Controller, Reach)) return;
 	const FVector Facing = UCatFishingAimLibrary::ResolveScoopFacingHorizontal(Character);
 	// 调 AimLibrary 里那个唯一的判定函数：画出来的"能不能抄到"就是服务器的结论，不存在两套口径。
 	const bool bReachable = UCatFishingAimLibrary::DoesScoopRayReachFish(Pawn->GetActorLocation(), Facing,

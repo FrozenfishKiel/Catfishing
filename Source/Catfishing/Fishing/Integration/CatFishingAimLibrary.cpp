@@ -157,30 +157,6 @@ float UCatFishingAimLibrary::ChargeAlphaFromHeldSeconds(const float HeldSeconds)
 	return static_cast<float>(FMath::Clamp(static_cast<double>(HeldSeconds) / MaxSeconds, 0.0, 1.0));
 }
 
-// 抄网有效长度解析流程：先读取全局上限，再从服务器装备快照读取当前抄网定义；两者必须同时完整。
-// debug 与服务器共用这条入口，避免无装备时仍使用全局值画绿色范围、权威裁决却把距离算成 0。
-bool UCatFishingAimLibrary::TryResolveScoopReach(const UCatEquipmentComponent* Equipment,
-	double& OutReachCentimeters)
-{
-	OutReachCentimeters = 0.0;
-	const UCatFishingSettings* FishingSettings = GetDefault<UCatFishingSettings>();
-	if (!FishingSettings || !FishingSettings->TryGetScoopReach(OutReachCentimeters))
-	{
-		return false;
-	}
-
-	const FName SelectedScoopDefinitionId = Equipment ? Equipment->GetSnapshot().ScoopNetDefinitionId : NAME_None;
-	const UCatEquipmentDefinition* ScoopDefinition = SelectedScoopDefinitionId.IsNone() ? nullptr
-		: GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(SelectedScoopDefinitionId);
-	if (!ScoopDefinition || !ScoopDefinition->CanServeScoopNet()
-		|| !ScoopDefinition->IsRuntimeDefinitionReady())
-	{
-		OutReachCentimeters = 0.0;
-		return false;
-	}
-	return TryResolveScoopReach(ScoopDefinition, OutReachCentimeters);
-}
-
 // 精确实例沿用统一抄网距离；定义只证明该物品具备抄网能力，不恢复已退役的逐网距离上限。
 bool UCatFishingAimLibrary::TryResolveScoopReach(const UCatEquipmentDefinition* ScoopDefinition,
 	double& OutReachCentimeters)

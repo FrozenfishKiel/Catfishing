@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Framework/Core/CatDomainCommandTypes.h"
 #include "Inventory/CatInventoryItemDefinition.h"
+#include "Inventory/CatInventoryUseTarget.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "CatInventoryStatics.generated.h"
 
@@ -84,7 +85,9 @@ class CATFISHING_API UCatInventoryStatics : public UBlueprintFunctionLibrary
 public:
 	/** 统一菜单请求的服务器入口；解析可访问库存后由库存重读实例并执行，成功同步既有装备读模型。 */
 	static FCatDomainCommandResult ExecuteInventoryActionFromAuthority(ACatCharacter* Character, FGuid RequestId,
-		AActor* SourceHost, int32 SourceSlot, FGuid ItemInstanceId, FGameplayTag Action, int32 Quantity);
+		AActor* SourceHost, int32 SourceSlot, FGuid ItemInstanceId, FGameplayTag Action, int32 Quantity,
+		const FCatInventoryUseTarget& Target = FCatInventoryUseTarget(),
+		TFunction<void(const FCatDomainCommandResult&)> OnCompleted = {});
 	/** 只读求解已有世界物的丢弃或放置变换；Drop 可附加世界坐标偏移来预检批量载体的分散落点，Place 始终忽略偏移以保持既有调用语义。 */
 	static bool FindWorldReleaseTransform(ACatCharacter* Character, AActor* ItemActor,
 		ECatInventoryWorldAction Action, const UCatInventorySettings& Settings, FTransform& OutTransform,

@@ -159,7 +159,7 @@ void UCatAbilityInputBindingComponent::HandleAbilityInputTagPressed(const FGamep
 	}
 	else return;
 	UE_LOG(LogCatfishing, Display, TEXT("Event=physical_input_route_pressed InputTag=%s Route=%s Pawn=%s %s"),
-		*InputTag.ToString(), Route.Grab.IsValid() ? TEXT("Grab") : TEXT("Ability"),
+		*InputTag.ToString(), Route.SelectedItemController.IsValid() ? TEXT("ItemUse") : Route.Grab.IsValid() ? TEXT("Grab") : TEXT("Ability"),
 		*GetNameSafe(RoutedPawn.Get()), *CatLogContext::BuildControllerFields(Controller));
 }
 
@@ -171,7 +171,7 @@ void UCatAbilityInputBindingComponent::HandleAbilityInputTagReleased(const FGame
 	if (UCatPhysicsGrabComponent* Grab = Route.Grab.Get()) Grab->SetGrabInput(Route.bLeft, false);
 	if (UCatAbilitySystemComponent* AbilitySystem = Route.AbilitySystem.Get()) AbilitySystem->AbilityInputTagReleased(InputTag);
 	UE_LOG(LogCatfishing, Display, TEXT("Event=physical_input_route_released InputTag=%s Route=%s Result=OriginalRecipientReleased %s"),
-		*InputTag.ToString(), Route.Grab.IsValid() ? TEXT("Grab") : TEXT("Ability"),
+		*InputTag.ToString(), Route.SelectedItemController.IsValid() ? TEXT("ItemUse") : Route.Grab.IsValid() ? TEXT("Grab") : TEXT("Ability"),
 		*CatLogContext::BuildControllerFields(Cast<APlayerController>(GetOwner())));
 }
 

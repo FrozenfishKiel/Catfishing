@@ -23,6 +23,8 @@ class CATFISHING_API UCatScoopNetEquipmentItemInstance final : public UCatEquipm
 {
 	GENERATED_BODY()
 public:
+	/** 锁定按下时准星下的鱼，服务器仍重算射线命中。 */
+	virtual FCatInventoryUseTarget CaptureUseTarget(APlayerController* Controller) const override;
 	/** 抄网 Use 的正式入口；将精确实例交给既有 Scoop 命令，由命令保持范围和结算规则。 */
 	virtual FCatDomainCommandResult UseFromInventorySlotFromAuthority(const FCatInventoryEntry& InventoryEntry, const FCatInventoryItemUseContext& UseContext) override;
 };

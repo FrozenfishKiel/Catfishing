@@ -70,6 +70,9 @@ USTRUCT(BlueprintType)
 struct FCatDomainCommandResult
 {
 	GENERATED_BODY()
+	/** 服务器已排队但尚未裁决；不是成功或失败终态，不得触发扣量或终态重放。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bPending = false;
 	/** 可操作的拒绝原因；保留原 Error 分类用于跨系统契约。 */
 	UPROPERTY(BlueprintReadOnly)
 	FName FailureReason;

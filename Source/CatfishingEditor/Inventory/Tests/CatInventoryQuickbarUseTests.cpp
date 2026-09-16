@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
+#include "CatSelectedUseInputTestAccess.h"
 #include "Tests/AutomationEditorCommon.h"
 #include "Editor.h"
 #include "Engine/Engine.h"
@@ -283,13 +284,13 @@ namespace CatInventoryQuickbarUseTests
 			{
 				return true;
 			}
-			HostController->BeginSelectedItemUseFromInput();
+			FCatSelectedUseInputTestAccess::Press(HostController.Get());
 			if (!Test->TestTrue(TEXT("remaining formal chum activates its source ability after moved-item cancellation"),
 				IsChumUseWaiting(Cast<ACatCharacter>(HostController->GetPawn()), BackPack.Get(), FirstChumId, FGuid())))
 			{
 				return true;
 			}
-			HostController->EndSelectedItemUseFromInput(false);
+			FCatSelectedUseInputTestAccess::Release(HostController.Get());
 			if (!Test->TestFalse(TEXT("listen-host release ends the source ability task"), IsChumUseWaiting(Cast<ACatCharacter>(HostController->GetPawn()), BackPack.Get(), FirstChumId, FGuid()))) return true;
 			Stage = 7;
 			return false;

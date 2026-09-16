@@ -39,6 +39,7 @@ public:
 
 private:
 	friend class FCatPhysicalInputRouteTest;
+	friend struct FCatSelectedUseInputTestAccess;
 	struct FPressedRoute
 	{
 		TWeakObjectPtr<UCatAbilitySystemComponent> AbilitySystem;

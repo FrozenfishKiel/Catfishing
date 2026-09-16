@@ -138,7 +138,7 @@ FCatDomainCommandResult UCatFishingCommandComponent::PlaceRodFromInventoryUseOnA
 
 // 窝料持续 Use 开始流程：
 // 1. 先验证组件归属、服务器权威和来源实例身份；UseContext 已由实例保存，Ability 激活后立即冻结它。
-// 2. 再只查找 SourceObject 正是该实例的 Chum AbilitySpec，避免 G 键把背包中所有窝料或默认输入 Ability 一并激活。
+// 2. 再只查找 SourceObject 正是该实例的 Chum AbilitySpec，避免左键把背包中所有窝料或默认输入 Ability 一并激活。
 // 3. 最后由服务器激活该 Spec；计时、等待松开和结束提交全部留在 AbilityTask，不在命令组件保存第二份会话状态。
 FCatDomainCommandResult UCatFishingCommandComponent::BeginChumUseFromInventoryOnAuthority(
 	APlayerController* RequestingController, const FCatInventoryItemUseContext& UseContext,
@@ -171,7 +171,7 @@ FCatDomainCommandResult UCatFishingCommandComponent::BeginChumUseFromInventoryOn
 		{
 			continue;
 		}
-		// G 的来源 Ability 没有全局 InputTag 路由；先显式标记同一 Spec 正在按住，避免 WaitInputRelease(true) 把首帧误判为已松开。
+		// 物品来源 Ability 没有全局 InputTag 路由；先显式标记同一 Spec 正在按住，避免 WaitInputRelease(true) 把首帧误判为已松开。
 		FGameplayAbilitySpec* MutableSpec = AbilitySystem->FindAbilitySpecFromHandle(Spec.Handle);
 		if (MutableSpec)
 		{
@@ -295,13 +295,23 @@ FCatDomainCommandResult UCatFishingCommandComponent::ScoopFromInventoryUseOnAuth
 	}
 	FCatFishingInputEdge Edge;
 	Edge.RequestId = UseContext.RequestId;
+	Edge.bHasCastViewRay = UseContext.Target.bHasViewRay;
+	Edge.CastViewOrigin = UseContext.Target.ViewOrigin;
+	Edge.CastViewDirection = UseContext.Target.ViewDirection;
+	Edge.FishingTarget = UseContext.Target.Actor;
 	HandleAbilityCommandFromAuthority(ECatFishingCommandType::RequestScoop, Edge, ScoopItemInstanceId);
-	FCatFishingCommandResult FishingResult;
-	if (TryGetResult(UseContext.RequestId, FishingResult))
+	if (const FCatFishingCommandResult* FishingResult = ScoopResults.Find(UseContext.RequestId))
 	{
-		Result.bCommitted = FishingResult.bCommitted;
-		Result.Revision = FishingResult.Revision;
-		Result.Error = MapFishingUseErrorToDomain(FishingResult.Error);
+		// 服务器同步拒绝/重放读取权威缓存；ResultsByRequestId 只属于 owning-client 回执。
+		Result.bCommitted = FishingResult->bCommitted;
+		Result.Revision = FishingResult->Revision;
+		Result.Error = MapFishingUseErrorToDomain(FishingResult->Error);
+	}
+	else if (PendingScoopRequests.Contains(UseContext.RequestId))
+	{
+		ScoopUseCompletions.FindOrAdd(UseContext.RequestId) = UseContext.OnCompleted;
+		Result.bPending = true;
+		Result.Error = ECatDomainCommandError::None;
 	}
 	else Result.Error = ECatDomainCommandError::DependencyUnavailable;
 	return Result;
@@ -317,6 +327,16 @@ void UCatFishingCommandComponent::DeliverResultFromAuthority(const FCatFishingCo
 	}
 
 	if (Result.CommandType == ECatFishingCommandType::RequestScoop) ScoopResults.FindOrAdd(Result.RequestId, Result);
+	TFunction<void(const FCatDomainCommandResult&)> Completion;
+	if (Result.CommandType == ECatFishingCommandType::RequestScoop && ScoopUseCompletions.RemoveAndCopyValue(Result.RequestId, Completion) && Completion)
+	{
+		FCatDomainCommandResult Final;
+		Final.RequestId = Result.RequestId;
+		Final.bCommitted = Result.bCommitted;
+		Final.Revision = Result.Revision;
+		Final.Error = MapFishingUseErrorToDomain(Result.Error);
+		Completion(Final);
+	}
 	// 唯一命令回执出口：每条结果都留结构化日志，失败用 Warning 便于在 Output Log 里过滤。
 	const FString ControllerFields = CatLogContext::BuildControllerFields(Controller);
 	if (Result.bCommitted)
@@ -519,6 +539,15 @@ void UCatFishingCommandComponent::ResetTransientCommandState()
 	ScoopCooldownGate.Reset(); // 世界时间会在旅行时重建，旧世界的绝对时间戳不能带入新地图。
 	ScoopResults.Reset();
 	PendingScoopRequests.Reset();
+	auto CancelledUses = MoveTemp(ScoopUseCompletions);
+	ScoopUseCompletions.Reset();
+	for (auto& Use : CancelledUses)
+	{
+		FCatDomainCommandResult Cancelled;
+		Cancelled.RequestId = Use.Key;
+		Cancelled.Error = ECatDomainCommandError::Cancelled;
+		if (Use.Value) Use.Value(Cancelled);
+	}
 	// This component lives on the Controller across pawn changes. Preserve monotonic sequence fences.
 }
 
@@ -953,16 +982,6 @@ FCatFishingInputEdge UCatFishingCommandComponent::SubmitCutLine()
 	return Edge;
 }
 
-FCatFishingInputEdge UCatFishingCommandComponent::SubmitScoop()
-{
-	FCatFishingInputEdge Edge = MakeDiscreteEdge();
-	APlayerController* Controller = Cast<APlayerController>(GetOwner());
-	Edge.bHasCastViewRay = UCatFishingAimLibrary::TryGetLocalCastViewRay(Controller, Edge.CastViewOrigin, Edge.CastViewDirection);
-	Edge.FishingTarget = Edge.bHasCastViewRay ? UCatFishingAimLibrary::ResolveFishingViewTarget(Controller, Edge.CastViewOrigin, Edge.CastViewDirection) : nullptr;
-	DispatchAbilityCommand(ECatFishingCommandType::RequestScoop, Edge);
-	return Edge;
-}
-
 void UCatFishingCommandComponent::DispatchAbilityCommand(const ECatFishingCommandType CommandType,
 	const FCatFishingInputEdge& Edge)
 {
@@ -1031,12 +1050,22 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		{
 			PendingScoopRequests.Add(Edge.RequestId);
 			Queue->Enqueue(ECatFishingResolution::Catch, Controller, Edge.RequestId,
-				[WeakThis = TWeakObjectPtr<ThisClass>(this), Edge]()
+				[WeakThis = TWeakObjectPtr<ThisClass>(this), Edge, RequestedScoopItemInstanceId,
+					WeakPawn = TWeakObjectPtr<APawn>(Controller->GetPawn())]()
 				{
-					if (!WeakThis.IsValid()) return;
-					WeakThis->PendingScoopRequests.Remove(Edge.RequestId);
+					if (!WeakThis.IsValid() || !WeakThis->PendingScoopRequests.Remove(Edge.RequestId)) return;
+					const auto* OwnerController = Cast<APlayerController>(WeakThis->GetOwner());
+					if (!WeakPawn.IsValid() || !OwnerController || OwnerController->GetPawn() != WeakPawn.Get())
+					{
+						FCatFishingCommandResult Cancelled;
+						Cancelled.RequestId = Edge.RequestId;
+						Cancelled.CommandType = ECatFishingCommandType::RequestScoop;
+						Cancelled.Error = ECatFishingCommandError::InvalidPhase;
+						WeakThis->DeliverResultFromAuthority(Cancelled);
+						return;
+					}
 					TGuardValue<bool> Guard(WeakThis->bResolvingCatch, true);
-					WeakThis->HandleAbilityCommandFromAuthority(ECatFishingCommandType::RequestScoop, Edge);
+					WeakThis->HandleAbilityCommandFromAuthority(ECatFishingCommandType::RequestScoop, Edge, RequestedScoopItemInstanceId);
 				});
 			return;
 		}
@@ -1114,6 +1143,18 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 
 	if (CommandType == ECatFishingCommandType::RequestScoop)
 	{
+		// 入队后物品可能被移走；在任何挥网、冷却或拾取副作用之前复核本人正式库存中的同一抄网。
+		const auto* Character = Cast<ACatCharacter>(Controller->GetPawn());
+		const auto* Inventory = Character ? Character->GetInventoryComponent() : nullptr;
+		const auto* Entry = Inventory && RequestedScoopItemInstanceId.IsValid()
+			? Inventory->GetInventoryEntryAtSlot(Inventory->FindInventorySlotIndexFromInstanceId(RequestedScoopItemInstanceId)) : nullptr;
+		const auto* Definition = Entry && Entry->Instance ? Cast<UCatEquipmentDefinition>(Entry->Instance->GetItemDefinition()) : nullptr;
+		if (!Definition || !Definition->CanServeScoopNet() || Entry->StackCount <= 0)
+		{
+			Result.Error = ECatFishingCommandError::InvalidPayload;
+			DeliverResultFromAuthority(Result);
+			return;
+		}
 		double CooldownSeconds = 0.0;
 		if (!Fishing || !GetDefault<UCatFishingSettings>()->TryGetScoopCooldown(CooldownSeconds))
 		{
@@ -1135,10 +1176,10 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 			return;
 		}
 
-		// 本地 Ability 已给发起者播放挥网；服务器在真正接受本次尝试后把动作广播给其他客户端。
+		// 统一 Use 不预测挥网；接受一次尝试后广播给发起者和旁观者，由角色映射到自身骨架。
 		BroadcastCosmeticEventFromAuthority(CatFishingAbilityTags::Cosmetic_Fishing_ScoopSwing);
 		const ACatCharacter* ScoopingCharacter = Cast<ACatCharacter>(Controller->GetPawn());
-		// 墓碑（2026-09-14，T15；钓鱼规则 §5.5）：F 绑定准星鱼身份，禁止重选最近 Session。
+		// 抄网 Use 绑定按下时的准星鱼身份，禁止在服务器重选最近 Session。
 		const bool bValidView = ScoopingCharacter && Edge.bHasCastViewRay
 			&& UCatFishingAimLibrary::IsCastViewRayValid(Edge.CastViewOrigin, Edge.CastViewDirection,
 				ScoopingCharacter->GetPawnViewLocation(), Controller->GetControlRotation().Vector());
@@ -1147,7 +1188,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 			? Edge.FishingTarget.Get() : nullptr;
 		if (ACatFishPickupActor* Pickup = Cast<ACatFishPickupActor>(Target))
 		{
-			// Pickup 是本分支的唯一终态/硬直/回执口，避免一次 F 给 UI 发两份结果。
+			// Pickup 是本分支的唯一终态/硬直/回执口，避免一次使用给 UI 发两份钓鱼结果。
 			if (Pickup->ResolveFishingPickupFromAuthority(Controller, Edge.RequestId)) ScoopCooldownGate.Reset();
 			return;
 		}
@@ -1648,7 +1689,7 @@ void UCatFishingCommandComponent::ServerSubmitPlaceChum_Implementation(const FCa
 	if (!Controller || !Controller->HasAuthority()) return;
 	if (!Controller->CanForwardFishingCommand())
 	{
-		// 显式 PlaceChum RPC 与 Q 蓄力路径共用同一个操作 gate；拒绝也投递终态，避免 UI 在夜晚挂着 pending。
+		// 显式 PlaceChum RPC 与左键蓄力路径共用同一个操作 gate；拒绝也投递终态，避免 UI 在夜晚挂着 pending。
 		Result.Error = ECatChumFieldError::CommandsClosed;
 		DeliverPlaceChumResultFromAuthority(Result);
 		return;

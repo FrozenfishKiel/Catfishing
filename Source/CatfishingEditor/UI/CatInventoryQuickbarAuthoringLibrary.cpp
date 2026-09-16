@@ -40,7 +40,7 @@ namespace CatInventoryQuickbarAuthoring
 	const TCHAR* const GameplayMappingContextPath = TEXT("/Game/Input/InputContext/IMC_InputContext.IMC_InputContext");
 	/** Native Input Config 正式路径；Controller 遍历它把统一动作路由到 core 的 NativeInput tags。 */
 	const TCHAR* const NativeInputConfigPath = TEXT("/Game/Data/Abilities/DA_CatAbilityInputConfig.DA_CatAbilityInputConfig");
-	/** 默认能力集合正式路径；统一 G 接管 Scoop/Chum 后只从这里移除对应旧授予条目。 */
+	/** 默认能力集合正式路径；统一左键接管 Scoop/Chum 后只从这里移除对应旧授予条目。 */
 	const TCHAR* const DefaultAbilitySetPath = TEXT("/Game/Data/Abilities/DA_CatAbilitySet_Default.DA_CatAbilitySet_Default");
 
 	/** 保存已编译/编辑的资产；保存失败返回 false，让 Python 脚本中断且保留可检查的 Editor 日志。 */

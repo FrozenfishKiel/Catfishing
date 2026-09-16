@@ -268,6 +268,33 @@ bool FCatCharacterVariantRuntime::RunTest(const FString& Parameters)
 		CheckPose();
 		UAnimMontage* Original = LoadObject<UAnimMontage>(nullptr, TEXT("/Game/Animalia/Cat/AM_Attack_Agressive_Legs_01-IP_Montage"));
 		UAnimMontage* Resolved = Cast<UAnimMontage>(Visual->ResolveAnimationAsset(Original));
+		// 走正式服务器挥网事件和 Blueprint 消费者，覆盖发起者曾被预测分支跳过的路径。
+		Cat->Multicast_PlayCosmeticEvent(FGameplayTag::RequestGameplayTag(TEXT("Cat.Cosmetic.Fishing.ScoopSwing")));
+		TestTrue(TEXT("scoop multicast reaches the owning character and resolves its skeleton"), Cat->GetMesh()->GetAnimInstance()->Montage_IsPlaying(Resolved));
+		double MinScoopRatio=DBL_MAX, MaxScoopRatio=0;
+		for (int32 Frame=0; Frame<180; ++Frame)
+		{
+			Step(1);
+			if (Frame==15) Capture(TEXT("ScoopSwing"));
+			if (Visual->RigSettings.RigId != TEXT("CuteCat")) continue;
+			const int32 Head=Cat->GetMesh()->GetBoneIndex(TEXT("Head_001")), Nose=Cat->GetMesh()->GetBoneIndex(TEXT("Nose_001"));
+			const FReferenceSkeleton& Ref=Cat->GetMesh()->GetSkeletalMeshAsset()->GetRefSkeleton();
+			TArray<FTransform> Reference;
+			for (int32 Bone=0; Bone<Ref.GetNum(); ++Bone)
+				Reference.Add(Ref.GetParentIndex(Bone)==INDEX_NONE ? Ref.GetRefBonePose()[Bone] : Ref.GetRefBonePose()[Bone]*Reference[Ref.GetParentIndex(Bone)]);
+			const double Length=FVector::Distance(Reference[Head].GetLocation(), Reference[Nose].GetLocation());
+			for (USkinnedMeshComponent* Mesh : {static_cast<USkinnedMeshComponent*>(Cat->GetMesh()), static_cast<USkinnedMeshComponent*>(Visual->GetVisualMesh())})
+			{
+				const double Ratio=FVector::Distance(Mesh->GetBoneTransform(Head).GetLocation(), Mesh->GetBoneTransform(Nose).GetLocation())/(Length*Mesh->GetComponentScale().GetAbsMax());
+				MinScoopRatio=FMath::Min(MinScoopRatio, Ratio); MaxScoopRatio=FMath::Max(MaxScoopRatio, Ratio);
+			}
+		}
+		if (Visual->RigSettings.RigId==TEXT("CuteCat"))
+		{
+			TestTrue(TEXT("scoop including blend-in/out never shrinks either mesh"), MinScoopRatio>0.95 && MaxScoopRatio<1.05);
+			AddInfo(FString::Printf(TEXT("Event=scoop_proportions_verified Min=%.6f Max=%.6f"), MinScoopRatio, MaxScoopRatio));
+		}
+		Cat->StopAnimMontage(Original);
 		TestTrue(TEXT("global gameplay montage starts on selected skin"), Cat->PlayAnimMontage(Original) > 0);
 		Step(4);
 		Capture(TEXT("Action"));

@@ -124,13 +124,13 @@ namespace CatCuteNetwork
 				if (Now-StageAt<2.5 || !SB->IsGrounded() || !CB->IsGrounded()) return false;
 				Test->TestEqual(TEXT("server shared template plays all jump phases"),Phases[0],7);
 				Test->TestEqual(TEXT("owning client shared template plays all jump phases"),Phases[1],7);
-				ServerCat->Multicast_PlayCosmeticEvent(FGameplayTag::RequestGameplayTag(TEXT("Cat.Cosmetic.Fishing.HookPull"))); Stage=4; StageAt=Now;
+				ServerCat->Multicast_PlayCosmeticEvent(FGameplayTag::RequestGameplayTag(TEXT("Cat.Cosmetic.Fishing.ScoopSwing"))); Stage=4; StageAt=Now;
 			}
 			else if (Stage==4 && Now-StageAt>0.1) {
 				UAnimMontage* Source=LoadObject<UAnimMontage>(nullptr,TEXT("/Game/Animalia/Cat/AM_Attack_Agressive_Legs_01-IP_Montage"));
 				for (ACatCharacter* Cat : {ServerCat,ClientCat}) Test->TestTrue(TEXT("multicast plays mapped CuteCat montage on both endpoints"),
 					Cat->GetMesh()->GetAnimInstance()->Montage_IsPlaying(Cast<UAnimMontage>(Cat->FindComponentByClass<UCatPhysicsPrototypeVisualComponent>()->ResolveAnimationAsset(Source))));
-				Test->AddExpectedMessage(TEXT("Event=character_downed"),ELogVerbosity::Warning);
+				// 当前正常倒地转换使用 Log；保留真实状态与复制断言，不再期待旧 Warning 事件。
 				Test->TestTrue(TEXT("authority sets downed transition"),ServerCat->GetConditionComponent()->SetDownedFromAuthority(true));
 				Stage=5; StageAt=Now;
 			}
