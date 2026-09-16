@@ -1,6 +1,25 @@
 # 钓鱼核心架构（技术文档）
 
-## 2026-09-15：逐鱼试探、响应窗与独立完美窗
+
+## 2026-09-16：抽鱼与实体生成分离
+
+现行时序为：等待结束 → Probe 抽定鱼种、重量、体型及巨物标记并记录图鉴相遇 → 试探结束真咬，冻结猫到本竿落点的 D₀（厘米）、扣一份饵并开响应窗 → 有效提钩生成实体鱼、初始化搏斗并放行表现。`Waiting / Probe / TrueBiteWindow` 均不生成 `ACatFishEncounterActor`；提前提钩仍为空竿，真咬超时仍终止，不重抽、不返饵。独立的水下黑影预告尚未交付，不能再以提前生成实体代替；用户本次明确要求实体只在提钩时生成，设计册中的鱼影要求不等于实体生成时机。
+
+基线为 `ed8b80fb`；用户未跟踪的《裁决同步 · 程序（工程待办）》保留。修改前定向世界测试 1 项成功（带警告），证据 `Saved/Automation/HookSpawnBaseline/index.json`。下表只记录本次技术变更，模块状态仍在唯一需求差距清单。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 抽鱼与试探 | `Source/Catfishing/Fishing/CatFishingSession.cpp`：`BeginProbeFromStateTree → ResolveHookSelectionFromAuthority` | 原选鱼同时生成实体；现只冻结数据，输入、随机种子及逐鱼秒数不变 | 从选择事务移除生成，保留图鉴相遇写口 | 抽鱼→配置校验→计时→快照 | 正式 StateTree；Probe 无实体、未扣饵、选鱼幂等 | 已完成；`ReportFinal/index.json` 定向回归通过，覆盖范围见下 |
+| 真咬与资源 | 同文件 `OpenTrueBiteWindowFromAuthority → CommitFishingBaitDeferred` | 原读鱼 Actor 位置；现读原实体出生所用的 `ServerCorrectedLandingWorldPoint` | D₀仍在真咬采样，单位厘米；唯一扣饵入口和最大线长边界不变 | 冻结距离→扣饵→距离门→响应 | Lmax 等于/超限、移动不重算、超时不退款 | 已完成；`ReportFinal/index.json` 定向回归通过，覆盖范围见下 |
+| 提钩与搏斗 | 同文件 `RequestHookFromAuthority → SpawnHookedFishFromAuthority → TryEnterHookedFightFromAuthority` | 原只启动已有实体；现校验窗口后才生成 | 私有生成口使用既有配置类、冻结鱼种与体型；失败销毁实体 | 窗口裁决→生成身份→构造校验→Runner→表现 | 普通/完美提钩、重复请求、实体类缺失、真实钩嘴与线长 | 已完成；`ReportFinal/index.json` 定向回归通过，覆盖范围见下 |
+| 复制与表现 | Session 快照→`UI/CatFishingViewTypes`；`CatFishEncounterActor`；`DefaultGame.ini` 的 `CatFishingPresentationSettings.FishEncounterActorClass` | 提钩前实体引用为空；公开鱼种、巨物标记与时间字段保留 | 不删除反射字段、StateTree 节点或蓝图事件；只推迟实体创建 | 已冻结数据→有效提钩创建→快照/Actor 复制 | 正式类加载及运行验证；有渲染和打包双端另验 | 正式配置为原生鱼类；二进制名称搜索命中 `/Game/Data/StateTrees/ST_FishFight` 和 `/Game/Catfishing/Maps/TestMap`，前者由真实Runner测试加载；搜索不构成完整资产引用证明，额外图表消费者仍需编辑器引用查看器核查，故不删接口；黑影表现仍未交付 |
+| 失败与清理 | `FinalizeSession / ScheduleTerminalDestroy`；`RunImprintService::RecordFishEncounterSilhouette` | 提钩前没有实体要销毁；图鉴记录保持原时机 | 沿用唯一终局、计时及装备释放；失败不另写状态 | 提前提钩/入夜/超时→终局；生成失败→清理 | 世界 Actor 计数、计时清除、库存数量、失败回放 | 已完成；`ReportFinal/index.json` 定向回归通过，覆盖范围见下 |
+| 测试与交付入口 | `CatFishingBiteTimingWorldTests.cpp`、`CatFishingTimingSpatialTests.cpp`、`Docs/Fishing*.md` | 旧测试要求 Probe 生成实体，旧说明混合抽鱼与生成 | 改为世界无实体检查，线长测试改走实际提钩；清理相关注释和现行说明 | 源码→Editor/Game 构建→相关自动化 | 配置默认、资产迁移脚本、Cook 入口不涉及修改；无资产删除 | Editor/Game Development 通过；定向 9/9 通过；未改资产或 Cook |
+
+验证：**contract**：Editor/Game Win64 Development 构建通过（`Saved/Automation/HookSpawn/EditorBuildFinal.log`、`GameBuildFinal.log`），`git diff --check` 通过。**runtime_behavior**：`Saved/Automation/HookSpawn/ReportFinal/index.json` 共9项全部通过（4 clean、5带警告、0失败/未运行），覆盖5项窗口/配置契约、正式StateTree世界时序、D₀与扣饵边界、有效提钩生成/请求去重/缺实体类清理/真实Runner与钩嘴及完美线长、真实鼠标主控输入链。首轮8项中1项旧夹具仍提前造鱼并移动它，现改为冻结落点和猫的移动，原700厘米及超长逃逸断言保留；第二轮全部通过。最终构建前仅删除一行过期注释，无运行逻辑变化。**presentation_delivery**：有渲染真人与打包双端未运行。日志过滤 `LogCatFishing`：`fishing_probe_started` → `fishing_windows_resolved` → `fishing_hook_fish_spawned` → `fishing_fight_started`；生成拒绝为 `fishing_hook_fish_spawn_rejected`。新事件带 RequestId、SessionId、CastAttemptId、玩家/World/NetMode/Authority/LocalRole，Development 默认落盘。新 Cook、真人表现及新包房主/客户端 `<打包根目录>/Catfishing/Saved/Logs` 未验，不关闭模块。
+## 2026-09-15：逐鱼试探、响应窗与独立完美窗（历史验证记录）
+
+> 本节保存当日实现和验证记录。其中 Probe 提前生成 Encounter、以该实体采样 D₀的方案已由上节 2026-09-16 修复替换，不作为现行接线指引。
 
 本次从 `upstream/feature/design-backlog-batch1` 的 `a7018c95` 采用已裁窗口数据，在本地钓鱼链实现，没有合并上游分支。数据来源为该提交 `Config/DefaultGame.ini` 的两组 BiteTiming 配置，已与最新 `79549456` 逐字核对。没有改鱼种稳定 ID、商店、存档、房间 UI、基础池概率或搏斗公式。
 
@@ -527,9 +546,9 @@ Runner只冻结主控ASC、输入及身体运动样本，并在最终求解后�
 | 阶段 | 写入者 |
 |---|---|
 | Waiting | StateTree 节点 `ScheduleWaitingProbe` **内部自己** EnterPhase，并按泊松抽咬钩延迟起计时器 |
-| Probe | StateTree 的 EnterPhase 后调用 `BeginProbeFromStateTree`，冻结选鱼并生成 Encounter；ProbeStayTimer 停留逐鱼秒数 |
+| Probe | StateTree 的 EnterPhase 后调用 `BeginProbeFromStateTree`，冻结选鱼数据，不生成实体；ProbeStayTimer 停留逐鱼秒数 |
 | TrueBiteWindow | ProbeStayTimer → `OpenTrueBiteWindowFromAuthority`：冻结 D₀、扣一次当前饵、距离门，然后发布逐鱼响应与独立完美截止时间并让浮漂下沉 |
-| HookedFight | `RequestHook` 验证服务器截止时间，按同一快照判完美，复用 Probe 已选鱼启动 Runner；不再选鱼或扣饵 |
+| HookedFight | `RequestHook` 验证服务器截止时间，按同一快照判完美，按 Probe 已选数据生成 Encounter 后启动 Runner；不再选鱼或扣饵 |
 | ExhaustedReel | 鱼体力归零或被猫端牵引越岸后发送 `FishExhausted` 事件；同一个 Runner 继续双端运动约束，但关闭鱼 AI 与猫端体力扣费 |
 | Resolved/Terminated | `FinalizeSession()` —— StateTree **禁止**进入终态，且它会停树 |
 

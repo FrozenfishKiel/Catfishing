@@ -476,7 +476,7 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 		// 抢抄对 HookedFight 与 NearShore 两个阶段都开放：鱼身上的可捞圆圈一直存在，不是"体力清零才能抄"。
 		// 搏斗中只要把鱼收到射线够得着的位置就能直接抄上来——这是高风险高回报的主动选择（提前结束搏斗、
 		// 也给多人抢抄留出更长的窗口），而不是等待鱼翻肚后的收尾操作。
-		// 更早的阶段（Waiting/Probe/TrueBiteWindow）不开放：试探期起水里虽然已经有鱼影，但鱼还没被提上钩，
+		// 更早的阶段（Waiting/Probe/TrueBiteWindow）不开放：尚未有效提钩，没有可抄的鱼实体，
 		// 抄它会绕过整个提竿机制。
 		Result.Command.Error = ECatDomainCommandError::InvalidPhase;
 	}
@@ -653,8 +653,7 @@ bool ACatFishingSession::PrepareSessionFromAuthority(const FCatFishingAttemptSna
 	Snapshot.RodActor = Attempt.RodActor;
 	Snapshot.HookActor = HookActor;
 	AttemptSnapshot = Attempt;
-	// 鱼身份留空到咬钩计时到点：那一刻抽鱼、生成鱼影并进入试探期（BeginProbeFromStateTree）。
-	// 2026-09-12 之前是「等合法左键才选鱼」，提竿前水里没有影子，与演出时序相反。
+	// 鱼身份留空到咬钩计时到点：那一刻抽鱼并进入试探期；实体留到有效提钩时生成。
 	FisherCharacter = InFisherCharacter;
 	CastEquipment = InFisherCharacter->GetEquipmentComponent(); // 绑定扣饵来源/会话协调器；它已记录真实竿宿主，物理抓握不重新绑定。
 	bool bRodBroken = false;
@@ -740,7 +739,7 @@ bool ACatFishingSession::ScheduleWaitingProbeFromStateTree()
 		return RejectSchedule(TEXT("SessionOrTimingConfigurationUnavailable"));
 	}
 	// Waiting 由首次抛竿或入夜撤销未真咬的 Probe 进入；超时是终局，不再循环。
-	// 撤销方必须先清理试探鱼影；已有选鱼事实时拒绝重新抽取。
+	// 已有实体或选鱼事实时拒绝重新抽取。
 	if (Snapshot.FishEncounterActor || FishDefinition || SelectionResolution == ECatFishSelectionResolution::Selected)
 	{
 		return RejectSchedule(TEXT("FishAlreadySelected"));
@@ -964,12 +963,11 @@ double ACatFishingSession::GetFisherGrowthMagnitude(const ECatGrowthOptionId Opt
 }
 
 // 试探期进入流程（钓鱼规则 §3.4:141 演出时序）：
-// ①咬钩计时到点这一刻就冻结上下文并抽鱼，同时按真鱼体型生成水里的鱼影 Encounter；
+// ①咬钩计时到点冻结上下文并抽鱼，只保存鱼种、重量与体型数据，不生成实体；
 // ②给这一竿的钓手揭开图鉴剪影层，永不撤销；
 // ③浮漂保持轻点（EnterPhase 里 Probe 对应 BiteWarning 表现），依次取逐鱼值、档位默认或旧区间兜底秒数；
 // ④停留到点才由 HandleProbeStayTimer 把浮漂转猛沉、打开真咬响应窗。
-// 墓碑：2026-09-12 之前本函数叫 OpenTrueBiteWindowFromStateTree，进 Probe 就直接开真咬窗，
-// 鱼与鱼影要等合法左键之后才创建——提竿前水里什么都没有，玩家没法凭鱼影决定要不要提。
+// 实体鱼由有效提钩事务创建；水下黑影预告应独立表现，不能借实体鱼提前出场。
 // 饵的数量不在这里扣：设计把「种类权重在抽鱼时消费、数量在真咬成立时扣」分得很清（钓鱼规则 §2.3:74），
 // 试探期提竿必空竿且不损饵（§3.3:133、§3.4:141），所以扣饵挪到了 OpenTrueBiteWindowFromAuthority。
 bool ACatFishingSession::BeginProbeFromStateTree()
@@ -1000,7 +998,7 @@ bool ACatFishingSession::BeginProbeFromStateTree()
 	const FCatFishSelectionCommitResult Selection = ResolveHookSelectionFromAuthority();
 	if (Selection.Resolution != ECatFishSelectionResolution::Selected)
 	{
-		// NoEligibleFish 已在选择事务里写成空军终局，依赖/生成失败也已收敛为 Invalidated；
+		// NoEligibleFish 已在选择事务里写成空军终局，依赖失败也已收敛为 Invalidated；
 		// 这里只把失败交回资产的失败边，不重复写终态。
 		return false;
 	}
@@ -1026,8 +1024,7 @@ bool ACatFishingSession::BeginProbeFromStateTree()
 		Imprint->RecordFishEncounterSilhouette(Snapshot.FishDefinitionId, CatchFisherStableNetId,
 			CurrentBiteEncounterId);
 	}
-	if (IsTerminal() || Snapshot.Phase != ECatFishingPhase::Probe || !IsValid(FishDefinition)
-		|| !IsValid(Snapshot.FishEncounterActor)) return false;
+	if (IsTerminal() || Snapshot.Phase != ECatFishingPhase::Probe || !IsValid(FishDefinition)) return false;
 
 	GetWorldTimerManager().ClearTimer(ProbeStayTimerHandle);
 	UE_CLOG(FCString::Strcmp(ProbeSource, TEXT("LegacyFallback")) == 0, LogCatFishing, Warning,
@@ -1044,9 +1041,6 @@ bool ACatFishingSession::BeginProbeFromStateTree()
 		*FishDefinition->RarityTierId.ToString(), ProbeSource, *GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()));
 	// 先建立完整计时事实，再发布。观察者可以同步取消或入夜，退出路径会清除计时器；此后不再重建。
 	PublishSnapshot(ECatFishingSnapshotMutation::Discrete);
-	if (!IsTerminal() && Snapshot.Phase == ECatFishingPhase::Probe
-		&& SelectionResolution == ECatFishSelectionResolution::Selected && IsValid(Snapshot.FishEncounterActor))
-		Snapshot.FishEncounterActor->PublishInitialPresentationFromAuthority();
 	return !IsTerminal();
 }
 
@@ -1077,7 +1071,7 @@ bool ACatFishingSession::OpenTrueBiteWindowFromAuthority()
 	UWorld* World = GetWorld();
 	if (!HasAuthority() || IsTerminal() || bOpeningTrueBiteWindow || Snapshot.Phase != ECatFishingPhase::Probe || !Settings || !World
 		|| !Snapshot.HookActor || SelectionResolution != ECatFishSelectionResolution::Selected
-		|| !IsValid(Snapshot.FishEncounterActor) || !FishDefinition)
+		|| !FishDefinition)
 	{
 		return false;
 	}
@@ -1103,7 +1097,7 @@ bool ACatFishingSession::OpenTrueBiteWindowFromAuthority()
 	// 真咬成立时才消费当前饵；预警、试探和抛竿准入均不扣数量。
 	// 先采样该时点，库存通知中的移动不能改变 D0。
 	TrueBiteDistanceCentimeters = FisherCharacter.IsValid()
-		? FVector::Distance(FisherCharacter->GetActorLocation(), Snapshot.FishEncounterActor->GetActorLocation()) : -1.0;
+		? FVector::Distance(FisherCharacter->GetActorLocation(), AttemptSnapshot.ServerCorrectedLandingWorldPoint) : -1.0;
 	UCatEquipmentComponent* Equipment = CastEquipment.Get();
 	const FCatFishingUseOperationResult BaitCommit = Equipment
 		? Equipment->CommitFishingBaitDeferred(Snapshot.FishingSessionId) : FCatFishingUseOperationResult{};
@@ -1126,7 +1120,7 @@ bool ACatFishingSession::OpenTrueBiteWindowFromAuthority()
 		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated, TEXT("True bite distance unavailable"));
 		return false;
 	}
-	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_true_bite_distance SessionId=%s D0Cm=%.3f LmaxCm=%.3f FishPoint=EncounterAtBite World=%s NetMode=%d Authority=1 LocalRole=%d Fisher=%s"),
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_true_bite_distance SessionId=%s D0Cm=%.3f LmaxCm=%.3f FishPoint=FrozenLanding World=%s NetMode=%d Authority=1 LocalRole=%d Fisher=%s"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), TrueBiteDistanceCentimeters, RodFragment->MaximumLineLengthCentimeters,
 		*GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()), *GetNameSafe(FisherCharacter.Get()));
 	if (TrueBiteDistanceCentimeters > RodFragment->MaximumLineLengthCentimeters)
@@ -1159,9 +1153,8 @@ bool ACatFishingSession::OpenTrueBiteWindowFromAuthority()
 	return true;
 }
 
-// 选鱼与鱼影生成事务：咬钩计时到点由 BeginProbeFromStateTree 调用一次，幂等返回缓存结果。
-// 它冻结本次选择依据的全部上下文（水域、窝料、时段、天气、饵、在场战力），选出鱼种并生成水里的 Encounter；
-// Encounter 的首次表现由调用方在剪影揭开前后放行，玩家因此在提竿之前就能看见那团按真鱼体型缩放的黑影。
+// 咬钩计时到点冻结选择上下文及鱼种、重量等数据，幂等返回缓存结果。
+// 抽鱼不生成实体；RequestHookFromAuthority 接受真咬窗口内的提钩后才创建 Encounter。
 FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthority()
 {
 	FCatFishSelectionCommitResult Result;
@@ -1261,55 +1254,9 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 		Result.Error = ECatDomainCommandError::None;
 		return Result;
 	}
-	const UCatFishingPresentationSettings* Presentation = GetDefault<UCatFishingPresentationSettings>();
-	const UCatFishPresentationDefinition* FishPresentation =
-		SelectedDefinition->LoadRuntimePresentationDefinition();
+	const UCatFishPresentationDefinition* FishPresentation = SelectedDefinition->LoadRuntimePresentationDefinition();
 	const double SelectedVisualScale = FishPresentation
 		? FishPresentation->ComputeUniformVisualScale(FrozenSelectionResult.WeightKilograms) : 1.0;
-	UClass* FishClass = Presentation ? Presentation->FishEncounterActorClass.LoadSynchronous() : nullptr;
-	const FVector FishLocation = AttemptSnapshot.ServerCorrectedLandingWorldPoint; // T13：合法实际落点冻结，漂表现不能改归属采样。
-	// 用 SpawnActorDeferred 而非直接 SpawnActor：需要先设置好初始 Transform/Owner，
-	// 再等下面显式调用 InitializeAuthoritativeIdentity 写好权威身份后才 FinishSpawning，
-	// 避免构造期蓝图逻辑读到一个身份尚未就绪的鱼 Actor。
-	ACatFishEncounterActor* Encounter = FishClass && FishClass->IsChildOf(ACatFishEncounterActor::StaticClass())
-		? World->SpawnActorDeferred<ACatFishEncounterActor>(FishClass, FTransform(FishLocation), this,
-			FisherCharacter.Get(), ESpawnActorCollisionHandlingMethod::AlwaysSpawn) : nullptr;
-	const double InitialLineLength = 0.0; // Probe 尚未建立线约束；真咬冻结 D0，提竿时初始化 Runner。
-	if (!Encounter)
-	{
-		SelectionResolution = ECatFishSelectionResolution::Failed;
-		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated, TEXT("Fish presentation unavailable"));
-		Result.Resolution = SelectionResolution;
-		return Result;
-	}
-	// 延迟首次表现通知，直到 PublishInitialPresentationFromAuthority 显式放行（避免构造期蓝图事件过早触发）。
-	// 放行点在 BeginProbeFromStateTree 末尾——鱼影必须先于提竿出现（钓鱼规则 §3.4:141 演出时序）。
-	Encounter->DeferInitialPresentationFromAuthority();
-	if (!Encounter->InitializeAuthoritativeIdentity(Snapshot.FishingSessionId, Snapshot.CastAttemptId,
-		SelectedDefinition->FishDefinitionId, InitialLineLength, SelectedVisualScale))
-	{
-		Encounter->Destroy();
-		SelectionResolution = ECatFishSelectionResolution::Failed;
-		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated, TEXT("Fish identity failed"));
-		Result.Resolution = SelectionResolution;
-		return Result;
-	}
-	Encounter->FinishSpawning(FTransform(FishLocation));
-	const FCatFishEncounterPresentationState& EncounterState = Encounter->GetPresentationState();
-	// FinishSpawning 之后再校验一遍身份/位置是否仍与预期一致：防止构造期蓝图逻辑（BeginPlay 等）
-	// 篡改了权威状态，一旦发现不一致就整体判失败，绝不带着被污染的鱼 Actor 继续往下走。
-	if (IsTerminal() || Snapshot.Phase != ECatFishingPhase::Probe || !IsValid(Encounter) || EncounterState.FishingSessionId != Snapshot.FishingSessionId
-		|| EncounterState.CastAttemptId != Snapshot.CastAttemptId
-		|| EncounterState.FishDefinitionId != SelectedDefinition->FishDefinitionId
-		|| !FMath::IsNearlyEqual(EncounterState.VisualScale, SelectedVisualScale)
-		|| !Encounter->GetActorLocation().Equals(FishLocation, 1.0))
-	{
-		if (IsValid(Encounter)) Encounter->Destroy();
-		SelectionResolution = ECatFishSelectionResolution::Failed;
-		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated, TEXT("Fish construction changed authority state"));
-		Result.Resolution = SelectionResolution;
-		return Result;
-	}
 	FishDefinition = SelectedDefinition;
 	FishWeightKilograms = FrozenSelectionResult.WeightKilograms;
 	FishVisualScale = SelectedVisualScale;
@@ -1323,12 +1270,66 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 		SelectedDefinition->ResolveInitialFightStamina(FrozenSelectionResult.WeightKilograms));
 	Snapshot.FishFightStaminaRemaining = FishFightStaminaInitial;
 	Snapshot.NormalizedFishStamina = FishFightStaminaInitial > 0.0 ? 1.0 : 0.0;
-	Snapshot.FishEncounterActor = Encounter;
 	SelectionResolution = ECatFishSelectionResolution::Selected;
 	Result.Resolution = SelectionResolution;
 	Result.FishDefinitionId = SelectedDefinition->FishDefinitionId;
 	Result.Error = ECatDomainCommandError::None;
 	return Result;
+}
+
+bool ACatFishingSession::SpawnHookedFishFromAuthority(const FGuid RequestId)
+{
+	UWorld* World = GetWorld();
+	const auto Reject = [&](const TCHAR* Reason)
+	{
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_hook_fish_spawn_rejected RequestId=%s SessionId=%s CastAttemptId=%s Fish=%s Reason=%s World=%s NetMode=%d Authority=%d LocalRole=%d %s"),
+			*RequestId.ToString(), *Snapshot.FishingSessionId.ToString(), *Snapshot.CastAttemptId.ToString(),
+			*Snapshot.FishDefinitionId.ToString(), Reason, *GetNameSafe(World), int32(GetNetMode()), HasAuthority(), int32(GetLocalRole()),
+			*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
+		return false;
+	};
+	if (!RequestId.IsValid() || !HasAuthority() || IsTerminal() || !World
+		|| Snapshot.Phase != ECatFishingPhase::TrueBiteWindow || bTrueBiteWindowAcceptingHook
+		|| SelectionResolution != ECatFishSelectionResolution::Selected || !IsValid(FishDefinition)
+		|| !FisherCharacter.IsValid() || !IsValid(Snapshot.HookActor) || Snapshot.FishEncounterActor)
+	{
+		return Reject(TEXT("InvalidHookTransaction"));
+	}
+	const UCatFishingPresentationSettings* Presentation = GetDefault<UCatFishingPresentationSettings>();
+	UClass* FishClass = Presentation ? Presentation->FishEncounterActorClass.LoadSynchronous() : nullptr;
+	const FVector FishLocation = AttemptSnapshot.ServerCorrectedLandingWorldPoint;
+	ACatFishEncounterActor* Encounter = FishClass && FishClass->IsChildOf(ACatFishEncounterActor::StaticClass())
+		? World->SpawnActorDeferred<ACatFishEncounterActor>(FishClass, FTransform(FishLocation), this,
+			FisherCharacter.Get(), ESpawnActorCollisionHandlingMethod::AlwaysSpawn) : nullptr;
+	if (!Encounter) return Reject(TEXT("FishPresentationUnavailable"));
+	// 身份先于构造写入；首次表现事件等搏斗初始化后再放行。
+	Encounter->DeferInitialPresentationFromAuthority();
+	if (!Encounter->InitializeAuthoritativeIdentity(Snapshot.FishingSessionId, Snapshot.CastAttemptId,
+		Snapshot.FishDefinitionId, 0.0, FishVisualScale))
+	{
+		Encounter->Destroy();
+		return Reject(TEXT("FishIdentityFailed"));
+	}
+	Encounter->FinishSpawning(FTransform(FishLocation));
+	if (!IsValid(Encounter)) return Reject(TEXT("FishDestroyedDuringConstruction"));
+	const FCatFishEncounterPresentationState& State = Encounter->GetPresentationState();
+	if (IsTerminal() || Snapshot.Phase != ECatFishingPhase::TrueBiteWindow
+		|| State.FishingSessionId != Snapshot.FishingSessionId || State.CastAttemptId != Snapshot.CastAttemptId
+		|| State.FishDefinitionId != Snapshot.FishDefinitionId || !FMath::IsNearlyEqual(State.VisualScale, FishVisualScale)
+		|| !Encounter->GetActorLocation().Equals(FishLocation, 1.0))
+	{
+		Encounter->Destroy();
+		return Reject(TEXT("FishConstructionChangedAuthorityState"));
+	}
+	Snapshot.FishEncounterActor = Encounter;
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_hook_fish_spawned RequestId=%s SessionId=%s CastAttemptId=%s Fish=%s FishActor=%s WeightKg=%.3f VisualScale=%.3f World=%s NetMode=%d Authority=1 LocalRole=%d %s"),
+		*RequestId.ToString(), *Snapshot.FishingSessionId.ToString(), *Snapshot.CastAttemptId.ToString(),
+		*Snapshot.FishDefinitionId.ToString(), *GetNameSafe(Encounter), FishWeightKilograms, FishVisualScale,
+		*GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()),
+		*CatLogContext::BuildControllerFields(FisherCharacter->GetController()));
+	return true;
 }
 
 void ACatFishingSession::HandleTrueBiteWindowExpired()
@@ -1634,7 +1635,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		return false;
 	}
 	// 巨物全体提示（多人钓鱼附篇 §3.3、交互册「求助与震动」）：求助一律手动喊人，**只有巨物**由系统发全场提示。
-	// 接线点选在这里，不选抽中鱼种那一刻：巨影在试探期就已经有鱼影在水里了，但那时玩家还没提竿，
+	// 接线点选在这里，不选抽中鱼种那一刻：试探期只冻结鱼种数据，玩家还没提竿，
 	// 竿强不够会在下面的检查序里当场瞬断、这一竿根本不成立——那时候把全队喊过来，来了也没有可合力的对象。
 	// 搏斗真的开起来了才喊，喊来的人能做的事（合力拉竿、拽尾救援、抢抄）此刻全部成立。
 	if (Snapshot.bGiant)
@@ -2650,9 +2651,11 @@ FCatFishingCommandResult ACatFishingSession::RequestHookFromAuthority(const FGui
 		}
 		Snapshot.bPerfectHook = FMath::IsFinite(SinceBite) && SinceBite >= 0.0
 			&& GetWorld()->GetTimeSeconds() <= Snapshot.PerfectWindowEndsServerTime;
-		Result.bCommitted = TryEnterHookedFightFromAuthority(); // 真正的搏斗初始化在这里发生。
+		Result.bCommitted = SpawnHookedFishFromAuthority(RequestId) && TryEnterHookedFightFromAuthority();
 		if (Result.bCommitted)
 		{
+			if (IsValid(Snapshot.FishEncounterActor))
+				Snapshot.FishEncounterActor->PublishInitialPresentationFromAuthority();
 			if (StateTreeComponent) StateTreeComponent->SendStateTreeEvent(
 				CatFishingGameplayTags::HookAccepted, FConstStructView(), TEXT("CatFishing"));
 		}

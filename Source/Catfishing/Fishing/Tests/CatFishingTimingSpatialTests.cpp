@@ -5,8 +5,10 @@
 #include "Data/CatFishDefinition.h"
 #include "Data/CatFishPersonalityDefinition.h"
 #include "TimerManager.h"
+#include "EngineUtils.h"
 #include "Growth/CatGrowthComponent.h"
 #include "Fishing/CatFishingSettings.h"
+#include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Fishing/Integration/CatFishingResolutionSubsystem.h"
 #include "Fishing/Integration/CatFishingAimLibrary.h"
 #include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
@@ -115,10 +117,8 @@ bool FCatFishingR3BaitDistanceTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("抽魚入口读当前饵"), F.Equipment->GetCurrentFishingBaitDefinitionId(F.SessionId), FName(TEXT("FruitBait")));
 		auto* World = F.Wrapper.GetTestWorld();
 		auto* Session = World->SpawnActor<ACatFishingSession>();
-		auto* Fish = World->SpawnActor<ACatFishEncounterActor>();
 		Session->Snapshot.FishingSessionId = F.SessionId;
 		Session->Snapshot.Phase = ECatFishingPhase::Probe;
-		Session->Snapshot.FishEncounterActor = Fish;
 		Session->Snapshot.HookActor = World->SpawnActor<ACatFishingHookActor>();
 		Session->Snapshot.CastAttemptId = FGuid::NewGuid();
 		Session->Snapshot.HookActor->InitializeAuthoritativeIdentity(F.SessionId, Session->Snapshot.CastAttemptId);
@@ -134,8 +134,9 @@ bool FCatFishingR3BaitDistanceTest::RunTest(const FString& Parameters)
 		Session->AttemptSnapshot.RodItemInstanceId = L.RodItemInstanceId;
 		Session->bStartupInProgress = true;
 		F.Cat->SetActorLocation(FVector(300, 0, 0));
-		Fish->SetActorLocation(FVector(bOverlong ? 10000 : 1000, 0, 0));
+		Session->AttemptSnapshot.ServerCorrectedLandingWorldPoint = FVector(bOverlong ? 10000 : 1000, 0, 0);
 		const bool bOpened = Session->OpenTrueBiteWindowFromAuthority();
+		TestNull(TEXT("真咬距离门不依赖提前生成鱼"), Session->Snapshot.FishEncounterActor.Get());
 		TestEqual(TEXT("真咬超 Lmax 不进入合法窗口"), bOpened, !bOverlong);
 		TestEqual(TEXT("抛竿时旧饵从未预扣，无需退款"), Inventory->CountVisibleInventoryQuantityByDefinitionId(TEXT("BugBait")), 2);
 		TestEqual(TEXT("只扣真咬当前一份饵"), Inventory->CountVisibleInventoryQuantityByDefinitionId(TEXT("FruitBait")), 1);
@@ -146,7 +147,7 @@ bool FCatFishingR3BaitDistanceTest::RunTest(const FString& Parameters)
 				double(World->GetTimerManager().GetTimerRemaining(Session->TrueBiteTimerHandle)), 12.0);
 			TestEqual(TEXT("实际完美窗保持基础 1 秒"),
 				Session->Snapshot.PerfectWindowEndsServerTime - Session->Snapshot.PhaseStartedServerTime, 1.0);
-			TestEqual(TEXT("真咬 D0 使用移动后的鱼猫距离"), Session->TrueBiteDistanceCentimeters, 700.0);
+			TestEqual(TEXT("真咬 D0 使用移动后的猫到冻结落点距离"), Session->TrueBiteDistanceCentimeters, 700.0);
 			F.Cat->SetActorLocation(FVector(500, 0, 0));
 			TestEqual(TEXT("响应窗移动不改冻结 D0"), Session->TrueBiteDistanceCentimeters, 700.0);
 			F.Equipment->CommitFishingBaitDeferred(F.SessionId);
@@ -341,14 +342,12 @@ bool FCatFishingCatalogTimingTimersTest::RunTest(const FString& Parameters)
 		if (!F.Init(*this, true)) return false;
 		auto* World = F.Wrapper.GetTestWorld();
 		auto* Session = World->SpawnActor<ACatFishingSession>();
-		auto* Encounter = World->SpawnActor<ACatFishEncounterActor>();
 		auto* Fish = Ref.LoadSynchronous();
-		if (!Fish || !Session || !Encounter) return false;
+		if (!Fish || !Session) return false;
 		Session->FishDefinition = Fish;
 		Session->Snapshot.FishingSessionId = F.SessionId;
 		Session->Snapshot.FishDefinitionId = Fish->FishDefinitionId;
 		Session->Snapshot.Phase = ECatFishingPhase::Probe;
-		Session->Snapshot.FishEncounterActor = Encounter;
 		Session->Snapshot.HookActor = World->SpawnActor<ACatFishingHookActor>();
 		Session->Snapshot.CastAttemptId = FGuid::NewGuid();
 		Session->Snapshot.HookActor->InitializeAuthoritativeIdentity(F.SessionId, Session->Snapshot.CastAttemptId);
@@ -359,7 +358,7 @@ bool FCatFishingCatalogTimingTimersTest::RunTest(const FString& Parameters)
 		Session->AttemptSnapshot.RodItemInstanceId = F.Equipment->GetSnapshot().RodItemInstanceId;
 		Session->bStartupInProgress = true;
 		F.Cat->SetActorLocation(FVector(0, 0, 100));
-		Encounter->SetActorLocation(FVector(1000, 0, 0));
+		Session->AttemptSnapshot.ServerCorrectedLandingWorldPoint = FVector(1000, 0, 0);
 		if (!TestTrue(TEXT("正式鱼默认值进入真实真咬开窗入口"), Session->OpenTrueBiteWindowFromAuthority())) return false;
 		const double Expected = Catalog->ResolveBiteTiming(*Fish).TrueBiteWindowSeconds;
 		TestEqual(TEXT("计时器真正使用配置响应秒数"), double(World->GetTimerManager().GetTimerRemaining(Session->TrueBiteTimerHandle)), Expected);
@@ -382,8 +381,9 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 {
 	const auto* Catalog = GetDefault<UCatFishCatalogSettings>();
 	TestEqual(TEXT("读取正式ini完美线长倍率"), Catalog->PerfectInitialLineLengthMultiplier, 0.9);
-	for (const bool bPerfect : {false, true})
+	for (const int32 Scenario : {0, 1, 2})
 	{
+		const bool bPerfect = Scenario == 1;
 		CatR3Tests::FFixture F;
 		if (!F.Init(*this)) return false;
 		auto* World = F.Wrapper.GetTestWorld();
@@ -419,12 +419,9 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 		FCatWaterRegionTestAccess::InjectBakedGeometry(*Region, Built.Cache);
 		Region->FinishSpawning(FTransform::Identity);
 		auto* Session = World->SpawnActor<ACatFishingSession>();
-		auto* Encounter = World->SpawnActor<ACatFishEncounterActor>();
 		const FVector InitialFishPosition(1000, 0, Built.Cache.PlaneToWorld.GetLocation().Z);
-		Encounter->SetActorLocation(InitialFishPosition);
-		const double D0 = FVector::Distance(F.Cat->GetActorLocation(), Encounter->GetActorLocation());
+		const double D0 = FVector::Distance(F.Cat->GetActorLocation(), InitialFishPosition);
 		const FGuid CastId = FGuid::NewGuid();
-		if (!TestTrue(TEXT("真实鱼实体接收本场身份"), Encounter->InitializeAuthoritativeIdentity(F.SessionId, CastId, Fish->FishDefinitionId, D0, 1.0))) return false;
 		auto* Hook = World->SpawnActor<ACatFishingHookActor>();
 		if (!TestTrue(TEXT("真实鱼钩接收同场身份和落点"), Hook && Hook->InitializeAuthoritativeIdentity(F.SessionId, CastId)
 			&& Hook->FinalizeAuthoritativeLandingOnce(true, InitialFishPosition))) return false;
@@ -434,12 +431,14 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 		Session->Snapshot.FishingSessionId = F.SessionId;
 		Session->Snapshot.CastAttemptId = CastId;
 		Session->Snapshot.FishDefinitionId = Fish->FishDefinitionId;
-		Session->Snapshot.FishEncounterActor = Encounter;
 		Session->Snapshot.HookActor = Hook;
 		Session->Snapshot.RodActor = Rod;
 		Session->Snapshot.FisherPlayerState = F.Player;
 		Session->Snapshot.Phase = ECatFishingPhase::TrueBiteWindow;
-		Session->Snapshot.bPerfectHook = bPerfect;
+		Session->Snapshot.PhaseStartedServerTime = World->GetTimeSeconds();
+		Session->Snapshot.WindowEndsServerTime = World->GetTimeSeconds() + 10.0;
+		Session->Snapshot.PerfectWindowEndsServerTime = World->GetTimeSeconds() + (bPerfect ? 1.0 : -1.0);
+		Session->bTrueBiteWindowAcceptingHook = true;
 		Session->Snapshot.FishStrength = 20.0;
 		Session->Snapshot.FishFightStaminaRemaining = 100.0;
 		Session->SelectionResolution = ECatFishSelectionResolution::Selected;
@@ -450,16 +449,48 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 		Session->AttemptSnapshot.RodItemInstanceId = L.RodItemInstanceId;
 		Session->AttemptSnapshot.CastAttemptId = CastId;
 		Session->AttemptSnapshot.WaterRegion = Built.Cache.Handle;
-		Session->AttemptSnapshot.ServerCorrectedLandingWorldPoint = Encounter->GetActorLocation();
+		Session->AttemptSnapshot.ServerCorrectedLandingWorldPoint = InitialFishPosition;
 		Session->TrueBiteDistanceCentimeters = D0;
 		Session->FisherCharacter = F.Cat;
 		Session->CastEquipment = F.Equipment;
 		Session->bStartupInProgress = true;
 		// 冻结常规搏斗样本，猫鱼力量比保持在瞬断/碾压区间之外，确保经过真实入场。
 		F.Cat->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 10.0f);
-		// 直接进入入战入口的夹具补齐真实中鱼已完成的扣饵事务；完整固定步随后需要合法磨损写口。
+		// 夹具仅准备真咬已经完成的扣饵和冻结数据，生成实体与初始化搏斗走正式提钩事务。
 		if (!TestTrue(TEXT("中鱼前置通过唯一库存入口提交鱼饵"), F.Equipment->CommitFishingBaitDeferred(F.SessionId).bApplied)) return false;
-		if (!TestTrue(TEXT("生产搏斗入口启动真实Runner"), Session->TryEnterHookedFightFromAuthority() && Session->IsFightRunnerRunning())) return false;
+		const auto CountFishActors = [&]()
+		{
+			int32 Count = 0;
+			for (TActorIterator<ACatFishEncounterActor> It(World); It; ++It)
+				if (IsValid(*It)) ++Count;
+			return Count;
+		};
+		TestEqual(TEXT("有效提钩前没有鱼实体"), CountFishActors(), 0);
+		const FGuid HookRequestId = FGuid::NewGuid();
+		if (Scenario == 2)
+		{
+			auto* Presentation = GetMutableDefault<UCatFishingPresentationSettings>();
+			TGuardValue<TSoftClassPtr<ACatFishEncounterActor>> MissingClass(Presentation->FishEncounterActorClass, {});
+			AddExpectedErrorPlain(TEXT("Event=fishing_hook_fish_spawn_rejected"), EAutomationExpectedErrorFlags::Contains, 1);
+			AddExpectedErrorPlain(TEXT("Outcome=ECatFishingOutcome::Invalidated"), EAutomationExpectedErrorFlags::Contains, 1);
+			TestFalse(TEXT("实体类缺失拒绝有效提钩"), Session->RequestHookFromAuthority(HookRequestId).bCommitted);
+			TestEqual(TEXT("生成失败终止会话"), Session->Snapshot.Outcome, ECatFishingOutcome::Invalidated);
+			TestFalse(TEXT("失败请求重放仍返回原拒绝"), Session->RequestHookFromAuthority(HookRequestId).bCommitted);
+			TestEqual(TEXT("生成失败及重放没有残留实体"), CountFishActors(), 0);
+			TestFalse(TEXT("生成失败不遗留搏斗"), Session->IsFightRunnerRunning());
+			TestFalse(TEXT("生成失败释放装备使用记录"), F.Equipment->IsFishingUseActive(F.SessionId));
+			continue;
+		}
+		if (!TestTrue(TEXT("有效提钩生成实体并启动真实Runner"), Session->RequestHookFromAuthority(HookRequestId).bCommitted && Session->IsFightRunnerRunning())) return false;
+		auto* Encounter = Session->Snapshot.FishEncounterActor.Get();
+		if (!TestNotNull(TEXT("有效提钩绑定实体"), Encounter)) return false;
+		TestEqual(TEXT("生成鱼沿用已选鱼种"), Encounter->GetPresentationState().FishDefinitionId, Fish->FishDefinitionId);
+		TestEqual(TEXT("生成鱼沿用冻结比例"), Encounter->GetPresentationState().VisualScale, Session->FishVisualScale);
+		TestEqual(TEXT("提钩判定仍区分普通和完美"), Session->Snapshot.bPerfectHook, bPerfect);
+		TestTrue(TEXT("同一提钩请求重放返回原回执"), Session->RequestHookFromAuthority(HookRequestId).bCommitted);
+		TestFalse(TEXT("搏斗中新的提钩请求被拒绝"), Session->RequestHookFromAuthority(FGuid::NewGuid()).bCommitted);
+		TestEqual(TEXT("重复提钩只保留一个实体"), CountFishActors(), 1);
+		TestEqual(TEXT("重复提钩不替换实体"), Session->Snapshot.FishEncounterActor.Get(), Encounter);
 		TestTrue(TEXT("生产入口读取正式非零嘴部标定并绑定真实钩嘴"), Session->FightRunner->Config.FishBody.Geometry.HasMouthLever()
 			&& Hook->GetAttachParentActor() == Encounter && Hook->GetActorLocation().Equals(Encounter->GetMouthWorldLocation(), 0.001));
 		const auto* Template = GetDefault<UCatFishingSettings>()->FindFightPersonality(Fish->FightPersonalityId);

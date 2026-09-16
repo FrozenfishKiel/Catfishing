@@ -66,7 +66,7 @@ FCatFishingOpenTrueBiteWindowTask::FCatFishingOpenTrueBiteWindowTask()
 	bShouldCopyBoundPropertiesOnExitState = false;
 }
 
-// 进 Probe 即抽鱼并生成鱼影；真咬窗由会话内部的试探期计时器打开，本节点不再直接开窗。
+// 进 Probe 即抽鱼并冻结数据；真咬窗由试探期计时器打开，实体鱼只在有效提钩时生成。
 EStateTreeRunStatus FCatFishingOpenTrueBiteWindowTask::EnterState(FStateTreeExecutionContext& Context,
 	const FStateTreeTransitionResult& Transition) const
 {

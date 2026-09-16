@@ -219,8 +219,8 @@ Controller.Server Configure Equipment(
 3. 第一次按 R，确认 `PlaceRod` 结果 `bCommitted=true`，鱼竿直接拿在手上，本人已为主 Operator
 4. 再按R放下，伸爪抓回同一根竿后按R恢复主控；确认旁人抓竿不进入会话、不自动接任，角色不被摆到固定站位
 5. 瞄水面按抛竿确认键，确认 `Event=fishing_phase_entered ... Phase=Waiting`，浮漂飞出去后 `Phase` 最终变成 `Landed`（Hook 的 `BP_OnHookPresentationChanged` 应该收到一次带 `Landed` 的回调）
-6. 确认默认鱼饵下浮漂先慢浮至少 `MinimumBiteDelaySeconds`（当前 3 秒），再快速抖动 `BiteWarningSeconds`（当前 1.5 秒），然后下沉并进入 `Phase=TrueBiteWindow`；无窝/单份新窝中心/五份重叠新窝中心的平均总等待为20/14/6秒。
-7. 窗口内按住 Primary，确认提竿成功进 `HookedFight`
+6. 确认默认鱼饵下浮漂先慢浮至少 `MinimumBiteDelaySeconds`（当前 3 秒），再快速抖动 `BiteWarningSeconds`（当前 1.5 秒），进入 `Probe` 并轻点逐鱼试探时长，最后下沉进入 `Phase=TrueBiteWindow`；无窝/单份新窝中心/五份重叠新窝中心的20/14/6秒均值计到试探开始，真咬还需加逐鱼试探时间。
+7. 试探期仅抽定鱼种，真咬窗开启也没有实体鱼；窗口内按住 Primary，确认出现 `fishing_hook_fish_spawned`，实体鱼生成并进入 `HookedFight`。提前提竿、入夜收竿或响应超时均不应生成实体。
 8. 鱼仍有体力时先收到抄网射线范围内按 `F`，确认鱼直接挂到猫嘴上；也可继续把鱼力竭后回收，确认岸上生成可交互的死鱼 Actor
 9. F 抄中的鱼应已处于嘴叼状态；力竭落地鱼则先按 `E` 叼起。两条路线都确认随身背包没有新增鱼，再对目标地面鱼护按 `E`，确认只写入该鱼护
 10. 单独测打窝：调用 `SubmitPlaceChum`，确认 `TryGetPlaceChumResult` 返回 `bCommitted=true`，且第 6 步的等待时间因为窝料明显缩短

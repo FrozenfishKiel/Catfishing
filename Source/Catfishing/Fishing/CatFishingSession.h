@@ -59,10 +59,9 @@ public:
 	/** 仅刷新尚未真咬的计时；次日重新采样，已有真咬和搏斗不受影响。 */
 	void RefreshBiteAvailabilityFromAuthority();
 	/**
-	 * 进入试探期（钓鱼规则 §3.4:141 演出时序）：抽中瞬间就选鱼并生成按真鱼体型的鱼影，浮漂轻点，
+	 * 进入试探期：抽定鱼种并冻结重量、体型及巨物标记，浮漂轻点，不生成实体鱼。
 	 * 停留解析后的试探时长（逐鱼可选覆盖，否则参数页区间）之后浮漂猛沉、才打开真咬响应窗。
-	 * 2026-09-12 前是「Probe 只打开响应窗、鱼在合法左键之后才创建」，那样提竿前水里根本没有影子；
-	 * 而 09-12 裁「竿强瞬断报废鱼竿」的前提正是玩家看得见那团黑影才谈得上知情的赌博（钓鱼规则 §4.2:176）。
+	 * 实体鱼只在真咬窗口内有效提钩时创建；独立的水下黑影预告不由实体鱼承担。
 	 */
 	bool BeginProbeFromStateTree();
 	FCatFishingCommandResult RequestHookFromAuthority(FGuid RequestId);
@@ -281,7 +280,7 @@ private:
 	/** 渔获收口：确认消耗本场鱼饵，并按钓鱼规则 §4.4（:203）给鱼竿另扣 1 点基础磨损。 */
 	bool CommitCatchEquipmentFromAuthority();
 	void HandleBiteWarningTimer();
-	/** 咬钩等待计时到点：只把「试探触发」送进 StateTree，选鱼与鱼影在 BeginProbeFromStateTree 里发生。 */
+	/** 咬钩等待计时到点：只把「试探触发」送进 StateTree，选鱼在 BeginProbeFromStateTree 里发生。 */
 	void HandleProbeTimer();
 	/** 试探期停留到点：浮漂由轻点转猛沉，打开真咬响应窗。 */
 	void HandleProbeStayTimer();
@@ -292,8 +291,10 @@ private:
 	bool TryResolveTrueBiteWindowSeconds(double& OutSeconds, const TCHAR** OutSource = nullptr) const;
 	double GetFisherGrowthMagnitude(ECatGrowthOptionId OptionId) const;
 	void HandleTrueBiteWindowExpired();
-	/** 咬钩计时到点那一刻冻结选择上下文、选鱼、生成鱼影 Encounter；饵的数量在真咬成立时才扣。 */
+	/** 咬钩计时到点冻结选择上下文与鱼种数据，不生成实体；饵的数量在真咬成立时才扣。 */
 	FCatFishSelectionCommitResult ResolveHookSelectionFromAuthority();
+	/** 仅供有效提钩事务调用：按已冻结的鱼种、重量与落点生成实体，不重抽鱼。 */
+	bool SpawnHookedFishFromAuthority(FGuid RequestId);
 	bool TryReadNearShoreFishSpatial(FCatWaterSpatialResult& OutSpatial) const;
 
 	/** 当前会话唯一 StateTree 组件；自动启动关闭，由 Initialize 显式设置资产。 */

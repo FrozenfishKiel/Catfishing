@@ -140,9 +140,9 @@ Root
 | 阶段 | 谁写的 |
 |---|---|
 | Waiting | `Cat Fishing Schedule Waiting Probe` 节点内部自己 EnterPhase |
-| Probe | StateTree 的 `Cat Fishing Enter Phase` 节点 |
-| TrueBiteWindow | `Cat Fishing Open True Bite Window` 节点打开通用响应窗；此时没有鱼 Actor |
-| HookedFight | 真咬窗内收到左键后，`RequestHook` 才选鱼、生成 Actor、扣饵并 EnterPhase |
+| Probe | StateTree 进入阶段后调用 `BeginProbeFromStateTree` 抽定数据，尚无实体鱼 |
+| TrueBiteWindow | 试探计时结束后打开逐鱼响应窗并扣一份饵；此时没有鱼 Actor |
+| HookedFight | 真咬窗内收到左键后，`RequestHook` 使用试探期已选数据生成 Actor 并进入搏斗，不重抽、不重复扣饵 |
 | ExhaustedReel | 鱼体力耗尽或力量碾压后，Session 保留鱼的死亡瞬间位置、停止搏斗 Runner 并进入；随后仅在持续左键时有限速收近 |
 | Resolved / Terminated | `FinalizeSession()`，**StateTree 禁止进入** |
 
@@ -392,7 +392,7 @@ Event BeginPlay
 | 5 | 主位瞄水面按住再松开左键，队员继续移动 | `Event=fishing_phase_entered ... Phase=Waiting`，浮漂飞出去；飞行和等待期间保持实际抓握，不开启搏斗扣费 |
 | 6 | 等浮漂落水 | Hook 的 `BP_OnHookPresentationChanged` 收到 `Phase=Landed` |
 | 7 | 等咬钩，窗口内尝试移动 | `Phase=Probe` → `Phase=TrueBiteWindow`；实际抓握继续，尚不因进入咬钩窗口生成鱼或扣搏斗体力 |
-| 8 | 主位在3秒内按住左键 | 服务器选鱼并生成鱼Actor，进入 `Phase=HookedFight`；鱼线从实际竿尖施力，经手部约束传到身体 |
+| 8 | 主位在逐鱼响应窗内按住左键 | 服务器使用已选结果生成鱼Actor，进入 `Phase=HookedFight`；鱼线从实际竿尖施力，经手部约束传到身体 |
 | 9 | 持续按住左键收线 | Snapshot 里 `NormalizedFishStamina` 下降 |
 | 10 | 鱼被收到面前（**搏斗中就可以**） | debug 里鱼身上的圈从红变绿 = 现在按 F 抄得到 |
 | 11 | 对着鱼按 F | 不论鱼剩余体力，范围合法即直接变成嘴叼世界鱼；失败按同一 `RequestId` 查看 `scoop_target_* → scoop_rejected → fishing_scoop_terminal → fishing_command_result` |
