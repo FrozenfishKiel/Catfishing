@@ -1,4 +1,4 @@
-﻿#include "Fishing/Actors/CatFishingRodActor.h"
+#include "Fishing/Actors/CatFishingRodActor.h"
 
 #include "Character/CatCharacter.h"
 #include "Equipment/CatEquipmentComponent.h"
@@ -45,6 +45,14 @@ ACatFishingRodActor::ACatFishingRodActor()
 	PhysicsBody = CreateDefaultSubobject<UBoxComponent>(TEXT("PhysicsRodBody"));
 	PhysicsBody->SetupAttachment(SceneRoot);
 	PhysicsBody->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	InteractionBounds = CreateDefaultSubobject<UBoxComponent>(TEXT("RodInteractionBounds"));
+	InteractionBounds->SetupAttachment(PhysicsBody);
+	InteractionBounds->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	InteractionBounds->SetCollisionResponseToAllChannels(ECR_Ignore);
+	InteractionBounds->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+	InteractionBounds->BodyInstance.bAutoWeld = false;
+	InteractionBounds->SetGenerateOverlapEvents(false);
+	InteractionBounds->SetCanEverAffectNavigation(false);
 	PhysicalRod = CreateDefaultSubobject<UCatFishingPhysicalRodComponent>(TEXT("PhysicalRod"));
 	LightProp = CreateDefaultSubobject<UCatLightPropComponent>(TEXT("LightProp"));
 	// VisualRoot 承载美术表现（皮肤/特效），与权威判定用的锚点分层，便于蓝图独立驱动视觉
@@ -239,21 +247,23 @@ void ACatFishingRodActor::RevokeOperatorAbilityGrantFromAuthority(APlayerState* 
 
 void ACatFishingRodActor::ReconcileOperatorAbilityGrantsFromAuthority()
 {
-	// 操作能力对齐流程：先从 Owner 的 held-entry 解析这根已部署竿的原始实例，再按当前 roster 为实际操作员授予定义资产列出的集合。
+	// 操作能力对齐流程：先从服务解析这根已部署竿当前保管者的原始实例，再按当前 roster 为实际操作员授予定义资产列出的集合。
 	if (!HasAuthority()) return;
-	if (!PresentationState.bDeployed || PresentationState.bBroken || !PresentationState.OwnerPlayerState)
+	if (!PresentationState.bDeployed || PresentationState.bBroken)
 	{
 		TArray<TObjectPtr<APlayerState>> Existing;
 		OperatorAbilityGrants.GetKeys(Existing);
 		for (APlayerState* Player : Existing) RevokeOperatorAbilityGrantFromAuthority(Player);
 		return;
 	}
-	ACatCharacter* OwnerCharacter = Cast<ACatCharacter>(PresentationState.OwnerPlayerState->GetPawn());
-	UCatEquipmentComponent* Equipment = OwnerCharacter ? OwnerCharacter->GetEquipmentComponent() : nullptr;
+	UCatFishingService* Service = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
+	UCatEquipmentComponent* Equipment = Service ? Service->ResolveRodEquipmentFromAuthority(this) : nullptr;
 	UCatEquipmentInventoryItemInstance* SourceInstance = Equipment ? Equipment->ResolveDeployedRodItemInstanceFromAuthority(PresentationState.ItemInstanceId) : nullptr;
 	const UCatEquipmentDefinition* Definition = SourceInstance ? Cast<UCatEquipmentDefinition>(SourceInstance->GetItemDefinition()) : nullptr;
 	if (!Definition)
 	{
+		UE_CLOG(GetOperatorCount() > 0, LogCatFishing, Warning, TEXT("Event=fishing_rod_operator_abilities_rejected RodActorId=%s ItemInstanceId=%s Reason=SourceInstanceUnavailable World=%s NetMode=%d Authority=1 LocalRole=%d"),
+			*PresentationState.RodActorId.ToString(), *PresentationState.ItemInstanceId.ToString(), *GetNameSafe(GetWorld()), int32(GetNetMode()), int32(GetLocalRole()));
 		TArray<TObjectPtr<APlayerState>> Existing; OperatorAbilityGrants.GetKeys(Existing);
 		for (APlayerState* Player : Existing) RevokeOperatorAbilityGrantFromAuthority(Player);
 		return;
@@ -785,6 +795,7 @@ void ACatFishingRodActor::BeginPlay()
 {
 	Super::BeginPlay();
 	PhysicalRod->Initialize(PhysicsBody, GripCanonicalLocalTransform, RodTipCanonicalLocalTransform);
+	InteractionBounds->SetBoxExtent(PhysicsBody->GetUnscaledBoxExtent().ComponentMax(FVector(8.0)));
 	SetTickGroup(TG_PostPhysics);
 	SetActorTickEnabled(true);
 	SetActorTickEnabled(IsUsingPhysicalRod() || PresentationState.PoseMode == ECatFishingRodPoseMode::Held);
@@ -864,6 +875,8 @@ void ACatFishingRodActor::QueueOrDispatchPresentationChanged(const FCatFishingRo
 void ACatFishingRodActor::DispatchPresentationChanged(const FCatFishingRodPresentationState& Previous,
 	const FCatFishingRodPresentationState& Current)
 {
+	InteractionBounds->SetCollisionEnabled(Current.bDeployed && !Current.bBroken && !Current.OperatorPlayerState
+		? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
 	SetActorTickEnabled(IsUsingPhysicalRod() || Current.PoseMode == ECatFishingRodPoseMode::Held);
 	// 收竿后 Actor 还要活满一个终态复制窗（见 UCatFishingService::PackRod）才销毁，
 	// 期间必须立刻从视觉和碰撞上消失，否则玩家会看到一根杵着不走、还挡路的幽灵竿。

@@ -22,6 +22,8 @@
 #include "Framework/Game/CatfishingPlayerState.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatBackPackComponent.h"
+#include "Inventory/CatInventoryItemInstance.h"
 #include "OnlineSubsystemTypes.h"
 #include "UObject/StrongObjectPtr.h"
 
@@ -115,10 +117,51 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 		const FGuid SecondItemId = CatFishingTest::InstanceId(SecondInventoryItem);
 		TestNotEqual(TEXT("two physical rods have distinct instance IDs"), SecondItemId, ItemId);
 
-		const FCatFishingInputEdge FirstEdge = Commands->SubmitRodInteract();
-		FCatFishingCommandResult First;
-		if (!TestTrue(TEXT("first successful R returns result"), Commands->TryGetResult(FirstEdge.RequestId, First))
-			|| !TestTrue(TEXT("first R commits"), First.bCommitted)) return false;
+		// 正式选格链：同一实例进出 held storage，原格位不能被其他条目占用。
+		auto* BackPack = Cast<UCatBackPackComponent>(Character->GetInventoryComponent());
+		if (!TestNotNull(TEXT("character owns quickbar backpack"), BackPack)) return false;
+		const int32 FirstSlot = BackPack->FindInventorySlotIndexFromInstanceId(ItemId);
+		const int32 SecondSlot = BackPack->FindInventorySlotIndexFromInstanceId(SecondItemId);
+		TestTrue(TEXT("selecting rod equips without G"), Controller->RequestSelectQuickbarSlotFromInput(FirstSlot));
+		auto* SelectedRod = Fishing->FindRodOperatedBy(Player);
+		if (!TestNotNull(TEXT("selection creates held rod"), SelectedRod)) return false;
+		TestEqual(TEXT("held reservation uses exact first identity"), BackPack->GetQuickbarHeldSlot().ItemInstanceId, ItemId);
+		TestFalse(TEXT("reservation rejects another instance"), BackPack->CanAcceptInventoryEntryAtSlot(SecondInventoryItem, FirstSlot));
+		FCatInventoryReceiveBatch NewRods;
+		auto& NewRodDefinition = NewRods.DefinitionEntries.AddDefaulted_GetRef();
+		NewRodDefinition.Count = 0;
+		NewRodDefinition.ItemDefinition = BackPack->FindHeldInventoryEntryFromAuthority(ItemId)->Instance->GetItemDefinition();
+		for (const auto& Entry : BackPack->GetInventoryEntries()) if (!Entry.Instance) ++NewRodDefinition.Count;
+		TestFalse(TEXT("new same-definition rods cannot count the held reservation as capacity"), BackPack->CanFullyAcceptInventoryBatch(NewRods));
+		FCatInventoryReceiveBatch OriginalRod;
+		auto& OriginalRodEntry = OriginalRod.InstanceEntries.AddDefaulted_GetRef();
+		OriginalRodEntry.ItemInstance = BackPack->FindHeldInventoryEntryFromAuthority(ItemId)->Instance;
+		OriginalRodEntry.Count = 1;
+		TestTrue(TEXT("exact held instance can return through batch capacity preflight"), BackPack->CanFullyAcceptInventoryBatch(OriginalRod));
+		Controller->ServerSelectQuickbarSlot(FGuid::NewGuid(), SecondSlot, FGuid::NewGuid());
+		TestEqual(TEXT("stale target identity cannot release the held rod"), Fishing->FindRodOperatedBy(Player), SelectedRod);
+		TestTrue(TEXT("idle can switch directly to second rod"), Controller->RequestSelectQuickbarSlotFromInput(SecondSlot));
+		SelectedRod = Fishing->FindRodOperatedBy(Player);
+		if (!TestNotNull(TEXT("second selection holds a rod"), SelectedRod)) return false;
+		TestEqual(TEXT("second selection equips exact second instance"), SelectedRod->GetPresentationState().ItemInstanceId, SecondItemId);
+		TestEqual(TEXT("first rod returned to original slot"), BackPack->FindInventorySlotIndexFromInstanceId(ItemId), FirstSlot);
+		Controller->ParkHeldRodFromInput();
+		TestNull(TEXT("R leaves operation"), Fishing->FindRodOperatedBy(Player));
+		TestFalse(TEXT("R releases reserved slot"), BackPack->GetQuickbarHeldSlot().ItemInstanceId.IsValid());
+		TestNotNull(TEXT("R keeps same world rod"), Fishing->FindDeployedRodById(SelectedRod->GetPresentationState().RodActorId));
+		const FTransform RodBodyPose = SelectedRod->GetPhysicalRodBody()->GetComponentTransform();
+		FHitResult InteractionHit;
+		FCollisionQueryParams InteractionTrace(SCENE_QUERY_STAT(QuickbarParkedRod), true);
+		InteractionTrace.AddIgnoredActor(Character);
+		TestTrue(TEXT("parked rod is targetable beside its thin physical body"), World->LineTraceSingleByChannel(InteractionHit,
+			RodBodyPose.TransformPosition(FVector(0, 100, 6)), RodBodyPose.TransformPosition(FVector(0, -100, 6)), ECC_Visibility, InteractionTrace)
+			&& InteractionHit.GetActor() == SelectedRod);
+		TestTrue(TEXT("E reacquires the same parked rod"), SelectedRod->Interact_Implementation(Controller, FGuid::NewGuid()));
+		TestEqual(TEXT("E restores operation"), Fishing->FindRodOperatedBy(Player), SelectedRod);
+		Controller->PackHeldRodFromInput();
+		TestNull(TEXT("X releases operation"), Fishing->FindRodOperatedBy(Player));
+		TestTrue(TEXT("X returns same second instance"), BackPack->FindInventorySlotIndexFromInstanceId(SecondItemId) != INDEX_NONE);
+		if (!TestTrue(TEXT("select first rod for remaining lifecycle scenarios"), Controller->RequestSelectQuickbarSlotFromInput(FirstSlot))) return false;
 		ACatFishingRodActor* Rod = Fishing->FindDeployedRod(Player);
 		if (!TestNotNull(TEXT("first R creates a registered rod"), Rod)) return false;
 		const UCatEquipmentDefinition* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(DefinitionId);
@@ -128,7 +171,6 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("first R holder is the player"), Rod->GetPresentationState().HolderPlayerState.Get(), static_cast<APlayerState*>(Player));
 		TestEqual(TEXT("initial state contains exactly one operator"), Rod->GetOperatorCount(), 1);
 		TestEqual(TEXT("first R uses original instance"), Rod->GetPresentationState().ItemInstanceId, ItemId);
-		TestEqual(TEXT("first command acknowledges the committed primary revision"), First.RodActorRevision, Rod->GetPresentationState().RodActorRevision);
 		const FVector ExpectedGrip = Character->GetPhysicalBodyComponent()->GetBody()->GetComponentLocation()
 			+ Rod->GetGripWorldTransform().GetRotation().RotateVector(GetDefault<UCatFishingSettings>()->HeldRodGripOffsetCentimeters);
 		TestTrue(TEXT("formal BP uses the original controlled held offset before any tick"), Rod->GetGripWorldTransform().GetLocation().Equals(ExpectedGrip, 0.01));

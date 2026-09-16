@@ -57,12 +57,13 @@ void UCatGA_FishingPrimaryAction::EndAbility(const FGameplayAbilitySpecHandle Ha
 	const FGameplayAbilityActorInfo* ActorInfo, const FGameplayAbilityActivationInfo ActivationInfo,
 	const bool bReplicateEndAbility, const bool bWasCancelled)
 {
-	// 收尾流程：Task 正常松开已提交时不重复；输入重置、失焦或其他 Ability 取消时补发释放，保证 Commands 的连续收线状态随 GAS 生命周期清零。
+	// 收尾流程：Task 正常松开已提交时不重复；输入重置、失焦或其他 Ability 取消时清理瞄准和持续输入，不提交抛钩释放，保证 Commands 的连续收线状态随 GAS 生命周期清零。
 	if (bPressSubmitted && !bReleaseSubmitted && CanSubmitLocalCommand(ActorInfo))
 	{
 		if (UCatFishingCommandComponent* Commands = ResolveCommandComponent(ActorInfo))
 		{
-			Commands->SubmitPrimaryReleased();
+			if (bWasCancelled) Commands->ClearHeldInputForLifecycle(TEXT("PrimaryAbilityCancelled"));
+			else Commands->SubmitPrimaryReleased();
 			bReleaseSubmitted = true;
 		}
 	}

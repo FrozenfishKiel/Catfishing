@@ -224,7 +224,7 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 		Result.Command.Error = ECatFishingCommandError::DependencyUnavailable;
 		return Finish(Result);
 	}
-	RodEquipment = bPreservedRod ? Preserved->Get() : RodOwnerCharacter->GetEquipmentComponent();
+	RodEquipment = ResolveRodEquipmentFromAuthority(Rod);
 	if (!RodEquipment.IsValid())
 	{
 		Result.Command.Error = ECatFishingCommandError::DependencyUnavailable;
@@ -881,6 +881,17 @@ FCatFishingCommandResult UCatFishingService::LeaveRod(AController* Controller, c
 	return Result;
 }
 
+UCatEquipmentComponent* UCatFishingService::ResolveRodEquipmentFromAuthority(const ACatFishingRodActor* Rod) const
+{
+	if (!Rod || !Rod->HasAuthority() || Rod->GetWorld() != GetWorld()) return nullptr;
+	const auto& State = Rod->GetPresentationState();
+	if (const auto* Preserved = PreservedRodEquipment.Find(State.RodActorId); Preserved && Preserved->IsValid())
+		return Preserved->Get();
+	const ACatCharacter* Owner = Cast<ACatCharacter>(Rod->GetInstigator());
+	if (!Owner && State.OwnerPlayerState) Owner = Cast<ACatCharacter>(State.OwnerPlayerState->GetPawn());
+	return IsValid(Owner) && Owner->GetWorld() == GetWorld() ? Owner->GetEquipmentComponent() : nullptr;
+}
+
 FCatFishingCommandResult UCatFishingService::PackRod(AController* Controller, const FCatPackRodCommand& Command)
 {
 	FCatFishingCommandResult Result;
@@ -897,10 +908,7 @@ FCatFishingCommandResult UCatFishingService::PackRod(AController* Controller, co
 		return Result;
 	}
 	const FCatFishingRodPresentationState RodState = Rod->GetPresentationState();
-	const auto* SourceCharacter = Cast<ACatCharacter>(Rod->GetInstigator());
-	const auto* Preserved = PreservedRodEquipment.Find(RodState.RodActorId);
-	UCatEquipmentComponent* SourceEquipment = Preserved && Preserved->IsValid() ? Preserved->Get()
-		: IsValid(SourceCharacter) ? SourceCharacter->GetEquipmentComponent() : nullptr;
+	UCatEquipmentComponent* SourceEquipment = ResolveRodEquipmentFromAuthority(Rod);
 	UCatInventoryComponent* SourceInventory = SourceEquipment
 		? SourceEquipment->GetOwner()->FindComponentByClass<UCatInventoryComponent>() : nullptr;
 	UCatInventoryComponent* TargetInventory = Character->GetInventoryComponent();

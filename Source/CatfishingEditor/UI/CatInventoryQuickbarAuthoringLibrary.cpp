@@ -1,4 +1,4 @@
-﻿#include "CatInventoryQuickbarAuthoringLibrary.h"
+#include "CatInventoryQuickbarAuthoringLibrary.h"
 
 #include "AssetToolsModule.h"
 #include "AbilitySystem/Config/CatAbilityInputConfig.h"
@@ -338,7 +338,7 @@ bool UCatInventoryQuickbarAuthoringLibrary::CreateOrValidateInventoryQuickbarWid
 // 输入资产迁移流程：
 // 1. 读取唯一 IMC 和 Native Config，缺少任一正式资产直接拒绝，避免生成第二套运行时入口。
 // 2. 创建或复用八个选择/使用/丢弃 Action，并精确替换这些 Action 的键映射。
-// 3. 仅从已确认的旧打窝/收杆/抄网 Action 移除 Q/R/F，X、鼠标和交互映射保持不动。
+// 3. 移除旧 Q/R/F、G 使用及 X 持续剪线映射；R 架竿、X 收竿，左键沿按下时的统一路由使用选中物品。
 // 4. 将 Action/tag 对写入 Native Config，删除 RodInteract/Scoop/Chum 的旧 AbilityInputActions，并从默认 AbilitySet 移除 Scoop/Chum 授予。
 // 5. 调用既有库存动作迁移为 Chum 资产补齐 Use；所有资产保存成功才报告本次迁移完成。
 bool UCatInventoryQuickbarAuthoringLibrary::MigrateBackpackQuickbarInputAssets()
@@ -356,7 +356,8 @@ bool UCatInventoryQuickbarAuthoringLibrary::MigrateBackpackQuickbarInputAssets()
 		{ TEXT("IA_SelectInventorySlot4"), TEXT("Cat.Input.Inventory.SelectSlot4"), EKeys::Four },
 		{ TEXT("IA_SelectPreviousInventorySlot"), TEXT("Cat.Input.Inventory.SelectPreviousSlot"), EKeys::MouseScrollUp },
 		{ TEXT("IA_SelectNextInventorySlot"), TEXT("Cat.Input.Inventory.SelectNextSlot"), EKeys::MouseScrollDown },
-		{ TEXT("IA_UseSelectedInventoryItem"), TEXT("Cat.Input.Inventory.UseSelectedItem"), EKeys::G },
+		{ TEXT("IA_ParkHeldFishingRod"), TEXT("Cat.Input.Inventory.ParkRod"), EKeys::R },
+		{ TEXT("IA_PackHeldFishingRod"), TEXT("Cat.Input.Inventory.PackRod"), EKeys::X },
 		{ TEXT("IA_DropCarriedItem"), TEXT("Cat.Input.DropCarriedItem"), EKeys::Q }};
 	for (const FInputMigration& Migration : Migrations)
 	{
@@ -365,8 +366,9 @@ bool UCatInventoryQuickbarAuthoringLibrary::MigrateBackpackQuickbarInputAssets()
 		ReplaceActionMapping(*Context, *Action, Migration.Key);
 		if (!SaveAsset(Action)) return false;
 	}
-	const TCHAR* const LegacyActions[] = { TEXT("IA_BaitSpot"), TEXT("IA_PutDownFishingRod"), TEXT("IA_CatchFish") };
-	const FKey LegacyKeys[] = { EKeys::Q, EKeys::R, EKeys::F };
+	const TCHAR* const LegacyActions[] = { TEXT("IA_BaitSpot"), TEXT("IA_PutDownFishingRod"), TEXT("IA_CatchFish"), TEXT("IA_CancelFishing"), TEXT("IA_UseSelectedInventoryItem") };
+	const FKey LegacyKeys[] = { EKeys::Q, EKeys::R, EKeys::F, EKeys::X, EKeys::G };
+	Config->NativeInputActions.RemoveAll([](const FCatNativeInputAction& Entry) { return Entry.InputTag.MatchesTagExact(FGameplayTag::RequestGameplayTag(TEXT("Cat.Input.Inventory.UseSelectedItem"))); });
 	for (int32 Index = 0; Index < UE_ARRAY_COUNT(LegacyActions); ++Index)
 	{
 		const FString LegacyPath = FString::Printf(TEXT("/Game/Input/InputAction/%s.%s"), LegacyActions[Index], LegacyActions[Index]);

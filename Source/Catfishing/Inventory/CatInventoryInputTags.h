@@ -1,11 +1,11 @@
-﻿#pragma once
+#pragma once
 
 #include "NativeGameplayTags.h"
 
 /** 独立物品栏的原生输入意图；键位资产可自由调整，Controller 只按这些稳定标签选择或使用当前格。 */
 namespace CatInventoryInputTags
 {
-	/** 选择物品栏第一个槽位的意图；只改变所属客户端的本地槽位焦点，不直接使用该槽物品。 */
+	/** 选择物品栏第一个槽位的意图；鱼竿经服务器确认后立即装备，其他物品等待左键使用。 */
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_SelectSlot1);
 	/** 选择物品栏第二个槽位的意图；空槽同样是有效焦点，供玩家预先安排后续拾取。 */
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_SelectSlot2);
@@ -19,4 +19,6 @@ namespace CatInventoryInputTags
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_SelectNextSlot);
 	/** 使用当前本地选中槽位的意图；服务器按提交的槽位和观察到的实例身份裁决，不能自动改用其它格。 */
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_UseSelectedItem);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_ParkRod);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_PackRod);
 }

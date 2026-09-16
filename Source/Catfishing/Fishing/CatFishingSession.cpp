@@ -1094,8 +1094,10 @@ bool ACatFishingSession::OpenTrueBiteWindowFromAuthority()
 
 	// 真咬成立时才消费当前饵；预警、试探和抛竿准入均不扣数量。
 	// 先采样该时点，库存通知中的移动不能改变 D0。
-	TrueBiteDistanceCentimeters = FisherCharacter.IsValid()
-		? FVector::Distance(FisherCharacter->GetActorLocation(), AttemptSnapshot.ServerCorrectedLandingWorldPoint) : -1.0;
+	const FVector BiteOrigin = FisherCharacter.IsValid() ? FisherCharacter->GetActorLocation()
+		: Snapshot.RodActor ? Snapshot.RodActor->GetGripWorldTransform().GetLocation()
+		: AttemptSnapshot.ServerCorrectedLandingWorldPoint;
+	TrueBiteDistanceCentimeters = FVector::Distance(BiteOrigin, AttemptSnapshot.ServerCorrectedLandingWorldPoint);
 	UCatEquipmentComponent* Equipment = CastEquipment.Get();
 	const FCatFishingUseOperationResult BaitCommit = Equipment
 		? Equipment->CommitFishingBaitDeferred(Snapshot.FishingSessionId) : FCatFishingUseOperationResult{};
@@ -1173,7 +1175,7 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 	}
 	// 选鱼发生在试探期开始那一刻（咬钩计时到点），不再等玩家左键；阶段门随之从 TrueBiteWindow 改为 Probe。
 	if (!HasAuthority() || IsTerminal() || Snapshot.Phase != ECatFishingPhase::Probe
-		|| !AttemptSnapshot.WaterRegion.IsValid() || !Snapshot.HookActor || !FisherCharacter.IsValid())
+		|| !AttemptSnapshot.WaterRegion.IsValid() || !Snapshot.HookActor || !Snapshot.RodActor)
 	{
 		SelectionResolution = ECatFishSelectionResolution::Failed;
 		Result.Resolution = SelectionResolution;
@@ -2547,8 +2549,9 @@ FCatFishingCommandResult ACatFishingSession::RequestHookFromAuthority(const FGui
 		}
 		Snapshot.bPerfectHook = FMath::IsFinite(SinceBite) && SinceBite >= 0.0
 			&& GetWorld()->GetTimeSeconds() <= Snapshot.PerfectWindowEndsServerTime;
-		Result.bCommitted = SpawnHookedFishFromAuthority(RequestId) && TryEnterHookedFightFromAuthority();
-		if (Result.bCommitted)
+		const bool bSpawned = SpawnHookedFishFromAuthority(RequestId);
+		Result.bCommitted = bSpawned && (TryEnterHookedFightFromAuthority() || (IsTerminal() && Snapshot.Outcome == ECatFishingOutcome::LineBroken));
+		if (Result.bCommitted && !IsTerminal())
 		{
 			if (IsValid(Snapshot.FishEncounterActor))
 				Snapshot.FishEncounterActor->PublishInitialPresentationFromAuthority();

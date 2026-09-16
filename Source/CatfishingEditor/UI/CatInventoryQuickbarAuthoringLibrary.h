@@ -15,7 +15,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Authoring|Inventory")
 	static bool CreateOrValidateInventoryQuickbarWidgets();
 
-	/** 迁移正式 IMC 和 Native Input Config 到统一选择/使用/丢弃动作；只移除已确认 Q/R 的旧映射，保留其余互动按键。 */
+	/** 迁移正式 IMC 和 Native Input Config 到统一选择/使用/丢弃动作；选杆即装备，左键统一使用，R 架竿、X 收竿；移除 G 及旧 Q/R/F/X 映射。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Authoring|Inventory")
 	static bool MigrateBackpackQuickbarInputAssets();
 };

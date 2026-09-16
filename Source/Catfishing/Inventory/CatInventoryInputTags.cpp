@@ -9,4 +9,6 @@ namespace CatInventoryInputTags
 	UE_DEFINE_GAMEPLAY_TAG(Input_SelectPreviousSlot, "Cat.Input.Inventory.SelectPreviousSlot");
 	UE_DEFINE_GAMEPLAY_TAG(Input_SelectNextSlot, "Cat.Input.Inventory.SelectNextSlot");
 	UE_DEFINE_GAMEPLAY_TAG(Input_UseSelectedItem, "Cat.Input.Inventory.UseSelectedItem");
+	UE_DEFINE_GAMEPLAY_TAG(Input_ParkRod, "Cat.Input.Inventory.ParkRod");
+	UE_DEFINE_GAMEPLAY_TAG(Input_PackRod, "Cat.Input.Inventory.PackRod");
 }

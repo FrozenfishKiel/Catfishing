@@ -55,7 +55,7 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("正式资产解析响应秒数"), Resolved.TrueBiteWindowSeconds, Fish->TrueBiteWindowSeconds);
     }
 	// 只准备抛竿事务的已冻结输入；后续采样、计时器、正式 StateTree 和正式 Hook BP 都走生产代码。
-	for (const int32 Portions : {0, 1, 5, 2, 3})
+	for (const int32 Portions : {0, 1, 5, 2, 3, 4})
 	{
 		FTestWorldWrapper Wrapper;
 		if (!Wrapper.CreateTestWorld(EWorldType::Game)) return false;
@@ -199,6 +199,11 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 		});
 		if (!TestTrue(TEXT("正式会话 StateTree 进入等待"), Session->StartPreparedSessionLogicFromAuthority())) return false;
 		TestEqual(TEXT("运行阶段为等待"), Session->GetSnapshot().Phase, ECatFishingPhase::Waiting);
+		if (Portions == 4)
+		{
+			Session->SuspendOperatorFromAuthority();
+			TestFalse(TEXT("unattended wait has no operator character"), Session->FisherCharacter.IsValid());
+		}
 		FCatFishingBiteTimingDistribution Distribution;
 		FCatFishingBiteTimingModel::BuildDistribution(Timing, Total(Sample), 1.0, 1.0, Distribution);
 		FRandomStream Random(static_cast<int32>(Session->CurrentBiteRandomSeed));
@@ -278,7 +283,7 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("实际预警持续完整时段（帧量化容差）"), World->GetTimeSeconds() - ObservedWarningTime, 1.5 + ResolvedTiming.ProbeDurationSeconds, 0.06);
 		TestEqual(TEXT("true bite consumes exactly one actual bait"), BaitCharacter->GetInventoryComponent()->CountVisibleInventoryQuantityByDefinitionId(TEXT("BugBait")), 0);
 		const double D0 = Session->TrueBiteDistanceCentimeters;
-		TestEqual(TEXT("D0 uses frozen fish spawn point at true bite"), D0, FVector::Distance(BaitCharacter->GetActorLocation(), Session->AttemptSnapshot.ServerCorrectedLandingWorldPoint), 0.01);
+		TestEqual(TEXT("D0 uses frozen fish spawn point at true bite"), D0, FVector::Distance(Portions == 4 ? BaitRod->GetGripWorldTransform().GetLocation() : BaitCharacter->GetActorLocation(), Session->AttemptSnapshot.ServerCorrectedLandingWorldPoint), 0.01);
 		BaitCharacter->SetActorLocation(FVector(-1200, 0, 0));
 		TestEqual(TEXT("response-window movement does not recalculate D0"), Session->TrueBiteDistanceCentimeters, D0);
 		TestNull(TEXT("真咬开窗仍未生成实体"), Session->GetSnapshot().FishEncounterActor.Get());

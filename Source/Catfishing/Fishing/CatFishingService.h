@@ -123,6 +123,8 @@ public:
 
 	/** 为 PlayerState 登记部署竿；同一 Actor 重放成功，超过两根或跨玩家重复登记被拒绝。 */
 	bool RegisterDeployedRod(APlayerState* PlayerState, ACatFishingRodActor* RodActor);
+	/** 按世界竿身份解析原实例的当前保管者，支持原角色离场后转移到资源托管 Actor。 */
+	UCatEquipmentComponent* ResolveRodEquipmentFromAuthority(const ACatFishingRodActor* Rod) const;
 
 	/** 仅当当前登记值精确匹配 ExpectedRodActor 时注销，避免旧 Actor 迟到回调删除替代鱼竿。 */
 	void UnregisterDeployedRod(const APlayerState* PlayerState, const ACatFishingRodActor* ExpectedRodActor);

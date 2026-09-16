@@ -4,6 +4,17 @@
 #include "Inventory/CatInventoryComponent.h"
 #include "CatBackPackComponent.generated.h"
 
+/** 手持物品的格位保留；实例仍只有一份，由库存活动区保管。 */
+USTRUCT()
+struct FCatQuickbarHeldSlot
+{
+	GENERATED_BODY()
+	UPROPERTY() int32 SlotIndex = INDEX_NONE;
+	UPROPERTY() FGuid ItemInstanceId;
+	UPROPERTY() FName DefinitionId;
+	UPROPERTY() bool bInUse = false;
+};
+
 /** 角色随身背包的正式库存宿主；它只拥有玩家容量初始化，物品收货、移动和使用继续由通用库存实现。 */
 UCLASS(ClassGroup = (Catfishing), meta = (BlueprintSpawnableComponent))
 class CATFISHING_API UCatBackPackComponent : public UCatInventoryComponent
@@ -24,7 +35,16 @@ public:
 	 */
 	virtual bool EnforcesCarryLimits() const override { return true; }
 
+	bool ReserveQuickbarHeldSlotFromAuthority(int32 SlotIndex, FGuid ItemId);
+	void ClearQuickbarHeldSlotFromAuthority();
+	void SetQuickbarHeldSlotInUseFromAuthority(bool bInUse);
+	const FCatQuickbarHeldSlot& GetQuickbarHeldSlot() const { return QuickbarHeldSlot; }
+	virtual bool CanAcceptInventoryEntryAtSlot(const FCatInventoryEntry& Entry, int32 TargetSlotIndex) const override;
+	virtual bool CanAcceptInventoryDefinitionAtSlot(const UCatInventoryItemDefinition& Definition, int32 TargetSlotIndex) const override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 private:
+	UPROPERTY(ReplicatedUsing=OnRep_QuickbarHeldSlot) FCatQuickbarHeldSlot QuickbarHeldSlot;
+	UFUNCTION() void OnRep_QuickbarHeldSlot();
 	/** 读取项目基础格数与角色成长容量之和；缺失项按零处理，初始化和成长扩容据此替代蓝图遗留容量。 */
 	int32 GetConfiguredPlayerSlotCapacity() const;
 };

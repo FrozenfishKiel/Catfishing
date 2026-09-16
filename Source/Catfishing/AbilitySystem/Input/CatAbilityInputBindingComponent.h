@@ -6,6 +6,7 @@
 #include "CatAbilityInputBindingComponent.generated.h"
 
 class APawn;
+class ACatfishingPlayerController;
 class UCatAbilityInputConfig;
 class UCatAbilitySystemComponent;
 class UEnhancedInputComponent;
@@ -42,6 +43,7 @@ private:
 	{
 		TWeakObjectPtr<UCatAbilitySystemComponent> AbilitySystem;
 		TWeakObjectPtr<UCatPhysicsGrabComponent> Grab;
+		TWeakObjectPtr<ACatfishingPlayerController> SelectedItemController;
 		bool bLeft = false;
 	};
 	TMap<FGameplayTag, FPressedRoute> PressedRoutes;

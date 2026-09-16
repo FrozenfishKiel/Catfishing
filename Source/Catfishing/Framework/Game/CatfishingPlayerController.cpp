@@ -1,4 +1,7 @@
 #include "Framework/Game/CatfishingPlayerController.h"
+#include "EngineUtils.h"
+#include "Fishing/CatFishingSession.h"
+#include "Equipment/CatEquipmentDefinition.h"
 #include "Interaction/Carry/CatCarryableActor.h"
 #include "Framework/Game/CatfishingGameState.h"
 #include "Components/InputComponent.h"
@@ -79,6 +82,18 @@ UCatFishingCommandComponent* ACatfishingPlayerController::GetFishingCommandCompo
 // 帧流程：先消费新快照并刷新遮罩，使本帧输入看到最新锁；父类仍负责正常 Controller、相机和网络生命周期。
 void ACatfishingPlayerController::Tick(const float DeltaSeconds)
 {
+	if (HasAuthority())
+	{
+		if (auto* BackPack = GetControlledBackPack(); BackPack && BackPack->GetQuickbarHeldSlot().ItemInstanceId.IsValid())
+		{
+			auto* Fishing = GetWorld()->GetSubsystem<UCatFishingService>();
+			auto* Rod = Fishing ? Fishing->FindRodOperatedBy(PlayerState) : nullptr;
+			if (!Rod || Rod->GetPresentationState().ItemInstanceId != BackPack->GetQuickbarHeldSlot().ItemInstanceId)
+				BackPack->ClearQuickbarHeldSlotFromAuthority();
+			else BackPack->SetQuickbarHeldSlotInUseFromAuthority(Fishing->FindActiveSessionByRod(Rod) != nullptr);
+		}
+	}
+
 	ReconcileDayTransition();
 	Super::Tick(DeltaSeconds);
 }
@@ -263,6 +278,9 @@ void ACatfishingPlayerController::SetPawn(APawn* InPawn)
 		ClearPhysicalControlInput(TEXT("PawnChanged"));
 		// 物品栏焦点属于本地玩家当前身体；在新 UI 绑定前重置，背包自身不保存选择。
 		SelectedQuickbarSlotIndex = 0;
+		AuthorityQuickbarSlotIndex = 0;
+		PendingQuickbarSelectionRequestId.Invalidate();
+		QuickbarSelectionResults.Reset();
 		SetDayTransitionLocked(false);
 	}
 	Super::SetPawn(InPawn);
@@ -933,18 +951,256 @@ UCatBackPackComponent* ACatfishingPlayerController::GetControlledBackPack() cons
 	return ControlledCharacter ? Cast<UCatBackPackComponent>(ControlledCharacter->GetInventoryComponent()) : nullptr;
 }
 
-// 物品栏选格流程：先拒绝非本机和模态/过场输入，再只读当前背包检查槽位；成功只更新 Controller 焦点并通知物品栏，不写库存或发送 RPC。
+// 选格携带观察到的实例身份；服务器负责收回旧竿、装备新竿，并回执最终焦点。
 bool ACatfishingPlayerController::RequestSelectQuickbarSlotFromInput(const int32 RequestedSlotIndex)
 {
-	if (!IsLocalController() || IsDayTransitionInputBlocked() || IsMoveInputIgnored()) return false;
-	const UCatBackPackComponent* BackPack = GetControlledBackPack();
+	if (!IsLocalController() || IsDayTransitionInputBlocked() || IsMoveInputIgnored() || IsQuickbarSelectionLocked()) return false;
+	UCatBackPackComponent* BackPack = GetControlledBackPack();
 	if (!BackPack || !BackPack->IsValidInventorySlotIndex(RequestedSlotIndex)) return false;
-	if (SelectedQuickbarSlotIndex != RequestedSlotIndex)
-	{
-		SelectedQuickbarSlotIndex = RequestedSlotIndex;
-		OnQuickbarSelectionChanged.Broadcast(SelectedQuickbarSlotIndex);
-	}
+	const auto* Entry = BackPack->GetInventoryEntryAtSlot(RequestedSlotIndex);
+	const auto& Held = BackPack->GetQuickbarHeldSlot();
+	const FGuid ExpectedItemId = Held.SlotIndex == RequestedSlotIndex && Held.ItemInstanceId.IsValid()
+		? Held.ItemInstanceId : Entry && Entry->Instance ? Entry->Instance->GetItemInstanceId() : FGuid();
+	if (FishingCommandComponent) FishingCommandComponent->ClearHeldInputForLifecycle(TEXT("QuickbarSelection"));
+	SelectedQuickbarSlotIndex = RequestedSlotIndex;
+	OnQuickbarSelectionChanged.Broadcast(SelectedQuickbarSlotIndex);
+	PendingQuickbarSelectionRequestId = FGuid::NewGuid();
+	ServerSelectQuickbarSlot(PendingQuickbarSelectionRequestId, RequestedSlotIndex, ExpectedItemId);
 	return true;
+}
+
+bool ACatfishingPlayerController::IsQuickbarSelectionLocked() const
+{
+	if (!GetWorld() || ActiveSelectedItemUseRequestId.IsValid()) return true;
+	if (const auto* BackPack = GetControlledBackPack(); !HasAuthority() && BackPack && BackPack->GetQuickbarHeldSlot().bInUse) return true;
+	for (TActorIterator<ACatFishingSession> It(GetWorld()); It; ++It)
+	{
+		const auto& State = It->GetSnapshot();
+		if (!It->IsTerminal() && State.FisherPlayerState == PlayerState && State.RodActor
+			&& State.RodActor->IsPrimaryOperator(PlayerState)) return true;
+	}
+	return false;
+}
+
+void ACatfishingPlayerController::ServerSelectQuickbarSlot_Implementation(const FGuid RequestId,
+	const int32 SlotIndex, const FGuid ExpectedItemId)
+{
+	if (const auto* Cached = QuickbarSelectionResults.Find(RequestId))
+	{
+		ClientReceiveQuickbarSelection(RequestId, Cached->Key, Cached->Value);
+		return;
+	}
+	UCatBackPackComponent* BackPack = GetControlledBackPack();
+	UCatFishingService* Fishing = GetWorld()->GetSubsystem<UCatFishingService>();
+	const auto* Entry = BackPack ? BackPack->GetInventoryEntryAtSlot(SlotIndex) : nullptr;
+	const auto Held = BackPack ? BackPack->GetQuickbarHeldSlot() : FCatQuickbarHeldSlot{};
+	const FGuid ActualId = Held.ItemInstanceId.IsValid() && Held.SlotIndex == SlotIndex
+		? Held.ItemInstanceId : Entry && Entry->Instance ? Entry->Instance->GetItemInstanceId() : FGuid();
+	bool bCommitted = false;
+	const TCHAR* Reason = TEXT("InvalidSelection");
+	if (RequestId.IsValid() && BackPack && Fishing && BackPack->IsValidInventorySlotIndex(SlotIndex)
+		&& ActualId == ExpectedItemId && CanForwardGameplayCommand() && !IsQuickbarSelectionLocked())
+	{
+		if (FishingCommandComponent) FishingCommandComponent->ClearHeldInputForLifecycle(TEXT("QuickbarSelection"));
+		ACatFishingRodActor* OldRod = Fishing->FindRodOperatedBy(PlayerState);
+		const FGuid OldId = OldRod ? OldRod->GetPresentationState().ItemInstanceId : FGuid();
+		const bool bSameHeld = OldRod && OldId == ExpectedItemId;
+		bool bReleased = true;
+		if (OldRod && !bSameHeld)
+		{
+			FCatLeaveRodCommand Leave;
+			Leave.Context.RequestId = FGuid::NewGuid();
+			Leave.Context.RodActorId = OldRod->GetPresentationState().RodActorId;
+			Leave.Context.ExpectedRodActorRevision = OldRod->GetPresentationState().RodActorRevision;
+			bReleased = Fishing->LeaveRod(this, Leave).bCommitted;
+			if (bReleased && Held.ItemInstanceId == OldId)
+			{
+				FCatPackRodCommand Pack;
+				Pack.Context.RequestId = FGuid::NewGuid();
+				Pack.Context.RodActorId = OldRod->GetPresentationState().RodActorId;
+				Pack.Context.ExpectedRodActorRevision = OldRod->GetPresentationState().RodActorRevision;
+				bReleased = Fishing->PackRod(this, Pack).bCommitted;
+			}
+			if (bReleased) BackPack->ClearQuickbarHeldSlotFromAuthority();
+		}
+		if (bReleased)
+		{
+			Entry = BackPack->GetInventoryEntryAtSlot(SlotIndex);
+			const auto* Definition = Entry && Entry->Instance ? Cast<UCatEquipmentDefinition>(Entry->Instance->GetItemDefinition()) : nullptr;
+			if (!bSameHeld && ExpectedItemId.IsValid() && Definition && Definition->CanServeFishingRod())
+			{
+				FCatInventoryItemUseContext Context;
+				Context.RequestId = RequestId; Context.RequestingController = this; Context.UserPawn = GetPawn();
+				Context.SourceInventory = BackPack; Context.InventorySlotIndex = SlotIndex;
+				bCommitted = Entry->Instance->GetItemInstanceId() == ExpectedItemId
+					&& BackPack->ReserveQuickbarHeldSlotFromAuthority(SlotIndex, ExpectedItemId)
+					&& BackPack->ExecuteItemActionFromAuthority(Context, ExpectedItemId, CatInventoryActionTags::Use, 1).bCommitted;
+				if (!bCommitted) BackPack->ClearQuickbarHeldSlotFromAuthority();
+			}
+			else bCommitted = bSameHeld || (Entry && Entry->Instance ? Entry->Instance->GetItemInstanceId() : FGuid()) == ExpectedItemId;
+		}
+		if (!bCommitted && IsValid(OldRod) && OldRod->GetPresentationState().bDeployed && !Fishing->FindRodOperatedBy(PlayerState))
+		{
+			FCatOperateRodCommand Restore;
+			Restore.Context.RequestId = FGuid::NewGuid(); Restore.Context.RodActorId = OldRod->GetPresentationState().RodActorId;
+			Restore.Context.ExpectedRodActorRevision = OldRod->GetPresentationState().RodActorRevision;
+			const auto Restored = Fishing->OperateRod(this, Restore);
+			if (FishingCommandComponent) FishingCommandComponent->DeliverResultFromAuthority(Restored);
+		}
+		// 新竿拒绝时恢复原手持实例；已入库的旧竿重新使用同一身份。
+		if (!bCommitted && OldId.IsValid() && Held.ItemInstanceId == OldId)
+		{
+			const auto* Previous = BackPack->GetInventoryEntryAtSlot(Held.SlotIndex);
+			if (Previous && Previous->Instance && Previous->Instance->GetItemInstanceId() == OldId)
+			{
+				FCatInventoryItemUseContext Restore;
+				Restore.RequestId = FGuid::NewGuid(); Restore.RequestingController = this; Restore.UserPawn = GetPawn();
+				Restore.SourceInventory = BackPack; Restore.InventorySlotIndex = Held.SlotIndex;
+				const bool bRestored = BackPack->ReserveQuickbarHeldSlotFromAuthority(Held.SlotIndex, OldId)
+					&& BackPack->ExecuteItemActionFromAuthority(Restore, OldId, CatInventoryActionTags::Use, 1).bCommitted;
+				if (!bRestored) BackPack->ClearQuickbarHeldSlotFromAuthority();
+				UE_LOG(LogCatfishing, Warning, TEXT("Event=quickbar_selection_restore RequestId=%s ItemId=%s Restored=%d %s"),
+					*RequestId.ToString(), *OldId.ToString(), bRestored, *CatLogContext::BuildControllerFields(this));
+			}
+		}
+		Reason = bCommitted ? TEXT("Selected") : TEXT("RodTransitionRejected");
+	}
+	else if (IsQuickbarSelectionLocked()) Reason = TEXT("ItemInUse");
+	if (bCommitted) AuthorityQuickbarSlotIndex = SlotIndex;
+	if (QuickbarSelectionResults.Num() >= 128) QuickbarSelectionResults.Empty();
+	QuickbarSelectionResults.Add(RequestId, {AuthorityQuickbarSlotIndex, bCommitted});
+	UE_CLOG(!bCommitted, LogCatfishing, Warning, TEXT("Event=quickbar_selection_rejected RequestId=%s Slot=%d Reason=%s %s"),
+		*RequestId.ToString(), SlotIndex, Reason, *CatLogContext::BuildControllerFields(this));
+	UE_LOG(LogCatfishing, Log, TEXT("Event=quickbar_selection_result RequestId=%s Slot=%d ItemId=%s Committed=%d Reason=%s %s"),
+		*RequestId.ToString(), SlotIndex, *ExpectedItemId.ToString(), bCommitted, Reason, *CatLogContext::BuildControllerFields(this));
+	ClientReceiveQuickbarSelection(RequestId, AuthorityQuickbarSlotIndex, bCommitted);
+}
+
+void ACatfishingPlayerController::ClientReceiveQuickbarSelection_Implementation(const FGuid RequestId,
+	const int32 SlotIndex, const bool bCommitted)
+{
+	if (RequestId != PendingQuickbarSelectionRequestId) return;
+	PendingQuickbarSelectionRequestId.Invalidate();
+	SelectedQuickbarSlotIndex = SlotIndex;
+	OnQuickbarSelectionChanged.Broadcast(SlotIndex);
+	UE_LOG(LogCatfishing, Log, TEXT("Event=quickbar_selection_received RequestId=%s Slot=%d Committed=%d %s"),
+		*RequestId.ToString(), SlotIndex, bCommitted, *CatLogContext::BuildControllerFields(this));
+}
+
+bool ACatfishingPlayerController::IsQuickbarRodSelected() const
+{
+	const auto* BackPack = GetControlledBackPack();
+	if (!BackPack) return false;
+	const int32 Slot = GetSelectedQuickbarSlotIndex();
+	if (BackPack->GetQuickbarHeldSlot().ItemInstanceId.IsValid() && BackPack->GetQuickbarHeldSlot().SlotIndex == Slot) return true;
+	const auto* Entry = BackPack->GetInventoryEntryAtSlot(Slot);
+	const auto* Definition = Entry && Entry->Instance ? Cast<UCatEquipmentDefinition>(Entry->Instance->GetItemDefinition()) : nullptr;
+	return Definition && Definition->CanServeFishingRod();
+}
+
+void ACatfishingPlayerController::PackHeldRodFromInput()
+{
+	if (!IsLocalController() || IsDayTransitionInputBlocked() || IsMoveInputIgnored()) return;
+	if (FishingCommandComponent) FishingCommandComponent->ClearHeldInputForLifecycle(TEXT("PackRod"));
+	const auto* Rod = UCatFishingCameraComponent::FindHeldRodOperatedBy(this);
+	if (Rod) ServerPackHeldRod(FGuid::NewGuid(), Rod->GetPresentationState().RodActorId);
+}
+void ACatfishingPlayerController::ServerPackHeldRod_Implementation(const FGuid RequestId, const FGuid RodId)
+{
+	if (!RequestId.IsValid() || !CanForwardFishingCommand()) return;
+	auto* Fishing = GetWorld()->GetSubsystem<UCatFishingService>();
+	auto* Rod = Fishing ? Fishing->FindRodOperatedBy(PlayerState) : nullptr;
+	if (!Rod || Rod->GetPresentationState().RodActorId != RodId)
+	{
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=quickbar_rod_request_rejected RequestId=%s RodActorId=%s Reason=HeldRodChanged %s"),
+			*RequestId.ToString(), *RodId.ToString(), *CatLogContext::BuildControllerFields(this));
+		return;
+	}
+	auto* BackPack = GetControlledBackPack();
+	auto* SourceEquipment = Fishing->ResolveRodEquipmentFromAuthority(Rod);
+	auto* SourceInventory = SourceEquipment ? SourceEquipment->GetOwner()->FindComponentByClass<UCatInventoryComponent>() : nullptr;
+	const auto* Held = SourceInventory ? SourceInventory->FindHeldInventoryEntryFromAuthority(Rod->GetPresentationState().ItemInstanceId) : nullptr;
+	FCatInventoryReceiveBatch ReturnBatch;
+	if (Held)
+	{
+		auto& Entry = ReturnBatch.InstanceEntries.AddDefaulted_GetRef();
+		Entry.ItemInstance = Held->Instance; Entry.Count = Held->StackCount;
+	}
+	if (!Held || !BackPack || !BackPack->CanFullyAcceptInventoryBatch(ReturnBatch))
+	{
+		FCatFishingCommandResult Rejected;
+		Rejected.RequestId = RequestId; Rejected.RodActorId = RodId; Rejected.CommandType = ECatFishingCommandType::PackRod;
+		Rejected.Error = ECatFishingCommandError::DependencyUnavailable;
+		if (FishingCommandComponent) FishingCommandComponent->DeliverResultFromAuthority(Rejected);
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=quickbar_rod_pack_rejected RequestId=%s RodActorId=%s Reason=InventoryCannotReceive %s"),
+			*RequestId.ToString(), *RodId.ToString(), *CatLogContext::BuildControllerFields(this));
+		return;
+	}
+	if (FishingCommandComponent) FishingCommandComponent->ClearHeldInputForLifecycle(TEXT("PackRod"));
+	if (auto* Session = Fishing->FindActiveSessionByRod(Rod))
+	{
+		FCatFishingSessionCommandContext Context;
+		Context.RequestId = FGuid::NewGuid(); Context.FishingSessionId = Session->GetSnapshot().FishingSessionId;
+		Context.CastAttemptId = Session->GetSnapshot().CastAttemptId; Context.ExpectedRevision = Session->GetSnapshot().Revision;
+		const auto CutResult = Session->CutLineFromAuthority(this, Context);
+		if (FishingCommandComponent) FishingCommandComponent->DeliverResultFromAuthority(CutResult);
+		if (!CutResult.bCommitted) return;
+	}
+	FCatLeaveRodCommand Leave;
+	Leave.Context.RequestId = FGuid::NewGuid();
+	Leave.Context.RodActorId = RodId;
+	Leave.Context.ExpectedRodActorRevision = Rod->GetPresentationState().RodActorRevision;
+	bool bCommitted = Fishing->LeaveRod(this, Leave).bCommitted;
+	if (bCommitted)
+	{
+		FCatPackRodCommand Pack;
+		Pack.Context.RequestId = RequestId; Pack.Context.RodActorId = RodId;
+		Pack.Context.ExpectedRodActorRevision = Rod->GetPresentationState().RodActorRevision;
+		const auto PackResult = Fishing->PackRod(this, Pack);
+		if (FishingCommandComponent) FishingCommandComponent->DeliverResultFromAuthority(PackResult);
+		bCommitted = PackResult.bCommitted;
+	}
+	if (bCommitted) BackPack->ClearQuickbarHeldSlotFromAuthority();
+	else if (!Rod->GetPresentationState().bBroken && !Fishing->FindRodOperatedBy(PlayerState))
+	{
+		FCatOperateRodCommand Restore;
+		Restore.Context.RequestId = FGuid::NewGuid(); Restore.Context.RodActorId = RodId;
+		Restore.Context.ExpectedRodActorRevision = Rod->GetPresentationState().RodActorRevision;
+		const auto Restored = Fishing->OperateRod(this, Restore);
+		if (FishingCommandComponent) FishingCommandComponent->DeliverResultFromAuthority(Restored);
+	}
+	UE_LOG(LogCatfishing, Log, TEXT("Event=quickbar_rod_pack_result RequestId=%s RodActorId=%s Committed=%d %s"),
+		*RequestId.ToString(), *RodId.ToString(), bCommitted, *CatLogContext::BuildControllerFields(this));
+}
+
+void ACatfishingPlayerController::ParkHeldRodFromInput()
+{
+	if (!IsLocalController() || IsDayTransitionInputBlocked() || IsMoveInputIgnored()) return;
+	if (FishingCommandComponent) FishingCommandComponent->ClearHeldInputForLifecycle(TEXT("ParkRod"));
+	const auto* Rod = UCatFishingCameraComponent::FindHeldRodOperatedBy(this);
+	if (Rod) ServerParkHeldRod(FGuid::NewGuid(), Rod->GetPresentationState().RodActorId);
+}
+void ACatfishingPlayerController::ServerParkHeldRod_Implementation(const FGuid RequestId, const FGuid RodId)
+{
+	if (!RequestId.IsValid() || !CanForwardFishingCommand()) return;
+	auto* Fishing = GetWorld()->GetSubsystem<UCatFishingService>();
+	auto* Rod = Fishing ? Fishing->FindRodOperatedBy(PlayerState) : nullptr;
+	if (!Rod || Rod->GetPresentationState().RodActorId != RodId)
+	{
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=quickbar_rod_request_rejected RequestId=%s RodActorId=%s Reason=HeldRodChanged %s"),
+			*RequestId.ToString(), *RodId.ToString(), *CatLogContext::BuildControllerFields(this));
+		return;
+	}
+	if (FishingCommandComponent) FishingCommandComponent->ClearHeldInputForLifecycle(TEXT("ParkRod"));
+	FCatLeaveRodCommand Leave;
+	Leave.Context.RequestId = RequestId;
+	Leave.Context.RodActorId = Rod->GetPresentationState().RodActorId;
+	Leave.Context.ExpectedRodActorRevision = Rod->GetPresentationState().RodActorRevision;
+	const auto Result = Fishing->LeaveRod(this, Leave);
+	if (FishingCommandComponent) FishingCommandComponent->DeliverResultFromAuthority(Result);
+	if (Result.bCommitted) if (auto* BackPack = GetControlledBackPack()) BackPack->ClearQuickbarHeldSlotFromAuthority();
+	UE_LOG(LogCatfishing, Log, TEXT("Event=quickbar_rod_park_result RequestId=%s RodActorId=%s Committed=%d %s"),
+		*RequestId.ToString(), *Leave.Context.RodActorId.ToString(), Result.bCommitted, *CatLogContext::BuildControllerFields(this));
 }
 
 // 物品栏焦点读取流程：不存在库存格时无选择，容量尚在复制或缩小时返回有效第一格；库存内容变化不改变玩家选中的槽位。
@@ -979,13 +1235,13 @@ bool ACatfishingPlayerController::CanUseSelectedBackpackItemFromInput() const
 	return BackPack && BackPack->CanUseItemAtSlot(SelectedSlotIndex, GetPawn());
 }
 
-// G 按下流程：
+// 选中物品左键按下流程：
 // 1. 先用 Controller 的独立物品栏焦点读取背包中的槽位和实例身份；未解析、空格或本地预检失败不发网络请求。
 // 2. 为本次 Use 创建稳定 RequestId，并把槽位与观察到的实例 ID 原样交给服务器；服务器不会读取客户端的“已选中”声明。
 // 3. 只有声明持续输入的实例才在本机冻结这组身份，松开和取消因此不会改用之后新选中的物品。
 void ACatfishingPlayerController::BeginSelectedItemUseFromInput()
 {
-	if (ActiveSelectedItemUseRequestId.IsValid() || !CanUseSelectedBackpackItemFromInput())
+	if (ActiveSelectedItemUseRequestId.IsValid() || IsQuickbarRodSelected() || !CanUseSelectedBackpackItemFromInput())
 	{
 		return;
 	}
@@ -1015,7 +1271,7 @@ void ACatfishingPlayerController::BeginSelectedItemUseFromInput()
 	ServerUseSelectedBackpackItem(RequestId, SelectedSlotIndex, Instance->GetItemInstanceId());
 }
 
-// G 松开流程：持续 Use 已在按下时冻结了 RequestId、实例和槽位；本地清记录后发送同一组值，普通瞬时物品不会生成结束请求。
+// 选中物品左键松开流程：持续 Use 已在按下时冻结了 RequestId、实例和槽位；本地清记录后发送同一组值，普通瞬时物品不会生成结束请求。
 void ACatfishingPlayerController::EndSelectedItemUseFromInput(const bool bCancelled)
 {
 	ClearSelectedItemUseInput(bCancelled);
@@ -1444,6 +1700,8 @@ void ACatfishingPlayerController::NativeInputTagPressed(const FGameplayTag Input
 		RequestCycleQuickbarSlotFromInput(1);
 		return;
 	}
+	if (InputTag == CatInventoryInputTags::Input_ParkRod) { ParkHeldRodFromInput(); return; }
+	if (InputTag == CatInventoryInputTags::Input_PackRod) { PackHeldRodFromInput(); return; }
 	if (InputTag.MatchesTagExact(CatInventoryInputTags::Input_UseSelectedItem))
 	{
 		BeginSelectedItemUseFromInput();

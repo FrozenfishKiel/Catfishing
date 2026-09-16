@@ -3101,9 +3101,9 @@ bool UCatInventoryComponent::CanAcceptInventoryDefinitionAtSlot(const UCatInvent
 	return IsValidInventorySlotIndex(TargetSlotIndex);
 }
 
-// 容量预演单项流程：先合并同类未满格，再占用空格；每个目标槽都复用定义接收规则，避免预演放行正式入库会拒绝的物品。
+// 容量预演单项流程：先合并同类未满格，再占用空格；实例批次复用实例接收规则，定义批次使用定义规则，保留格不能只凭同型号放行。
 bool UCatInventoryComponent::SimulateAddItemDefinition(TArray<FSimulatedInventorySlot>& SimulatedSlots,
-	const UCatInventoryItemDefinition& ItemDefinition, int32& InOutRemainingCount) const
+	const UCatInventoryItemDefinition& ItemDefinition, int32& InOutRemainingCount, UCatInventoryItemInstance* IncomingInstance) const
 {
 	if (InOutRemainingCount <= 0)
 	{
@@ -3134,6 +3134,14 @@ bool UCatInventoryComponent::SimulateAddItemDefinition(TArray<FSimulatedInventor
 		}
 	}
 
+	FCatInventoryEntry IncomingEntry;
+	IncomingEntry.Instance = IncomingInstance;
+	IncomingEntry.StackCount = InOutRemainingCount;
+	const auto CanAcceptSlot = [&](const int32 SlotIndex)
+	{
+		return IncomingInstance ? CanAcceptInventoryEntryAtSlot(IncomingEntry, SlotIndex)
+			: CanAcceptInventoryDefinitionAtSlot(ItemDefinition, SlotIndex);
+	};
 	const int32 MaxStackCount = GetMaxStackCountForDefinition(ItemDefinition);
 	if (MaxStackCount > 1)
 	{
@@ -3150,7 +3158,7 @@ bool UCatInventoryComponent::SimulateAddItemDefinition(TArray<FSimulatedInventor
 			{
 				continue;
 			}
-			if (!CanAcceptInventoryDefinitionAtSlot(ItemDefinition, SlotIndex))
+			if (!CanAcceptSlot(SlotIndex))
 			{
 				continue;
 			}
@@ -3174,7 +3182,7 @@ bool UCatInventoryComponent::SimulateAddItemDefinition(TArray<FSimulatedInventor
 		{
 			continue;
 		}
-		if (!CanAcceptInventoryDefinitionAtSlot(ItemDefinition, SlotIndex))
+		if (!CanAcceptSlot(SlotIndex))
 		{
 			continue;
 		}
@@ -3235,7 +3243,7 @@ bool UCatInventoryComponent::SimulateAddInventoryBatch(const FCatInventoryReceiv
 		const UCatInventoryItemDefinition* ItemDefinition = InstanceEntry.ItemInstance->GetItemDefinition();
 		int32 RemainingCount = InstanceEntry.Count;
 		if (ItemDefinition == nullptr
-			|| !SimulateAddItemDefinition(SimulatedSlots, *ItemDefinition, RemainingCount))
+			|| !SimulateAddItemDefinition(SimulatedSlots, *ItemDefinition, RemainingCount, InstanceEntry.ItemInstance))
 		{
 			return false;
 		}

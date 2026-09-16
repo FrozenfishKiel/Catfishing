@@ -1,4 +1,6 @@
-﻿#include "UI/Inventory/CatInventoryQuickbarWidget.h"
+#include "UI/Inventory/CatInventoryQuickbarWidget.h"
+#include "Inventory/CatInventorySettings.h"
+#include "Equipment/CatEquipmentDefinition.h"
 
 #include "Components/WrapBox.h"
 #include "Inventory/CatBackPackComponent.h"
@@ -103,6 +105,9 @@ void UCatInventoryQuickbarWidget::RefreshSlots()
 			continue;
 		}
 		SlotWidget->SetSlotContext(Index, CurrentBackPack, Entries[Index]);
+		const auto& Held = CurrentBackPack->GetQuickbarHeldSlot();
+		if (Held.ItemInstanceId.IsValid() && Held.SlotIndex == Index)
+			SlotWidget->SetHeldItemPresentation(GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(Held.DefinitionId), Held.bInUse);
 		SlotWidget->SetAcceptsSlotInput(false);
 		SlotWidget->SetSelectedFromModel(Index == SelectedSlotIndex);
 		QuickbarSlotWrapBox->AddChildToWrapBox(SlotWidget);

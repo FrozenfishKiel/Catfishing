@@ -2,6 +2,9 @@
 
 #include "Inventory/CatInventorySettings.h"
 #include "Growth/CatGrowthComponent.h"
+#include "Inventory/CatInventoryItemInstance.h"
+#include "Inventory/CatInventoryItemDefinition.h"
+#include "Net/UnrealNetwork.h"
 
 // 构造流程：保留父类全部库存事实和复制行为，只声明背包是角色默认整批收货目标。
 UCatBackPackComponent::UCatBackPackComponent(const FObjectInitializer& ObjectInitializer)
@@ -42,4 +45,55 @@ int32 UCatBackPackComponent::GetConfiguredPlayerSlotCapacity() const
 	return static_cast<int32>(FMath::Clamp(
 		double(InventorySettings ? InventorySettings->GetPlayerInventorySlotCapacity() : 0) + Bonus,
 		0.0, double(MAX_int32)));
+}
+
+// 格位与 held entry 身份配对，不复制或创建第二份物品。
+bool UCatBackPackComponent::ReserveQuickbarHeldSlotFromAuthority(const int32 SlotIndex, const FGuid ItemId)
+{
+	const auto* Entry = GetInventoryEntryAtSlot(SlotIndex);
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !Entry || !Entry->Instance
+		|| Entry->Instance->GetItemInstanceId() != ItemId || Entry->StackCount != 1) return false;
+	if (QuickbarHeldSlot.ItemInstanceId.IsValid()) return QuickbarHeldSlot.ItemInstanceId == ItemId;
+	QuickbarHeldSlot.SlotIndex = SlotIndex;
+	QuickbarHeldSlot.ItemInstanceId = ItemId;
+	QuickbarHeldSlot.DefinitionId = Entry->Instance->GetItemDefinition()->GetInventoryDefinitionId();
+	OnRep_QuickbarHeldSlot();
+	GetOwner()->ForceNetUpdate();
+	return true;
+}
+void UCatBackPackComponent::ClearQuickbarHeldSlotFromAuthority()
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !QuickbarHeldSlot.ItemInstanceId.IsValid()) return;
+	QuickbarHeldSlot = FCatQuickbarHeldSlot{};
+	OnRep_QuickbarHeldSlot();
+	GetOwner()->ForceNetUpdate();
+}
+void UCatBackPackComponent::SetQuickbarHeldSlotInUseFromAuthority(const bool bInUse)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !QuickbarHeldSlot.ItemInstanceId.IsValid() || QuickbarHeldSlot.bInUse == bInUse) return;
+	QuickbarHeldSlot.bInUse = bInUse;
+	OnRep_QuickbarHeldSlot();
+	GetOwner()->ForceNetUpdate();
+}
+void UCatBackPackComponent::OnRep_QuickbarHeldSlot() { BroadcastInventoryChange(); }
+void UCatBackPackComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME_CONDITION(UCatBackPackComponent, QuickbarHeldSlot, COND_OwnerOnly);
+}
+bool UCatBackPackComponent::CanAcceptInventoryEntryAtSlot(const FCatInventoryEntry& Entry, const int32 TargetSlotIndex) const
+{
+	if (QuickbarHeldSlot.ItemInstanceId.IsValid())
+	{
+		const bool bReturning = Entry.Instance && Entry.Instance->GetItemInstanceId() == QuickbarHeldSlot.ItemInstanceId;
+		if (bReturning) return TargetSlotIndex == QuickbarHeldSlot.SlotIndex && Super::CanAcceptInventoryEntryAtSlot(Entry, TargetSlotIndex);
+		if (TargetSlotIndex == QuickbarHeldSlot.SlotIndex) return false;
+	}
+	return Super::CanAcceptInventoryEntryAtSlot(Entry, TargetSlotIndex);
+}
+bool UCatBackPackComponent::CanAcceptInventoryDefinitionAtSlot(const UCatInventoryItemDefinition& Definition, const int32 TargetSlotIndex) const
+{
+	if (QuickbarHeldSlot.ItemInstanceId.IsValid() && TargetSlotIndex == QuickbarHeldSlot.SlotIndex)
+		return false; // 定义批次没有原实例身份，不能占用手持保留格。
+	return Super::CanAcceptInventoryDefinitionAtSlot(Definition, TargetSlotIndex);
 }

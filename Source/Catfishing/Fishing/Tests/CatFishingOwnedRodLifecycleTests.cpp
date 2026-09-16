@@ -471,6 +471,18 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 				TestEqual(TEXT("recall never gives bait to the person pressing X"), Quantity(Owner.Equipment, TEXT("BugBait")), 4);
 			}
 		}
+		if (ExitScenario == 1 || ExitScenario == 3)
+		{
+			Helper.Character->GetPhysicalBodyComponent()->TeleportBodyFromAuthority(
+				FTransform(Helper.Character->GetActorRotation(), Rod->GetGripWorldTransform().GetLocation() - FVector(60, 0, 0)), TEXT("CustodyRetake"));
+			FCatOperateRodCommand Take; Take.Context = Context();
+			if (!TestTrue(TEXT("remaining player can take rod from departed owner"), Fishing->OperateRod(Helper.Controller, Take).bCommitted)) return false;
+			TestEqual(TEXT("rod source resolves the exact custody ledger"), Fishing->ResolveRodEquipmentFromAuthority(Rod), RodLedger);
+			bool bHasSourceAbility = false;
+			for (const auto& Spec : Helper.Character->GetCatAbilitySystemComponent()->GetActivatableAbilities())
+				bHasSourceAbility |= Spec.SourceObject.Get() == ReleasedRod.Instance.Get();
+			TestTrue(TEXT("retake grants abilities from original custodied rod instance"), bHasSourceAbility);
+		}
 		AddInfo(FString::Printf(TEXT("Event=owned_rod_service_lifecycle_verified Scenario=%d SessionId=%s RodItemInstanceId=%s Operators=%d Durability=%.3f Evidence=runtime_behavior"),
 			ExitScenario, *CastResult.Command.FishingSessionId.ToString(), *OwnerRodId.ToString(), Rod->GetOperatorCount(), CatFishingTest::Durability(ReleasedRod)));
 	}

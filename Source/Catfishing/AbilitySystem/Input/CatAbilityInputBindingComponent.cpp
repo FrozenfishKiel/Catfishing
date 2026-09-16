@@ -80,6 +80,7 @@ void UCatAbilityInputBindingComponent::ReleaseAllInputRoutes(const FName Reason)
 	{
 		FPressedRoute Route;
 		if (!PressedRoutes.RemoveAndCopyValue(Tag, Route)) continue;
+		if (auto* ItemController = Route.SelectedItemController.Get()) ItemController->EndSelectedItemUseFromInput(true);
 		if (UCatPhysicsGrabComponent* Grab = Route.Grab.Get()) Grab->SetGrabInput(Route.bLeft, false);
 		if (UCatAbilitySystemComponent* AbilitySystem = Route.AbilitySystem.Get())
 		{
@@ -129,7 +130,15 @@ void UCatAbilityInputBindingComponent::HandleAbilityInputTagPressed(const FGamep
 	const ACatFishingRodActor* Rod = UCatFishingCameraComponent::FindHeldRodOperatedBy(Controller);
 	const bool bPrimary = Rod && Rod->IsPrimaryOperator(Controller ? Controller->PlayerState : nullptr);
 	FPressedRoute Route;
-	if (bHandInput && !bPrimary)
+	auto* ItemController = Cast<ACatfishingPlayerController>(Controller);
+	if (bLeft && !bPrimary && ItemController && ItemController->IsQuickbarRodSelected()) return;
+	if (bLeft && !bPrimary && ItemController && ItemController->CanUseSelectedBackpackItemFromInput())
+	{
+		Route.SelectedItemController = ItemController;
+		PressedRoutes.Add(InputTag, Route);
+		ItemController->BeginSelectedItemUseFromInput();
+	}
+	else if (bHandInput && !bPrimary)
 	{
 		const ACatCharacter* Character = Cast<ACatCharacter>(RoutedPawn.Get());
 		UCatPhysicalBodyComponent* Body = Character ? Character->GetPhysicalBodyComponent() : nullptr;
@@ -158,6 +167,7 @@ void UCatAbilityInputBindingComponent::HandleAbilityInputTagReleased(const FGame
 {
 	FPressedRoute Route;
 	if (!PressedRoutes.RemoveAndCopyValue(InputTag, Route)) return;
+	if (auto* ItemController = Route.SelectedItemController.Get()) ItemController->EndSelectedItemUseFromInput(false);
 	if (UCatPhysicsGrabComponent* Grab = Route.Grab.Get()) Grab->SetGrabInput(Route.bLeft, false);
 	if (UCatAbilitySystemComponent* AbilitySystem = Route.AbilitySystem.Get()) AbilitySystem->AbilityInputTagReleased(InputTag);
 	UE_LOG(LogCatfishing, Display, TEXT("Event=physical_input_route_released InputTag=%s Route=%s Result=OriginalRecipientReleased %s"),

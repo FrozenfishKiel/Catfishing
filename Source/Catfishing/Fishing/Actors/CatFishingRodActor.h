@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
@@ -249,6 +249,8 @@ private:
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> SceneRoot;
 	/** Detached on authority when simulating; SceneRoot observes it and never drives it. */
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UBoxComponent> PhysicsBody;
+	/** 仅供准星查询，不参与竿体质量、接触或抓握约束。 */
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UBoxComponent> InteractionBounds;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatFishingPhysicalRodComponent> PhysicalRod;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatLightPropComponent> LightProp;
 	/** 美术表现根节点；皮肤和特效挂在这里，不参与权威锚点计算。 */

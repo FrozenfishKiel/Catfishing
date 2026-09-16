@@ -520,7 +520,8 @@ protected:
 
 	/** 在模拟格子数组里尝试放入指定数量的同类定义；成功时扣减 InOutRemainingCount。 */
 	bool SimulateAddItemDefinition(TArray<FSimulatedInventorySlot>& SimulatedSlots,
-		const UCatInventoryItemDefinition& ItemDefinition, int32& InOutRemainingCount) const;
+		const UCatInventoryItemDefinition& ItemDefinition, int32& InOutRemainingCount,
+		UCatInventoryItemInstance* IncomingInstance = nullptr) const;
 
 	/** 用整批输入预演当前库存能否完整接收；成功时不会创建实例，也不会改变正式库存。 */
 	bool SimulateAddInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch,

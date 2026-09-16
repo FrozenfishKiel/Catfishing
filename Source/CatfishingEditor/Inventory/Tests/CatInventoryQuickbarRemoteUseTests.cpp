@@ -232,7 +232,7 @@ namespace CatInventoryQuickbarRemoteUseTests
 			bPacketSimulationApplied = true;
 			return true;
 		}
-		/** 远端先选第二份窝料按 G，再立刻换到第一格；弱网下不能把客户端 RPC 尚未抵达服务器误判为 Begin 失败。 */
+		/** 远端先选第二份窝料按左键，再立刻换到第一格；弱网下不能把客户端 RPC 尚未抵达服务器误判为 Begin 失败。 */
 		bool StartRemoteSecondChumThenChangeSelection()
 		{
 			if (!VerifyFixtureChumLineOfSight()) return true;
@@ -240,8 +240,8 @@ namespace CatInventoryQuickbarRemoteUseTests
 			ClientController->BeginSelectedItemUseFromInput();
 			const FCatInventoryEntry* SourceChum = ServerBackpack->GetInventoryEntryAtSlot(SecondChumSlot);
 			ActiveChumSource = SourceChum ? SourceChum->Instance : nullptr;
-			if (!Test->TestTrue(TEXT("remote G retains the selected source chum identity before RPC arrives"), ActiveChumSource.IsValid())) return true;
-			if (!Test->TestTrue(TEXT("remote changes local selection without ending the active chum input"), ClientController->RequestSelectQuickbarSlotFromInput(FirstChumSlot))) return true;
+			if (!Test->TestTrue(TEXT("remote left click retains the selected source chum identity before RPC arrives"), ActiveChumSource.IsValid())) return true;
+			if (!Test->TestFalse(TEXT("continuous selected item locks switching until release"), ClientController->RequestSelectQuickbarSlotFromInput(FirstChumSlot))) return true;
 			Stage = 4; return false;
 		}
 		/** 等待弱网 RPC 在服务器原实例上真正激活后才发送 Release，保证结束事件与 Begin 的精确实例配对。 */
@@ -327,7 +327,7 @@ namespace CatInventoryQuickbarRemoteUseTests
 			if (!bFirstChumUnchanged || !bSecondChumConsumed || !bServerReceiptMatches || !bClientReceiptMatches) return true;
 			Stage = 6; return false;
 		}
-		/** 远端选择第二根鱼竿并按 G；服务器部署时必须读取该槽的实例，第一根仍留在背包。 */
+		/** 远端选择第二根鱼竿并按左键；服务器部署时必须读取该槽的实例，第一根仍留在背包。 */
 		bool DeployRemoteSecondRod()
 		{
 			if (!Test->TestTrue(TEXT("remote selects second rod locally"), ClientController->RequestSelectQuickbarSlotFromInput(SecondRodSlot))) return true;
@@ -345,7 +345,7 @@ namespace CatInventoryQuickbarRemoteUseTests
 			UCatEquipmentInventoryItemInstance* HeldInstance = Held ? Cast<UCatEquipmentInventoryItemInstance>(Held->Instance) : nullptr;
 			if (!Rod || !FirstInstance || !HeldInstance) return false;
 			// 三项都是同一次选中实例部署的独立证据；逐项执行可在回归时同时报告身份、库存和耐久是否串线。
-			const bool bSecondRodPayloadMatches = Test->TestEqual(TEXT("remote G deploys the selected second rod instance into world payload"), Rod->GetPresentationState().ItemInstanceId, SecondRodId);
+			const bool bSecondRodPayloadMatches = Test->TestEqual(TEXT("remote slot selection deploys the selected second rod instance into world payload"), Rod->GetPresentationState().ItemInstanceId, SecondRodId);
 			const bool bFirstRodStillVisible = Test->TestEqual(TEXT("first rod remains visible in remote server backpack"), FirstInstance->GetItemInstanceId(), FirstRodId);
 			const bool bRodDurabilityRemainsDistinct = Test->TestTrue(TEXT("two rod runtime durability values stay distinct across selected deployment"),
 				FMath::IsNearlyEqual(FirstInstance->GetRodDurability(), FirstRodDurability)

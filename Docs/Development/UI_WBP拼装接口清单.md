@@ -1,18 +1,19 @@
-﻿# UI WBP 拼装接口清单
+# UI WBP 拼装接口清单
 
 文档状态：当前代码与 Frontend / 局内菜单接口核对版（2026-09-08）
 
 范围：这份文档只说明当前项目给 WBP 提供的父类、控件名、蓝图事件、蓝图可调用函数和只读数据。它用于手工重做 UI 样式，不作为验收文档，也不规定最终美术风格。
 
-## 2026-09-15 背包常驻快捷栏接线
+## 2026-09-16 背包常驻快捷栏接线
 
 本节状态：背包与独立物品栏已分离，正式资产和正常/延迟丢包双端回归已通过；尚未进行打包双机与全套键鼠人工走查。事实来源：`UCatInventoryQuickbarWidget`、`UCatBackPackComponent`、`UCatInventoryModel`、`UCatLocalPlayerUISubsystem`、`ACatfishingPlayerController` 和 `Scripts/migrate_inventory_quickbar.py`。
 
 - 正式资产 `/Game/UI/Inventory/WBP_CatInventoryQuickbar` 继承 `UCatInventoryQuickbarWidget`，包含 `QuickbarSlotWrapBox`。现有 UI Subsystem 随当前 Pawn 绑定、解绑背包，背包窗口关闭不会移除常驻快捷栏。
 - 快捷栏按个人背包 Model 的实际列表创建格子，个人容量来源为 `InventorySettings.PlayerInventorySlotCapacity=4`；不另配快捷栏容量或物品列表。
 - 物品栏专用格子 `/Game/UI/InventorySlot/WBP_CatInventoryQuickbarSlot` 使用 `SelectedBorder` 显示选中外圈、`SlotKeyTextBlock` 显示数字提示。背包继续使用 `/Game/UI/InventorySlot/WBP_CatInventorySlot`，没有外圈和数字；两者仅共享库存列表。
-- `1～4`、滚轮只改变本地 Controller 的物品栏焦点；背包点击不参与选择。选格立即更新外圈，不发选择 RPC。滚轮包含空格并循环；换格不结束正在进行的物品使用。
-- `G` 读取当时的槽位及已解析实例 ID，交给服务器校验并执行既有物品 Use。持续使用的松开/取消绑定按下时的原实例；`Q` 只丢弃嘴叼物。模态页面开启时不穿透执行这些游戏按键。
+- `1～4`、滚轮预测选择外圈，并向服务器提交槽位和观察到的实例 ID；服务器切换鱼竿并回执最终格位。未抛钩可以切换，抛钩到终局期间禁止换格；持续物品使用也在松键前锁定。背包点击不参与快捷栏选择。
+- 选中鱼竿立即拿到手中，保留该格位置；`QuantityTextBlock` 显示“已装备”或“使用中”，缩略图读取原物品定义，库存实例只有一份。左键继续瞄准/抛钩、提钩和收线；选中其他可用物品时左键进入原 Use，松开/取消绑定按下时的原实例。
+- `R` 架下当前鱼竿并保留会话，清除格位保留；世界竿可通过 `E` 重新操作，允许其他玩家接管。`X` 结束当前手持竿会话并收回同一实例，容量不足时拒绝且不结束会话。空手 X 不扫描地面竿；统一丢弃/拾取权限待定。`G` 已从正式配置解绑，`Q` 仍只丢弃嘴叼物。模态页面不穿透这些输入。
 
 
 事实来源清单：

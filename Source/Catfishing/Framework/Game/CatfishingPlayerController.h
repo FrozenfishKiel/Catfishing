@@ -51,7 +51,7 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerExecuteInventoryAction(FGuid RequestId, AActor* SourceInventoryHost, int32 SourceSlotIndex,
 		FGuid ItemInstanceId, FGameplayTag Action, int32 Quantity);
-	/** 本机物品栏输入选择一个实际库存槽位；只写 Controller 的物品栏焦点，背包窗口不能触发它。 */
+	/** 本机物品栏输入选择一个实际库存槽位；预测焦点并请求服务器切换同一实例，背包窗口不能触发它。 */
 	bool RequestSelectQuickbarSlotFromInput(int32 RequestedSlotIndex);
 	/** 读取物品栏当前焦点；只读背包容量来排除无效槽位，不在背包组件或库存 Model 中保存选择。 */
 	int32 GetSelectedQuickbarSlotIndex() const;
@@ -59,9 +59,9 @@ public:
 	FCatQuickbarSelectionChanged OnQuickbarSelectionChanged;
 	/** owning client 按实际背包格数循环选择；Direction 小于零向前、大于零向后，空格同样属于可选目标。 */
 	bool RequestCycleQuickbarSlotFromInput(int32 Direction);
-	/** G 的按下入口；只在当前本地选择槽位已解析实例时提交统一 Use，请求不会猜测或替换槽位。 */
+	/** 选中物品的左键按下入口；只在当前本地选择槽位已解析实例时提交统一 Use，请求不会猜测或替换槽位。 */
 	void BeginSelectedItemUseFromInput();
-	/** G 松开时结束同一持续使用请求；普通瞬时物品没有活动请求时无副作用，取消和旅行也复用它清理。 */
+	/** 左键松开时结束同一持续使用请求；普通瞬时物品没有活动请求时无副作用，取消和旅行也复用它清理。 */
 	void EndSelectedItemUseFromInput(bool bCancelled);
 	/** 查询当前输入是否可以使用一个本地选中且有有效实例的背包槽位；不做服务器权限裁决。 */
 	bool CanUseSelectedBackpackItemFromInput() const;
@@ -71,6 +71,15 @@ public:
 	/** 服务器结束同一个持续使用实例；只接受 Begin 已记录的 RequestId 和实例身份，换格后也不会把结束事件投给新物品。 */
 	UFUNCTION(Server, Reliable)
 	void ServerEndSelectedBackpackItem(FGuid RequestId, FGuid ItemInstanceId, bool bCancelled);
+	bool IsQuickbarSelectionLocked() const;
+	void ParkHeldRodFromInput();
+	void PackHeldRodFromInput();
+	bool IsQuickbarRodSelected() const;
+	UFUNCTION(Server, Reliable) void ServerPackHeldRod(FGuid RequestId, FGuid RodId);
+	UFUNCTION(Server, Reliable) void ServerSelectQuickbarSlot(FGuid RequestId, int32 SlotIndex, FGuid ExpectedItemId);
+	UFUNCTION(Client, Reliable) void ClientReceiveQuickbarSelection(FGuid RequestId, int32 SlotIndex, bool bCommitted);
+	UFUNCTION(Server, Reliable) void ServerParkHeldRod(FGuid RequestId, FGuid RodId);
+
 	/** Ordinary/sprint speed from this controller and the pawn class, in cm/s. Used by CMC flags. */
 	float GetConfiguredMovementSpeed(const APawn* TargetPawn, bool bSprinting) const;
 	/** 每帧先对齐公开翻天快照与锁，再交给引擎处理输入；同时覆盖 GameState 晚到与复制延迟。 */
@@ -384,6 +393,9 @@ private:
 	FGuid ActiveSelectedItemUseRequestId;
 	/** 独立物品栏的本地焦点，初始第一格；仅本机输入修改，换 Pawn 重置，不复制、不持久化、不写入背包 Model。 */
 	int32 SelectedQuickbarSlotIndex = 0;
+	int32 AuthorityQuickbarSlotIndex = 0;
+	FGuid PendingQuickbarSelectionRequestId;
+	TMap<FGuid, TPair<int32, bool>> QuickbarSelectionResults;
 	/** 本机持续使用事务锁定的实例身份；服务器和客户端都据此拒绝把结束输入转给另一个同定义物品。 */
 	FGuid ActiveSelectedItemUseItemId;
 	/** 本机持续使用事务开始时的背包槽位；它与固定实例共同提供诊断上下文，结束不会改读之后的新选中格。 */

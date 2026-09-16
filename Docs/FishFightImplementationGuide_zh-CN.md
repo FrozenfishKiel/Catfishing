@@ -1,5 +1,30 @@
 # 鱼运动与遛鱼逻辑：设计与实现
 
+## 2026-09-16 选格取竿与钓鱼生命周期修复
+
+当前输入：选中鱼竿立即装备；左键沿用瞄准/松开抛钩、真咬提钩及收线；未抛钩可换格，抛钩后到终局锁定。R 架竿保留会话并释放格位，E 操作同一世界竿，X 收回当前手持竿。其他选中物品使用左键。空手 X 不承担统一拾取入口；地面竿的通用拾取权限仍待定。下节力量碾压删除结果仍有效，竿强断竿规则保留。
+
+修改前基线：上一个独立检查点 `0bd9faae`，并保留 `245af919` 的有效提钩后才生成鱼实体。开始本轮盘点时无已跟踪并行改动；根目录未跟踪的程序工程待办保留。既有多人辅助抓握失败见下节，不当作本轮已修复。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 选择入口、权威与回执 | `Source/Catfishing/Framework/Game/CatfishingPlayerController.cpp`：Native slot tag→RequestSelect→ServerSelect | 原本仅本地选中，G 才 Use；改为选杆立即装备，进行中的会话禁止换格 | 原格/实例身份复核、可靠 RPC、最终格位回执；同一实例重放不重复装备 | 先准备格位接收方，再接 Use/Leave/Pack | 错配 ID、换竿、快速选格、普通/弱网 | 已接入；最终定向报告见下 |
+| 库存与资源 | `Inventory/CatBackPackComponent`→通用库存 held entry/ReturnHeld | 取竿使可见格消失；需要手持期间保留源格，但不能复制第二份物品 | owner-only `QuickbarHeldSlot` 只含 SlotIndex/ItemId/DefinitionId/bInUse；按实例限制收货格 | 新 reservation→旧库存同实例事务→收回/架竿释放 | 收货不能占用手持格，X 容量预检，失败恢复操作位 | 不改存档 schema/扣饵入口；原 held entry 导出合同保留，旅行仍由原离场链托管 |
+| 收货容量预检 | `Inventory/CatInventoryComponent::SimulateAddInventoryBatch`→`SimulateAddItemDefinition` | 仅按定义模拟，无法区分原竿和同型号新竿 | 实例批次保留实例身份并复用实际接收规则；定义批次禁止占用手持格 | 与 BackPack reservation 同步 | 同型号新竿预检拒绝、原竿归还预检接受、通用库存收货回归 | 最终容量回归见下 |
+| 输入边沿 | `AbilitySystem/Input/CatAbilityInputBindingComponent`→Primary/selected Use；`CatFishingPrimaryActionAbility::EndAbility` | 左键空手只抓握；取消 Primary 也发 Released，可能误抛钩 | 按下固定 Use/GAS/Grab 接收者；取消清瞄准而不抛钩 | 先改取消，再切选格及 R/X | 松键、菜单取消、持竿约束、持续窝料 | 已接入；真实鼠标路由/会话保持测试见下 |
+| 架竿、咬钩与终局 | `Fishing/CatFishingService::LeaveRod`→Session.Suspend；`ResolveHookSelectionFromAuthority/OpenTrueBiteWindowFromAuthority/RequestHookFromAuthority` | 离竿清空 FisherCharacter 后抽鱼失败，D0=-1；正常断竿误报初始化失败 | 抽鱼用会话竿/原装备；无人持竿时 D0 从握把到冻结落点计算（cm）；已裁断竿回执成功，不二次 Invalidated | 不重启等待/真咬计时；不预生成鱼；保留同一 SessionId 和原扣饵来源 | 无人等待到真咬、架竿后接管、合法提钩断竿重放 | 已接入；原断竿阈值与正常窗口默认值不变 |
+| 世界交互与离场托管 | `Fishing/Actors/CatFishingRodActor`→E trace/Service；`ResolveRodEquipmentFromAuthority` 被授予、抛钩、收竿调用 | 竿物理体很细；能力来源只找 Owner Pawn，离场后找不到实例 | 附加半厚至少 8cm 的 Visibility 查询盒，禁焊接/物理/重叠；先找托管装备，再找活体来源 | 不加新物理质量，不转移会话或物品归属 | 偏离细杆6cm的真实查询、离场后接管原实例能力 | 已接入；遮挡仍用原 first-hit 查询，世界拾取规则未扩展 |
+| UI/复制消费者 | `UI/Inventory/CatInventoryQuickbarWidget`→`UI/InventorySlot/CatInventorySlotWidget::SetHeldItemPresentation` | 空格无法表明手持和使用中 | reservation OnRep 通知原 Model 重读，正式格子画原缩略图和状态字 | 等库存/保留记录复制后重绘，选择最终由回执校正 | owning-client 实例/格位、正式 WBP 控件及画面 | 原 WBP 结构不变；未新增正式界面资产，不声明完整人工视觉验收 |
+| 配置、生成脚本与资产 | `CatInventoryQuickbarAuthoringLibrary::MigrateBackpackQuickbarInputAssets`、`Scripts/migrate_inventory_quickbar.py`→`/Game/Input/InputContext/IMC_InputContext`、`/Game/Data/Abilities/DA_CatAbilityInputConfig` | 旧 G Use、R 未绑定、X 持续取消 | 新 `/Game/Input/InputAction/IA_ParkHeldFishingRod`(R)、`IA_PackHeldFishingRod`(X)；移除 G 与旧 X 映射；LMB 保持 Primary 路由 | C++ 标签编译后编辑器迁移，再运行正式资产测试 | 重生成不恢复 G；映射/Tag 加载；Cook 入口继续引用原 IMC | 迁移日志 `Saved/Logs/QuickbarRod-MigrationCompleted.log` 为0 Error；未 Cook |
+| 旧入口、日志、文档 | 原 `SubmitRodInteract/SubmitCancel` 仍被自动化/兼容命令使用；旧 InputAction 可能有外部 BP 消费者 | 旧 R/G/X 口径不能继续作为当前操作说明 | 保留尚有消费者的代码/资产，解除正式 IMC 旧绑定；新 RequestId/RodId 结果与客户端回执落盘 | 先切实际入口再保留隔离兼容路径 | Source/资产检查、diff、Development 构建与日志 | 旧二进制外部引用未完全确认，不删除资产；未来全量引用迁移后可清理。当前 UI 接口文档已改，历史说明不作当前契约 |
+
+验证与剩余边界：主体版本 `Saved/Automation/QuickbarRod-Final/Report/index.json` 15/15 通过（4 clean、11 warning），包含正常/弱网四项、无人真咬、原实例、物理输入、离场托管与合法提钩断竿；日志 `Automation.log`。Editor 构建 `Saved/Logs/QuickbarRod-VerifiedEditor.log`、Game 构建 `Saved/Logs/QuickbarRod-GameBuild.log` 通过。容量边界及必要库存消费者最终复验：`Saved/Automation/QuickbarRod-CapacityFinal/Report/index.json` 23/23 通过（8 clean、15 warning），与前轮有重叠，不累加；包括新增同型号拒绝占位、原实例归还、库存回滚/转移，以及全部本轮钓鱼和快捷栏场景。拒绝分支随后仅补 Warning 日志，未改变玩法或测试期望。最终源码构建见 `Saved/Logs/QuickbarRod-DeliveryEditor.log`、`QuickbarRod-DeliveryGame.log`。
+
+- `contract`：UHT/C++、正式输入迁移、容量及身份约束通过；`git diff --check` 通过。初次迁移相对脚本路径被 commandlet 当作表达式，已改用显式脚本定位后成功；本机 Zen 不可达回退带来启动 Warning。
+- `runtime_behavior`：上述23项通过，主客机日志包含同一 RequestId 的 `quickbar_selection_result` / `quickbar_selection_received`（NetMode=ListenServer/Client），普通及弱网都实际部署第二根原实例；无人看守真咬、搏斗中架竿后同会话接管、原主人离场后的能力来源和合法断竿回执均通过。早期 FirstRod 夹具把新换杆流程插在旧默认杆选择前，导致旧断言取错型号；改为显式选中原竿后复验通过，没有降低生产门禁。
+- `presentation_delivery`：正式WBP仍加载原控件，新的状态字/保留图标由原生投影提供；未真人检查其布局和全部键鼠操作、未 Cook/打包双机，不关闭 EquipmentShop/UIReach/Fishing/Delivery 整体模块。运行诊断筛选 `quickbar_selection_result/received`、`quickbar_rod_park_result`、`quickbar_rod_pack_result/rejected`、`fishing_rod_interaction_*`、`fishing_rod_operator_abilities_granted`、`fishing_input_lifecycle_cleared`。开发包预期在 `<打包根目录>/Catfishing/Saved/Logs` 默认落盘；本轮未新 Cook，未核验新的打包双端日志。
+
+
 ## 2026-09-16：删除力量碾压，统一进入物理搏斗
 
 用户确认小鱼通过实际移动拖岸、大鱼通过鱼线把猫拖入水中；取消按猫鱼力量倍数直接甩岸收鱼。鱼竿强度、耐久、抄网规则不变。本文下方带日期的碾压实现和夹具记录属于历史证据，不再作为当前实现要求；旧模拟报告保留用于解释历史数值，不可用于生成当前玩法。

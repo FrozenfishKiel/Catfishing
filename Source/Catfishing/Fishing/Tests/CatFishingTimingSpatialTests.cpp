@@ -389,7 +389,7 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 {
 	const auto* Catalog = GetDefault<UCatFishCatalogSettings>();
 	TestEqual(TEXT("读取正式ini完美线长倍率"), Catalog->PerfectInitialLineLengthMultiplier, 0.9);
-	for (const int32 Scenario : {0, 1, 2})
+	for (const int32 Scenario : {0, 1, 2, 3})
 	{
 		const bool bPerfect = Scenario == 1;
 		CatR3Tests::FFixture F;
@@ -476,6 +476,18 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 		};
 		TestEqual(TEXT("有效提钩前没有鱼实体"), CountFishActors(), 0);
 		const FGuid HookRequestId = FGuid::NewGuid();
+		if (Scenario == 3)
+		{
+			auto* RodFragment = const_cast<UCatEquipmentFragment_Rod*>(RodDefinition->FindFragment<UCatEquipmentFragment_Rod>());
+			TGuardValue<double> WeakRod(RodFragment->FishingStrength, 10.0);
+			AddExpectedErrorPlain(TEXT("Event=fishing_rod_strength_snapped"), EAutomationExpectedErrorFlags::Contains, 1);
+			AddExpectedErrorPlain(TEXT("Event=fishing_rod_broken"), EAutomationExpectedErrorFlags::Contains, 1);
+			AddExpectedErrorPlain(TEXT("Outcome=ECatFishingOutcome::LineBroken"), EAutomationExpectedErrorFlags::Contains, 1);
+			TestTrue(TEXT("legal hook acknowledges immediate rod break"), Session->RequestHookFromAuthority(HookRequestId).bCommitted);
+			TestEqual(TEXT("rod break is not rewritten as initialization failure"), Session->Snapshot.Outcome, ECatFishingOutcome::LineBroken);
+			TestTrue(TEXT("terminal hook result remains replayable"), Session->RequestHookFromAuthority(HookRequestId).bCommitted);
+			continue;
+		}
 		if (Scenario == 2)
 		{
 			auto* Presentation = GetMutableDefault<UCatFishingPresentationSettings>();

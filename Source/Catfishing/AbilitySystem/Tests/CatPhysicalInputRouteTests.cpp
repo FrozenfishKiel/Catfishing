@@ -277,6 +277,8 @@ bool FCatPhysicalInputRouteTest::RunTest(const FString& Parameters)
 	ACatFishingSession* CastSession = Service->FindSession(CastSessionId);
 	if (!TestTrue(TEXT("抛钩与鱼饵预留未释放显式持竿"),CastSession && Equipment->IsFishingUseActive(CastSessionId)
 		&& Grab->IsGripping(true) && Grab->GetGripState(true).GripId==RetakeGripId)) return false;
+	TestTrue(TEXT("cast hook immediately locks slot selection"), Controller->IsQuickbarSelectionLocked());
+	TestFalse(TEXT("in-use rod refuses changing slots"), Controller->RequestSelectQuickbarSlotFromInput(1));
 	const double WaitStarted=World->GetTimeSeconds();
 	const FVector WaitBodyStart=Body->GetBody()->GetComponentLocation();
 	double MinimumWaitingBodyZ=WaitBodyStart.Z;
@@ -323,6 +325,14 @@ bool FCatPhysicalInputRouteTest::RunTest(const FString& Parameters)
 	AddInfo(FString::Printf(TEXT("Event=physical_input_same_hand_retake_cast_reel_verified GripId=%s SessionId=%s ExplicitHold=%d Phase=%s Reeling=%d World=%s Authority=1"),
 		*RetakeGripId.ToString(),*CastSessionId.ToString(),Grab->GetGripState(true).bExplicitHold,
 		*UEnum::GetValueAsString(CastSession->GetSnapshot().Phase),CastSession->GetSnapshot().bReeling,*World->GetName()));
+	Controller->ParkHeldRodFromInput();
+	TestNull(TEXT("R parks fighting rod without an operator"), Service->FindRodOperatedBy(Controller->PlayerState));
+	TestEqual(TEXT("R preserves the same fishing session"), Service->FindActiveSessionByRod(Rod), CastSession);
+	TestTrue(TEXT("R preserves the running fish simulation"), CastSession->IsFightRunnerRunning());
+	TestFalse(TEXT("parked session no longer locks this player's quickbar"), Controller->IsQuickbarSelectionLocked());
+	TestTrue(TEXT("E resumes fighting on the same world rod"), Rod->Interact_Implementation(Controller, FGuid::NewGuid()));
+	TestEqual(TEXT("retake resumes the same session"), Service->FindActiveSessionByRod(Rod), CastSession);
+	TestTrue(TEXT("retake restores in-use lock"), Controller->IsQuickbarSelectionLocked());
 	Controller->ClearPhysicalControlInput(TEXT("RetakeRegressionFinished"));
 	TestFalse(TEXT("生命周期强清理仍拆显式来源的真实约束"),Grab->IsGripping(true));
 	TestFalse(TEXT("强清理不遗留显式来源"),Grab->GetGripState(true).bExplicitHold);
