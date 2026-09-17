@@ -5,7 +5,6 @@
 #include "AbilitySystem/Config/CatAbilitySet.h"
 #include "CatAbilitySystemComponent.generated.h"
 
-/** 角色持有的 GAS 入口；管理输入边沿、默认授予及按来源回收的持续状态，权威事实保存在 Spec 和活动 GE 中。 */
 /** Character 持有的公共 GAS 入口；管理输入、默认授予及状态来源句柄，资源数值仍由效果和属性集保存。 */
 UCLASS()
 class CATFISHING_API UCatAbilitySystemComponent : public UAbilitySystemComponent

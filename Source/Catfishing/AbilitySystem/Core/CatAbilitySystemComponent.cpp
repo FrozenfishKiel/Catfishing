@@ -65,6 +65,8 @@ void UCatAbilitySystemComponent::ProcessAbilityInput(const float DeltaTime, cons
 		return;
 	}
 
+	// 输入任务可同步消耗最后一件来源并撤销 Spec；沿用 GAS 列表锁，将回收延后到本帧遍历结束。
+	ABILITYLIST_SCOPE_LOCK();
 	TArray<FGameplayAbilitySpecHandle> AbilitiesToActivate;
 	for (const FGameplayAbilitySpecHandle Handle : InputHeldSpecHandles)
 	{

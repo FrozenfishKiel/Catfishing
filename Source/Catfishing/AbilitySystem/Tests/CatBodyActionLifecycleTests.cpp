@@ -1,4 +1,4 @@
-﻿#if WITH_DEV_AUTOMATION_TESTS
+#if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
@@ -61,8 +61,23 @@ bool FCatBodyActionLifecycleTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("求救前摇保持活跃"), ASC->FindAbilitySpecFromHandle(HelpHandle)->IsActive());
 	ASC->CancelBodyActionAbilitiesFromAuthority();
 	TestFalse(TEXT("主动取消可以结束求救"), ASC->FindAbilitySpecFromHandle(HelpHandle)->IsActive());
-	ASC->ClearAbility(SignHandle);
-	ASC->ClearAbility(HelpHandle);
+	// 输入事件中同步撤销来源，模拟最后一件消耗或装备卸下；遍历必须允许 GAS 在回调中请求回收。
+    ASC->ClearStateSourcesFromAuthority();
+    auto* HelpSpec = ASC->FindAbilitySpecFromHandle(HelpHandle);
+    HelpSpec->GetDynamicSpecSourceTags().AddTag(CatFishingAbilityTags::Input_Fishing_Cancel);
+    TestEqual(TEXT("重新启动求助用于输入撤销回归"), ASC->HandleGameplayEvent(HelpEvent.EventTag, &HelpEvent), 1);
+    const auto PredictionKey = HelpSpec->GetPrimaryInstance()->GetCurrentActivationInfo().GetActivationPredictionKey();
+    bool bInputReceived = false;
+    ASC->AbilityReplicatedEventDelegate(EAbilityGenericReplicatedEvent::InputPressed, HelpHandle, PredictionKey).AddLambda([ASC, HelpHandle, &bInputReceived]()
+    {
+        bInputReceived = true;
+        ASC->ClearAbility(HelpHandle);
+    });
+    ASC->AbilityInputTagPressed(CatFishingAbilityTags::Input_Fishing_Cancel);
+    ASC->ProcessAbilityInput(1.f / 60.f, false);
+    TestTrue(TEXT("标准输入事件确实到达能力"), bInputReceived);
+    TestNull(TEXT("输入回调撤销的能力在分发后已回收"), ASC->FindAbilitySpecFromHandle(HelpHandle));
+    ASC->ClearAbility(SignHandle);
 	ASC->ClearStateSourcesFromAuthority();
 	return true;
 }
