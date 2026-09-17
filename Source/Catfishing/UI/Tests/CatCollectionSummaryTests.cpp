@@ -13,6 +13,8 @@
 #include "UI/CatUISettings.h"
 #include "UI/Collection/CatCollectionModel.h"
 #include "UI/Collection/CatCollectionWidget.h"
+#include "Data/CatFishDefinition.h"
+#include "Inventory/CatInventorySettings.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatCollectionSummaryTest,
 	"Catfishing.Unit.UI.CollectionSummaryPreservesRecordsWithoutCompletionCounts",
@@ -41,10 +43,18 @@ bool FCatCollectionSummaryTest::RunTest(const FString& Parameters)
 		Instance->AddLocalPlayer(Player, FPlatformUserId::CreateFromInternalId(0));
 	}
 	auto* Profile = Player->GetSubsystem<UCatProfileSubsystem>();
+	// 推荐只改变本次内存夹具，结束自动恢复；先验证未知鱼不泄露，再验证显式 ID 和缺配空格。
+	auto* Fish = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatFishDefinition>(3);
+	if (!TestNotNull(TEXT("推荐配置测试鱼"), Fish)) return false;
+	TGuardValue<int32> BaitGuard(Fish->RecommendedBaitItemId, 4);
+	TGuardValue<int32> ChumGuard(Fish->RecommendedChumItemId, 5);
 	auto* Model = NewObject<UCatCollectionModel>();
 	if (!TestNotNull(TEXT("read-only profile source"), Profile) || !TestTrue(TEXT("model binds profile"), Model->Bind(Player))) return false;
 	const auto& View = Model->GetViewState();
 	if (!TestTrue(TEXT("available summary branch exercised"), View.bAvailable)) return false;
+	const auto* UnknownFish = View.Entries.FindByPredicate([](const auto& Entry) { return Entry.ItemId == 3; });
+	if (!TestNotNull(TEXT("未知鱼投影"), UnknownFish)) return false;
+	TestTrue(TEXT("未知鱼不泄露推荐图"), UnknownFish->RecommendedBaitThumbnail.IsNull() && UnknownFish->RecommendedChumThumbnail.IsNull());
 	const FString Summary = View.SummaryText.ToString();
 	TestFalse(TEXT("summary contains no completion fraction or photo count"), Summary.Contains(TEXT("/")) || Summary.Contains(TEXT("张")) || Summary.Contains(TEXT("已收集")));
 	for (const TCHAR Character : Summary) TestFalse(TEXT("summary contains no numerical completion metric"), FChar::IsDigit(Character));
@@ -76,6 +86,15 @@ bool FCatCollectionSummaryTest::RunTest(const FString& Parameters)
 	Profile->GetFishCollectionSnapshot(Records);
 	TestEqual(TEXT("知识与捕获汇入同一条鱼记录"), Records.Num(), 1);
 	if (Records.Num() == 1) TestEqual(TEXT("重投递不重复计数"), Records[0].EncounterCount, 1);
+	const auto* KnownFish = View.Entries.FindByPredicate([](const auto& Entry) { return Entry.ItemId == 3; });
+	if (!TestNotNull(TEXT("解锁推荐投影"), KnownFish)) return false;
+	TestTrue(TEXT("鱼饵图来自显式总表 ID"), KnownFish->RecommendedBaitThumbnail == GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(4)->GetInventoryThumbnail());
+	TestTrue(TEXT("窝料图来自显式总表 ID"), KnownFish->RecommendedChumThumbnail == GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(5)->GetInventoryThumbnail());
+	Fish->RecommendedBaitItemId = 0;
+	Fish->RecommendedChumItemId = MAX_int32;
+	Model->Refresh();
+	KnownFish = View.Entries.FindByPredicate([](const auto& Entry) { return Entry.ItemId == 3; });
+	TestTrue(TEXT("零和无效推荐 ID 留空不猜选"), KnownFish && KnownFish->RecommendedBaitThumbnail.IsNull() && KnownFish->RecommendedChumThumbnail.IsNull());
 	TestTrue(TEXT("捕获后允许追踪"), Model->SetTrackedFish(3));
 	const auto* Durable = Cast<UCatCollectionSaveGame>(UGameplayStatics::LoadGameFromSlot(CollectionSlot, 0));
 	if (TestNotNull(TEXT("专用图鉴文件存在"), Durable))

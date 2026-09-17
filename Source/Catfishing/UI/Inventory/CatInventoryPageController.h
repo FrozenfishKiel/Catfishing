@@ -58,10 +58,8 @@ public:
 	void RefreshInventoryContextMenuForInventory(UCatInventoryComponent* ChangedInventory);
 
 private:
-	/** 读取共享图鉴 Model，只在团队库存打开且追踪有效时显示左下角鱼卡。 */
+	/** 读取共享图鉴 Model，只在团队库存打开且追踪有效时更新页面内推荐区域。 */
 	void RefreshTrackedFish();
-	/** 当前团队库存打开期间显示的本人追踪鱼卡；关闭时移出视口并释放。 */
-	UPROPERTY(Transient) TObjectPtr<class UCatFishCardWidget> TrackedFishCard;
 	/** 本次团队库存打开时订阅的本地玩家图鉴 Model；关闭时从原对象解绑。 */
 	UPROPERTY(Transient) TWeakObjectPtr<class UCatCollectionModel> TrackingModel;
 	/** 图鉴变化监听的配对句柄；不建立第二份追踪状态。 */

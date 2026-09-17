@@ -25,6 +25,10 @@ struct FCatCollectionEntryView
 	UPROPERTY(BlueprintReadOnly) FText BaitPreferenceText;
 	/** 现有窝料需求类别；按腥、香、发酵属性展示，未解锁只含问号。 */
 	UPROPERTY(BlueprintReadOnly) FText ChumPreferenceText;
+	/** 策划指定推荐鱼饵的总表图片；Model 仅为已解锁鱼解析，无配置或无效 ID 时为空。 */
+	UPROPERTY(BlueprintReadOnly) TSoftObjectPtr<UTexture2D> RecommendedBaitThumbnail;
+	/** 策划指定推荐窝料的总表图片；团队库存只展示，不反推类别或自行选择替代物品。 */
+	UPROPERTY(BlueprintReadOnly) TSoftObjectPtr<UTexture2D> RecommendedChumThumbnail;
 	/** 个人最佳重量保留在读模型供已有记录消费者读取；本版鱼卡不绘制这一栏。 */
 	UPROPERTY(BlueprintReadOnly) double BestWeightKilograms = 0.0;
 };

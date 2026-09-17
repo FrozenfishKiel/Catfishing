@@ -15,6 +15,14 @@
 #include "Profile/CatProfileSettings.h"
 #include "Profile/CatProfileSubsystem.h"
 #include "UI/Collection/CatFishCardWidget.h"
+#include "UI/Inventory/CatCampInventoryWidget.h"
+#include "Data/CatFishDefinition.h"
+#include "Components/Image.h"
+#include "Slate/WidgetRenderer.h"
+#include "Engine/TextureRenderTarget2D.h"
+#include "Kismet/KismetRenderingLibrary.h"
+#include "AssetCompilingManager.h"
+#include "HAL/FileManager.h"
 #include "UI/Inventory/CatInventoryPageController.h"
 #include "Camp/CatCampInventoryActor.h"
 #include "Character/CatCharacter.h"
@@ -264,6 +272,31 @@ namespace CatInventoryInteractionNetwork
 			UClass* TrackingCampClass = LoadClass<UCatInventoryWidget>(nullptr, TEXT("/Game/UI/Inventory/WBP_CatCampInventory.WBP_CatCampInventory_C"));
 			if (!TrackingUI->OpenInventory(ClientCamps[0]->GetInventoryComponent(), TrackingCampClass)) return false;
 			Test->TestEqual(TEXT("reopening team inventory restores tracking card"), CountVisibleTrackingCards(ClientControllersByIndex[0]->GetLocalPlayer()), 1);
+			// 有 RHI 时输出刚打开的正式团队页供视觉检查；解锁与推荐是隔离夹具，原鱼资产不会保存。
+			TArray<UUserWidget*> CampViews;
+			UWidgetBlueprintLibrary::GetAllWidgetsOfClass(ClientControllersByIndex[0].Get(), CampViews, UCatCampInventoryWidget::StaticClass(), true);
+			for (auto* CampView : CampViews)
+			{
+				if (CampView->GetOwningPlayer() != ClientControllersByIndex[0].Get()) continue;
+				auto* BaitImage = Cast<UImage>(CampView->GetWidgetFromName(TEXT("RecommendedBaitImage")));
+				auto* ChumImage = Cast<UImage>(CampView->GetWidgetFromName(TEXT("RecommendedChumImage")));
+				Test->TestTrue(TEXT("推荐鱼饵按总表 ID 读图"), BaitImage && BaitImage->GetBrush().GetResourceObject() == GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(4)->GetInventoryThumbnail().LoadSynchronous());
+				Test->TestTrue(TEXT("推荐窝料按总表 ID 读图"), ChumImage && ChumImage->GetBrush().GetResourceObject() == GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(5)->GetInventoryThumbnail().LoadSynchronous());
+				if (!FApp::CanEverRender()) continue;
+				FAssetCompilingManager::Get().FinishAllCompilation();
+				const FString Directory = FPaths::ProjectSavedDir() / TEXT("CampInventory");
+				IFileManager::Get().MakeDirectory(*Directory, true);
+				FWidgetRenderer Renderer(true);
+				for (const FIntPoint Size : {FIntPoint(1536,1024), FIntPoint(1280,720)})
+				{
+					auto* Target = NewObject<UTextureRenderTarget2D>(CampView);
+					Target->RenderTargetFormat = ETextureRenderTargetFormat::RTF_RGBA8;
+					Target->InitAutoFormat(Size.X, Size.Y);
+					Target->UpdateResourceImmediate(true);
+					for (int32 Frame = 0; Frame < 3; ++Frame) Renderer.DrawWidget(Target, CampView->TakeWidget(), FVector2D(Size), 1.0f / 60.0f);
+					UKismetRenderingLibrary::ExportRenderTarget(CampView, Target, Directory, FString::Printf(TEXT("Camp_%dx%d.png"), Size.X, Size.Y));
+				}
+			}
 			const int32 SourceSlot = FindOccupiedSlot(ClientCharacters[0]->GetInventoryComponent()->GetInventoryModel()->GetInventoryList(), 4);
 			UCatInventorySlotWidget* TargetSlot = FindWidgetSlot(ClientControllersByIndex[0].Get(), ClientCamps[0]->GetInventoryComponent(), 0);
 			if (SourceSlot == INDEX_NONE || !TargetSlot) return false;
@@ -277,6 +310,11 @@ namespace CatInventoryInteractionNetwork
 		/** 从实际鱼卡和追踪按钮提交；以隔离档案准备捕获事实，检查广播、持久化、失败回滚和重开显示。 */
 		bool VerifyTrackingFromFormalBook(ULocalPlayer* Player)
 		{
+			// 仅临时配置内存中的两项推荐，作用域结束恢复，不保存正式鱼资产。
+			auto* Fish = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatFishDefinition>(3);
+			if (!Test->TestNotNull(TEXT("推荐测试鱼定义"), Fish)) return false;
+			TGuardValue<int32> BaitGuard(Fish->RecommendedBaitItemId, 4);
+			TGuardValue<int32> ChumGuard(Fish->RecommendedChumItemId, 5);
 			auto* UI = Player->GetSubsystem<UCatLocalPlayerUISubsystem>();
 			auto* Profile = Player->GetSubsystem<UCatProfileSubsystem>();
 			FCatProfileGrant Other;
@@ -374,20 +412,17 @@ namespace CatInventoryInteractionNetwork
 			return !Test->HasAnyErrors();
 		}
 
-		/** 统计当前玩家直接挂到视口且可见的鱼卡，同时断言其最终左下锚点；图鉴内部鱼卡不在顶层，不会冒充库存追踪卡。 */
+		/** 统计当前玩家已打开团队库存内的可见追踪区域；不再把独立视口鱼卡当作页面内推荐。 */
 		int32 CountVisibleTrackingCards(ULocalPlayer* Player) const
 		{
 			TArray<UUserWidget*> Widgets;
-			UWidgetBlueprintLibrary::GetAllWidgetsOfClass(Player, Widgets, UCatFishCardWidget::StaticClass(), true);
+			UWidgetBlueprintLibrary::GetAllWidgetsOfClass(Player, Widgets, UCatCampInventoryWidget::StaticClass(), true);
 			int32 Count = 0;
 			for (auto* Widget : Widgets)
-				if (Widget->GetOwningLocalPlayer() == Player && Widget->IsInViewport() && Widget->IsVisible())
-				{
-					++Count;
-					// 存在于视口不代表画在屏幕内：负 Y 偏移必须以左下角为原点，否则整张卡会落到屏幕上方。
-					const FAnchors Anchors = Widget->GetAnchorsInViewport();
-					Test->TestTrue(TEXT("追踪卡最终锚点必须是视口左下角"), Anchors.Minimum == FVector2D(0, 1) && Anchors.Maximum == FVector2D(0, 1));
-				}
+			{
+				auto* Panel = Widget->GetWidgetFromName(TEXT("TrackingPanel"));
+				if (Widget->GetOwningLocalPlayer() == Player && Widget->IsInViewport() && Panel && Panel->IsVisible()) ++Count;
+			}
 			return Count;
 		}
 

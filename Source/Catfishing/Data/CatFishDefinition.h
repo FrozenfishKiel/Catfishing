@@ -297,6 +297,14 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Behavior", meta = (ClampMin = "0.0", DisplayName = "游速系数"))
 	double SwimSpeedCoefficient = 0.0;
 
+	/** 团队库存展示的推荐鱼饵数字 ID；策划填写、图鉴 Model 经总表读图，0 留空，不参与选鱼计算。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Collection", meta = (ClampMin = "0", DisplayName = "推荐鱼饵 ID"))
+	int32 RecommendedBaitItemId = 0;
+
+	/** 团队库存展示的推荐窝料数字 ID；策划填写、图鉴 Model 经总表读图，0 留空，不改变窝料计算。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Collection", meta = (ClampMin = "0", DisplayName = "推荐窝料 ID"))
+	int32 RecommendedChumItemId = 0;
+
 	/** 鱼的窝料类别：正式资产为腥/香/酵单一轴 1，其余轴 0；不作为连续亲和倍率。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Preference")
 	FCatChumVector ChumPreference;

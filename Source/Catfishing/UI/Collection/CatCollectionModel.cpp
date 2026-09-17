@@ -66,6 +66,9 @@ void UCatCollectionModel::Refresh()
 			Entry.DisplayName = Entry.bRecordedUnlocked ? Fish->GetInventoryDisplayName() : Unknown;
 			Entry.BaitPreferenceText = Entry.ChumPreferenceText = Unknown;
 			if (!Entry.bRecordedUnlocked) continue;
+			// 推荐只按策划指定身份读图，不从权重或窝料轴推导；零或无效配置保留空格。
+			if (const auto* Bait = Items->FindRuntimeDefinition(Fish->RecommendedBaitItemId)) Entry.RecommendedBaitThumbnail = Bait->GetInventoryThumbnail();
+			if (const auto* Chum = Items->FindRuntimeDefinition(Fish->RecommendedChumItemId)) Entry.RecommendedChumThumbnail = Chum->GetInventoryThumbnail();
 			TArray<FString> Baits;
 			for (const auto& Weight : Fish->BaitWeightMultipliers)
 				// 中性倍率是 1；只有提高选鱼权重的关联才属于偏好，不把中性或抑制项列入。
