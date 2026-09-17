@@ -1,4 +1,9 @@
 ﻿#include "CatInventoryActionsAuthoringLibrary.h"
+#include "AbilitySystem/Items/Abilities/CatItemGameplayAbility.h"
+#include "AbilitySystem/Items/Abilities/CatGA_ConsumeFish.h"
+#include "AbilitySystem/Items/Abilities/CatGA_DeployFishingRod.h"
+#include "AbilitySystem/Items/Abilities/CatGA_UseScoopNet.h"
+#include "AbilitySystem/Items/Abilities/CatGA_SelectFishingLoadout.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetToolsModule.h"
@@ -7,7 +12,6 @@
 #include "AbilitySystem/BodyAction/CatCancelBodyActionAbility.h"
 #include "AbilitySystem/Fishing/InputAbilities/CatFishingChumAbility.h"
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
-#include "AbilitySystem/Items/CatEquipmentItemAbilities.h"
 #include "Inventory/Fragments/CatItemUseFragment.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "Data/CatFishDefinition.h"

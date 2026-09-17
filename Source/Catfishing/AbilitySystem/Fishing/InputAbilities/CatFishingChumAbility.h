@@ -1,6 +1,6 @@
 ﻿#pragma once
 #include "CoreMinimal.h"
-#include "AbilitySystem/Items/CatItemGameplayAbility.h"
+#include "AbilitySystem/Items/Abilities/CatItemGameplayAbility.h"
 #include "CatFishingChumAbility.generated.h"
 
 /** 窝料使用能力；预测蓄力表现并以标准松开事件提交原物品，实例只保存持久数据。 */

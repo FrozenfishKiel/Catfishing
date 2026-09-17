@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "AbilitySystem/Abilities/CatGameplayAbility.h"
@@ -68,27 +68,4 @@ private:
 	UFUNCTION() void CancelPendingUse();
 	/** 接受同一激活的来源数据并校验；伪造类型、来源或重复提交被拒绝。 */
 	void ReceiveTargetData(const FGameplayAbilityTargetDataHandle& Data, FGameplayTag ApplicationTag);
-};
-
-/** 食用鱼的行为实现；与容器无关，只补充可食用性、实际重量参数及吃过图鉴事件。 */
-UCLASS()
-class CATFISHING_API UCatGA_ConsumeFish : public UCatItemGameplayAbility
-{
-	GENERATED_BODY()
-public:
-	/** 一次食用结算一条实物鱼；拒绝零成本或多条成本与单鱼重量经验不一致的配置。 */
-	virtual bool ValidateUseConfiguration(const UCatItemUseFragment& Configuration, FText& OutError) const override;
-	/** 排除不可食用鱼，并在服务器检查成长系统能否接受本条鱼。 */
-	virtual bool ValidateUse() const override;
-	/** 按本条实物鱼的实际重量生成经验，保持逐条取整规则。 */
-	virtual void GatherEffectParameters(TMap<FGameplayTag, float>& Parameters) const override;
-	/** 首次确认消费后记录食用知识并释放隐藏鱼载体，不修改经验或库存。 */
-	virtual void OnUseCommitted(UCatInventoryItemInstance* ConsumedItem) override;
-};
-
-/** 自用效果型道具；沿共同提交点支付配置成本并施加 GE，供小鱼干等同类内容直接配置。 */
-UCLASS()
-class CATFISHING_API UCatGA_ApplyItemEffects : public UCatItemGameplayAbility
-{
-	GENERATED_BODY()
 };

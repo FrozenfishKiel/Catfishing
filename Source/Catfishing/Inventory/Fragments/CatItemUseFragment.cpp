@@ -1,5 +1,5 @@
 ﻿#include "Inventory/Fragments/CatItemUseFragment.h"
-#include "AbilitySystem/Items/CatItemGameplayAbility.h"
+#include "AbilitySystem/Items/Abilities/CatItemGameplayAbility.h"
 #include "GameplayEffect.h"
 #if WITH_EDITOR
 #include "Misc/DataValidation.h"

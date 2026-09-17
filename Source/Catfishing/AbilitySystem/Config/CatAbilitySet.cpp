@@ -1,4 +1,5 @@
 ﻿#include "AbilitySystem/Config/CatAbilitySet.h"
+#include "AbilitySystem/Items/Abilities/CatGA_ConsumeFish.h"
 
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "AbilitySystem/BodyAction/Camp/CatCampBodyActionAbilities.h"
@@ -6,7 +7,6 @@
 #include "AbilitySystem/BodyAction/Social/CatSocialBodyActionAbilities.h"
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "GameplayEffect.h"
-#include "AbilitySystem/Items/CatItemGameplayAbility.h"
 
 bool UCatAbilitySet::IsRuntimeReady() const
 {

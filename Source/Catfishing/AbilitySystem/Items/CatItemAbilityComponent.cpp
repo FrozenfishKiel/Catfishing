@@ -1,5 +1,5 @@
 #include "AbilitySystem/Items/CatItemAbilityComponent.h"
-#include "AbilitySystem/Items/CatItemGameplayAbility.h"
+#include "AbilitySystem/Items/Abilities/CatItemGameplayAbility.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatInventoryItemInstance.h"

@@ -1,5 +1,6 @@
 ﻿#if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "AbilitySystem/Items/Abilities/CatGA_UseScoopNet.h"
 #include "Equipment/CatEquippedDefinition.h"
 #include "Inventory/Fragments/CatEquippableItemFragment.h"
 #include "Tests/AutomationCommon.h"
@@ -29,7 +30,6 @@
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
-#include "AbilitySystem/Items/CatEquipmentItemAbilities.h"
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "Framework/Game/CatfishingPlayerState.h"

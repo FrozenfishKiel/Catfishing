@@ -1,6 +1,8 @@
 ﻿#if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
+#include "AbilitySystem/Items/Abilities/CatGA_ConsumeFish.h"
+#include "AbilitySystem/Items/Abilities/CatGA_UseScoopNet.h"
 #include "CatSelectedUseInputTestAccess.h"
 #include "Tests/AutomationEditorCommon.h"
 #include "Editor.h"
@@ -40,12 +42,10 @@
 #include "Components/PrimitiveComponent.h"
 #include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
 #include "AbilitySystem/Items/CatItemAbilityComponent.h"
-#include "AbilitySystem/Items/CatEquipmentItemAbilities.h"
 #include "Inventory/CatFishInventoryItemInstance.h"
 #include "Growth/CatGrowthComponent.h"
 #include "FishContainers/CatFishGuardActor.h"
 #include "Inventory/CatFishOnlyInventoryComponent.h"
-#include "AbilitySystem/Items/CatItemGameplayAbility.h"
 #include "Inventory/CatInventoryAccessRules.h"
 
 namespace CatInventoryQuickbarRemoteUseTests
