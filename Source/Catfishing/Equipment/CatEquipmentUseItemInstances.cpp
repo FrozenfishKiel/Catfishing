@@ -5,7 +5,8 @@
 #include "AbilitySystem/Config/CatAbilitySet.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Equipment/CatEquipmentComponent.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
+#include "Equipment/CatEquippedDefinition.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "TimerManager.h"
@@ -18,22 +19,22 @@ namespace CatEquipmentUseItemInstances
 	/** 共同 Use 前置校验；只解析当前角色、装备组件和定义，不解释任何具体装备用途。 */
 	bool ResolveUseDependencies(const UCatEquipmentInventoryItemInstance& Instance, const FCatInventoryEntry& Entry,
 		const FCatInventoryItemUseContext& Context, ACatCharacter*& OutCharacter, UCatEquipmentComponent*& OutEquipment,
-		const UCatEquipmentDefinition*& OutDefinition, FCatDomainCommandResult& OutResult)
+		const UCatEquipmentItemDefinition*& OutDefinition, FCatDomainCommandResult& OutResult)
 	{
 		OutResult.RequestId = Context.RequestId;
 		OutCharacter = Cast<ACatCharacter>(Context.UserPawn);
 		if (!OutCharacter && Context.RequestingController) OutCharacter = Cast<ACatCharacter>(Context.RequestingController->GetPawn());
 		OutEquipment = OutCharacter ? OutCharacter->GetEquipmentComponent() : nullptr;
-		OutDefinition = Cast<UCatEquipmentDefinition>(Instance.GetItemDefinition());
+		OutDefinition = Cast<UCatEquipmentItemDefinition>(Instance.GetItemDefinition());
 		OutResult.Revision = OutEquipment ? OutEquipment->GetSnapshot().Revision : 0;
 		if (Entry.Instance != &Instance || Entry.StackCount <= 0 || !Instance.GetItemInstanceId().IsValid()) { OutResult.Error = ECatDomainCommandError::NotFound; return false; }
-		if (!OutDefinition || !OutDefinition->IsRuntimeDefinitionReady()) { OutResult.Error = ECatDomainCommandError::InvalidPayload; return false; }
+		if (!OutDefinition || !OutDefinition->IsRuntimeDefinitionReady() || !OutDefinition->GetEquipmentDefinition()) { OutResult.Error = ECatDomainCommandError::InvalidPayload; return false; }
 		if (!OutCharacter || !OutEquipment) { OutResult.Error = ECatDomainCommandError::DependencyUnavailable; return false; }
 		return true;
 	}
 
 	/** 按单一装配槽提交选择；调用方已决定目标槽，函数不根据定义用途分派行为。 */
-	FCatDomainCommandResult ConfigureLoadout(UCatEquipmentComponent& Equipment, const UCatEquipmentDefinition& Definition,
+	FCatDomainCommandResult ConfigureLoadout(UCatEquipmentComponent& Equipment, const UCatEquipmentItemDefinition& Definition,
 		const UCatEquipmentInventoryItemInstance& Instance, const FCatInventoryItemUseContext& Context, const bool bBait)
 	{
 		const FCatEquipmentLoadoutSnapshot& Current = Equipment.GetSnapshot();
@@ -48,7 +49,7 @@ namespace CatEquipmentUseItemInstances
 // 部署流程：核对条目、定义与角色依赖，再把本实例 ID 和装备版本交给既有放置事务；失败不借用其他鱼竿。
 FCatDomainCommandResult UCatFishingRodEquipmentItemInstance::UseFromInventorySlotFromAuthority(const FCatInventoryEntry& Entry, const FCatInventoryItemUseContext& Context)
 {
-	ACatCharacter* Character = nullptr; UCatEquipmentComponent* Equipment = nullptr; const UCatEquipmentDefinition* Definition = nullptr; FCatDomainCommandResult Result;
+	ACatCharacter* Character = nullptr; UCatEquipmentComponent* Equipment = nullptr; const UCatEquipmentItemDefinition* Definition = nullptr; FCatDomainCommandResult Result;
 	if (!CatEquipmentUseItemInstances::ResolveUseDependencies(*this, Entry, Context, Character, Equipment, Definition, Result)) return Result;
 	if (!Definition->CanServeFishingRod()) { Result.Error = ECatDomainCommandError::InvalidPayload; return Result; }
 	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(Context.RequestingController);
@@ -72,7 +73,7 @@ FCatInventoryUseTarget UCatScoopNetEquipmentItemInstance::CaptureUseTarget(APlay
 // 抄网流程：验证定义确有抄网能力并解析本人命令组件；只提交这件实例，捕获与 GE 冷却仍由原事务裁决。
 FCatDomainCommandResult UCatScoopNetEquipmentItemInstance::UseFromInventorySlotFromAuthority(const FCatInventoryEntry& Entry, const FCatInventoryItemUseContext& Context)
 {
-	ACatCharacter* Character = nullptr; UCatEquipmentComponent* Equipment = nullptr; const UCatEquipmentDefinition* Definition = nullptr; FCatDomainCommandResult Result;
+	ACatCharacter* Character = nullptr; UCatEquipmentComponent* Equipment = nullptr; const UCatEquipmentItemDefinition* Definition = nullptr; FCatDomainCommandResult Result;
 	if (!CatEquipmentUseItemInstances::ResolveUseDependencies(*this, Entry, Context, Character, Equipment, Definition, Result)) return Result;
 	if (!Definition->CanServeScoopNet()) { Result.Error = ECatDomainCommandError::InvalidPayload; return Result; }
 	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(Context.RequestingController);
@@ -83,7 +84,7 @@ FCatDomainCommandResult UCatScoopNetEquipmentItemInstance::UseFromInventorySlotF
 // 安装流程：先校验当前实例，再读取定义目标槽并保留其余装配；目标未配置或片段不匹配时拒绝。
 FCatDomainCommandResult UCatLoadoutEquipmentItemInstance::UseFromInventorySlotFromAuthority(const FCatInventoryEntry& Entry, const FCatInventoryItemUseContext& Context)
 {
-	ACatCharacter* Character = nullptr; UCatEquipmentComponent* Equipment = nullptr; const UCatEquipmentDefinition* Definition = nullptr; FCatDomainCommandResult Result;
+	ACatCharacter* Character = nullptr; UCatEquipmentComponent* Equipment = nullptr; const UCatEquipmentItemDefinition* Definition = nullptr; FCatDomainCommandResult Result;
 	if (!CatEquipmentUseItemInstances::ResolveUseDependencies(*this, Entry, Context, Character, Equipment, Definition, Result)) return Result;
 	if (Definition->TargetSlot == ECatEquipmentLoadoutTargetSlot::Bait && Definition->CanServeFishingBait()) return CatEquipmentUseItemInstances::ConfigureLoadout(*Equipment, *Definition, *this, Context, true);
 	if (Definition->TargetSlot == ECatEquipmentLoadoutTargetSlot::Float && Definition->CanServeFishingFloat()) return CatEquipmentUseItemInstances::ConfigureLoadout(*Equipment, *Definition, *this, Context, false);
@@ -93,7 +94,7 @@ FCatDomainCommandResult UCatLoadoutEquipmentItemInstance::UseFromInventorySlotFr
 // 开始流程：验证此实例没有未结束请求，冻结上下文后逐套授予来源能力；任一失败回收本批，成功启动等待而不扣量。
 FCatDomainCommandResult UCatChumEquipmentItemInstance::UseFromInventorySlotFromAuthority(const FCatInventoryEntry& Entry, const FCatInventoryItemUseContext& Context)
 {
-	ACatCharacter* Character = nullptr; UCatEquipmentComponent* Equipment = nullptr; const UCatEquipmentDefinition* Definition = nullptr; FCatDomainCommandResult Result;
+	ACatCharacter* Character = nullptr; UCatEquipmentComponent* Equipment = nullptr; const UCatEquipmentItemDefinition* Definition = nullptr; FCatDomainCommandResult Result;
 	if (!CatEquipmentUseItemInstances::ResolveUseDependencies(*this, Entry, Context, Character, Equipment, Definition, Result)) return Result;
 	if (!Definition->CanServeChumPlacement() || bHasActiveUseContext) { Result.Error = ECatDomainCommandError::InvalidPhase; return Result; }
 	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(Context.RequestingController);
@@ -101,7 +102,7 @@ FCatDomainCommandResult UCatChumEquipmentItemInstance::UseFromInventorySlotFromA
 	if (!Commands) { Result.Error = ECatDomainCommandError::DependencyUnavailable; return Result; }
 	ActiveUseContext = Context; bHasActiveUseContext = true;
 	UCatAbilitySystemComponent* ASC = Character->GetCatAbilitySystemComponent();
-	for (const TSoftObjectPtr<UCatAbilitySet>& SetRef : Definition->AbilitySetsToGrant)
+	for (const TSoftObjectPtr<UCatAbilitySet>& SetRef : Definition->GetEquipmentDefinition()->AbilitySetsToGrant)
 	{
 		const UCatAbilitySet* Set = SetRef.LoadSynchronous();
 		FCatGrantedAbilitySetHandles SetHandles;

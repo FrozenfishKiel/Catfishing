@@ -113,20 +113,19 @@ public:
 	/** 读取当前运行宿主；没有显式宿主时回退到 Outer Actor，方便刚创建的实例立即可用。 */
 	AActor* GetRuntimeOwnerActor() const;
 
-	/** Use 预检只读地声明实例是否可进入正式提交；基础实例要求有效消耗片段，未配置的物品明确不可用。 */
+	/** 菜单只读查询使用可用性；基础实例检查使用配置与数量，正式访问权限和提交条件由能力再次确认。 */
 	virtual bool CanUseFromInventory(const FCatInventoryEntry& InventoryEntry, APawn* UserPawn) const;
 
-	/** 正式库存 Use 的唯一实例扩展面；服务器命令入口用它传递 RequestId、槽位上下文和错误码，具体物品效果只通过结构化回包提交。 */
+	/** 尚未迁移的装备接收服务器库存使用上下文；基础实现拒绝执行，已配置使用能力的普通物品必须走 GA。 */
 	virtual FCatDomainCommandResult UseFromInventorySlotFromAuthority(
 		const FCatInventoryEntry& InventoryEntry, const FCatInventoryItemUseContext& UseContext);
 
 	/** 说明本实例的 Use 是否必须等待同一次输入结束；Controller 据此固定实例和请求 ID，避免松开时改用新选中物品。 */
 	virtual bool UsesContinuousInput() const;
 
-	/** 报告本次使用成功的真实扣量要求；基础实例读取消耗片段，未配置返回零。 */
+	/** 读取使用配置声明的消耗件数；零表示不扣数量或配置不可用，不能仅凭此值判断可用性。 */
 	virtual int32 GetInventoryUseQuantity() const;
-	/** 仅提交本实例效果；由通用库存事务在暂扣后调用，失败由事务还原数量。 */
-	virtual FCatDomainCommandResult ApplyUseEffectsFromAuthority(const FCatInventoryItemUseContext& UseContext);
+
 
 	/** 本地连续 Use 的表现边沿；Controller 对 Begin、Release、取消和拒绝都通知同一实例，基类不保存状态也不产生玩法效果。 */
 	virtual void SetUseInputActiveLocally(APlayerController* RequestingController, bool bActive);

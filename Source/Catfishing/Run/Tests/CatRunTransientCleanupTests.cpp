@@ -5,7 +5,7 @@
 #include "Environment/CatChumFieldSubsystem.h"
 #include "Environment/CatChumFieldReplicationComponent.h"
 #include "Environment/Tests/CatWaterTestFixtures.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Chum.h"
 #include "Inventory/CatInventorySettings.h"
 #include "Fishing/CatFishingSession.h"
@@ -47,7 +47,7 @@ bool FCatRunTransientCleanupTest::RunTest(const FString& Parameters)
 		auto* Fishing = World->GetSubsystem<UCatFishingService>();
 		auto* Fields = World->GetSubsystem<UCatChumFieldSubsystem>();
 		auto* Replication = World->GetGameState<ACatfishingGameState>()->GetChumFieldReplicationFromAuthority();
-		const auto* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(5);
+		const auto* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentItemDefinition>(5);
 		if (!Mode || !Fishing || !Fields || !Replication || !Definition) return false;
 		FCatPrepareChumFieldRequest Request;
 		Request.StableNetId = TEXT("Batch7A");

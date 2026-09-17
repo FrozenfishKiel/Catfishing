@@ -1,11 +1,13 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
+#include "Equipment/CatEquippedDefinition.h"
+#include "Inventory/Fragments/CatEquippableItemFragment.h"
 #include "Tests/AutomationCommon.h"
 
 #include "Character/CatCharacter.h"
 #include "Equipment/CatEquipmentComponent.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Bait.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Float.h"
@@ -36,7 +38,7 @@ namespace CatRodDurabilityTests
 		/** 进入测试前的数量堆叠容量；测试需要固定堆叠上限，结束后恢复项目默认对象。 */
 		int32 SavedStackCapacity = InventorySettings->DefaultQuantityStackCapacity;
 		/** 本测试创建的装备定义保活集合；目录身份仍由 临时数字总表 持有。 */
-		TArray<TStrongObjectPtr<UCatEquipmentDefinition>> CreatedDefinitions;
+		TArray<TStrongObjectPtr<UCatEquipmentItemDefinition>> CreatedDefinitions;
 		/** 本测试持有的 authority World；析构由 FTestWorldWrapper 负责关闭。 */
 		FTestWorldWrapper WorldWrapper;
 		/** 本测试生成的角色；用来读取真实 EquipmentComponent 和 InventoryComponent。 */
@@ -54,9 +56,9 @@ namespace CatRodDurabilityTests
 		}
 
 		// 测试定义注册流程：创建一条内存装备定义，写入正式库存目录映射，并返回对象给调用方补齐对应能力字段。
-		UCatEquipmentDefinition* AddDefinition(const int32 Id, const FName LoadoutSlotId = NAME_None)
+		UCatEquipmentItemDefinition* AddDefinition(const int32 Id, const FName LoadoutSlotId = NAME_None)
 		{
-			UCatEquipmentDefinition* Definition = NewObject<UCatEquipmentDefinition>();
+			UCatEquipmentItemDefinition* Definition = NewObject<UCatEquipmentItemDefinition>();
 			CreatedDefinitions.Emplace(Definition);
 			Definition->ItemId = Id;
 			Definition->FunctionalRouteId = FName(*FString::FromInt(Id));
@@ -71,28 +73,32 @@ namespace CatRodDurabilityTests
 		{
 			InventorySettings->PlayerInventorySlotCapacity = 12;
 			InventorySettings->DefaultQuantityStackCapacity = 20;
-			UCatEquipmentDefinition* Rod =
-				AddDefinition(1767918, UCatEquipmentDefinition::FishingRodLoadoutSlotId());
+			UCatEquipmentItemDefinition* Rod =
+				AddDefinition(1767918, UCatEquipmentItemDefinition::FishingRodLoadoutSlotId());
 			UCatEquipmentFragment_Rod* RodFragment = NewObject<UCatEquipmentFragment_Rod>(Rod);
 			Rod->Fragments.Add(RodFragment);
 			RodFragment->FishingStrength = 25.0; // 竿强度按鱼竿表 1 级树枝竿；耐久与强度是两个量，本夹具只动耐久。
 			RodFragment->MaximumRodDurability = 100.0;
 			RodFragment->MaximumLineLengthCentimeters = 1500.0;
 			RodFragment->HighTensionWearMultiplier = 1.0;
-			Rod->UseActorClass = ACatFishingRodActor::StaticClass();
-			UCatEquipmentDefinition* Bait =
-				AddDefinition(1622907, UCatEquipmentDefinition::FishingBaitLoadoutSlotId());
+			// 测试资产沿正式组合关系配置世界表现，不再把装备类写到库存定义。
+		auto* RodEquippable = NewObject<UCatEquippableItemFragment>(Rod);
+		RodEquippable->EquipmentDefinition = NewObject<UCatEquippedDefinition>(Rod);
+		RodEquippable->EquipmentDefinition->ActorClass = ACatFishingRodActor::StaticClass();
+		Rod->Fragments.Add(RodEquippable);
+			UCatEquipmentItemDefinition* Bait =
+				AddDefinition(1622907, UCatEquipmentItemDefinition::FishingBaitLoadoutSlotId());
 			UCatEquipmentFragment_Bait* BaitFragment = NewObject<UCatEquipmentFragment_Bait>(Bait);
 			Bait->Fragments.Add(BaitFragment);
 			Bait->bRunConsumable = true;
 			BaitFragment->BiteRateMultiplier = 1.0;
 			BaitFragment->MinimumBiteDelayMultiplier = 1.0;
-			UCatEquipmentDefinition* Float =
-				AddDefinition(1593892, UCatEquipmentDefinition::FishingFloatLoadoutSlotId());
+			UCatEquipmentItemDefinition* Float =
+				AddDefinition(1593892, UCatEquipmentItemDefinition::FishingFloatLoadoutSlotId());
 			UCatEquipmentFragment_Float* FloatFragment = NewObject<UCatEquipmentFragment_Float>(Float);
 			Float->Fragments.Add(FloatFragment);
 			FloatFragment->MaximumCastDistanceCentimeters = 1000.0;
-			for (const TStrongObjectPtr<UCatEquipmentDefinition>& Definition : CreatedDefinitions)
+			for (const TStrongObjectPtr<UCatEquipmentItemDefinition>& Definition : CreatedDefinitions)
 			{
 				if (!Test.TestTrue(TEXT("test equipment definition is complete"), Definition->IsRuntimeDefinitionReady())) return false;
 			}

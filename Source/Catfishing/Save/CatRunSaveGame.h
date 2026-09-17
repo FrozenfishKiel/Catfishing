@@ -276,7 +276,7 @@ public:
 	/** 返回本项目当前载荷版本；引擎在保存前写入 SavedDataVersion，读取方据此拒绝未知格式。 */
 	virtual int32 GetLatestDataVersion() const override;
 
-	/** 读盘后仅迁移已知 v5/v6/v7 数据：先保留原始字节备份，身份转换成功才升级版本，失败保持旧版本；宿主恢复另行执行。 */
+	/** 读盘后保留真实版本；不兼容旧档由协调器拒绝，回调只记录原因，不执行静默迁移。 */
 	virtual void HandlePostLoad() override;
 
 	/** 写盘完成后接收引擎真实结果，并消费一次完成委托；不会把受理成功当作落盘成功。 */
@@ -285,9 +285,9 @@ public:
 	/** 当前不可变写盘候选的完成接收者；Subsystem 写盘前绑定，完成时清空，不进入磁盘。 */
 	FCatRunSaveFinished OnSaveFinished;
 
-	/** 载荷格式标记；保留字段名以识别 v5/v6/v7，数字身份迁移成功后升级为 v8，新文件同时由引擎记录数据版本。 */
+	/** 载荷格式标记；v9 起采用拆分后的物品使用职责，旧开发档失效但原物品编号保持不变。 */
 	UPROPERTY(SaveGame)
-	int32 FormatVersion = 8;
+	int32 FormatVersion = 9;
 
 	/** 是否已采集过正式世界；新建空槽为 false，首次采样后为 true，区分新局和缺失世界载荷。 */
 	UPROPERTY(SaveGame)

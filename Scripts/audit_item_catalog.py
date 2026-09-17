@@ -28,7 +28,7 @@ def audit():
     for data in registry.get_assets_by_path('/Game', recursive=True):
         # 只加载可能携带项目物品定义的资产，不加载地图、贴图及第三方场景资源。
         class_name = str(data.asset_class_path.asset_name)
-        if class_name not in ('CatFishDefinition', 'CatEquipmentDefinition', 'CatInventoryItemDefinition'):
+        if class_name not in ('CatFishDefinition', 'CatEquipmentItemDefinition', 'CatInventoryItemDefinition'):
             continue
         asset = data.get_asset()
         item_id = int(asset.get_editor_property('item_id'))

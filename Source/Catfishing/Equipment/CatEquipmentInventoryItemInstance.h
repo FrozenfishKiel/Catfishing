@@ -4,7 +4,7 @@
 #include "Inventory/CatInventoryItemInstance.h"
 #include "CatEquipmentInventoryItemInstance.generated.h"
 
-class UCatEquipmentDefinition;
+class UCatEquipmentItemDefinition;
 
 /** 装备资产进入正式库存后的运行实例；只承载装备专属状态，不让通用库存格知道鱼竿、鱼饵、鱼漂或抄网规则。 */
 UCLASS(BlueprintType, Blueprintable)

@@ -1,5 +1,5 @@
 #include "AbilitySystem/Effects/CatFishExperienceEffect.h"
-#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
+#include "AbilitySystem/Attributes/CatGrowthAttributeSet.h"
 #include "NativeGameplayTags.h"
 UE_DEFINE_GAMEPLAY_TAG_STATIC(TAG_ItemFishExperience, "Cat.Data.Item.FishExperience");
 
@@ -8,7 +8,7 @@ UCatGE_FishExperience::UCatGE_FishExperience()
 {
 	DurationPolicy = EGameplayEffectDurationType::Instant;
 	FGameplayModifierInfo& Modifier = Modifiers.AddDefaulted_GetRef();
-	Modifier.Attribute = UCatSurvivalAttributeSet::GetIncomingFishExperienceAttribute();
+	Modifier.Attribute = UCatGrowthAttributeSet::GetIncomingExperienceAttribute();
 	Modifier.ModifierOp = EGameplayModOp::Additive;
 	FSetByCallerFloat Value;
 	Value.DataTag = GetExperienceTag();

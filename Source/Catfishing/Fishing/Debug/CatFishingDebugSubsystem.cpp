@@ -21,7 +21,7 @@
 #include "Equipment/CatEquipmentComponent.h"
 #include "Data/CatFishCatalogSettings.h"
 #include "Data/CatFishDefinition.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "Equipment/CatEquipmentUseItemInstances.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
@@ -304,8 +304,8 @@ namespace
 		const UCatInventoryComponent* Inventory = Character ? Character->GetInventoryComponent() : nullptr;
 		const FCatInventoryEntry* Entry = Inventory && CatController
 			? Inventory->GetInventoryEntryAtSlot(CatController->GetSelectedQuickbarSlotIndex()) : nullptr;
-		const UCatEquipmentDefinition* Definition = Entry && Entry->Instance && Entry->StackCount > 0
-			? Cast<UCatEquipmentDefinition>(Entry->Instance->GetItemDefinition()) : nullptr;
+		const UCatEquipmentItemDefinition* Definition = Entry && Entry->Instance && Entry->StackCount > 0
+			? Cast<UCatEquipmentItemDefinition>(Entry->Instance->GetItemDefinition()) : nullptr;
 		return UCatFishingAimLibrary::TryResolveScoopReach(Definition, OutReach);
 	}
 
@@ -416,7 +416,7 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 		RodItemId = SessionSnapshot->RodActor->GetPresentationState().RodItemId;
 	}
 	FString RodLine = TEXT("ROD   Durability --  Strength --");
-	if (const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(
+	if (const UCatEquipmentItemDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentItemDefinition>(
 		RodItemId))
 	{
 		double CurrentDurability = 0.0;
@@ -695,8 +695,8 @@ void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const
 		{
 			for (const FCatInventoryEntry& Entry : Inventory->GetInventoryEntries())
 			{
-				const UCatEquipmentDefinition* Definition = Entry.Instance
-					? Cast<UCatEquipmentDefinition>(Entry.Instance->GetItemDefinition()) : nullptr;
+				const UCatEquipmentItemDefinition* Definition = Entry.Instance
+					? Cast<UCatEquipmentItemDefinition>(Entry.Instance->GetItemDefinition()) : nullptr;
 				if (Definition && Definition->CanServeChumPlacement() && Entry.StackCount > 0)
 				{
 					ChumCount += Entry.StackCount;

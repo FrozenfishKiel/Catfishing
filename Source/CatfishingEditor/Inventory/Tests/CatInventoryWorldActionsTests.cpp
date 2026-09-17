@@ -16,7 +16,7 @@
 #include "Engine/DataTable.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "FishContainers/CatFishGuardActor.h"
 #include "FishContainers/CatFishTankActor.h"
@@ -493,7 +493,7 @@ bool FCatInventoryRodPayloadStateTest::RunTest(const FString& Parameters)
 	FTestWorldWrapper Wrapper;
 	if (!StartWorld(*this, Wrapper)) return false;
 	UWorld* World = Wrapper.GetTestWorld();
-	UCatEquipmentDefinition* Definition = LoadObject<UCatEquipmentDefinition>(nullptr,
+	UCatEquipmentItemDefinition* Definition = LoadObject<UCatEquipmentItemDefinition>(nullptr,
 		TEXT("/Game/Catfishing/Data/Equipment/Equip_Rod_StarterT1.Equip_Rod_StarterT1"));
 	ACatCharacter* Character = World->SpawnActor<ACatCharacter>();
 	ACatfishingPlayerController* Controller = World->SpawnActor<ACatfishingPlayerController>();

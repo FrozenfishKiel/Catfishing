@@ -1,13 +1,13 @@
 #include "Items/CatEquipmentItem.h"
 
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Logging/CatLog.h"
 
 // 定义写入流程：生成器把唯一装备资产写入本 Actor；不在这里创建实例，避免未通过库存预检就产生孤立运行对象。
-void ACatEquipmentItem::SetEquipmentDefinition(UCatEquipmentDefinition* InEquipmentDefinition) { EquipmentDefinition = InEquipmentDefinition; }
+void ACatEquipmentItem::SetEquipmentDefinition(UCatEquipmentItemDefinition* InEquipmentDefinition) { EquipmentDefinition = InEquipmentDefinition; }
 
 // 定义读取流程：返回当前静态装备资产，调用方只能读取身份和配置，库存实例仍由收货事务创建。
-UCatEquipmentDefinition* ACatEquipmentItem::GetEquipmentDefinition() const { return EquipmentDefinition; }
+UCatEquipmentItemDefinition* ACatEquipmentItem::GetEquipmentDefinition() const { return EquipmentDefinition; }
 
 // 生成配置流程：读取装备运行就绪状态并记录异常；不禁用拾取碰撞，未部署装备仍必须走通用世界物拾取链。
 void ACatEquipmentItem::InitializeActorSpawnConfig()

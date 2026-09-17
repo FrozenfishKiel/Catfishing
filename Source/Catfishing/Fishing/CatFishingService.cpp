@@ -1,4 +1,6 @@
 #include "Fishing/CatFishingService.h"
+#include "Equipment/CatEquippedDefinition.h"
+#include "Inventory/Fragments/CatEquippableItemFragment.h"
 #include "UObject/UObjectIterator.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "Inventory/CatInventorySettings.h"
@@ -22,7 +24,7 @@
 #include "Engine/World.h"
 #include "Environment/CatWaterQuerySubsystem.h"
 #include "Equipment/CatEquipmentComponent.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Equipment/CatFishingResourceCustodian.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
@@ -242,9 +244,9 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 	DependencyStage = TEXT("EquipmentDefinitions");
 	const UCatInventorySettings* EquipmentSettings = GetDefault<UCatInventorySettings>();
 	// 两根部署竿可以与背包当前选择不同；射程、耐久和会话必须绑定实际操作的实例。
-	const UCatEquipmentDefinition* RodDefinition = EquipmentSettings->FindRuntimeDefinition<UCatEquipmentDefinition>(RodState.RodItemId);
-	const UCatEquipmentDefinition* FloatDefinition = EquipmentSettings->FindRuntimeDefinition<UCatEquipmentDefinition>(Loadout.FloatItemId);
-	const UCatEquipmentDefinition* BaitDefinition = EquipmentSettings->FindRuntimeDefinition<UCatEquipmentDefinition>(Loadout.BaitItemId);
+	const UCatEquipmentItemDefinition* RodDefinition = EquipmentSettings->FindRuntimeDefinition<UCatEquipmentItemDefinition>(RodState.RodItemId);
+	const UCatEquipmentItemDefinition* FloatDefinition = EquipmentSettings->FindRuntimeDefinition<UCatEquipmentItemDefinition>(Loadout.FloatItemId);
+	const UCatEquipmentItemDefinition* BaitDefinition = EquipmentSettings->FindRuntimeDefinition<UCatEquipmentItemDefinition>(Loadout.BaitItemId);
 	if (!RodDefinition || !RodDefinition->CanServeFishingRod() || !FloatDefinition
 		|| !FloatDefinition->CanServeFishingFloat() || !BaitDefinition
 		|| !BaitDefinition->CanServeFishingBait())
@@ -542,8 +544,8 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 	{
 		Equipment->TryGetInventoryRodForDeployment(InventoryRod);
 	}
-	const UCatEquipmentDefinition* RequestedDefinition = InventoryRod.Instance
-		? Cast<UCatEquipmentDefinition>(InventoryRod.Instance->GetItemDefinition()) : nullptr;
+	const UCatEquipmentItemDefinition* RequestedDefinition = InventoryRod.Instance
+		? Cast<UCatEquipmentItemDefinition>(InventoryRod.Instance->GetItemDefinition()) : nullptr;
 	if (!InventoryRod.Instance || InventoryRod.StackCount != 1 || !RequestedDefinition
 		|| !RequestedDefinition->CanServeFishingRod()
 		|| (Command.RequestedRodItemInstanceId.IsValid()
@@ -600,8 +602,8 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 			*CatLogContext::BuildControllerFields(Controller));
 		return Result;
 	}
-	const UCatEquipmentDefinition* UsedRodDefinition =
-		GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(UseResult.Item.Instance->GetItemId());
+	const UCatEquipmentItemDefinition* UsedRodDefinition =
+		GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentItemDefinition>(UseResult.Item.Instance->GetItemId());
 	if (!UsedRodDefinition || !UsedRodDefinition->CanServeFishingRod()
 		|| UseResult.Item.Instance->GetItemId() != InventoryRod.Instance->GetItemId())
 	{
@@ -612,7 +614,7 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 	}
 	// 鱼竿 Actor 类在 Use 成功后按被移出的实例定义重读；正式 InventoryComponent 已完成借出，Equipment 这里只是旧投影适配层。
 	// 表现类型仍由钓鱼服务按鱼竿规则裁决，不能让旧装备快照重新拥有库存事实。
-	UClass* RodClass = UsedRodDefinition->UseActorClass.LoadSynchronous();
+	UClass* RodClass = UsedRodDefinition->GetEquipmentDefinition()->ActorClass.LoadSynchronous();
 	if (!RodClass || !RodClass->IsChildOf(ACatFishingRodActor::StaticClass()))
 	{
 		Equipment->UnUse(FGuid::NewGuid(), UseResult.Item.Instance->GetItemInstanceId());

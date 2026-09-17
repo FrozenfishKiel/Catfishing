@@ -4,13 +4,13 @@
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "AbilitySystem/Physics/CatPhysicalEffortComponent.h"
 #include "Character/Physics/Tests/CatPhysicalTestWorld.h"
-#include "Inventory/Fragments/CatConsumableEffectFragment.h"
+#include "AbilitySystem/Attributes/CatGrowthAttributeSet.h"
 #include "AbilitySystem/Effects/CatFishExperienceEffect.h"
 #include "Growth/CatGrowthComponent.h"
 #include "Data/CatFishDefinition.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatYellowStaminaBalanceTest,
-	"Catfishing.PhysicalEffort.Runtime.YellowBalanceRecoveryAndFoodReplay",
+	"Catfishing.PhysicalEffort.Runtime.YellowBalanceRecoveryAndFoodExperience",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 bool FCatYellowStaminaBalanceTest::RunTest(const FString&)
 {
@@ -64,23 +64,15 @@ bool FCatYellowStaminaBalanceTest::RunTest(const FString&)
 	// 吃鱼目前只提交成长；确认独立黄色体力既不增加，也不被重放覆盖。
 	const float ReserveBeforeEating = ASC->GetYellowFightStamina();
 	const double TotalBeforeEating = ASC->GetTotalFightStamina();
-	const auto* FoodEffect = Fish->FindFragment<UCatConsumableEffectFragment>();
-	if (!TestNotNull(TEXT("formal edible fish has consumable fragment"), FoodEffect)) return false;
 	const int64 ExperienceBeforeEating = Cat->GetGrowthComponent()->GetSnapshot().TotalExperience;
-	const auto Request = FGuid::NewGuid();
-	const auto Result = Fish->FindFragment<UCatConsumableEffectFragment>()->ApplyFromAuthority(Cat, Request, const_cast<UCatFishDefinition*>(Fish),
-		{{UCatGE_FishExperience::GetExperienceTag(), static_cast<float>(FMath::FloorToInt(Fish->ResolveEatingExperiencePoints(0.5)))}});
-	TestTrue(TEXT("formal food chain commits"), Result.bCommitted);
-	TestEqual(TEXT("GE preserves weight-derived integer experience"), static_cast<int64>(Cat->GetGrowthComponent()->GetSnapshot().TotalExperience),
-		ExperienceBeforeEating + FMath::FloorToInt(Fish->ResolveEatingExperiencePoints(0.5)));
-	TestEqual(TEXT("experience meta attribute is consumed"), ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetIncomingFishExperienceAttribute()), 0.0f);
+	const int32 Experience = FMath::FloorToInt(Fish->ResolveEatingExperiencePoints(0.5));
+	const auto Spec = ASC->MakeOutgoingSpec(UCatGE_FishExperience::StaticClass(), 1.f, ASC->MakeEffectContext());
+	if (!TestTrue(TEXT("experience effect can be constructed"), Spec.IsValid())) return false;
+	Spec.Data->SetSetByCallerMagnitude(UCatGE_FishExperience::GetExperienceTag(), Experience);
+	ASC->ApplyGameplayEffectSpecToSelf(*Spec.Data.Get());
+	TestEqual(TEXT("GE preserves weight-derived integer experience"), static_cast<int64>(Cat->GetGrowthComponent()->GetSnapshot().TotalExperience), ExperienceBeforeEating + Experience);
+	TestEqual(TEXT("experience meta attribute is consumed"), ASC->GetNumericAttribute(UCatGrowthAttributeSet::GetIncomingExperienceAttribute()), 0.0f);
 	TestEqual(TEXT("food leaves reserve unchanged"), ASC->GetYellowFightStamina(), ReserveBeforeEating);
-	const auto Replay = Fish->FindFragment<UCatConsumableEffectFragment>()->ApplyFromAuthority(Cat, Request, const_cast<UCatFishDefinition*>(Fish),
-		{{UCatGE_FishExperience::GetExperienceTag(), static_cast<float>(FMath::FloorToInt(Fish->ResolveEatingExperiencePoints(0.5)))}});
-	TestTrue(TEXT("food request replay is recognized"), Replay.bTerminalReplay);
-	TestEqual(TEXT("replay does not add experience"), static_cast<int64>(Cat->GetGrowthComponent()->GetSnapshot().TotalExperience),
-		ExperienceBeforeEating + FMath::FloorToInt(Fish->ResolveEatingExperiencePoints(0.5)));
-	TestEqual(TEXT("replay leaves reserve unchanged"), ASC->GetYellowFightStamina(), ReserveBeforeEating);
 	ASC->ClearActorInfo();
 	TestFalse(TEXT("grant with no authority avatar is rejected"), ASC->ApplyYellowFightStaminaDelta(1));
 	TestFalse(TEXT("day cleanup also requires authority avatar"), ASC->ClearYellowFightStaminaFromAuthority());

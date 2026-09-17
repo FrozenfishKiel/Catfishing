@@ -2,23 +2,26 @@
 
 #include "CoreMinimal.h"
 #include "Inventory/CatInventoryItemDefinition.h"
-#include "CatEquipmentDefinition.generated.h"
+#include "CatEquipmentItemDefinition.generated.h"
 
 class AActor;
 class UTexture2D;
 class UCatAbilitySet;
+class UCatEquippedDefinition;
 
 /** 装配型装备 Use 的目标槽；定义显式声明写入位置，运行实例不再按子类或用途猜测。 */
 UENUM(BlueprintType)
 enum class ECatEquipmentLoadoutTargetSlot : uint8 { None, Bait, Float };
 
-/** 一条功能型装备/道具定义；字段只表达玩法用途，不含等级、战力、随机词条或强制升级。 */
+/** 装备类物品的库存定义；保存物品身份、展示和钓具用途，通过片段引用独立的拿出配置，不持有能力授予句柄。 */
 UCLASS(BlueprintType)
-class CATFISHING_API UCatEquipmentDefinition : public UCatInventoryItemDefinition
+class CATFISHING_API UCatEquipmentItemDefinition : public UCatInventoryItemDefinition
 {
 	GENERATED_BODY()
 
 public:
+	/** 物品组合的装备配置；未声明装备片段时返回空，调用方不得按物品种类临时拼装能力。 */
+	const UCatEquippedDefinition* GetEquipmentDefinition() const;
 	/** 库存表现读取装备资产自己的显示名；背包和商店把缺省回退留在各自展示模型里。 */
 	virtual FText GetInventoryDisplayName() const override;
 
@@ -95,10 +98,6 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation")
 	TSoftObjectPtr<UTexture2D> Thumbnail;
 
-	/** 这类物品通过 Use 部署到世界时生成的 Actor 类；策划数据写入它，具体玩法表现从自己的定义读取，鱼竿只是其中一种。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use")
-	TSoftClassPtr<AActor> UseActorClass;
-
 	/** 单格最大堆叠数；0 表示沿用项目默认规则，1 表示这类物品不可堆叠。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Inventory", meta = (ClampMin = "0"))
 	int32 MaxStackSize = 0;
@@ -115,8 +114,5 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Runtime")
 	bool bEnableRuntimeDefinition = false;
 
-	/** 这件装备部署或装备时授予的能力集合；每个 Spec 的 SourceObject 是本件库存实例，撤销随装备生命周期配对完成。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Abilities")
-	TArray<TSoftObjectPtr<UCatAbilitySet>> AbilitySetsToGrant;
 
 };

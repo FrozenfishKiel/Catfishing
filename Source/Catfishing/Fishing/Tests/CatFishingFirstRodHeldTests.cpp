@@ -1,4 +1,6 @@
 #include "Fishing/Tests/CatFishingEquipmentTestFixtures.h"
+#include "Equipment/CatEquippedDefinition.h"
+#include "Inventory/Fragments/CatEquippableItemFragment.h"
 #include "Inventory/CatInventorySettings.h"
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -12,7 +14,7 @@
 #include "Components/BoxComponent.h"
 #include "Engine/LocalPlayer.h"
 #include "Equipment/CatEquipmentComponent.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 #include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
@@ -190,8 +192,8 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("select first rod for remaining lifecycle scenarios"), Controller->RequestSelectQuickbarSlotFromInput(FirstSlot))) return false;
 		ACatFishingRodActor* Rod = Fishing->FindDeployedRod(Player);
 		if (!TestNotNull(TEXT("first R creates a registered rod"), Rod)) return false;
-		const UCatEquipmentDefinition* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(DefinitionItemId);
-		TestEqual(TEXT("spawns the formal configured Blueprint"), Rod->GetClass(), Definition->UseActorClass.Get());
+		const UCatEquipmentItemDefinition* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentItemDefinition>(DefinitionItemId);
+		TestEqual(TEXT("spawns the formal configured Blueprint"), Rod->GetClass(), Definition->GetEquipmentDefinition()->ActorClass.Get());
 		TestEqual(TEXT("first R already operates the new rod"), Fishing->FindRodOperatedBy(Player), Rod);
 		TestEqual(TEXT("first R is held"), Rod->GetPresentationState().PoseMode, ECatFishingRodPoseMode::Held);
 		TestEqual(TEXT("first R holder is the player"), Rod->GetPresentationState().HolderPlayerState.Get(), static_cast<APlayerState*>(Player));
@@ -355,8 +357,8 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 			|| !TestTrue(TEXT("R deploys the physical spare rod"), Second.bCommitted)) return false;
 		ACatFishingRodActor* SecondRod = Fishing->FindDeployedRodById(Second.RodActorId);
 		if (!TestNotNull(TEXT("second rod is independently registered"), SecondRod)) return false;
-		const UCatEquipmentDefinition* SecondDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(SecondDefinitionItemId);
-		TestEqual(TEXT("spare uses its own formal Blueprint class"), SecondRod->GetClass(), SecondDefinition->UseActorClass.Get());
+		const UCatEquipmentItemDefinition* SecondDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentItemDefinition>(SecondDefinitionItemId);
+		TestEqual(TEXT("spare uses its own formal Blueprint class"), SecondRod->GetClass(), SecondDefinition->GetEquipmentDefinition()->ActorClass.Get());
 		TestEqual(TEXT("spare uses its own physical instance"), SecondRod->GetPresentationState().ItemInstanceId, SecondItemId);
 		TestEqual(TEXT("spare preserves its definition"), SecondRod->GetPresentationState().RodItemId, SecondDefinitionItemId);
 		TestEqual(TEXT("held plus grounded rods consume both deployment slots"), Fishing->GetDeployedRodCount(Player), 2);

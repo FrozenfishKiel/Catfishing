@@ -1,4 +1,6 @@
 #include "Inventory/CatInventorySettings.h"
+#include "Equipment/CatEquippedDefinition.h"
+#include "Inventory/Fragments/CatEquippableItemFragment.h"
 #include "Fishing/Tests/CatFishingEquipmentTestFixtures.h"
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -20,7 +22,7 @@
 #include "Environment/Tests/CatWaterTestFixtures.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatFishingResourceCustodian.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingService.h"
@@ -174,8 +176,8 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("production PlaceRod deploys owner's physical rod"), Placed.bCommitted)) return false;
 		ACatFishingRodActor* Rod = Fishing->FindDeployedRodById(Placed.RodActorId);
 		if (!TestNotNull(TEXT("placed rod is registered"), Rod)) return false;
-		const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(34);
-		TestEqual(TEXT("rod is the formal configured Blueprint"), Rod->GetClass(), RodDefinition->UseActorClass.Get());
+		const UCatEquipmentItemDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentItemDefinition>(34);
+		TestEqual(TEXT("rod is the formal configured Blueprint"), Rod->GetClass(), RodDefinition->GetEquipmentDefinition()->ActorClass.Get());
 		TestEqual(TEXT("physical ledger owner is frozen in deployment Instigator"), Rod->GetInstigator(), static_cast<APawn*>(Owner.Character));
 		const auto Context = [&]()
 		{

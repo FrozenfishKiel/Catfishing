@@ -2,7 +2,7 @@
 
 #include "Logging/CatLog.h"
 #include "Engine/LocalPlayer.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Data/CatFishDefinition.h"
 #include "Inventory/CatInventorySettings.h"
 #include "Kismet/GameplayStatics.h"
@@ -197,7 +197,7 @@ FCatDomainCommandResult UCatProfileSubsystem::SetEquipmentSelection(const FGuid 
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
-	UCatEquipmentDefinition* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(ItemId);
+	UCatEquipmentItemDefinition* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentItemDefinition>(ItemId);
 	if (!bPersistenceReady || !CurrentProfile || !RequestId.IsValid() || SlotId.IsNone() || !Definition
 		|| Definition->LoadoutSlotId != SlotId)
 	{

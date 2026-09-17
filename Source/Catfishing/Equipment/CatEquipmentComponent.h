@@ -7,7 +7,7 @@
 #include "Inventory/CatInventoryComponent.h"
 #include "CatEquipmentComponent.generated.h"
 
-class UCatEquipmentDefinition;
+class UCatEquipmentItemDefinition;
 class UCatEquipmentInventoryItemInstance;
 class UCatInventoryComponent;
 class APlayerState;
@@ -72,13 +72,9 @@ public:
 		int32  ItemId);
 #endif
 
-	/** 背包点击或玩法入口共用的物品使用入口；InventoryComponent 执行 Use 事务，Equipment 只同步钓鱼选择读模型。 */
+	/** 鱼竿部署的资源入口；按原实例借出保管并更新装备选择，不执行消耗品效果。 */
 	FCatInventoryItemUseResult Use(FGuid RequestId, int64 ExpectedRevision, FGuid ItemInstanceId,
 		int32 Quantity = 1);
-
-	/** 只读查询同一 Use 请求是否已有终态；命中时返回可诊断重放，不命中时不读写当前库存。 */
-	bool TryReplayInventoryItemUseTerminal(FGuid RequestId, int64 ExpectedRevision, FGuid ItemInstanceId,
-		int32 Quantity, FCatInventoryItemUseResult& OutResult) const;
 
 	/** 部署型物品收口时共用的停止使用入口；InventoryComponent 归还同一实例，Equipment 只同步钓鱼选择读模型。 */
 	FCatInventoryItemUseResult UnUse(FGuid RequestId, FGuid ItemInstanceId);
@@ -167,7 +163,7 @@ private:
 	bool HasActiveInventoryItemUse() const;
 	/** 正式库存刷新后校正钓鱼选择；选中实例离开随身库存时换到仍存在的同类实例或清空选择。 */
 	void ReconcileLoadoutSelectionsWithInventory(
-		const UCatEquipmentDefinition* PreferredDefinition, int32  PreferredItemId);
+		const UCatEquipmentItemDefinition* PreferredDefinition, int32  PreferredItemId);
 	/** 组装 Fishing Begin 回包；只读取会话记录和绑定鱼竿实例，不创建新记录或改写库存。 */
 	FCatFishingUseFreezeResult MakeFishingUseFreezeResult(FGuid FishingSessionId,
 		ECatDomainCommandError Error, bool bUseAccepted, const FCatFishingUseRecord* Record = nullptr) const;
@@ -185,16 +181,16 @@ private:
 	UCatInventoryComponent* ResolveOwnerInventoryComponent() const;
 
 	/** 读取一个定义在单格里的最大堆叠数；装备型物品固定为 1，数量型物品使用项目配置。 */
-	int32 GetInventoryStackLimit(const UCatEquipmentDefinition& Definition) const;
+	int32 GetInventoryStackLimit(const UCatEquipmentItemDefinition& Definition) const;
 
 	/** 从库存定位当前选择的鱼竿实例；失败伤竿用它直接写实例状态，读模型只接收实例状态。 */
 	UCatEquipmentInventoryItemInstance* ResolveSelectedFormalRodInstanceFromInventory(
-		UCatInventoryComponent& OwnerInventory, const UCatEquipmentDefinition& RodDefinition,
+		UCatInventoryComponent& OwnerInventory, const UCatEquipmentItemDefinition& RodDefinition,
 		FCatInventoryEntry& OutSlot) const;
 
 	/** 从 Owner 库存校正当前钓具选择；发货、移动和使用收口都靠它让选择跟随真实背包。 */
 	bool RefreshLoadoutFromInventoryComponentFromAuthority(
-		const UCatEquipmentDefinition* GrantedDefinition, int32  GrantedItemId);
+		const UCatEquipmentItemDefinition* GrantedDefinition, int32  GrantedItemId);
 
 	/** 按实例身份从正式可见库存读取运行格；选择和诊断用它避免只按 ItemId 误认同类物品。 */
 	bool TryFindInventorySlotByInstanceId(FGuid ItemInstanceId, FCatInventoryEntry& OutSlot) const;
@@ -213,6 +209,10 @@ private:
 	/** 钓鱼选择和鱼竿摘要的复制读模型；InventoryComponent 持有物品事实。 */
 	UPROPERTY(ReplicatedUsing = OnRep_Snapshot)
 	FCatEquipmentLoadoutSnapshot Snapshot;
+
+	/** 部署和收回的首次终态；缓存保活原实例，网络重放不重新移动实物。 */
+	UPROPERTY(Transient)
+	TMap<FString, FCatInventoryItemUseResult> ItemUseTerminalCache;
 
 	/** 装备选择、物品发放和物品使用命令的首次终态缓存；背包整理已由 InventoryComponent 自己维护幂等结果。 */
 	TMap<FString, FCatDomainCommandResult> TerminalCache;

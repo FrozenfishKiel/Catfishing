@@ -6,7 +6,7 @@
 #include "Camp/CatCampSettings.h"
 #include "Character/CatCharacter.h"
 #include "Condition/CatConditionComponent.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "FishContainers/CatFishContainerSettings.h"
 #include "FishContainers/CatFishGuardActor.h"
 #include "FishContainers/CatFishTankActor.h"
@@ -140,7 +140,7 @@ namespace
 	UCatInventoryComponent* ResolveInventoryTargetForDefinition(const UCatInventoryItemDefinition& Definition,
 		FCatShopDeliveryTargets& Targets)
 	{
-		const UCatEquipmentDefinition* Equipment = Cast<UCatEquipmentDefinition>(&Definition);
+		const UCatEquipmentItemDefinition* Equipment = Cast<UCatEquipmentItemDefinition>(&Definition);
 		const bool bRunConsumable = (Equipment != nullptr && Equipment->bRunConsumable)
 			|| Definition.GetItemId() == GetDefault<UCatShopEconomySettings>()->SettlementDriedItemId;
 		UCatInventoryComponent* Preferred = bRunConsumable ? Targets.SupplyStore : Targets.EquipmentRack;

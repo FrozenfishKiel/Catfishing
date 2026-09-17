@@ -5,7 +5,7 @@
 #include "Character/CatCharacterMovementComponent.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/CatFishingSession.h"
@@ -23,7 +23,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingCMCStabilityTest,
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 bool FCatFishingCMCStabilityTest::RunTest(const FString& Parameters)
 {
-    const auto* Definition = LoadObject<UCatEquipmentDefinition>(nullptr,
+    const auto* Definition = LoadObject<UCatEquipmentItemDefinition>(nullptr,
         TEXT("/Game/Catfishing/Data/Equipment/Equip_Rod_StarterT1.Equip_Rod_StarterT1"));
     if (!TestNotNull(TEXT("formal rod calibration"), Definition)) return false;
     for (double FishMass : {5.535, 15.0}) for (int32 Rate : {20, 60, 120})

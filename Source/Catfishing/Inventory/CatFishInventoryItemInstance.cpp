@@ -1,5 +1,5 @@
 #include "Inventory/CatFishInventoryItemInstance.h"
-#include "Inventory/Fragments/CatConsumableEffectFragment.h"
+#include "Inventory/Fragments/CatItemUseFragment.h"
 #include "AbilitySystem/Effects/CatFishExperienceEffect.h"
 #include "Growth/CatGrowthComponent.h"
 
@@ -175,15 +175,15 @@ bool UCatFishInventoryItemInstance::ConsumesInventoryQuantityOnUse() const
 	return true;
 }
 
-// 鱼使用预检核对公开实例数据；服务器额外检查私有捕获身份与 Condition 的权威成长预检。
-// 客户端只展示公开数据能确定的可用性，不能调用仅允许 authority 的 Condition 入口，否则所有客户端的食用都会置灰。
+// 鱼使用预检先核对公开身份、重量、可食用标记与动作配置；服务器再检查捕获身份和成长系统。
+// 客户端不能调用仅允许 authority 的成长预检；此处只决定菜单可用性，实际消费仍由进食能力复核并提交。
 bool UCatFishInventoryItemInstance::CanUseFromInventory(
 	const FCatInventoryEntry& InventoryEntry, APawn* UserPawn) const
 {
 	const UCatFishDefinition* Definition = GetFishDefinition();
 	const ACatCharacter* Character = Cast<ACatCharacter>(UserPawn);
 	const UCatGrowthComponent* Growth = Character ? Character->GetGrowthComponent() : nullptr;
-	const UCatConsumableEffectFragment* Effect = Definition ? Definition->FindFragment<UCatConsumableEffectFragment>() : nullptr;
+	const UCatItemUseFragment* Effect = Definition ? Definition->FindFragment<UCatItemUseFragment>() : nullptr;
 	return InventoryEntry.Instance == this
 		&& InventoryEntry.StackCount == 1
 		&& GetItemInstanceId().IsValid()
@@ -198,52 +198,6 @@ bool UCatFishInventoryItemInstance::CanUseFromInventory(
 		&& Definition->IsEdible()
 		&& Growth && Effect && Super::CanUseFromInventory(InventoryEntry, UserPawn)
 		&& (!Character->HasAuthority() || Growth->ValidateFishGrowth(Definition, WeightKilograms) == ECatDomainCommandError::None);
-}
-
-namespace CatFishInventoryConsumePrivate
-{
-	// 知识层授予流程：从吃鱼的猫解析服务器私有身份，交给一局图鉴服务生成 FishKnowledge Grant。
-	// 授予按「接收者+鱼种」去重，吃第二条同种鱼不会再生成待 ACK 的 Grant；本函数不改身体状态也不碰库存。
-	void GrantFishKnowledgeFromAuthority(const ACatCharacter* EatingCharacter, const UCatFishDefinition* Definition)
-	{
-		if (!CatFishCollectionLayers::HasKnowledgeLayer(Definition) || !EatingCharacter)
-		{
-			return;
-		}
-		const AController* Controller = EatingCharacter->GetController();
-		const APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
-		UCatRunImprintService* Imprint = EatingCharacter->GetWorld()
-			? EatingCharacter->GetWorld()->GetSubsystem<UCatRunImprintService>() : nullptr;
-		if (!Imprint || !PlayerState || !PlayerState->GetUniqueId().IsValid())
-		{
-			return;
-		}
-		Imprint->RecordFishKnowledge(Definition->ItemId, PlayerState->GetUniqueId()->ToString());
-	}
-}
-
-// 鱼效果流程：实例按冻结重量计算经验参数，定义片段申请 GE；成功后授予知识并释放保留载体，库存扣量归基类事务。
-FCatDomainCommandResult UCatFishInventoryItemInstance::ApplyUseEffectsFromAuthority(const FCatInventoryItemUseContext& UseContext)
-{
- ACatCharacter* Character = Cast<ACatCharacter>(UseContext.UserPawn);
- const UCatFishDefinition* Definition = GetFishDefinition();
- const UCatConsumableEffectFragment* Effect = Definition ? Definition->FindFragment<UCatConsumableEffectFragment>() : nullptr;
- FCatDomainCommandResult Result;
- Result.RequestId = UseContext.RequestId;
- if (!Character || !Effect)
- {
-  Result.Error = ECatDomainCommandError::DependencyUnavailable;
-  return Result;
- }
- Result = Effect->ApplyFromAuthority(Character, UseContext.RequestId, this,
-  {{UCatGE_FishExperience::GetExperienceTag(), static_cast<float>(FMath::FloorToInt(Definition->ResolveEatingExperiencePoints(WeightKilograms)))}});
- if (CatIsAcceptedDomainCommandResult(Result))
- {
-  CatFishInventoryConsumePrivate::GrantFishKnowledgeFromAuthority(Character, Definition);
-  // 效果已被接受，基类事务不会再回滚实物；此时才销毁容器保留的隐藏载体。
-  if (ACatFishPickupActor* Actor = Cast<ACatFishPickupActor>(GetWorldActor())) Actor->Destroy();
- }
- return Result;
 }
 
 // 投掷效果查询流程：只沿鱼定义读那一份逐鱼数据；定义缺失、数据不完整或本鱼没有投掷效果时返回 false。

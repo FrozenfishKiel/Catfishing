@@ -1,10 +1,12 @@
-﻿#include "Equipment/CatEquipmentInventoryItemInstance.h"
+#include "Equipment/CatEquipmentInventoryItemInstance.h"
+#include "Equipment/CatEquippedDefinition.h"
+#include "Inventory/Fragments/CatEquippableItemFragment.h"
 
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 
 #include "Character/CatCharacter.h"
 #include "Equipment/CatEquipmentComponent.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Inventory/CatInventoryComponent.h"
 #include "Net/UnrealNetwork.h"
 
@@ -51,7 +53,7 @@ void UCatEquipmentInventoryItemInstance::SetRodRuntimeStateFromAuthority(
 		return;
 	}
 
-	const UCatEquipmentDefinition* EquipmentDefinition = Cast<UCatEquipmentDefinition>(GetItemDefinition());
+	const UCatEquipmentItemDefinition* EquipmentDefinition = Cast<UCatEquipmentItemDefinition>(GetItemDefinition());
 	if (EquipmentDefinition == nullptr || !EquipmentDefinition->CanServeFishingRod())
 	{
 		RodDurability = 0.0;
@@ -73,7 +75,7 @@ void UCatEquipmentInventoryItemInstance::SetRodRuntimeStateFromAuthority(
 ECatDomainCommandError UCatEquipmentInventoryItemInstance::Use(const FCatInventoryEntry& Item,
 	const int32 Quantity) const
 {
-	const UCatEquipmentDefinition* EquipmentDefinition = Cast<UCatEquipmentDefinition>(GetItemDefinition());
+	const UCatEquipmentItemDefinition* EquipmentDefinition = Cast<UCatEquipmentItemDefinition>(GetItemDefinition());
 	if (EquipmentDefinition == nullptr || Item.Instance != this || Item.StackCount <= 0)
 	{
 		return ECatDomainCommandError::InvalidPayload;
@@ -87,7 +89,7 @@ ECatDomainCommandError UCatEquipmentInventoryItemInstance::Use(const FCatInvento
 
 	const bool bKeepsInstance = KeepsInventoryInstanceWhileUsed();
 	const bool bConsumesQuantity = ConsumesInventoryQuantityOnUse();
-	if (bKeepsInstance && (EquipmentDefinition->UseActorClass.IsNull()
+	if (bKeepsInstance && (EquipmentDefinition->GetEquipmentDefinition()->ActorClass.IsNull()
 		|| EquipmentDefinition->bRunConsumable || Item.StackCount != 1 || Quantity != 1))
 	{
 		return ECatDomainCommandError::InvalidPhase;
@@ -107,7 +109,7 @@ ECatDomainCommandError UCatEquipmentInventoryItemInstance::Use(const FCatInvento
 // 装备实例 UnUse 裁决流程：先确认实例和定义身份没有错位；热配置失去部署 Actor 时仍允许收回，避免 held entry 卡死。
 ECatDomainCommandError UCatEquipmentInventoryItemInstance::UnUse(const FCatInventoryEntry& Item) const
 {
-	const UCatEquipmentDefinition* EquipmentDefinition = Cast<UCatEquipmentDefinition>(GetItemDefinition());
+	const UCatEquipmentItemDefinition* EquipmentDefinition = Cast<UCatEquipmentItemDefinition>(GetItemDefinition());
 	if (EquipmentDefinition == nullptr || Item.Instance != this || Item.StackCount != 1)
 	{
 		return ECatDomainCommandError::InvalidPayload;
@@ -131,7 +133,7 @@ bool UCatEquipmentInventoryItemInstance::ConsumesInventoryQuantityOnUse() const
 bool UCatEquipmentInventoryItemInstance::CanUseFromInventory(
 	const FCatInventoryEntry& InventoryEntry, APawn* UserPawn) const
 {
-	const UCatEquipmentDefinition* EquipmentDefinition = Cast<UCatEquipmentDefinition>(GetItemDefinition());
+	const UCatEquipmentItemDefinition* EquipmentDefinition = Cast<UCatEquipmentItemDefinition>(GetItemDefinition());
 	const ACatCharacter* Character = Cast<ACatCharacter>(UserPawn);
 	const bool bHasConcreteBehavior = GetClass() != UCatEquipmentInventoryItemInstance::StaticClass();
 	return InventoryEntry.Instance == this
@@ -139,7 +141,7 @@ bool UCatEquipmentInventoryItemInstance::CanUseFromInventory(
 		&& GetItemInstanceId().IsValid()
 		&& EquipmentDefinition != nullptr
 		&& EquipmentDefinition->IsRuntimeDefinitionReady()
-		&& bHasConcreteBehavior
+		&& (bHasConcreteBehavior || Super::CanUseFromInventory(InventoryEntry, UserPawn))
 		&& Character != nullptr
 		&& Character->GetEquipmentComponent() != nullptr;
 }
@@ -148,7 +150,7 @@ bool UCatEquipmentInventoryItemInstance::CanUseFromInventory(
 void UCatEquipmentInventoryItemInstance::HandleItemDefinitionAssigned()
 {
 	Super::HandleItemDefinitionAssigned();
-	const UCatEquipmentDefinition* EquipmentDefinition = Cast<UCatEquipmentDefinition>(GetItemDefinition());
+	const UCatEquipmentItemDefinition* EquipmentDefinition = Cast<UCatEquipmentItemDefinition>(GetItemDefinition());
 	if (EquipmentDefinition != nullptr && EquipmentDefinition->CanServeFishingRod())
 	{
 		SetRodRuntimeStateFromAuthority(EquipmentDefinition->FindFragment<UCatEquipmentFragment_Rod>()->MaximumRodDurability, false);

@@ -34,7 +34,7 @@
 #include "Environment/CatEnvironmentSettings.h"
 #include "Engine/GameInstance.h"
 #include "EngineUtils.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Fishing/CatFishingService.h"
 #include "GameFramework/GameSession.h"
 #include "GameFramework/Pawn.h"
@@ -2275,7 +2275,7 @@ void ACatfishingGameModeBase::SubmitNaturalChumFieldIfConfigured()
 	{
 		return;
 	}
-	UCatEquipmentDefinition* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(ChumItemId);
+	UCatEquipmentItemDefinition* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentItemDefinition>(ChumItemId);
 	if (!Definition || !Definition->CanServeChumPlacement())
 	{
 		return;

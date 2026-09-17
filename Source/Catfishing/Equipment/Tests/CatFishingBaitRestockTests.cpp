@@ -5,7 +5,7 @@
 #include "Camp/CatCampInventoryActor.h"
 #include "Character/CatCharacter.h"
 #include "Equipment/CatEquipmentComponent.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Inventory/CatInventorySettings.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Inventory/CatInventoryComponent.h"

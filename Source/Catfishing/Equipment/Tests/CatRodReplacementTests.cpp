@@ -1,11 +1,13 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
+#include "Equipment/CatEquippedDefinition.h"
+#include "Inventory/Fragments/CatEquippableItemFragment.h"
 #include "Tests/AutomationCommon.h"
 #include "Camp/CatCampInventoryActor.h"
 #include "Character/CatCharacter.h"
 #include "Equipment/CatEquipmentComponent.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
@@ -169,7 +171,7 @@ bool FCatBrokenRodReplacementTest::RunTest(const FString& Parameters)
 			const FCatEquipmentLoadoutSnapshot Loadout = Fixture.Equipment->GetSnapshot();
 			TestEqual(TEXT("主动使用后选中 T2"), Loadout.RodItemId, 34);
 			TestEqual(TEXT("选中公共仓库交付的同一实例"), Loadout.RodItemInstanceId, Fixture.NewItemId);
-			const UCatEquipmentDefinition* T2 = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(34);
+			const UCatEquipmentItemDefinition* T2 = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentItemDefinition>(34);
 			if (!TestNotNull(TEXT("T2 正式资产可用于运行"), T2)) return false;
 			const UCatEquipmentFragment_Rod* T2RodFragment = T2->FindFragment<UCatEquipmentFragment_Rod>();
 			if (!TestNotNull(TEXT("T2 正式资产含鱼竿参数片段"), T2RodFragment)) return false;
@@ -187,7 +189,7 @@ bool FCatBrokenRodReplacementTest::RunTest(const FString& Parameters)
 				? Cast<UCatEquipmentInventoryItemInstance>(Use.Item.Instance) : nullptr;
 			if (!TestTrue(TEXT("实际使用返回装备实例"), UsedRod != nullptr)) return false;
 			TestEqual(TEXT("实际使用的是 T2"), UsedRod->GetItemId(), 34);
-			UClass* RodClass = T2->UseActorClass.LoadSynchronous();
+			UClass* RodClass = T2->GetEquipmentDefinition()->ActorClass.LoadSynchronous();
 			TestTrue(TEXT("T2 配置了可生成的正式鱼竿 Actor"), RodClass && RodClass->IsChildOf(ACatFishingRodActor::StaticClass()));
 		}
 	}

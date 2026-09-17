@@ -131,7 +131,6 @@ void UCatAbilityInputBindingComponent::HandleAbilityInputTagPressed(const FGamep
 	const bool bPrimary = Rod && Rod->IsPrimaryOperator(Controller ? Controller->PlayerState : nullptr);
 	FPressedRoute Route;
 	auto* ItemController = Cast<ACatfishingPlayerController>(Controller);
-	if (bLeft && !bPrimary && ItemController && ItemController->IsQuickbarRodSelected()) return;
 	if (bLeft && !bPrimary && ItemController && ItemController->CanUseSelectedBackpackItemFromInput())
 	{
 		Route.SelectedItemController = ItemController;

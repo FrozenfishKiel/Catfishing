@@ -1,6 +1,6 @@
 #include "Inventory/CatInventorySettings.h"
 
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Logging/CatLog.h"
 
 // 全表读取流程：先验证表类型，再检查每行的编号、行名、定义和唯一性；全部成立后才发布按编号排序的结果。
@@ -94,7 +94,7 @@ int32 UCatInventorySettings::GetChumCarryLimit() const
 // 分类判定流程：只问装备定义已有的两个能力判定；不是装备定义、或两个能力都不成立时不受任何随身总量约束。
 ECatInventoryCarryCategory UCatInventorySettings::ResolveCarryCategory(const UCatInventoryItemDefinition& ItemDefinition)
 {
-	const UCatEquipmentDefinition* Equipment = Cast<UCatEquipmentDefinition>(&ItemDefinition);
+	const UCatEquipmentItemDefinition* Equipment = Cast<UCatEquipmentItemDefinition>(&ItemDefinition);
 	if (Equipment == nullptr)
 	{
 		return ECatInventoryCarryCategory::None;

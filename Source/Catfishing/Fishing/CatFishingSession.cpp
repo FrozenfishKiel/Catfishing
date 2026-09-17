@@ -1,4 +1,4 @@
-#include "Fishing/CatFishingSession.h"
+﻿#include "Fishing/CatFishingSession.h"
 #include "Growth/CatGrowthComponent.h"
 #include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
@@ -8,7 +8,7 @@
 #include "Inventory/CatInventorySettings.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Bait.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatInventoryItemInstance.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Float.h"
@@ -50,7 +50,7 @@
 #include "Components/StateTreeComponent.h"
 #include "GameFramework/PlayerState.h"
 #include "Equipment/CatEquipmentComponent.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "FishContainers/CatFishContainerService.h"
 #include "FishContainers/CatFishPickupSettings.h"
 #include "Items/Fish/CatFishPickupActor.h"
@@ -381,9 +381,9 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 	const UCatInventoryComponent* ScooperInventory = ScoopingCharacter ? ScoopingCharacter->GetInventoryComponent() : nullptr;
 	const FCatInventoryEntry* RequestedScoopEntry = Command.RequestedScoopItemInstanceId.IsValid() && ScooperInventory
 		? ScooperInventory->GetInventoryEntryAtSlot(ScooperInventory->FindInventorySlotIndexFromInstanceId(Command.RequestedScoopItemInstanceId)) : nullptr;
-	const UCatEquipmentDefinition* RequestedScoopDefinition = RequestedScoopEntry && RequestedScoopEntry->Instance
+	const UCatEquipmentItemDefinition* RequestedScoopDefinition = RequestedScoopEntry && RequestedScoopEntry->Instance
 		&& RequestedScoopEntry->Instance->GetItemInstanceId() == Command.RequestedScoopItemInstanceId
-		? Cast<UCatEquipmentDefinition>(RequestedScoopEntry->Instance->GetItemDefinition()) : nullptr;
+		? Cast<UCatEquipmentItemDefinition>(RequestedScoopEntry->Instance->GetItemDefinition()) : nullptr;
 	const bool bScoopReachReady = RequestedScoopEntry && RequestedScoopEntry->StackCount > 0
 		&& UCatFishingAimLibrary::TryResolveScoopReach(RequestedScoopDefinition, ScoopReachCentimeters);
 	// 这里不再要求"鱼处于近岸带内"：射线∩圆本身就是唯一的范围判定，再叠一层离岸距离等于两套口径，
@@ -1151,7 +1151,7 @@ bool ACatFishingSession::OpenTrueBiteWindowFromAuthority()
 	}
 	// 扣饵通知可能同步结束/迁移会话；不得用已经失效的资源继续打开窗口。
 	if (IsTerminal() || Snapshot.Phase != ECatFishingPhase::Probe || !IsValid(Snapshot.HookActor)) return false;
-	const UCatEquipmentDefinition* BiteRod = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(AttemptSnapshot.RodItemId);
+	const UCatEquipmentItemDefinition* BiteRod = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentItemDefinition>(AttemptSnapshot.RodItemId);
 	const UCatEquipmentFragment_Rod* RodFragment = BiteRod ? BiteRod->FindFragment<UCatEquipmentFragment_Rod>() : nullptr;
 	if (!RodFragment || !FMath::IsFinite(TrueBiteDistanceCentimeters) || TrueBiteDistanceCentimeters < 0.0
 		|| !FMath::IsFinite(RodFragment->MaximumLineLengthCentimeters) || RodFragment->MaximumLineLengthCentimeters <= 0.0)
@@ -1390,7 +1390,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	const UCatFightPersonalityDefinition* Personality = FishDefinition && Settings
 		? Settings->FindFightPersonality(FishDefinition->FightPersonalityId) : nullptr;
 	UStateTree* FishBehaviorStateTree = Settings ? Settings->FishBehaviorStateTree.LoadSynchronous() : nullptr;
-	const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(
+	const UCatEquipmentItemDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentItemDefinition>(
 		AttemptSnapshot.RodItemId);
 	UCatEquipmentComponent* Equipment = CastEquipment.Get(); // 钓鱼使用记录及扣饵来源始终绑定原始抛竿者，物理抓握不改变结算对象。
 	UCatAbilitySystemComponent* AbilitySystem = FisherCharacter.IsValid()
@@ -2235,8 +2235,8 @@ void ACatFishingSession::PublishBiteSignalFromAuthority()
 	{
 		return;
 	}
-	const UCatEquipmentDefinition* FloatDefinition = GetDefault<UCatInventorySettings>()
-		->FindRuntimeDefinition<UCatEquipmentDefinition>(AttemptSnapshot.FloatItemId);
+	const UCatEquipmentItemDefinition* FloatDefinition = GetDefault<UCatInventorySettings>()
+		->FindRuntimeDefinition<UCatEquipmentItemDefinition>(AttemptSnapshot.FloatItemId);
 	const UCatEquipmentFragment_Float* FloatFragment = FloatDefinition
 		? FloatDefinition->FindFragment<UCatEquipmentFragment_Float>() : nullptr;
 	if (FloatFragment == nullptr || !FloatFragment->IsRuntimeReady())
@@ -2272,14 +2272,14 @@ void ACatFishingSession::PublishBiteSignalFromAuthority()
 }
 
 // 竿强度读取流程：静态配置，三档 25／60／210（钓鱼规则 §4.1:162）。0 或读不到都表示"未裁"，
-// 调用方一律不得据此瞬断——没落数据的鱼竿不能一中鱼就断。
+// 缺少有效配置时没有强度裁决依据，因此不能触发断竿。
 // 承载字段沿用历史名 UCatEquipmentFragment_Rod::FishingStrength（2026-09-04 停用、本轮按 D-21 恢复），
 // 它是鱼竿资产的静态配置，与猫的 GAS 属性 UCatSurvivalAttributeSet::FishingStrength（猫力）不是同一个来源。
 bool ACatFishingSession::TryResolveRodStrength(double& OutRodStrength) const
 {
 	OutRodStrength = 0.0;
-	const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatInventorySettings>()
-		->FindRuntimeDefinition<UCatEquipmentDefinition>(AttemptSnapshot.RodItemId);
+	const UCatEquipmentItemDefinition* RodDefinition = GetDefault<UCatInventorySettings>()
+		->FindRuntimeDefinition<UCatEquipmentItemDefinition>(AttemptSnapshot.RodItemId);
 	const UCatEquipmentFragment_Rod* RodFragment = RodDefinition
 		? RodDefinition->FindFragment<UCatEquipmentFragment_Rod>() : nullptr;
 	if (!RodFragment || !FMath::IsFinite(RodFragment->FishingStrength) || RodFragment->FishingStrength <= 0.0)

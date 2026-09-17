@@ -9,7 +9,7 @@
 #include "Environment/CatChumFieldSubsystem.h"
 #include "Environment/CatWaterQuerySubsystem.h"
 #include "Equipment/CatEquipmentComponent.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Fishing/CatFishingService.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/PlayerController.h"
@@ -116,7 +116,7 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::DependencyUnavailable));
 	}
 	int32  ChumItemId = 0;
-	UCatEquipmentDefinition* Definition = nullptr;
+	UCatEquipmentItemDefinition* Definition = nullptr;
 	int32 FormalChumSlotIndex = INDEX_NONE;
 	// 正式库存复核：
 	// 1. 服务层不信任命令里的 ItemId，而是按实例 ID 回到当前正式库存槽位。
@@ -128,7 +128,7 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 	const UCatInventoryItemInstance* FormalChumInstance =
 		FormalChumEntry != nullptr ? FormalChumEntry->Instance.Get() : nullptr;
 	Definition = FormalChumInstance != nullptr
-		? Cast<UCatEquipmentDefinition>(FormalChumInstance->GetItemDefinition()) : nullptr;
+		? Cast<UCatEquipmentItemDefinition>(FormalChumInstance->GetItemDefinition()) : nullptr;
 	if (FormalChumInstance != nullptr
 		&& FormalChumEntry->StackCount >= Command.Quantity
 		&& FormalChumInstance->GetItemInstanceId() == Command.ChumItemInstanceId

@@ -5,7 +5,7 @@
 
 #include "GameFramework/Actor.h"
 #include "Character/CatCharacter.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "Inventory/CatBackPackComponent.h"
 #include "Inventory/CatInventoryComponent.h"
@@ -28,9 +28,9 @@ namespace CatInventoryInstanceTests
 	}
 
 	// 装备拾取定义创建流程：只写入装备目录身份和运行 gate，使 ACatEquipmentItem 经正式库存批次创建装备实例而不依赖装备玩法字段。
-	UCatEquipmentDefinition* CreatePickupEquipmentDefinition()
+	UCatEquipmentItemDefinition* CreatePickupEquipmentDefinition()
 	{
-		UCatEquipmentDefinition* Definition = NewObject<UCatEquipmentDefinition>(GetTransientPackage());
+		UCatEquipmentItemDefinition* Definition = NewObject<UCatEquipmentItemDefinition>(GetTransientPackage());
 		Definition->ItemId = 1810425;
 		Definition->FunctionalRouteId = TEXT("EquipmentPickupBoundaryRoute");
 		Definition->bEnableRuntimeDefinition = true;
@@ -219,7 +219,7 @@ bool FCatEquipmentItemPickupBoundaryTest::RunTest(const FString& Parameters)
 	UCatInventoryComponent* Inventory = Character->GetInventoryComponent();
 	if (!TestNotNull(TEXT("角色拥有正式随身库存"), Inventory)) return false;
 
-	UCatEquipmentDefinition* EquipmentDefinition = CatInventoryInstanceTests::CreatePickupEquipmentDefinition();
+	UCatEquipmentItemDefinition* EquipmentDefinition = CatInventoryInstanceTests::CreatePickupEquipmentDefinition();
 	ACatEquipmentItem* Pickup = World->SpawnActor<ACatEquipmentItem>(Character->GetActorLocation(), FRotator::ZeroRotator);
 	if (!TestNotNull(TEXT("创建真实装备世界物"), Pickup)) return false;
 	Pickup->SetEquipmentDefinition(EquipmentDefinition);
@@ -278,58 +278,45 @@ bool FCatEquipmentItemPickupBoundaryTest::RunTest(const FString& Parameters)
 }
 
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatInventoryUseAtomicCallbackTest,
-	"Catfishing.Unit.Inventory.UseCallbackIsIdempotentAndPublishesOnlyCommittedQuantity",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatInventoryAbilityCostTest,
+	"Catfishing.Unit.Inventory.AbilityCostPreservesExactSourceAndRejectsReplay",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-// 真实库存回调边界：用一条带身份的鱼进入同一扣量事务，验证预检重入、效果拒绝、通知时重放都不产生第二次效果或临时空格。
-bool FCatInventoryUseAtomicCallbackTest::RunTest(const FString& Parameters)
+// 精确来源成本回归：两条同种鱼分别占格，通知里重入原请求；重复提交、失效来源和篡改请求不能误扣另一条。
+bool FCatInventoryAbilityCostTest::RunTest(const FString& Parameters)
 {
-	(void)Parameters;
 	FTestWorldWrapper WorldWrapper;
-	if (!TestTrue(TEXT("创建 authority 世界"), WorldWrapper.CreateTestWorld(EWorldType::Game))) return false;
+	if (!TestTrue(TEXT("创建权威世界"), WorldWrapper.CreateTestWorld(EWorldType::Game))) return false;
 	AActor* Owner = WorldWrapper.GetTestWorld()->SpawnActor<AActor>();
 	UCatInventoryComponent* Inventory = CatInventoryInstanceTests::AddInventoryComponent(*Owner, 2);
 	UCatFishDefinition* Definition = NewObject<UCatFishDefinition>();
 	Definition->ItemId = 1183317;
-	UCatFishInventoryItemInstance* Fish = NewObject<UCatFishInventoryItemInstance>(Owner);
-	Fish->SetItemDefinition(Definition);
-	Fish->SetRuntimeOwnerActor(Owner);
-	if (!TestTrue(TEXT("写入实际鱼身份"), Fish->InitializeFishFromAuthority(FGuid::NewGuid(), FGuid::NewGuid(), TEXT("TestPlayer"), 1.0))) return false;
 	TArray<FCatInventoryEntry> Entries;
-	FCatInventoryEntry& Entry = Entries.AddDefaulted_GetRef();
-	Entry.Instance = Fish; Entry.StackCount = 1;
-	if (!TestTrue(TEXT("恢复一条真实鱼"), Inventory->ReplaceInventoryEntriesFromAuthority(Entries, 2))) return false;
+	for (int32 Index = 0; Index < 2; ++Index)
+	{
+		auto* Fish = NewObject<UCatFishInventoryItemInstance>(Owner);
+		Fish->SetItemDefinition(Definition); Fish->SetRuntimeOwnerActor(Owner);
+		if (!Fish->InitializeFishFromAuthority(FGuid::NewGuid(), FGuid::NewGuid(), TEXT("TestPlayer"), 1.0)) return false;
+		auto& Entry = Entries.AddDefaulted_GetRef(); Entry.Instance = Fish; Entry.StackCount = 1;
+	}
+	if (!TestTrue(TEXT("写入两条独立实物"), Inventory->ReplaceInventoryEntriesFromAuthority(Entries, 2))) return false;
+	const FGuid FirstId = Entries[0].Instance->GetItemInstanceId();
+	const FGuid SecondId = Entries[1].Instance->GetItemInstanceId();
+	const FGuid RequestId = FGuid::NewGuid();
 	int32 Notifications = 0;
-	int32 Effects = 0;
-	const FDelegateHandle Observer = Inventory->OnInventoryObservedChanged.AddLambda([&]() { ++Notifications; });
-	const FGuid FailedRequest = FGuid::NewGuid();
-	const auto Ready = [](FCatInventoryItemUseResult&) { return ECatDomainCommandError::None; };
-	const auto UnexpectedEffect = [&](FCatInventoryItemUseResult&) { ++Effects; return true; };
-	const FCatInventoryItemUseResult Failed = Inventory->UseItemInstanceFromAuthority(FailedRequest, Fish->GetItemInstanceId(), 1, TEXT("failure"),
-		[&](FCatInventoryItemUseResult&)
-		{
-			const auto Reentrant = Inventory->UseItemInstanceFromAuthority(FailedRequest, Fish->GetItemInstanceId(), 1, TEXT("failure"), Ready, UnexpectedEffect);
-			TestFalse(TEXT("预检中的重入不能提交"), Reentrant.bCommitted);
-			TestTrue(TEXT("预检中的重入有缓存标记"), Reentrant.bTerminalReplay);
-			return ECatDomainCommandError::None;
-		},
-		[&](FCatInventoryItemUseResult&) { ++Effects; return false; });
-	TestFalse(TEXT("拒绝效果不提交"), Failed.bCommitted);
-	TestEqual(TEXT("失败只执行一次效果尝试"), Effects, 1);
-	TestEqual(TEXT("失败不向UI发布临时扣量"), Notifications, 0);
-	CatInventoryInstanceTests::TestPreservesEntry(*this, *Inventory, Fish);
-	const auto FailedReplay = Inventory->UseItemInstanceFromAuthority(FailedRequest, Fish->GetItemInstanceId(), 1, TEXT("failure"), Ready, UnexpectedEffect);
-	TestTrue(TEXT("失败终态可以重放"), FailedReplay.bTerminalReplay);
-	TestEqual(TEXT("失败重放不重试效果"), Effects, 1);
-	const FGuid SuccessRequest = FGuid::NewGuid();
-	const auto Success = Inventory->UseItemInstanceFromAuthority(SuccessRequest, Fish->GetItemInstanceId(), 1, TEXT("success"), Ready, UnexpectedEffect);
-	TestTrue(TEXT("首次成功正式提交"), Success.bCommitted);
-	TestEqual(TEXT("成功只发布一次库存"), Notifications, 1);
-	const auto SuccessReplay = Inventory->UseItemInstanceFromAuthority(SuccessRequest, Fish->GetItemInstanceId(), 1, TEXT("success"), Ready, UnexpectedEffect);
-	TestTrue(TEXT("原格耗尽后仍可重放成功"), SuccessReplay.bReplayedTerminalCommitted);
-	TestEqual(TEXT("成功重放不重复效果"), Effects, 2);
-	TestEqual(TEXT("成功重放不重复通知"), Notifications, 1);
+	const auto Observer = Inventory->OnInventoryObservedChanged.AddLambda([&]()
+	{
+		++Notifications;
+		const auto Replay = Inventory->ConsumeAbilityItemFromAuthority(RequestId, FirstId, 1);
+		TestTrue(TEXT("通知重入读取已确认终态而非再次提交"), !Replay.bCommitted && Replay.bReplayedTerminalCommitted && Replay.bTerminalReplay);
+	});
+	const auto First = Inventory->ConsumeAbilityItemFromAuthority(RequestId, FirstId, 1);
+	TestTrue(TEXT("首次扣除原鱼"), First.bCommitted && !First.bTerminalReplay);
+	TestEqual(TEXT("只通知一次"), Notifications, 1);
+	TestFalse(TEXT("另一玩家提交已消失的鱼失败"), Inventory->ConsumeAbilityItemFromAuthority(FGuid::NewGuid(), FirstId, 1).bCommitted);
+	TestFalse(TEXT("同请求不能改扣另一鱼"), Inventory->ConsumeAbilityItemFromAuthority(RequestId, SecondId, 1).bCommitted);
+	TestTrue(TEXT("同种另一鱼仍在原格"), Inventory->GetInventoryEntryAtSlot(1)->Instance == Entries[1].Instance);
+	TestEqual(TEXT("另一鱼数量不变"), Inventory->GetInventoryEntryAtSlot(1)->StackCount, 1);
 	Inventory->OnInventoryObservedChanged.Remove(Observer);
 	return !HasAnyErrors();
 }

@@ -28,7 +28,7 @@
 #include "Character/CatCharacter.h"
 #include "Data/CatFishDefinition.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "GameFramework/PlayerState.h"
 #include "Inventory/CatFishInventoryItemInstance.h"
@@ -154,7 +154,7 @@ namespace CatItemTooltipNetwork
 				ServerCampName = Camp->GetFName();
 
 				UCatFishDefinition* FishDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatFishDefinition>(35);
-				UCatEquipmentDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(37);
+				UCatEquipmentItemDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentItemDefinition>(37);
 				if (!Test->TestNotNull(TEXT("formal SilvermoonTrout definition resolves"), FishDefinition)
 					|| !Test->TestNotNull(TEXT("formal StarterRodT1 definition resolves"), RodDefinition)) return true;
 				UCatFishInventoryItemInstance* Fish = NewObject<UCatFishInventoryItemInstance>(Camp);

@@ -13,7 +13,7 @@
 #include "Components/PrimitiveComponent.h"
 #include "Environment/CatChumPlacementService.h"
 #include "Equipment/CatEquipmentComponent.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/Integration/CatFishingAimLibrary.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
@@ -1148,7 +1148,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		const auto* Inventory = Character ? Character->GetInventoryComponent() : nullptr;
 		const auto* Entry = Inventory && RequestedScoopItemInstanceId.IsValid()
 			? Inventory->GetInventoryEntryAtSlot(Inventory->FindInventorySlotIndexFromInstanceId(RequestedScoopItemInstanceId)) : nullptr;
-		const auto* Definition = Entry && Entry->Instance ? Cast<UCatEquipmentDefinition>(Entry->Instance->GetItemDefinition()) : nullptr;
+		const auto* Definition = Entry && Entry->Instance ? Cast<UCatEquipmentItemDefinition>(Entry->Instance->GetItemDefinition()) : nullptr;
 		if (!Definition || !Definition->CanServeScoopNet() || Entry->StackCount <= 0)
 		{
 			Result.Error = ECatFishingCommandError::InvalidPayload;
@@ -1634,8 +1634,8 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 	const int32 ChumQuantity = FMath::Max(1, GetDefault<UCatFishingSettings>()->ChumThrowQuantity);
 	const FCatInventoryEntry* Entry = OwnerInventory->GetInventoryEntryAtSlot(UseContext.InventorySlotIndex);
 	const UCatInventoryItemInstance* Instance = Entry ? Entry->Instance : nullptr;
-	const UCatEquipmentDefinition* Definition = Instance
-		? Cast<UCatEquipmentDefinition>(Instance->GetItemDefinition()) : nullptr;
+	const UCatEquipmentItemDefinition* Definition = Instance
+		? Cast<UCatEquipmentItemDefinition>(Instance->GetItemDefinition()) : nullptr;
 	if (!Entry || !Instance || Entry->StackCount < ChumQuantity
 		|| Instance->GetItemInstanceId() != ChumItemInstanceId
 		|| Instance->GetItemId() != ChumItemId

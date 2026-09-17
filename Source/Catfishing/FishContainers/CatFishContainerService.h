@@ -9,7 +9,7 @@ class UCatContainerReplicationComponent;
 class AController;
 class ACatCharacter;
 
-/** 一局服务器鱼容器模块；它是鱼容器数组、捕获创建、转移与消费的唯一写入口。 */
+/** 一局服务器鱼容器登记与持久化服务；直接进食由物品能力访问真实库存，本服务不再执行效果或消费。 */
 UCLASS()
 class CATFISHING_API UCatFishContainerService : public UWorldSubsystem
 {
@@ -48,16 +48,11 @@ public:
 
 
 
-	/** Controller 在服务器上发起直接吃鱼时调用；本服务会用服务器身份重读可触达的鱼护或共享鱼缸，并在容器暂扣期间申请定义 GE，效果成功后提交实物；终态重放不会重复申请效果。 */
-	FCatFishConsumeResult ConsumeReachableFish(AController* RequestingController,
-		ACatCharacter* EatingCharacter, FCatFishConsumeCommand Command);
 
-	/** 暂扣目标鱼后同步执行可选效果；效果失败恢复实物，成功才发布，完整结果参与幂等重放。 */
-	FCatFishConsumeResult ConsumeFish(const FCatFishConsumeCommand& Command,
-		TFunction<FCatDomainCommandResult(const FCatFishInstance&)> FinalizeEffect = {});
 
-	/** 只读查询直接吃鱼请求是否已有鱼容器终态；命中前校验鱼实例签名，不命中时不读取或修改容器。 */
-	bool TryReplayFishConsumeTerminal(const FCatFishConsumeCommand& Command, FCatFishConsumeResult& OutResult) const;
+
+
+
 
 	/** Host teardown 关闭容器写口。 */
 	void CloseCommandsFromAuthority();
@@ -81,10 +76,6 @@ private:
 	/** 为容器发布新快照；组件失效不回滚服务器事务。 */
 	void PublishContainer(FContainerRecord& Record);
 
-	/** 组合身份、操作、聚合 ID 与 RequestId 的稳定私有终态键；原始身份不进入日志或复制。 */
-	static FString MakeTerminalKey(const FString& StableNetId, const TCHAR* Operation, const FGuid& AggregateId,
-		const FGuid& RequestId);
-
 	/** 校验保存的世界鱼容器能否映射到当前地图宿主；它是服务内部步骤，只服务导出自检和恢复入口，不对 Save 暴露第二条流程。 */
 	bool ValidatePersistedWorldFishContainersForRestore(
 		const TArray<FCatPersistentContainerSnapshot>& SavedContainers, FText& OutFailure) const;
@@ -98,12 +89,7 @@ private:
 
 	/** 恢复当前正在创建或销毁的唯一宿主；注册与注销只接受这条生命周期配对，其他宿主的重入会封锁恢复。 */
 	TWeakObjectPtr<AActor> ExpectedRestoreHost;
-	/** 直接吃鱼命令的首次完整终态缓存。 */
-	TMap<FString, FCatFishConsumeResult> ConsumeTerminalCache;
-	/** 直接吃鱼终态的请求载荷签名；防止同身份同容器同 RequestId 改鱼实例后重放已记录终态。 */
-	TMap<FString, FString> ConsumeTerminalPayloadByKey;
 	/** teardown 后永久关闭本 World 的新鱼容器命令。 */
 	bool bCommandsOpen = true;
-	/** 同步效果尚未返回的事务窗口；拒绝消费及恢复重入，避免回滚覆盖其他实物变更。 */
-	bool bFinalizingConsumption = false;
+
 };

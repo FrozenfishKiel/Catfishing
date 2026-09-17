@@ -1,4 +1,4 @@
-#if WITH_DEV_AUTOMATION_TESTS
+﻿#if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
 #include "CatSelectedUseInputTestAccess.h"
@@ -14,7 +14,7 @@
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "AbilitySystem/Fishing/InputAbilities/CatFishingChumAbility.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "Equipment/CatEquipmentUseItemInstances.h"
 #include "Environment/CatChumFieldSettings.h"
@@ -39,6 +39,9 @@
 #include "Items/Fish/CatFishPickupActor.h"
 #include "Components/PrimitiveComponent.h"
 #include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
+#include "AbilitySystem/Items/CatItemAbilityComponent.h"
+#include "Inventory/CatFishInventoryItemInstance.h"
+#include "Growth/CatGrowthComponent.h"
 
 namespace CatInventoryQuickbarRemoteUseTests
 {
@@ -181,11 +184,11 @@ namespace CatInventoryQuickbarRemoteUseTests
 		/** 用两种正式窝料和两根正式鱼竿填充服务器远端背包，并给两根竿写入不同耐久以检测实例串线。 */
 		bool SeedServerInventory()
 		{
-			auto Load = [](const TCHAR* Path) { return LoadObject<UCatEquipmentDefinition>(nullptr, Path); };
-			UCatEquipmentDefinition* A = Load(TEXT("/Game/Catfishing/Data/Equipment/Equip_Chum_Bug.Equip_Chum_Bug"));
-			UCatEquipmentDefinition* B = Load(TEXT("/Game/Catfishing/Data/Equipment/Equip_Chum_FermentedGrain.Equip_Chum_FermentedGrain"));
-			UCatEquipmentDefinition* RodA = Load(TEXT("/Game/Catfishing/Data/Equipment/Equip_Rod_StarterT1.Equip_Rod_StarterT1"));
-			UCatEquipmentDefinition* RodB = Load(TEXT("/Game/Catfishing/Data/Equipment/Equip_Rod_ShopT2.Equip_Rod_ShopT2"));
+			auto Load = [](const TCHAR* Path) { return LoadObject<UCatEquipmentItemDefinition>(nullptr, Path); };
+			UCatEquipmentItemDefinition* A = Load(TEXT("/Game/Catfishing/Data/Equipment/Equip_Chum_Bug.Equip_Chum_Bug"));
+			UCatEquipmentItemDefinition* B = Load(TEXT("/Game/Catfishing/Data/Equipment/Equip_Chum_FermentedGrain.Equip_Chum_FermentedGrain"));
+			UCatEquipmentItemDefinition* RodA = Load(TEXT("/Game/Catfishing/Data/Equipment/Equip_Rod_StarterT1.Equip_Rod_StarterT1"));
+			UCatEquipmentItemDefinition* RodB = Load(TEXT("/Game/Catfishing/Data/Equipment/Equip_Rod_ShopT2.Equip_Rod_ShopT2"));
 			const TArray<FCatInventoryEntry> Empty;
 			if (!Test->TestTrue(TEXT("remote fixture loads two formal chum and two formal rods"), A && B && RodA && RodB)
 				|| !Test->TestTrue(TEXT("remote server backpack resets to four slots"), ServerBackpack->ReplaceInventoryEntriesFromAuthority(Empty, 4))
@@ -425,7 +428,7 @@ namespace CatInventoryQuickbarRemoteUseTests
 		{
 			FCatInventoryEntry Removed;
 			if (!ServerBackpack->RemoveInventoryEntryAtSlotFromAuthority(FirstRodSlot, Removed)) return true;
-			auto* Net=LoadObject<UCatEquipmentDefinition>(nullptr,TEXT("/Game/Catfishing/Data/Equipment/Equip_ScoopNet_Starter.Equip_ScoopNet_Starter"));
+			auto* Net=LoadObject<UCatEquipmentItemDefinition>(nullptr,TEXT("/Game/Catfishing/Data/Equipment/Equip_ScoopNet_Starter.Equip_ScoopNet_Starter"));
 			if (!Test->TestTrue(TEXT("正式抄网填入原空格"), Net && ServerBackpack->AddItemDefinition(Net,1))) return true;
 			ScoopSlot=ServerBackpack->FindFirstInventorySlotIndexByItemId(38);
 			ScoopId=ServerBackpack->GetInventoryEntryAtSlot(ScoopSlot)->Instance->GetItemInstanceId();
@@ -595,24 +598,19 @@ namespace CatInventoryQuickbarRemoteUseTests
 				}
 			return false;
 		}
-		/** 等待 X 的归还和选中格重装备同时复制，不能只凭库存数量或服务器持竿判断成功。 */
+		/** 等待 X 归还原实例；选中格保持选择，不再自动部署第二个世界竿。 */
 		bool VerifyRemotePackedRodSelection()
 		{
 			auto* Fishing = ServerWorld->GetSubsystem<UCatFishingService>();
-			auto* Rod = Fishing ? Fishing->FindRodOperatedBy(ServerCharacter->GetPlayerState()) : nullptr;
-			if (!Rod || Rod->GetPresentationState().RodActorId == RodActorId) return false;
-			const auto& Held = ClientBackpack->GetQuickbarHeldSlot();
-			if (Held.ItemInstanceId != SecondRodId || ClientController->GetSelectedQuickbarSlotIndex() != Held.SlotIndex) return false;
-			for (TActorIterator<ACatFishingRodActor> It(ClientWorld.Get()); It; ++It)
-				if (It->GetPresentationState().RodActorId == Rod->GetPresentationState().RodActorId && It->IsPrimaryOperator(ClientController->PlayerState))
-				{
-					const auto* Entry = ServerBackpack->FindHeldInventoryEntryFromAuthority(SecondRodId);
-					const auto* Instance = Entry ? Cast<UCatEquipmentInventoryItemInstance>(Entry->Instance) : nullptr;
-					Test->TestTrue(TEXT("remote X keeps original rod durability and exact active instance"), Instance && FMath::IsNearlyEqual(Instance->GetRodDurability(), SecondRodDurability));
-					Test->TestEqual(TEXT("remote X immediately holds the selected original rod"), It->GetPresentationState().ItemInstanceId, SecondRodId);
-					return true;
-				}
-			return false;
+			if (Fishing && Fishing->FindRodOperatedBy(ServerCharacter->GetPlayerState())) return false;
+			const int32 Slot = ClientBackpack->FindInventorySlotIndexFromInstanceId(SecondRodId);
+			if (Slot == INDEX_NONE || ClientBackpack->GetQuickbarHeldSlot().ItemInstanceId.IsValid()) return false;
+			const auto* Entry = ServerBackpack->GetInventoryEntryAtSlot(ServerBackpack->FindInventorySlotIndexFromInstanceId(SecondRodId));
+			const auto* Instance = Entry ? Cast<UCatEquipmentInventoryItemInstance>(Entry->Instance) : nullptr;
+			Test->TestTrue(TEXT("收竿归还原实例及耐久"), Instance && FMath::IsNearlyEqual(Instance->GetRodDurability(), SecondRodDurability));
+			Test->TestEqual(TEXT("收竿后保留选中格但不拿出"), ClientController->GetSelectedQuickbarSlotIndex(), Slot);
+			Test->TestNull(TEXT("原世界鱼竿已经收回"), Fishing ? Fishing->FindDeployedRodById(RodActorId) : nullptr);
+			return true;
 		}
 		/** Automation 的断言写入对象。 */
 		FAutomationTestBase* Test = nullptr;
@@ -665,8 +663,95 @@ namespace CatInventoryQuickbarRemoteUseTests
 		bool bPacketSimulationFailed = false;
 	};
 
+
+	/** 真实远端库存进食：服务器创建正式鱼实例，客户端直接调用来源使用入口，核对实物移除与成长复制；不覆盖菜单点击、嘴叼或公共容器。 */
+	class FVerifyRemoteFishUse final : public IAutomationLatentCommand
+	{
+	public:
+		/** 保存断言出口和网络条件；世界、角色和库存仅保存弱引用。 */
+		FVerifyRemoteFishUse(FAutomationTestBase* InTest, bool bInWeak) : Test(InTest), bWeak(bInWeak) {}
+		/** 先等待两端角色准入并在服务器入库一条鱼，再等待客户端实例复制并提交使用；弱网在此次提交前开启。
+		 * 最后等待两端移除和成长复制，核对当前奖励值；超过三十五秒报告阶段，测试不伪造客户端 Spec，也不额外观察长期重复奖励。 */
+		virtual bool Update() override
+		{
+			if (StartedAt == 0.0) StartedAt = FPlatformTime::Seconds();
+			if (FPlatformTime::Seconds() - StartedAt > 35.0)
+			{
+				Test->AddError(FString::Printf(TEXT("Remote fish use timed out Stage=%d"), Stage)); return true;
+			}
+			if (Stage == 0)
+			{
+				for (const FWorldContext& Context : GEngine->GetWorldContexts())
+				{
+					UWorld* World = Context.World();
+					if (!World || Context.WorldType != EWorldType::PIE) continue;
+					if (World->GetNetMode() == NM_ListenServer) ServerWorld = World;
+					if (World->GetNetMode() == NM_Client) ClientWorld = World;
+				}
+				auto* ClientPC = ClientWorld.IsValid() ? Cast<ACatfishingPlayerController>(ClientWorld->GetFirstPlayerController()) : nullptr;
+				if (!ClientPC || !ClientPC->PlayerState || !ServerWorld.IsValid()) return false;
+				ClientCat = Cast<ACatCharacter>(ClientPC->GetPawn());
+				for (TActorIterator<ACatCharacter> It(ServerWorld.Get()); It; ++It)
+					if (It->GetPlayerState() && It->GetPlayerState()->GetPlayerId() == ClientPC->PlayerState->GetPlayerId()) ServerCat = *It;
+				const auto* Mode = ServerWorld->GetAuthGameMode<ACatfishingGameModeBase>();
+				if (!ClientCat.IsValid() || !ServerCat.IsValid() || !Mode || !Mode->CanAcceptGameplayCommand(ServerCat->GetController())) return false;
+				auto* Definition = LoadObject<UCatFishDefinition>(nullptr, TEXT("/Game/Catfishing/Data/Fish/Fish_LittleSilver.Fish_LittleSilver"));
+				if (!Test->TestNotNull(TEXT("正式可食用鱼定义"), Definition)) return true;
+				const double Weight = 1.0;
+				ExpectedGain = FMath::FloorToInt(Definition->ResolveEatingExperiencePoints(Weight));
+				BeforeExperience = ServerCat->GetGrowthComponent()->GetSnapshot().TotalExperience;
+				auto* Fish = NewObject<UCatFishInventoryItemInstance>(ServerCat.Get());
+				Fish->SetItemDefinition(Definition); Fish->SetRuntimeOwnerActor(ServerCat.Get());
+				if (!Fish->InitializeFishFromAuthority(FGuid::NewGuid(), FGuid::NewGuid(), TEXT("RemoteFoodFixture"), Weight)) return true;
+				FishId = Fish->GetItemInstanceId();
+				if (!Test->TestTrue(TEXT("加入唯一实物鱼"), ServerCat->GetInventoryComponent()->AddItemInstance(Fish, 1))) return true;
+				Stage = 1; return false;
+			}
+			if (Stage == 1)
+			{
+				auto* Inventory = ClientCat->GetInventoryComponent();
+				if (Inventory->FindInventorySlotIndexFromInstanceId(FishId) == INDEX_NONE) return false;
+				if (bWeak)
+				{
+					FPacketSimulationSettings Simulation; Simulation.PktLag = 120; Simulation.PktLoss = 5;
+					ServerWorld->GetNetDriver()->SetPacketSimulationSettings(Simulation);
+					ClientWorld->GetNetDriver()->SetPacketSimulationSettings(Simulation);
+					Test->TestEqual(TEXT("服务器实际启用丢包"), ServerWorld->GetNetDriver()->PacketSimulationSettings.PktLoss, 5);
+					Test->TestEqual(TEXT("客户端实际启用延迟"), ClientWorld->GetNetDriver()->PacketSimulationSettings.PktLag, 120);
+				}
+				auto* Items = ClientCat->FindComponentByClass<UCatItemAbilityComponent>();
+				if (!Test->TestTrue(TEXT("远端接受原鱼使用意图"), Items && Items->RequestUse(Inventory, FishId, FGuid::NewGuid()))) return true;
+				Stage = 2; return false;
+			}
+			if (ServerCat->GetInventoryComponent()->FindInventorySlotIndexFromInstanceId(FishId) != INDEX_NONE
+				|| ClientCat->GetInventoryComponent()->FindInventorySlotIndexFromInstanceId(FishId) != INDEX_NONE) return false;
+			const int32 Expected = BeforeExperience + ExpectedGain;
+			if (ClientCat->GetGrowthComponent()->GetSnapshot().TotalExperience != Expected) return false;
+			Test->TestEqual(TEXT("服务器最后一条鱼只奖励一次"), ServerCat->GetGrowthComponent()->GetSnapshot().TotalExperience, Expected);
+			Test->TestEqual(TEXT("客户端收到权威成长"), ClientCat->GetGrowthComponent()->GetSnapshot().TotalExperience, Expected);
+			return true;
+		}
+	private:
+		/** 当前测试的断言接收者。 */
+		FAutomationTestBase* Test;
+		/** 本轮是否显式启用延迟与丢包。 */
+		bool bWeak = false;
+		/** 异步场景的当前阶段；每个输入只执行一次。 */
+		int32 Stage = 0;
+		/** 超时计时起点，单位为平台秒。 */
+		double StartedAt = 0.0;
+		/** 操作前权威累计经验和这条正式鱼的预期经验。 */
+		int32 BeforeExperience = 0, ExpectedGain = 0;
+		/** 两端需要匹配的稳定实物身份。 */
+		FGuid FishId;
+		/** 当前 PIE 的服务器与远端世界，退出后弱引用失效。 */
+		TWeakObjectPtr<UWorld> ServerWorld, ClientWorld;
+		/** 同一网络玩家在两端的角色。 */
+		TWeakObjectPtr<ACatCharacter> ServerCat, ClientCat;
+	};
+
 	/** 复用相同 PIE 拓扑和状态机排入正常或弱网用例；网络参数只在状态机确认初始库存同步后写入 Driver。 */
-	bool QueueRemoteSelectedUseScenario(FAutomationTestBase* Test, const bool bSimulateWeakNetwork, const bool bToolsOnly=false, const bool bTransferRod=false)
+	bool QueueRemoteSelectedUseScenario(FAutomationTestBase* Test, const bool bSimulateWeakNetwork, const bool bToolsOnly=false, const bool bTransferRod=false, const bool bFishUse=false)
 	{
 		if (!Test->TestTrue(TEXT("remote quickbar selected-use test requires idle editor"), GEditor && GEngine && !GEditor->PlayWorld)) return false;
 		const TSharedRef<FRestoreSettings> Restore = MakeShared<FRestoreSettings>();
@@ -676,7 +761,8 @@ namespace CatInventoryQuickbarRemoteUseTests
 			if (Driver.DefName == TEXT("GameNetDriver")) { Driver.DriverClassName = TEXT("/Script/OnlineSubsystemUtils.IpNetDriver"); Driver.DriverClassNameFallback = Driver.DriverClassName; }
 		FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShareable(new FEditorLoadMap(TEXT("/Game/Catfishing/Maps/TestMap"))));
 		FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShareable(new FStartPIECommand(false)));
-		FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FVerifyRemoteSelectedUse>(Test, bSimulateWeakNetwork, bToolsOnly, bTransferRod));
+		if (bFishUse) FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FVerifyRemoteFishUse>(Test, bSimulateWeakNetwork));
+		else FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<FVerifyRemoteSelectedUse>(Test, bSimulateWeakNetwork, bToolsOnly, bTransferRod));
 		FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShareable(new FEndPlayMapCommand()));
 		FAutomationTestFramework::Get().EnqueueLatentCommand(Restore);
 		return true;
@@ -733,5 +819,22 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatToolsLeftClickWeakNetworkTest,
 bool FCatToolsLeftClickWeakNetworkTest::RunTest(const FString& Parameters)
 {
 	return CatInventoryQuickbarRemoteUseTests::QueueRemoteSelectedUseScenario(this,true,true);
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatRemoteFishUseTest,
+	"Catfishing.Editor.Inventory.Food.RemoteExactSource",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+// 排入正常网络 PIE：通过正式资产、来源授予和 GAS TargetData 验证指定鱼消费与成长复制；收尾交给公共场景队列。
+bool FCatRemoteFishUseTest::RunTest(const FString& Parameters)
+{
+	return CatInventoryQuickbarRemoteUseTests::QueueRemoteSelectedUseScenario(this, false, false, false, true);
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatRemoteFishUseWeakTest,
+	"Catfishing.Editor.Inventory.Food.RemoteExactSourceWeakNetwork",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+// 排入弱网 PIE：初始库存同步后启用双端 120 毫秒延迟和 5% 丢包，再核对同一来源的消费与成长复制。
+bool FCatRemoteFishUseWeakTest::RunTest(const FString& Parameters)
+{
+	return CatInventoryQuickbarRemoteUseTests::QueueRemoteSelectedUseScenario(this, true, false, false, true);
 }
 #endif

@@ -12,7 +12,7 @@
 #include "Environment/CatWaterQuerySubsystem.h"
 #include "Character/CatCharacter.h"
 #include "Equipment/CatEquipmentComponent.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Inventory/CatInventorySettings.h"
 #include "Kismet/GameplayStatics.h"
@@ -158,7 +158,7 @@ float UCatFishingAimLibrary::ChargeAlphaFromHeldSeconds(const float HeldSeconds)
 }
 
 // 精确实例沿用统一抄网距离；定义只证明该物品具备抄网能力，不恢复已退役的逐网距离上限。
-bool UCatFishingAimLibrary::TryResolveScoopReach(const UCatEquipmentDefinition* ScoopDefinition,
+bool UCatFishingAimLibrary::TryResolveScoopReach(const UCatEquipmentItemDefinition* ScoopDefinition,
 	double& OutReachCentimeters)
 {
 	OutReachCentimeters = 0.0;

@@ -1,8 +1,10 @@
 #include "CatFishUseAuthoringLibrary.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Data/CatFishDefinition.h"
-#include "Inventory/Fragments/CatConsumableEffectFragment.h"
+#include "Inventory/Fragments/CatItemUseFragment.h"
 #include "AbilitySystem/Effects/CatFishExperienceEffect.h"
+#include "AbilitySystem/Items/CatItemGameplayAbility.h"
+#include "Animation/AnimMontage.h"
 #include "Misc/PackageName.h"
 #include "UObject/SavePackage.h"
 
@@ -23,17 +25,20 @@ bool UCatFishUseAuthoringLibrary::MigrateExistingFishUseEffects()
 	{
 		UCatFishDefinition* Definition = Cast<UCatFishDefinition>(Asset.GetAsset());
 		if (!Definition || !Definition->IsEdible()) continue;
-		UCatConsumableEffectFragment* Fragment = Definition->FindFragment<UCatConsumableEffectFragment>();
-		if (Fragment)
-		{
-			if (!Fragment->IsRuntimeReady() || Fragment->ConsumeCount != 1) return false;
-			continue;
-		}
+		UCatItemUseFragment* Fragment = Definition->FindFragment<UCatItemUseFragment>();
 		Definition->Modify();
-		Fragment = NewObject<UCatConsumableEffectFragment>(Definition, NAME_None, RF_Transactional);
-		Fragment->EffectClass = UCatGE_FishExperience::StaticClass();
+		Definition->Fragments.RemoveAll([](const auto& Candidate) { return !IsValid(Candidate); });
+		if (!Fragment)
+		{
+			Fragment = NewObject<UCatItemUseFragment>(Definition, NAME_None, RF_Transactional);
+			Definition->Fragments.Add(Fragment);
+		}
+		Fragment->AbilityClass = UCatGA_ConsumeFish::StaticClass();
+		Fragment->Effects = { UCatGE_FishExperience::StaticClass() };
 		Fragment->ConsumeCount = 1;
-		Definition->Fragments.Add(Fragment);
+		Fragment->CommitDelay = 1.0f;
+		Fragment->Montage = LoadObject<UAnimMontage>(nullptr, TEXT("/Game/Catfishing/Animation/BodyAction/AM_BodyAction_ConsumeFish.AM_BodyAction_ConsumeFish"));
+		if (!Fragment->IsRuntimeReady()) return false;
 		Definition->MarkPackageDirty();
 		FSavePackageArgs Save;
 		Save.TopLevelFlags = RF_Public | RF_Standalone;

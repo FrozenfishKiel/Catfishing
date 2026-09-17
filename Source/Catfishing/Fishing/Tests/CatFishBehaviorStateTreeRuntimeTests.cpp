@@ -1,4 +1,6 @@
 #include "Inventory/CatInventorySettings.h"
+#include "Equipment/CatEquippedDefinition.h"
+#include "Inventory/Fragments/CatEquippableItemFragment.h"
 #include "Inventory/Tests/CatItemCatalogTestFixture.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Bait.h"
@@ -22,7 +24,7 @@
 #include "Environment/CatWaterQuerySubsystem.h"
 #include "Environment/Tests/CatWaterTestFixtures.h"
 #include "Equipment/CatEquipmentComponent.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingSession.h"
@@ -222,10 +224,10 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 	FCatItemCatalogTestFixture Catalog(false);
 	TGuardValue<int32> SavedSlots(EquipmentSettings->PlayerInventorySlotCapacity, 12);
 	TGuardValue<int32> SavedStacks(EquipmentSettings->DefaultQuantityStackCapacity, 20);
-	TArray<TStrongObjectPtr<UCatEquipmentDefinition>> Definitions;
+	TArray<TStrongObjectPtr<UCatEquipmentItemDefinition>> Definitions;
 	const auto AddDefinition = [&](const int32 Id, const CatFishingTest::EFixtureKind Kind)
 	{
-		UCatEquipmentDefinition* Definition = NewObject<UCatEquipmentDefinition>();
+		UCatEquipmentItemDefinition* Definition = NewObject<UCatEquipmentItemDefinition>();
 		Definitions.Emplace(Definition);
 		Definition->ItemId = Id;
 		Definition->FunctionalRouteId = Definition->LoadoutSlotId = FName(*FString::FromInt(Id));
@@ -234,16 +236,20 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		Catalog.Add(Definition);
 		return Definition;
 	};
-	UCatEquipmentDefinition* RodDefinition = AddDefinition(1357733, CatFishingTest::EFixtureKind::Rod);
+	UCatEquipmentItemDefinition* RodDefinition = AddDefinition(1357733, CatFishingTest::EFixtureKind::Rod);
 	CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->MaximumRodDurability = 1000.0;
 	CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->MaximumLineLengthCentimeters = 1500.0;
 	CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->HighTensionWearMultiplier = 1.0;
-	RodDefinition->UseActorClass = ACatFishingRodActor::StaticClass();
-	UCatEquipmentDefinition* BaitDefinition = AddDefinition(1391318, CatFishingTest::EFixtureKind::Bait);
+	// 测试资产沿正式组合关系配置世界表现，不再把装备类写到库存定义。
+		auto* RodDefinitionEquippable = NewObject<UCatEquippableItemFragment>(RodDefinition);
+		RodDefinitionEquippable->EquipmentDefinition = NewObject<UCatEquippedDefinition>(RodDefinition);
+		RodDefinitionEquippable->EquipmentDefinition->ActorClass = ACatFishingRodActor::StaticClass();
+		RodDefinition->Fragments.Add(RodDefinitionEquippable);
+	UCatEquipmentItemDefinition* BaitDefinition = AddDefinition(1391318, CatFishingTest::EFixtureKind::Bait);
 	BaitDefinition->bRunConsumable = true;
 	CatFishingTest::Fragment<UCatEquipmentFragment_Bait>(BaitDefinition)->BiteRateMultiplier = CatFishingTest::Fragment<UCatEquipmentFragment_Bait>(BaitDefinition)->MinimumBiteDelayMultiplier = 1.0;
 	CatFishingTest::Fragment<UCatEquipmentFragment_Float>(AddDefinition(1821885, CatFishingTest::EFixtureKind::Float))->MaximumCastDistanceCentimeters = 1000.0;
-	for (const TStrongObjectPtr<UCatEquipmentDefinition>& Definition : Definitions)
+	for (const TStrongObjectPtr<UCatEquipmentItemDefinition>& Definition : Definitions)
 		if (!TestTrue(TEXT("生产付款夹具的装备定义完整"), Definition->IsRuntimeDefinitionReady())) return false;
 
 	double PreviousFishDrain = 0.0;

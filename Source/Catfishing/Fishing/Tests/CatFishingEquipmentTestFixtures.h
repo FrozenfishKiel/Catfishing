@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
@@ -13,7 +13,7 @@ namespace CatFishingTest
 {
 	/** Test fixture definitions explicitly own the same fragments as production assets. */
 	template<class T>
-	T* Fragment(UCatEquipmentDefinition* Definition)
+	T* Fragment(UCatEquipmentItemDefinition* Definition)
 	{
 		if (T* Existing = Definition->FindFragment<T>()) return Existing;
 		T* Created = NewObject<T>(Definition);
@@ -21,20 +21,20 @@ namespace CatFishingTest
 		return Created;
 	}
 	template<class T>
-	const T* Fragment(const UCatEquipmentDefinition* Definition)
+	const T* Fragment(const UCatEquipmentItemDefinition* Definition)
 	{
 		return Definition->FindFragment<T>();
 	}
 
 	enum class EFixtureKind { Rod, Bait, Float, ScoopNet, Driftwood };
-	inline void Configure(UCatEquipmentDefinition* Definition, EFixtureKind Kind)
+	inline void Configure(UCatEquipmentItemDefinition* Definition, EFixtureKind Kind)
 	{
 		switch (Kind)
 		{
-		case EFixtureKind::Rod: Definition->LoadoutSlotId = UCatEquipmentDefinition::FishingRodLoadoutSlotId(); Fragment<UCatEquipmentFragment_Rod>(Definition); break;
-		case EFixtureKind::Bait: Definition->LoadoutSlotId = UCatEquipmentDefinition::FishingBaitLoadoutSlotId(); Fragment<UCatEquipmentFragment_Bait>(Definition); break;
-		case EFixtureKind::Float: Definition->LoadoutSlotId = UCatEquipmentDefinition::FishingFloatLoadoutSlotId(); Fragment<UCatEquipmentFragment_Float>(Definition); break;
-		case EFixtureKind::ScoopNet: Definition->LoadoutSlotId = UCatEquipmentDefinition::ScoopNetLoadoutSlotId(); Fragment<UCatEquipmentFragment_Scoop>(Definition); break;
+		case EFixtureKind::Rod: Definition->LoadoutSlotId = UCatEquipmentItemDefinition::FishingRodLoadoutSlotId(); Fragment<UCatEquipmentFragment_Rod>(Definition); break;
+		case EFixtureKind::Bait: Definition->LoadoutSlotId = UCatEquipmentItemDefinition::FishingBaitLoadoutSlotId(); Fragment<UCatEquipmentFragment_Bait>(Definition); break;
+		case EFixtureKind::Float: Definition->LoadoutSlotId = UCatEquipmentItemDefinition::FishingFloatLoadoutSlotId(); Fragment<UCatEquipmentFragment_Float>(Definition); break;
+		case EFixtureKind::ScoopNet: Definition->LoadoutSlotId = UCatEquipmentItemDefinition::ScoopNetLoadoutSlotId(); Fragment<UCatEquipmentFragment_Scoop>(Definition); break;
 		case EFixtureKind::Driftwood: Definition->LoadoutSlotId = NAME_None; break;
 		}
 	}

@@ -26,7 +26,7 @@
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "Framework/Game/CatfishingPlayerController.h"

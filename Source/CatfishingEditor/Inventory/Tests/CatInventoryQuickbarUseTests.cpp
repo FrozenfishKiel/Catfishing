@@ -11,7 +11,7 @@
 #include "Character/CatCharacter.h"
 #include "AbilitySystem/Fishing/InputAbilities/CatFishingChumAbility.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Inventory/CatBackPackComponent.h"
 #include "Inventory/CatInventoryItemInstance.h"
@@ -144,13 +144,13 @@ namespace CatInventoryQuickbarUseTests
 		/** 清空测试 PIE 背包后装入两种正式窝料和两根正式鱼竿；四个实例让本回归只依赖真实资产及四格容量。 */
 		bool SeedFormalInventory()
 		{
-			UCatEquipmentDefinition* BugChum = LoadObject<UCatEquipmentDefinition>(nullptr,
+			UCatEquipmentItemDefinition* BugChum = LoadObject<UCatEquipmentItemDefinition>(nullptr,
 				TEXT("/Game/Catfishing/Data/Equipment/Equip_Chum_Bug.Equip_Chum_Bug"));
-			UCatEquipmentDefinition* GrainChum = LoadObject<UCatEquipmentDefinition>(nullptr,
+			UCatEquipmentItemDefinition* GrainChum = LoadObject<UCatEquipmentItemDefinition>(nullptr,
 				TEXT("/Game/Catfishing/Data/Equipment/Equip_Chum_FermentedGrain.Equip_Chum_FermentedGrain"));
-			UCatEquipmentDefinition* StarterRod = LoadObject<UCatEquipmentDefinition>(nullptr,
+			UCatEquipmentItemDefinition* StarterRod = LoadObject<UCatEquipmentItemDefinition>(nullptr,
 				TEXT("/Game/Catfishing/Data/Equipment/Equip_Rod_StarterT1.Equip_Rod_StarterT1"));
-			UCatEquipmentDefinition* ShopRod = LoadObject<UCatEquipmentDefinition>(nullptr,
+			UCatEquipmentItemDefinition* ShopRod = LoadObject<UCatEquipmentItemDefinition>(nullptr,
 				TEXT("/Game/Catfishing/Data/Equipment/Equip_Rod_ShopT2.Equip_Rod_ShopT2"));
 			if (!Test->TestTrue(TEXT("two formal chum and two formal rod definitions load"),
 				BugChum && GrainChum && StarterRod && ShopRod))

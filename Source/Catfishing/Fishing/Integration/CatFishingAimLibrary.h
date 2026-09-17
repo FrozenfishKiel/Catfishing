@@ -9,7 +9,7 @@ class ACatCharacter;
 class AController;
 class APlayerController;
 class UCatEquipmentComponent;
-class UCatEquipmentDefinition;
+class UCatEquipmentItemDefinition;
 
 /** 抛竿/打窝瞄准的公共数学；服务器裁决和客户端预览调用同一组函数，保证预览线与真实落点一致。 */
 UCLASS()
@@ -59,7 +59,7 @@ public:
 	 * 解析抄网唯一有效长度：玩家必须选中完整 ScoopNet；有效长度只读全局 Fishing 射程。
 	 * 服务器裁决与 debug 显示共用此入口，避免无装备时仍显示绿色范围。
 	 */
-	static bool TryResolveScoopReach(const UCatEquipmentDefinition* ScoopDefinition, double& OutReachCentimeters);
+	static bool TryResolveScoopReach(const UCatEquipmentItemDefinition* ScoopDefinition, double& OutReachCentimeters);
 
 	/**
 	 * 解析抄网唯一有效朝向：只使用 Character Actor 的水平前向，不读取 Controller/Camera 朝向。

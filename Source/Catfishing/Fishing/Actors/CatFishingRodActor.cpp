@@ -2,7 +2,9 @@
 
 #include "Character/CatCharacter.h"
 #include "Equipment/CatEquipmentComponent.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
+#include "Equipment/CatEquippedDefinition.h"
+#include "Equipment/CatEquippedInstance.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
@@ -33,6 +35,7 @@ ACatFishingRodActor::ACatFishingRodActor()
 {
 	// Transform 仍由服务器权威；原生 Tick 只在 Held 姿态启用，用控制器视角和 Pawn 运动更新规范握把。
 	bReplicates = true;
+	bReplicateUsingRegisteredSubObjectList = true;
 	SetReplicateMovement(true);
 	bAlwaysRelevant = false; // 不强制全图相关性，交给引擎按距离/视锥裁剪
 	bNetUseOwnerRelevancy = false;
@@ -235,19 +238,23 @@ bool ACatFishingRodActor::SetPrimaryOperatorFromAuthority(APlayerState* PlayerOr
 
 void ACatFishingRodActor::RevokeOperatorAbilityGrantFromAuthority(APlayerState* PlayerState)
 {
-	// 回收流程：只按本竿保存的句柄回收，不扫描 ASC 的同类能力，避免交接时误删另一根竿或别的装备来源。
+	// 回收流程：先移出该操作员的装备对象，再让对象撤销原 ASC 的独占授予，最后解除复制登记；不扫描或删除其他装备的同类能力。
 	if (!PlayerState) return;
 	// 先移出记录再执行 GAS 撤销；结束委托即使重入，也不能再次回收同一批句柄。
-	FCatFishingRodAbilityGrant Grant;
+	TObjectPtr<UCatEquippedInstance> Grant;
 	if (!OperatorAbilityGrants.RemoveAndCopyValue(PlayerState, Grant)) return;
-	if (UCatAbilitySystemComponent* ASC = Grant.AbilitySystem.Get()) Grant.Handles.TakeFromAbilitySystem(ASC);
+	if (!Grant) return;
+	const FString OriginalAbilitySystem = GetNameSafe(Grant->GetAbilitySystem());
+	Grant->Unequip();
+	RemoveReplicatedSubObject(Grant);
 	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_rod_operator_abilities_revoked RodActorId=%s OriginalASC=%s World=%s NetMode=%d Authority=1"),
-		*PresentationState.RodActorId.ToString(), *GetNameSafe(Grant.AbilitySystem.Get()), *GetNameSafe(GetWorld()), GetNetMode());
+		*PresentationState.RodActorId.ToString(), *OriginalAbilitySystem, *GetNameSafe(GetWorld()), GetNetMode());
 }
 
 void ACatFishingRodActor::ReconcileOperatorAbilityGrantsFromAuthority()
 {
-	// 操作能力对齐流程：先从服务解析这根已部署竿当前保管者的原始实例，再按当前 roster 为实际操作员授予定义资产列出的集合。
+	// 操作能力对齐流程：未部署、断竿或来源失效时回收全部装备；否则从服务取得当前保管者的原物品，并按操作位移除退出者。
+	// 同一操作员换 ASC 时先撤销旧装备，再创建并登记新的复制子对象；Equip 以装备对象作为能力来源，失败则解除登记。
 	if (!HasAuthority()) return;
 	if (!PresentationState.bDeployed || PresentationState.bBroken)
 	{
@@ -259,8 +266,8 @@ void ACatFishingRodActor::ReconcileOperatorAbilityGrantsFromAuthority()
 	UCatFishingService* Service = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
 	UCatEquipmentComponent* Equipment = Service ? Service->ResolveRodEquipmentFromAuthority(this) : nullptr;
 	UCatEquipmentInventoryItemInstance* SourceInstance = Equipment ? Equipment->ResolveDeployedRodItemInstanceFromAuthority(PresentationState.ItemInstanceId) : nullptr;
-	const UCatEquipmentDefinition* Definition = SourceInstance ? Cast<UCatEquipmentDefinition>(SourceInstance->GetItemDefinition()) : nullptr;
-	if (!Definition)
+	const UCatEquipmentItemDefinition* Definition = SourceInstance ? Cast<UCatEquipmentItemDefinition>(SourceInstance->GetItemDefinition()) : nullptr;
+	if (!Definition || !Definition->GetEquipmentDefinition())
 	{
 		UE_CLOG(GetOperatorCount() > 0, LogCatFishing, Warning, TEXT("Event=fishing_rod_operator_abilities_rejected RodActorId=%s ItemInstanceId=%s Reason=SourceInstanceUnavailable World=%s NetMode=%d Authority=1 LocalRole=%d"),
 			*PresentationState.RodActorId.ToString(), *PresentationState.ItemInstanceId.ToString(), *GetNameSafe(GetWorld()), int32(GetNetMode()), int32(GetLocalRole()));
@@ -278,29 +285,20 @@ void ACatFishingRodActor::ReconcileOperatorAbilityGrantsFromAuthority()
 		if (!Player) continue;
 		ACatCharacter* Character = Cast<ACatCharacter>(Player->GetPawn());
 		UCatAbilitySystemComponent* ASC = Character ? Character->GetCatAbilitySystemComponent() : nullptr;
-		if (const FCatFishingRodAbilityGrant* ExistingGrant = OperatorAbilityGrants.Find(Player))
+		if (const auto* ExistingGrant = OperatorAbilityGrants.Find(Player))
 		{
-			if (ASC && ExistingGrant->AbilitySystem.Get() == ASC) continue;
+			if (ASC && *ExistingGrant && (*ExistingGrant)->GetAbilitySystem() == ASC) continue;
 			RevokeOperatorAbilityGrantFromAuthority(Player);
 		}
 		if (!ASC) continue;
-		FCatGrantedAbilitySetHandles Handles;
-		bool bSucceeded = true;
-		for (const TSoftObjectPtr<UCatAbilitySet>& SetRef : Definition->AbilitySetsToGrant)
+		auto* Equipped = NewObject<UCatEquippedInstance>(this);
+		AddReplicatedSubObject(Equipped);
+		if (Equipped->Equip(ASC, SourceInstance, Definition->GetEquipmentDefinition()))
 		{
-			const UCatAbilitySet* Set = SetRef.LoadSynchronous();
-			FCatGrantedAbilitySetHandles SetHandles;
-			if (!Set || !Set->GiveToAbilitySystem(ASC, SetHandles, SourceInstance)) { SetHandles.TakeFromAbilitySystem(ASC); bSucceeded = false; break; }
-			Handles.Append(MoveTemp(SetHandles));
-		}
-		if (bSucceeded && Handles.HasAnyGrantedHandle())
-		{
-			FCatFishingRodAbilityGrant& Grant = OperatorAbilityGrants.Add(Player);
-			Grant.AbilitySystem = ASC;
-			Grant.Handles = MoveTemp(Handles);
+			OperatorAbilityGrants.Add(Player, Equipped);
 			UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_rod_operator_abilities_granted RodActorId=%s PlayerId=%d ItemInstanceId=%s Result=Committed"), *PresentationState.RodActorId.ToString(), Player->GetPlayerId(), *PresentationState.ItemInstanceId.ToString());
 		}
-		else Handles.TakeFromAbilitySystem(ASC);
+		else RemoveReplicatedSubObject(Equipped);
 	}
 }
 void ACatFishingRodActor::OnRep_GripCanonicalLocalTransform()

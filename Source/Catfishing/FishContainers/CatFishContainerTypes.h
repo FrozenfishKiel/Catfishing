@@ -165,44 +165,6 @@ struct FCatFishTransferCommand
 
 };
 
-/** 直接吃鱼的命令；地面鱼护要求捕获者本人，共享鱼缸允许当前 Active 玩家但仍由服务器身份写入。 */
-USTRUCT(BlueprintType)
-struct FCatFishConsumeCommand
-{
-	GENERATED_BODY()
-
-	/** RequestId 与服务器身份。 */
-	UPROPERTY(BlueprintReadWrite)
-	FCatDomainCommandContext Context;
-
-	/** 要直接吃掉的一条实物鱼。 */
-	UPROPERTY(BlueprintReadWrite)
-	FGuid FishInstanceId;
-
-	/** 鱼当前所在的地面鱼护或共享鱼缸。 */
-	UPROPERTY(BlueprintReadWrite)
-	FGuid SourceContainerId;
-};
-
-/** 直接进食的不可变鱼容器结果；成功后鱼已从容器移除，Character 才能消费定义效果。 */
-USTRUCT(BlueprintType)
-struct FCatFishConsumeResult
-{
-	GENERATED_BODY()
-
-	/** 公共命令终态；Revision 只回传容器移除后的快照序号。 */
-	UPROPERTY(BlueprintReadOnly)
-	FCatDomainCommandResult Command;
-
-	/** 实物鱼移除后提交到 Condition/Growth 的身体终态；用于区分容器成功和身体效果失败。 */
-	UPROPERTY(BlueprintReadOnly)
-	FCatDomainCommandResult Body;
-
-	/** 已被不可逆吃掉的鱼事实；拒绝时保持默认。 */
-	UPROPERTY(BlueprintReadOnly)
-	FCatFishInstance Fish;
-};
-
 /** 捕获 Compare-and-Commit 的唯一不可变结果；Fishing、Collection 与 Imprint 只消费这份已提交事实。 */
 USTRUCT(BlueprintType)
 struct FCatCaptureCommittedResult

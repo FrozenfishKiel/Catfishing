@@ -9,6 +9,8 @@
 class UAbilitySystemComponent;
 class UCatAbilitySystemComponent;
 class UCatSurvivalAttributeSet;
+class UCatGrowthAttributeSet;
+class UCatItemAbilityComponent;
 class UCatConditionComponent;
 class UCatConditionPresentationComponent;
 class UCatEquipmentComponent;
@@ -230,6 +232,11 @@ private:
 	/** 猫身体唯一 Survival 属性集；构造期显式交给 ASC 持有 FishingStrength、FightStamina 和 MaxFightStamina。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Survival", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatSurvivalAttributeSet> SurvivalAttributes;
+
+	/** 成长 GE 的临时输入；ASC 持有它，经验余额仍只存在 Growth 快照中。 */
+	UPROPERTY() TObjectPtr<UCatGrowthAttributeSet> GrowthAttributes;
+	/** 物品来源能力的授予接线；随身体销毁，不保存另一份库存。 */
+	UPROPERTY(VisibleAnywhere, Category="Abilities") TObjectPtr<UCatItemAbilityComponent> ItemAbilities;
 
 	/** 猫身体唯一离散状态组件；复制 Wet/Downed/Recovery，数值仍由 Survival AttributeSet 拥有。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Survival", meta = (AllowPrivateAccess = "true"))

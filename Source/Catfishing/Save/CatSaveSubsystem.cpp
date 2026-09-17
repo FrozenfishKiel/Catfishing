@@ -14,7 +14,7 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "Equipment/CatEquipmentComponent.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "GameFramework/PlayerController.h"
@@ -173,7 +173,7 @@ namespace
 			}
 			const UCatInventoryItemDefinition* InventoryDefinition =
 				InventorySettings->FindRuntimeDefinition(Slot.ItemId);
-			const UCatEquipmentDefinition* EquipmentDefinition = Cast<UCatEquipmentDefinition>(InventoryDefinition);
+			const UCatEquipmentItemDefinition* EquipmentDefinition = Cast<UCatEquipmentItemDefinition>(InventoryDefinition);
 			const int32 StackLimit = InventoryDefinition != nullptr ? InventoryDefinition->GetMaxStackCount() : 0;
 			if (!Slot.ItemInstanceId.IsValid() || SeenInstanceIds.Contains(Slot.ItemInstanceId) || !InventoryDefinition
 				|| !InventoryDefinition->IsInventoryRuntimeDefinitionReady() || Slot.Quantity > StackLimit)
@@ -358,20 +358,20 @@ namespace
 			return InstanceId.IsValid() && InventorySlots.ContainsByPredicate(
 				[ItemId, InstanceId, ExpectedSlotId, InventorySettings](const FCatSavedRunInventorySlot& Slot)
 				{
-					const UCatEquipmentDefinition* Definition =
-						Cast<UCatEquipmentDefinition>(InventorySettings->FindRuntimeDefinition(Slot.ItemId));
+					const UCatEquipmentItemDefinition* Definition =
+						Cast<UCatEquipmentItemDefinition>(InventorySettings->FindRuntimeDefinition(Slot.ItemId));
 					return Slot.ItemId == ItemId && Slot.ItemInstanceId == InstanceId && Definition
 						&& Definition->CanServeFishingLoadoutSlot(ExpectedSlotId);
 				});
 		};
 		if (!HasSelectedInstance(Snapshot.RodItemId, Snapshot.RodItemInstanceId,
-				UCatEquipmentDefinition::FishingRodLoadoutSlotId())
+				UCatEquipmentItemDefinition::FishingRodLoadoutSlotId())
 			|| !HasSelectedInstance(Snapshot.BaitItemId, Snapshot.BaitItemInstanceId,
-				UCatEquipmentDefinition::FishingBaitLoadoutSlotId())
+				UCatEquipmentItemDefinition::FishingBaitLoadoutSlotId())
 			|| !HasSelectedInstance(Snapshot.FloatItemId, Snapshot.FloatItemInstanceId,
-				UCatEquipmentDefinition::FishingFloatLoadoutSlotId())
+				UCatEquipmentItemDefinition::FishingFloatLoadoutSlotId())
 			|| !HasSelectedInstance(Snapshot.ScoopNetItemId, Snapshot.ScoopNetItemInstanceId,
-				UCatEquipmentDefinition::ScoopNetLoadoutSlotId()))
+				UCatEquipmentItemDefinition::ScoopNetLoadoutSlotId()))
 		{
 			OutFailure = FText::FromString(TEXT("存档钓具选择没有指向同一库存中的合法实例。"));
 			return false;
@@ -1371,7 +1371,7 @@ bool UCatSaveSubsystem::BuildActiveRunSaveGame(UCatRunSaveGame& OutSaveGame, FTe
 }
 
 // 载荷验证流程：
-// 1. 先核对格式版本、槽归属、显示字段和数值边界；只接受当前格式或对象生命周期明确迁移过的旧档。
+// 1. 先核对格式版本、槽归属、显示字段和数值边界；只接受当前格式；旧开发档保留文件但拒绝恢复。
 // 2. 新建空槽只能没有世界快照和玩家快照，正式世界快照必须带一个可反序列化的本机玩家状态。
 // 3. 玩家域分别验证随身库存和钓具选择，恢复阶段也按 InventoryComponent、Equipment 的顺序消费。
 // 4. 最后继续检查营地和世界鱼实例唯一性；领域容量、定义和容器键仍会由对应恢复入口内部裁决。
@@ -1379,9 +1379,14 @@ bool UCatSaveSubsystem::ValidateLoadedRunSaveGame(const UCatRunSaveGame& SaveGam
 	FText& OutFailure) const
 {
 	OutFailure = FText::GetEmpty();
+	if (SaveGame.FormatVersion != SaveGame.GetLatestDataVersion())
+	{
+		OutFailure = FText::Format(NSLOCTEXT("CatSave", "IncompatibleItemSchema", "旧开发存档版本 {0} 与当前版本 {1} 不兼容，请创建新存档；旧文件已保留。"),
+			FText::AsNumber(SaveGame.FormatVersion), FText::AsNumber(SaveGame.GetLatestDataVersion()));
+		return false;
+	}
 	const FString TrimmedDisplayName = SaveGame.DisplayName.TrimStartAndEnd();
-	if (SaveGame.FormatVersion != SaveGame.GetLatestDataVersion()
-		|| (SaveGame.WasLoaded() && SaveGame.GetSavedDataVersion() != 0
+	if ((SaveGame.WasLoaded() && SaveGame.GetSavedDataVersion() != 0
 			&& SaveGame.GetSavedDataVersion() != SaveGame.GetLatestDataVersion()) || SaveGame.SlotId != ExpectedSlotId
 		|| TrimmedDisplayName.IsEmpty() || TrimmedDisplayName.Len() > 64
 		|| !IsValidSlotId(SaveGame.SlotId) || !FMath::IsFinite(SaveGame.PlayedDurationSeconds)

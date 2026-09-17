@@ -12,7 +12,7 @@
 #include "Data/CatFishCatalogSettings.h"
 #include "Data/CatFishDefinition.h"
 #include "Equipment/CatEquipmentComponent.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "GameFramework/PlayerController.h"
@@ -86,13 +86,13 @@ namespace CatSaveRoundTrip
 				UCatInventoryComponent* Inventory = Character->GetInventoryComponent();
 				const UCatInventorySettings* Settings = GetDefault<UCatInventorySettings>();
 				UCatInventoryItemDefinition* Bait = Settings->FindRuntimeDefinition(4);
-				UCatEquipmentDefinition* Rod = nullptr;
+				UCatEquipmentItemDefinition* Rod = nullptr;
 				TArray<UCatInventoryItemDefinition*> ItemDefinitions;
 				FString CatalogError;
 				if (!Test->TestTrue(TEXT("数字总表完整有效"), Settings->GetItemDefinitions(ItemDefinitions, CatalogError))) return Cleanup();
 				for (UCatInventoryItemDefinition* Entry : ItemDefinitions)
 				{
-					UCatEquipmentDefinition* Candidate = Cast<UCatEquipmentDefinition>(Entry);
+					UCatEquipmentItemDefinition* Candidate = Cast<UCatEquipmentItemDefinition>(Entry);
 					if (Candidate && Candidate->CanServeFishingRod()) { Rod = Candidate; break; }
 				}
 				UCatFishDefinition* FishDefinition = nullptr;

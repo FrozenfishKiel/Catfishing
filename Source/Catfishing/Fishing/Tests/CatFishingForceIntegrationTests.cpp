@@ -9,7 +9,7 @@
 #include "Engine/StaticMeshActor.h"
 #include "GameFramework/PlayerState.h"
 #include "GameFramework/PlayerController.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/Simulation/CatFishingFightSimulator.h"
 #include "Fishing/Simulation/CatFishingOperatorWorkModel.h"

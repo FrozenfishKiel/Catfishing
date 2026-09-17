@@ -1,4 +1,6 @@
 #include "UI/Inventory/CatInventoryPageController.h"
+#include "AbilitySystem/Items/CatItemAbilityComponent.h"
+#include "Inventory/Fragments/CatItemUseFragment.h"
 
 #include "Character/CatCharacter.h"
 #include "Framework/Game/CatfishingPlayerController.h"
@@ -357,6 +359,11 @@ void UCatInventoryPageController::SubmitInventoryContextAction(const FGameplayTa
 	UE_LOG(LogCatUI, Log, TEXT("Event=ui_inventory_action_submitted World=%s NetMode=%d RequestId=%s SourceHost=%s SourceIndex=%d Item=%s Action=%s Quantity=%d"),
 		*GetPathNameSafe(GetWorld()), static_cast<int32>(Controller->GetNetMode()), *RequestId.ToString(), *GetNameSafe(SourceHost),
 		SourceSlotIndex, *ItemInstanceId.ToString(), *Action.ToString(), Quantity);
+	if (Action == CatInventoryActionTags::Use && Instance->GetItemDefinition()->FindFragment<UCatItemUseFragment>())
+	{
+		if (auto* Items = UserPawn->FindComponentByClass<UCatItemAbilityComponent>()) Items->RequestUse(SourceInventory, ItemInstanceId, RequestId);
+		return;
+	}
 	Controller->ServerExecuteInventoryAction(RequestId, SourceHost, SourceSlotIndex, ItemInstanceId, Action, Quantity,
 		Action == CatInventoryActionTags::Use ? Instance->CaptureUseTarget(Controller) : FCatInventoryUseTarget());
 }

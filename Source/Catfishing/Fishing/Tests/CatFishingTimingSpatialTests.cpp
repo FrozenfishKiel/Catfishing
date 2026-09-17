@@ -1,5 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "Equipment/CatEquippedDefinition.h"
+#include "Inventory/Fragments/CatEquippableItemFragment.h"
 #include "Tests/AutomationCommon.h"
 #include "Fishing/CatFishingSession.h"
 #include "Data/CatFishDefinition.h"
@@ -22,7 +24,7 @@
 #include "Fishing/Actors/CatFishingHookActor.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Equipment/CatEquipmentComponent.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Character/CatCharacter.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
@@ -412,12 +414,12 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 		Boundary.BoundaryId = TEXT("TimingLineWater");
 		Boundary.Vertices = {{-5000, -5000}, {5000, -5000}, {5000, 5000}, {-5000, 5000}};
 		const auto L = F.Equipment->GetSnapshot();
-		const auto* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(L.RodItemId);
+		const auto* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentItemDefinition>(L.RodItemId);
 		// 两条正式鱼提供不同游速系数，防止模板基速误读被系数1的样本掩盖。
 		const auto* Fish = Catalog->FindRuntimeDefinition(bPerfect ? 22 : 30);
 		const auto* Balance = GetDefault<UCatFishingSettings>()->LoadFightBalanceDefinition();
 		if (!TestTrue(TEXT("正式鱼、竿、平衡资产齐全"), RodDefinition && Fish && Balance)) return false;
-		auto* Rod = World->SpawnActor<ACatFishingRodActor>(RodDefinition->UseActorClass.LoadSynchronous());
+		auto* Rod = World->SpawnActor<ACatFishingRodActor>(RodDefinition->GetEquipmentDefinition()->ActorClass.LoadSynchronous());
 		F.Cat->GetCharacterMovement()->DisableMovement();
 		F.Cat->SetActorLocation(FVector(0, 0, 100));
 		if (!TestTrue(TEXT("真实鱼竿绑定并建立握持"), Rod && Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(), L.RodItemInstanceId,

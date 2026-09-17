@@ -1,4 +1,6 @@
 #include "Inventory/CatInventorySettings.h"
+#include "Equipment/CatEquippedDefinition.h"
+#include "Inventory/Fragments/CatEquippableItemFragment.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 #include "Fishing/Tests/CatFishingEquipmentTestFixtures.h"
 #if WITH_DEV_AUTOMATION_TESTS
@@ -16,7 +18,7 @@
 #include "Environment/CatWaterQuerySubsystem.h"
 #include "Environment/Tests/CatWaterTestFixtures.h"
 #include "Equipment/CatEquipmentComponent.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingService.h"
@@ -51,7 +53,7 @@ bool FCatFishingFormalPhysicalRunnerTest::RunTest(const FString& Parameters)
 	UClass* CatClass = LoadClass<ACatCharacter>(nullptr,
 		TEXT("/Game/Character/BP_CatCharacter.BP_CatCharacter_C"));
 	UStateTree* Tree = LoadObject<UStateTree>(nullptr, TEXT("/Game/Data/StateTrees/ST_FishFight.ST_FishFight"));
-	const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(37);
+	const UCatEquipmentItemDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentItemDefinition>(37);
 	UCatFishDefinition* FishAsset = LoadObject<UCatFishDefinition>(nullptr,
 		TEXT("/Game/Catfishing/Data/Fish/Fish_RiverPattern.Fish_RiverPattern"));
 	if (!TestTrue(TEXT("formal cat, rod definition, fish definition and behavior tree load"),
@@ -148,7 +150,7 @@ bool FCatFishingFormalPhysicalRunnerTest::RunTest(const FString& Parameters)
 			Commands->TryGetResult(R.RequestId, RResult) && RResult.bCommitted)) return false;
 		auto* Rod = Service->FindRodOperatedBy(Player);
 		if (!TestTrue(TEXT("the configured rod Blueprint has a real grip and shaft"), Rod
-			&& Rod->GetClass() == RodDefinition->UseActorClass.Get() && Rod->GetPhysicalRodBody()
+			&& Rod->GetClass() == RodDefinition->GetEquipmentDefinition()->ActorClass.Get() && Rod->GetPhysicalRodBody()
 			&& Body->GetGrab()->GetGripTarget(true) == Rod && Body->GetGrab()->IsGripping(true))) return false;
 		for (int32 Frame = 0; Frame < Rate / 2; ++Frame) if (!TickConnected(1.0f / Rate)) return false;
 		const FCatEquipmentLoadoutSnapshot Loadout = Equipment->GetSnapshot();

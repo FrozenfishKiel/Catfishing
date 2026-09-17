@@ -12,7 +12,7 @@
 #include "EngineUtils.h"
 #include "Environment/CatChumFieldSubsystem.h"
 #include "Environment/Tests/CatWaterTestFixtures.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Chum.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
 #include "Fishing/CatFishingSession.h"
@@ -71,7 +71,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingBiteTimingWorldTest,
 
 bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 {
-	const UCatEquipmentDefinition* ChumDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(5);
+	const UCatEquipmentItemDefinition* ChumDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentItemDefinition>(5);
 	if (!TestNotNull(TEXT("正式窝料资产可加载"), ChumDefinition)) return false;
 	FCatFishingBiteTimingParameters Timing;
 	if (!TestTrue(TEXT("正式等待配置可读取"), GetDefault<UCatFishingSettings>()->TryGetBiteTimingParameters(Timing))) return false;
@@ -407,7 +407,7 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("夜间取消正常结束新会话"), NightSession->CancelFromAuthority(FGuid::NewGuid()).bCommitted);
 		Mode->RunPublicState.Phase.Phase = ECatRunPhase::DayActive;
 		Mode->RunPublicState.Phase.bNewFishingBitesAllowed = true;
-		const auto* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(BaitLoadout.RodItemId);
+		const auto* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentItemDefinition>(BaitLoadout.RodItemId);
 		const double Lmax = RodDefinition->FindFragment<UCatEquipmentFragment_Rod>()->MaximumLineLengthCentimeters;
 		for (const double Distance : {Lmax, Lmax + 1.0})
 		{

@@ -1,6 +1,8 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
+#include "Equipment/CatEquippedDefinition.h"
+#include "Inventory/Fragments/CatEquippableItemFragment.h"
 #include "Tests/AutomationCommon.h"
 #include "Components/Border.h"
 #include "Components/Image.h"
@@ -15,7 +17,7 @@
 #include "GameFramework/WorldSettings.h"
 #include "AssetCompilingManager.h"
 #include "Engine/TextureRenderTarget2D.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
@@ -40,14 +42,18 @@ namespace CatItemTooltipTests
 	// 通过现有装备定义和实例初始化路径建立可磨损鱼竿，不伪造 Tooltip 文本；用它验证耐久变化不依赖库存列表通知。
 	UCatEquipmentInventoryItemInstance* CreateRod()
 	{
-		UCatEquipmentDefinition* Definition = NewObject<UCatEquipmentDefinition>();
+		UCatEquipmentItemDefinition* Definition = NewObject<UCatEquipmentItemDefinition>();
 		Definition->ItemId = 1588535;
 		Definition->FunctionalRouteId = TEXT("TooltipRod");
 		Definition->bEnableRuntimeDefinition = true;
 		Definition->DisplayName = FText::FromString(TEXT("测试鱼竿"));
 		Definition->Description = FText::FromString(TEXT("耐久随同一件鱼竿保存。"));
-		Definition->LoadoutSlotId = UCatEquipmentDefinition::FishingRodLoadoutSlotId();
-		Definition->UseActorClass = ACatFishingRodActor::StaticClass();
+		Definition->LoadoutSlotId = UCatEquipmentItemDefinition::FishingRodLoadoutSlotId();
+		// 测试资产沿正式组合关系配置世界表现，不再把装备类写到库存定义。
+		auto* DefinitionEquippable = NewObject<UCatEquippableItemFragment>(Definition);
+		DefinitionEquippable->EquipmentDefinition = NewObject<UCatEquippedDefinition>(Definition);
+		DefinitionEquippable->EquipmentDefinition->ActorClass = ACatFishingRodActor::StaticClass();
+		Definition->Fragments.Add(DefinitionEquippable);
 		UCatEquipmentFragment_Rod* Fragment = NewObject<UCatEquipmentFragment_Rod>(Definition);
 		Fragment->MaximumRodDurability = 100.0;
 		Fragment->MaximumLineLengthCentimeters = 1500.0;

@@ -1,11 +1,13 @@
 #include "Inventory/CatInventorySettings.h"
+#include "Equipment/CatEquippedDefinition.h"
+#include "Inventory/Fragments/CatEquippableItemFragment.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 #if WITH_DEV_AUTOMATION_TESTS
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 
 #include "Misc/AutomationTest.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
 #include "Interaction/Grab/CatLightPropComponent.h"
@@ -166,10 +168,10 @@ namespace CatLightPropNetwork
 			if (Stage == 1)
 			{
 				if (Now - StageStarted < 1 || !Body->IsGrounded() || !ClientBody->IsGrounded()) return false;
-				const auto* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(37);
+				const auto* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentItemDefinition>(37);
 				if (!Test->TestNotNull(TEXT("formal rod definition"), Definition)) return true;
 				const FTransform Pose(Cat->GetActorLocation());
-				Rod = Server->SpawnActorDeferred<ACatFishingRodActor>(Definition->UseActorClass.LoadSynchronous(), Pose);
+				Rod = Server->SpawnActorDeferred<ACatFishingRodActor>(Definition->GetEquipmentDefinition()->ActorClass.LoadSynchronous(), Pose);
 				if (!Rod || !Rod->ConfigureCanonicalAnchorsFromAuthority(Definition->FindFragment<UCatEquipmentFragment_Rod>()->RodTipLocalTransform, Definition->FindFragment<UCatEquipmentFragment_Rod>()->StandLocalTransform, Definition->FindFragment<UCatEquipmentFragment_Rod>()->GripLocalTransform)
 					|| !Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid(), 37, NAME_None, Cat->GetPlayerState(), Cat->GetPlayerState(), true, false))
 				{ Test->AddError(TEXT("formal rod authority initialization failed")); return true; }

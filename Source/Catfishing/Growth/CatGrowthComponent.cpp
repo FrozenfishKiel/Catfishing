@@ -1,4 +1,4 @@
-﻿#include "Growth/CatGrowthComponent.h"
+#include "Growth/CatGrowthComponent.h"
 #include "Inventory/CatBackPackComponent.h"
 #include "Fishing/CatFishingSession.h"
 #include "EngineUtils.h"
@@ -43,36 +43,14 @@ ECatDomainCommandError UCatGrowthComponent::ValidateFishGrowth(const UCatFishDef
 		? ECatDomainCommandError::None : ECatDomainCommandError::DependencyUnavailable;
 }
 
-// 效果成长流程：先按 RequestId 重放，再验证服务器与已求值经验；首次提交沿用经验槽、待选次数和抽取流程。
+// 效果成长流程：检查服务器权限、经验和成长配置，再推进经验槽、待选次数与选项抽取；防重复提交由调用能力和成本承担。
 // 保留旧的逐鱼取整边界：正浮点经验取整为 0 时仍接受进食，但经验槽、选项和总经验均不增加。
-FCatDomainCommandResult UCatGrowthComponent::ApplyExperienceFromEffect(const FGuid RequestId, const int32 ExperienceAmount)
+void UCatGrowthComponent::GrantExperienceFromEffect(const int32 ExperienceAmount)
 {
-	FCatDomainCommandResult Result;
-	Result.RequestId = RequestId;
-	const FString Key = MakeTerminalKey(TEXT("EatFishGrowth"), RequestId);
-	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
-	{
-		Result = *Cached;
-		MarkCommandReplayed(Result);
-		return Result;
-	}
-	if (!RequestId.IsValid() || !GetOwner() || !GetOwner()->HasAuthority() || ExperienceAmount < 0
-		|| !GetDefault<UCatGrowthSettings>()->IsRuntimeReady())
-	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-	}
-	else
-	{
-		// 槽位发布会调用表现委托，先记处理中结果，防止同步监听者以同一请求重复推进成长。
-		Result.Error = ECatDomainCommandError::AlreadyResolved;
-		TerminalCache.Add(Key, Result);
-		AddExperienceFromCommittedFish(ExperienceAmount);
-		Result.bCommitted = true;
-		Result.Error = ECatDomainCommandError::None;
-		Result.Revision = Snapshot.Revision;
-	}
-	TerminalCache.Add(Key, Result);
-	return Result;
+	// GE 已由权威能力提交；这里只消费有效的成长输入，不再把属性回调当作库存事务回执。
+	if (!GetOwner() || !GetOwner()->HasAuthority() || ExperienceAmount < 0
+		|| !GetDefault<UCatGrowthSettings>()->IsRuntimeReady()) return;
+	AddExperienceFromCommittedFish(ExperienceAmount);
 }
 
 // 三选一提交流程：

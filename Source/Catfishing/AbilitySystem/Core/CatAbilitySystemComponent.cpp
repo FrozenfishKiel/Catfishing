@@ -1,6 +1,7 @@
-﻿#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Data/CatFishDefinition.h"
 #include "Growth/CatGrowthComponent.h"
+#include "AbilitySystem/Items/CatItemAbilityComponent.h"
 
 #include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
@@ -217,6 +218,7 @@ bool UCatAbilitySystemComponent::InitializeCharacterOwnerAvatar(AActor* Characte
 	}
 	SetReplicationMode(EGameplayEffectReplicationMode::Full);
 	InitAbilityActorInfo(CharacterOwnerAvatar, CharacterOwnerAvatar);
+	if (auto* Items = CharacterOwnerAvatar->FindComponentByClass<UCatItemAbilityComponent>()) Items->RefreshGrantedAbilities();
 	return true;
 }
 

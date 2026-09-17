@@ -328,30 +328,14 @@ public:
 	/** authority 按实例身份借出部署型物品；正式库存负责服务器校验、槽位解析和 held entry，返回值交给部署/回滚调用方串联同一实例。 */
 	FCatDomainCommandResult HoldInventoryItemInstanceFromAuthority(FGuid RequestId, FGuid ItemInstanceId, FCatInventoryEntry& OutHeldEntry);
 
-	/** authority 按实例执行正式库存 Use；库存负责幂等、定义裁决、扣量/借出和回滚，调用方只补自己的提交后刷新。 */
-	FCatInventoryItemUseResult UseItemInstanceFromAuthority(FGuid RequestId, FGuid ItemInstanceId, int32 Quantity, const FString& IdempotencyPayloadContext,
-		TFunctionRef<ECatDomainCommandError(FCatInventoryItemUseResult&)> ValidateBeforeMutation,
-		TFunctionRef<bool(FCatInventoryItemUseResult&)> FinalizeCommittedUse);
-
-	/** 只读查询正式库存 Use 是否已有终态；命中时返回首次结果的可诊断重放，不重新读取当前槽位。 */
-	bool TryReplayItemUseTerminalFromAuthority(FGuid RequestId, FGuid ItemInstanceId, int32 Quantity,
-		const FString& IdempotencyPayloadContext, FCatInventoryItemUseResult& OutResult) const;
-
 	/** authority 按实例身份把部署型物品从活动区归还可见库存；收杆和 Use 回滚只消费结构化结果，库存负责同一实例、容量、复制和变化通知，且不缓存终态以便外层失败后重新借回。 */
 	FCatDomainCommandResult ReturnHeldInventoryItemInstanceFromAuthority(FGuid RequestId, FGuid ItemInstanceId,
 		int32 MinimumSlotCount, FCatInventoryEntry& OutReturnedEntry);
-
-	/** authority 按实例执行正式库存 UnUse；库存负责从活动区归还同一实例、终态重放和失败回滚，调用方只补自己的读模型同步。 */
-	FCatInventoryItemUseResult UnUseItemInstanceFromAuthority(FGuid RequestId, FGuid ItemInstanceId,
-		int32 MinimumSlotCount, const FString& IdempotencyPayloadContext,
-		TFunctionRef<bool(FCatInventoryItemUseResult&)> FinalizeCommittedUnUse);
 
 	/** authority 把活动区里同一不可堆叠实例归还当前库存；这是部署型物品收回时复用本组件容量规则的低层拼装点。 */
 	bool ReturnHeldInventoryEntryFromAuthority(FGuid ItemInstanceId, int32 MinimumSlotCount,
 		FCatInventoryEntry& OutReturnedEntry);
 
-	/** authority 用保存的单实例 entry 重建活动区记录；只供外层归还后失败回滚，成功后可见库存不应再持有该实例。 */
-	bool RestoreHeldInventoryEntryForRollbackFromAuthority(const FCatInventoryEntry& HeldEntry);
 
 	/** authority 退役活动区里的同一实例；存档已接管部署物时用它清掉本库存活动区保管记录。 */
 	bool RetireHeldInventoryEntryFromAuthority(FGuid ItemInstanceId);
@@ -373,6 +357,8 @@ public:
 	/** 从指定格扣除数量；数量归零时清空格子并在安全时解除实例复制登记。 */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Catfishing|Inventory")
 	bool ConsumeItemAtSlot(int32 SlotIndex, int32 ConsumeCount);
+	/** 能力成本消费精确实例；首次成功后发布数量变化，重放只返回结果，绝不执行外部效果回调。 */
+	FCatDomainCommandResult ConsumeAbilityItemFromAuthority(FGuid RequestId, FGuid ItemId, int32 Quantity);
 
 	/** 丢弃、放置或 Carry 当前槽位的指定实例；Carry 只从鱼护或鱼缸移出数量一到嘴部且不做地面查询，其余动作生成或复用世界物并在空间检查成功后扣量，沿本库存终态缓存防止重复提交。 */
 	/** 菜单操作唯一库存提交；复核请求载荷、槽位身份及定义清单，再调用实例虚函数，终态缓存防止换格后重复作用于新物品。 */
@@ -591,10 +577,6 @@ protected:
 	/** 当前从本库存借出但尚未归还或退役的不可堆叠单实例；键是实例身份，值是唯一的完整 entry，部署与收回都只操作这份所有权记录。 */
 	UPROPERTY(Transient)
 	TMap<FGuid, FCatInventoryEntry> ActiveHeldItemEntries;
-
-	/** 物品 Use/UnUse 的首次终态缓存；Transient 反射引用会保活回包 entry 中的实例，重复 RequestId 只重放原结果，不重新扣量、借出或归还实例。 */
-	UPROPERTY(Transient)
-	TMap<FString, FCatInventoryItemUseResult> InventoryItemUseTerminalCache;
 
 	/** 普通库存命令首次终态缓存；重复 RequestId 只返回首次结果，避免重复整理格子。 */
 	TMap<FString, FCatDomainCommandResult> TerminalCache;
