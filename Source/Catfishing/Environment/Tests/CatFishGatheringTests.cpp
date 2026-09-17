@@ -7,7 +7,7 @@
 #include "Environment/CatChumFieldSubsystem.h"
 #include "Environment/CatChumFieldReplicationComponent.h"
 #include "Environment/Tests/CatWaterTestFixtures.h"
-#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Chum.h"
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
@@ -55,7 +55,7 @@ bool FCatFishGatheringFormalRecipeTest::RunTest(const FString& Parameters)
 	for (const TCHAR* Name : {TEXT("Bug"), TEXT("FermentedGrain"), TEXT("FruitFragrance"), TEXT("HolyLight")})
 	{
 		const FString Path = FString::Printf(TEXT("/Game/Catfishing/Data/Equipment/Equip_Chum_%s.Equip_Chum_%s"), Name, Name);
-		const auto* Definition = LoadObject<UCatEquipmentDefinition>(nullptr, *Path);
+		const auto* Definition = LoadObject<UCatEquipmentItemDefinition>(nullptr, *Path);
 		if (!TestNotNull(TEXT("formal chum asset loads"), Definition)) return false;
 		const auto* Fragment = Definition->FindFragment<UCatEquipmentFragment_Chum>();
 		if (!TestNotNull(TEXT("formal recipe fragment exists"), Fragment)) return false;
@@ -106,7 +106,7 @@ bool FCatFishGatheringWorldTest::RunTest(const FString& Parameters)
 	Mode->bRunCommandsOpen = true; Mode->RunPublicState.Phase.Phase = ECatRunPhase::DayActive;
 	Mode->RunPublicState.Phase.bNewFishingBitesAllowed = true;
 	auto* Fields = World->GetSubsystem<UCatChumFieldSubsystem>();
-	const auto* Definition = LoadObject<UCatEquipmentDefinition>(nullptr, TEXT("/Game/Catfishing/Data/Equipment/Equip_Chum_Bug.Equip_Chum_Bug"));
+	const auto* Definition = LoadObject<UCatEquipmentItemDefinition>(nullptr, TEXT("/Game/Catfishing/Data/Equipment/Equip_Chum_Bug.Equip_Chum_Bug"));
 	if (!Fields || !Definition || !Definition->FindFragment<UCatEquipmentFragment_Chum>()) return false;
 	const auto Spec = Definition->FindFragment<UCatEquipmentFragment_Chum>()->ChumInfluence;
 	const auto CountEvents = [&]() { int32 Count=0; for (TActorIterator<ACatFishGatheringActor> It(World); It; ++It) if (IsValid(*It)) ++Count; return Count; };
