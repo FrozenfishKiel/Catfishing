@@ -59,8 +59,7 @@ void UCatGA_BodyActionRequestManualHelp::ActivateAbility(const FGameplayAbilityS
 	if (UAnimMontage* Montage = Presentation->LoadMontage(BodyActionEventTag))
 	{
 		auto* Task = UAbilityTask_PlayMontageAndWait::CreatePlayMontageAndWaitProxy(this, NAME_None, Montage, 1.f, NAME_None, false);
-		Task->OnInterrupted.AddDynamic(this, &ThisClass::CancelAction);
-		Task->OnCancelled.AddDynamic(this, &ThisClass::CancelAction);
+		// 求助不依赖动作姿势完成；倒地动画可接管同一槽，不能因此取消救援请求。取消由 GAS 生命周期处理。
 		Task->ReadyForActivation();
 		if (!IsActive()) return;
 	}
@@ -90,11 +89,9 @@ void UCatGA_BodyActionRequestManualHelp::EndAbility(const FGameplayAbilitySpecHa
 	const FGameplayAbilityActorInfo* ActorInfo, const FGameplayAbilityActivationInfo ActivationInfo,
 	const bool bReplicateEndAbility, const bool bWasCancelled)
 {
-	// 结束流程：忽略失效或重复的结束请求并关闭取消资格，再记录本次结果；成功提交后动画自然播完，取消则停止蒙太奇。
+	// 结束流程：忽略失效或重复的结束请求，再记录本次结果；成功提交后动画自然播完，取消则停止蒙太奇。
 	// 再清空冻结参数并交给 GAS 销毁任务、回收随能力添加的 Cue；不回滚已经确认的领域结果。
-	// MontageStop 会触发任务中断回调；先关闭取消资格，避免清理过程中再次进入 EndAbility。
 	if (!IsEndAbilityValid(Handle, ActorInfo)) return;
-	SetCanBeCanceled(false);
 	UE_LOG(LogCatCharacter, Log, TEXT("Event=body_action_ended Ability=%s RequestId=%s Actor=%s World=%s NetMode=%d Authority=%d Cancelled=%d"),
 		*GetClass()->GetName(), *ActiveRequest.RequestId.ToString(), *GetNameSafe(GetAvatarActorFromActorInfo()),
 		*GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), ActorInfo && ActorInfo->IsNetAuthority(), bWasCancelled);
@@ -144,12 +141,6 @@ void UCatGA_BodyActionRequestManualHelp::CommitManualHelpAfterWindow()
 		return;
 	}
 	EndAbility(CurrentSpecHandle, ActorInfo, GetCurrentActivationInfo(), true, false);
-}
-
-// 中断流程：动画被其他动作打断时取消当前 GA；领域前摇任务随能力销毁，已提交的结果不会回滚。
-void UCatGA_BodyActionRequestManualHelp::CancelAction()
-{
-	if (IsActive()) CancelAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true);
 }
 
 // 目标数据传输流程：序列化请求身份与本动作参数；加载时还原字段，流错误标记失败，服务器据此校验请求，客户端预测不获得领域提交权。

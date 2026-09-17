@@ -61,8 +61,4 @@ private:
 	/** 当前求助动作冻结的请求参数；由激活阶段写入，提交或取消收尾时重置。 */
 	UPROPERTY(Transient)
 	FCatBodyActionRequestManualHelpTargetData ActiveRequest;
-
-	/** 动画中断时取消能力，提交前取消不会进入领域写口。 */
-	UFUNCTION()
-	void CancelAction();
 };
