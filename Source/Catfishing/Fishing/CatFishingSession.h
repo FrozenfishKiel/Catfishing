@@ -177,6 +177,7 @@ private:
 	friend class FCatFishingSlackAimCommandRoutingTest;
 	friend class FCatRodSessionDurabilityTest;
 	friend class FCatFishingBiteTimingWorldTest;
+	friend class FCatFishGatheringWorldTest;
 	friend class FCatFishingBaitTerminalConsumptionTest;
 	friend class FCatFishingProbeDurationOverrideTest;
 	friend class FCatFishingCatalogTimingDefaultsTest;
@@ -282,6 +283,7 @@ private:
     double BiteWaitMultiplier = 1.0;
     double LastLoggedBiteInterval = 0.0;
     int32 LastBiteFieldCount = INDEX_NONE;
+	FGuid LastGatheringEventId;
 	void HandleBiteWarningTimer();
 	/** 咬钩等待计时到点：只把「试探触发」送进 StateTree，选鱼在 BeginProbeFromStateTree 里发生。 */
 	void HandleProbeTimer();

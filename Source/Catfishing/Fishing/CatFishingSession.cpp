@@ -814,10 +814,12 @@ bool ACatFishingSession::ScheduleWaitingProbeFromStateTree()
     bBiteSampleFailed = false;
     LastLoggedBiteInterval = 0.0;
     LastBiteFieldCount = INDEX_NONE;
+	LastGatheringEventId.Invalidate();
     if (UCatChumFieldSubsystem* Chum = GetWorld()->GetSubsystem<UCatChumFieldSubsystem>())
     {
         Chum->OnFieldActivated.AddUObject(this, &ThisClass::HandleWaitingChumChanged);
         Chum->OnFieldRemoved.AddUObject(this, &ThisClass::HandleWaitingChumChanged);
+		Chum->OnGatheringChanged.AddUObject(this, &ThisClass::HandleWaitingChumChanged);
     }
     // 连续曲线每0.1秒重采样；投放/移除即时刷新。客户端只消费原浮漂复制。
     GetWorldTimerManager().SetTimer(BiteRefreshTimerHandle, this, &ThisClass::RefreshWaitingBiteClock, 0.1f, true);
@@ -835,6 +837,7 @@ void ACatFishingSession::StopWaitingBiteClock()
     {
         Chum->OnFieldActivated.RemoveAll(this);
         Chum->OnFieldRemoved.RemoveAll(this);
+		Chum->OnGatheringChanged.RemoveAll(this);
     }
 }
 
@@ -870,7 +873,7 @@ void ACatFishingSession::RefreshWaitingBiteClock()
     FCatFishingBiteTimingParameters Parameters;
     double Interval = 0.0;
     if (!GetDefault<UCatFishingSettings>()->TryGetBiteTimingParameters(Parameters)
-        || !FCatFishingBiteTimingModel::TryComputeInterval(Parameters, Concentration, BiteWaitMultiplier, Interval)
+        || !FCatFishingBiteTimingModel::TryComputeInterval(Parameters, Concentration, BiteWaitMultiplier / Sample.GatheringBiteSpeedMultiplier, Interval)
         || !BiteWaitProgress.Advance(Now, Interval))
     {
         StopWaitingBiteClock();
@@ -881,7 +884,7 @@ void ACatFishingSession::RefreshWaitingBiteClock()
     }
     const double Remaining = BiteWaitProgress.RemainingSeconds(Now);
     // 只记录首次排程、覆盖场变化和间隔累计变化25%；不在0.1秒采样中刷日志。
-    if (LastLoggedBiteInterval <= 0.0 || LastBiteFieldCount != Sample.ContributingFieldCount
+    if (LastLoggedBiteInterval <= 0.0 || LastBiteFieldCount != Sample.ContributingFieldCount || LastGatheringEventId != Sample.GatheringEventId
         || FMath::Abs(Interval - LastLoggedBiteInterval) >= LastLoggedBiteInterval * 0.25)
     {
         UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_bite_clock_updated Model=ConcentrationProgress SessionId=%s CastAttemptId=%s Opportunity=%u Concentration=%.6f K=%.6f IntervalSeconds=%.6f RemainingFraction=%.6f RemainingSeconds=%.6f Fields=%d World=%s NetMode=%d Authority=1 LocalRole=%d %s"),
@@ -891,6 +894,13 @@ void ACatFishingSession::RefreshWaitingBiteClock()
             *CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
         LastLoggedBiteInterval = Interval;
         LastBiteFieldCount = Sample.ContributingFieldCount;
+		if (LastGatheringEventId != Sample.GatheringEventId)
+		{
+			UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_gathering_clock_changed EventId=%s PreviousEventId=%s SessionId=%s CastAttemptId=%s World=%s NetMode=%d Authority=1 LocalRole=%d Actor=%s Speed=%.3f RemainingFraction=%.6f IntervalSeconds=%.6f"),
+				*Sample.GatheringEventId.ToString(), *LastGatheringEventId.ToString(), *Snapshot.FishingSessionId.ToString(), *Snapshot.CastAttemptId.ToString(),
+				*GetNameSafe(GetWorld()), GetNetMode(), int32(GetLocalRole()), *GetName(), Sample.GatheringBiteSpeedMultiplier, BiteWaitProgress.RemainingFraction, Interval);
+			LastGatheringEventId = Sample.GatheringEventId;
+		}
     }
     if (BiteWaitProgress.RemainingFraction <= 1.e-9)
     {

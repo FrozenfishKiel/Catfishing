@@ -1,5 +1,23 @@
 #include "Environment/CatChumFieldSettings.h"
 
+bool UCatChumFieldSettings::IsGatheringConfigurationValid() const
+{
+	return GatheringConcentrationThreshold.IsValidContribution()
+		&& GatheringConcentrationThreshold.Fishy > 0.0 && GatheringConcentrationThreshold.Fragrant > 0.0
+		&& GatheringConcentrationThreshold.Fermented > 0.0
+		&& FMath::IsFinite(GatheringTriggerProbability) && GatheringTriggerProbability >= 0.0 && GatheringTriggerProbability <= 1.0
+		&& FMath::IsFinite(GatheringDurationSeconds) && GatheringDurationSeconds > 0.0
+		&& FMath::IsFinite(GatheringBiteSpeedMultiplier) && GatheringBiteSpeedMultiplier > 1.0;
+}
+
+bool UCatChumFieldSettings::MeetsGatheringThreshold(const FCatChumVector& Concentration) const
+{
+	return IsGatheringConfigurationValid() && Concentration.IsValidContribution()
+		&& Concentration.Fishy >= GatheringConcentrationThreshold.Fishy
+		&& Concentration.Fragrant >= GatheringConcentrationThreshold.Fragrant
+		&& Concentration.Fermented >= GatheringConcentrationThreshold.Fermented;
+}
+
 bool UCatChumFieldSettings::TryGetInfluenceRadiusScale(double& OutRadiusScale) const
 {
 	OutRadiusScale = 0.0;

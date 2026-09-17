@@ -162,6 +162,7 @@ struct FCatPlaceChumResult
 struct FCatChumFieldState
 {
 	FGuid FieldId;
+	FGuid RequestId;
 	FCatWaterRegionHandle WaterRegion;
 	int32  ChumItemId = 0;
 	FVector CenterWorldPoint = FVector::ZeroVector;
@@ -195,6 +196,12 @@ struct FCatChumSample
 
 	UPROPERTY(BlueprintReadOnly)
 	FCatChumVector EffectiveChumVector;
+
+	/** 同位置活动聚鱼的速度倍率；不参与浓度和鱼种权重，多个事件不相乘。 */
+	UPROPERTY(BlueprintReadOnly)
+	double GatheringBiteSpeedMultiplier = 1.0;
+	UPROPERTY(BlueprintReadOnly)
+	FGuid GatheringEventId;
 
 	UPROPERTY(BlueprintReadOnly)
 	int32 ContributingFieldCount = 0;

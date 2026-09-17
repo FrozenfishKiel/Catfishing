@@ -6,6 +6,8 @@
 
 #include "CatChumFieldSubsystem.generated.h"
 
+class ACatFishGatheringActor;
+
 struct FCatChumFieldCommitToken
 {
 	FGuid Value;
@@ -76,6 +78,8 @@ public:
 
 	FCatChumFieldActivated OnFieldActivated;
 	FCatChumFieldRemoved OnFieldRemoved;
+	/** 聚鱼开始/结束即时刷新等待进度；不伪装成普通场增删。 */
+	FCatChumFieldActivated OnGatheringChanged;
 
 private:
 	struct FCatPendingChumField
@@ -95,6 +99,9 @@ private:
 	bool IsAuthorityRuntimeReady() const;
 	void EnsureCleanupTimer();
 	void HandleCleanupTimer();
+	void TryStartGathering(const FCatChumFieldState& Field);
+	void HandleGatheringEnded(FGuid EventId);
+	void ClearGatherings();
 	static FCatPrepareChumFieldResult MakePrepareError(ECatChumFieldError Error);
 	static ECatChumFieldError MapWaterError(ECatWaterQueryError Error);
 
@@ -106,4 +113,6 @@ private:
 	TMap<FCatChumRequestKey, FCatPlaceChumResult> TerminalByIdentityAndRequest;
 	TMap<FName, FCatChumBudgetState> BudgetByRegion;
 	FTimerHandle CleanupTimerHandle;
+	UPROPERTY(Transient)
+	TMap<FGuid, TObjectPtr<ACatFishGatheringActor>> GatheringsById;
 };

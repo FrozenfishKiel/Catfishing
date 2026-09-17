@@ -2,6 +2,7 @@
 
 #include "Engine/World.h"
 #include "Environment/CatChumFieldSettings.h"
+#include "Environment/CatFishGatheringActor.h"
 #include "Environment/CatChumFieldReplicationComponent.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Environment/CatWaterQuerySubsystem.h"
@@ -55,6 +56,7 @@ void UCatChumFieldSubsystem::EnsureCleanupTimer()
 
 void UCatChumFieldSubsystem::Deinitialize()
 {
+	ClearGatherings();
 	if (UWorld* World = GetWorld())
 	{
 		World->GetTimerManager().ClearTimer(CleanupTimerHandle); // World 销毁前先停掉定时器，避免野指针回调
@@ -198,6 +200,7 @@ FCatPrepareChumFieldResult UCatChumFieldSubsystem::PrepareField(const FCatPrepar
 	Pending.RequestKey = RequestKey;
 	Pending.RawContribution = RawContribution; // 记住占用量，Abort 时需要按这个数值回滚配额
 	Pending.State.FieldId = FieldId;
+	Pending.State.RequestId = Request.Command.RequestId;
 	Pending.State.WaterRegion = Water.WaterRegion;
 	Pending.State.ChumItemId = Request.Command.ChumItemId;
 	Pending.State.CenterWorldPoint = Water.WaterSurfaceWorldPoint; // 用服务器查询到的贴水面坐标，而非客户端原始落点
@@ -281,13 +284,17 @@ void UCatChumFieldSubsystem::PublishActivatedField(const FGuid FieldId)
 	}
 	if (!bTerminalStored) return; // 还没有对应终态记录，说明上层事务尚未完成，先不广播
 	Field->bPublicationFlushed = true; // 打上已发布标记，防止重复广播
+	const FCatChumFieldState PublishedField = *Field;
 	if (ACatfishingGameState* GameState = GetWorld()->GetGameState<ACatfishingGameState>())
 	{
 		if (UCatChumFieldReplicationComponent* Replication = GameState->GetChumFieldReplicationFromAuthority())
 		{
-			Replication->ReconcileFieldFromAuthority(*Field); // 真正写入 FastArray，触发对客户端的网络复制
+			Replication->ReconcileFieldFromAuthority(PublishedField); // 真正写入 FastArray，触发对客户端的网络复制
 		}
 	}
+	// 先发布普通场，再广播聚鱼；消费者可能在广播中终止局，不能在它之后重建已清理的场表现。
+	if (!FieldsById.Contains(FieldId)) return;
+	TryStartGathering(PublishedField);
 	OnFieldActivated.Broadcast(FieldId); // 服务器本地事件，供其他系统（如成就/日志）订阅
 }
 
@@ -378,7 +385,114 @@ FCatChumSample UCatChumFieldSubsystem::SampleChumAtPoint(const FVector& WorldPoi
 		}
 	}
 	Result.ContributingFieldCount = Result.ContributingFieldIds.Num();
+	for (const auto& Pair : GatheringsById)
+	{
+		if (!IsValid(Pair.Value)) continue;
+		const auto& Gathering = Pair.Value->GetPublicState();
+		if (Gathering.Contains(WorldPoint, ExpectedHandle, ServerTime)
+			&& Gathering.BiteSpeedMultiplier > Result.GatheringBiteSpeedMultiplier)
+		{
+			Result.GatheringBiteSpeedMultiplier = Gathering.BiteSpeedMultiplier;
+			Result.GatheringEventId = Gathering.EventId;
+		}
+	}
 	return Result;
+}
+
+void UCatChumFieldSubsystem::TryStartGathering(const FCatChumFieldState& Field)
+{
+	const auto* Settings = GetDefault<UCatChumFieldSettings>();
+	if (!Settings->bEnableFishGathering || Field.Source != ECatChumFieldSource::Player) return;
+	// 复制回调和事件广播可能重入；不持有活跃场表里的引用。
+	const FCatChumFieldState Frozen = Field;
+	const double Now = GetWorld()->GetTimeSeconds();
+	const auto LogDecision = [&](const TCHAR* Result, const FCatChumVector& Value, double Roll = -1.0)
+	{
+		UE_LOG(LogCatEnvironment, Log, TEXT("Event=fish_gathering_evaluated EventId=%s RequestId=%s Region=%s World=%s NetMode=%d Authority=1 LocalRole=Authority Actor=None Result=%s Fishy=%.6f Fragrant=%.6f Fermented=%.6f Roll=%.6f Probability=%.6f"),
+			*Frozen.FieldId.ToString(), *Frozen.RequestId.ToString(), *Frozen.WaterRegion.RegionId.ToString(),
+			*GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), Result, Value.Fishy, Value.Fragrant, Value.Fermented, Roll, Settings->GatheringTriggerProbability);
+	};
+	if (!Settings->IsGatheringConfigurationValid())
+	{
+		UE_LOG(LogCatEnvironment, Warning, TEXT("Event=fish_gathering_rejected EventId=%s RequestId=%s World=%s NetMode=%d Authority=1 Result=InvalidConfiguration"),
+			*Frozen.FieldId.ToString(), *Frozen.RequestId.ToString(), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()));
+		return;
+	}
+	const FCatChumSample Sample = SampleChumAtPoint(Frozen.CenterWorldPoint, Frozen.WaterRegion, Now);
+	if (!Sample.bSucceeded)
+	{
+		UE_LOG(LogCatEnvironment, Warning, TEXT("Event=fish_gathering_rejected EventId=%s RequestId=%s World=%s NetMode=%d Authority=1 Result=SampleFailed Error=%d"),
+			*Frozen.FieldId.ToString(), *Frozen.RequestId.ToString(), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), int32(Sample.Error));
+		return;
+	}
+	if (!Settings->MeetsGatheringThreshold(Sample.EffectiveChumVector))
+	{
+		LogDecision(TEXT("BelowThreshold"), Sample.EffectiveChumVector);
+		return;
+	}
+	for (const auto& Pair : GatheringsById)
+	{
+		if (!IsValid(Pair.Value)) continue;
+		const auto& Existing = Pair.Value->GetPublicState();
+		if (Existing.IsActive(Now) && Existing.WaterRegion == Frozen.WaterRegion
+			&& FVector::DistSquared2D(Existing.Center, Frozen.CenterWorldPoint)
+			<= FMath::Square(Existing.RadiusCentimeters + Frozen.Influence.RadiusCentimeters))
+		{
+			LogDecision(TEXT("ActiveAreaOverlap"), Sample.EffectiveChumVector);
+			return;
+		}
+	}
+	// 每个成功投料场一个服务端 GUID 种子，不消费钓鱼/选鱼随机流；每次发布至多一个抽样。
+	FRandomStream Random(GetTypeHash(Frozen.FieldId));
+	const double Roll = Random.GetFraction();
+	if (Roll >= Settings->GatheringTriggerProbability)
+	{
+		LogDecision(TEXT("ProbabilityMiss"), Sample.EffectiveChumVector, Roll);
+		return;
+	}
+	FCatFishGatheringState State;
+	State.EventId = Frozen.FieldId;
+	State.RequestId = Frozen.RequestId;
+	State.WaterRegion = Frozen.WaterRegion;
+	State.Center = Frozen.CenterWorldPoint;
+	State.RadiusCentimeters = Frozen.Influence.RadiusCentimeters;
+	State.StartedServerTime = Now;
+	State.EndsServerTime = Now + Settings->GatheringDurationSeconds;
+	State.BiteSpeedMultiplier = Settings->GatheringBiteSpeedMultiplier;
+	auto* Actor = GetWorld()->SpawnActor<ACatFishGatheringActor>();
+	if (!Actor || !Actor->InitializeFromAuthority(State))
+	{
+		if (Actor) Actor->Destroy();
+		UE_LOG(LogCatEnvironment, Warning, TEXT("Event=fish_gathering_rejected EventId=%s RequestId=%s World=%s NetMode=%d Authority=1 Result=SpawnFailed"),
+			*State.EventId.ToString(), *State.RequestId.ToString(), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()));
+		return;
+	}
+	GatheringsById.Add(State.EventId, Actor);
+	Actor->OnEnded.AddUObject(this, &ThisClass::HandleGatheringEnded);
+	LogDecision(TEXT("Started"), Sample.EffectiveChumVector, Roll);
+	OnGatheringChanged.Broadcast(State.EventId);
+}
+
+void UCatChumFieldSubsystem::HandleGatheringEnded(const FGuid EventId)
+{
+	GatheringsById.Remove(EventId);
+	OnGatheringChanged.Broadcast(EventId);
+}
+
+void UCatChumFieldSubsystem::ClearGatherings()
+{
+	TArray<TObjectPtr<ACatFishGatheringActor>> Actors;
+	GatheringsById.GenerateValueArray(Actors);
+	GatheringsById.Reset();
+	for (const auto& Entry : Actors)
+	{
+		auto* Actor = Entry.Get();
+		if (!IsValid(Actor)) continue;
+		const FGuid Id = Actor->GetPublicState().EventId;
+		Actor->OnEnded.RemoveAll(this);
+		Actor->Destroy();
+		OnGatheringChanged.Broadcast(Id);
+	}
 }
 
 // 扫描全部活跃窝料场，把已到期的整体下线：释放配额、更新版本号、驱动复制移除、广播事件。
@@ -388,6 +502,7 @@ FCatChumSample UCatChumFieldSubsystem::SampleChumAtPoint(const FVector& WorldPoi
 int32 UCatChumFieldSubsystem::ClearFieldsForRunTransition()
 {
 	if (!GetWorld() || GetWorld()->GetNetMode() == NM_Client) return 0;
+	ClearGatherings();
 	TArray<FGuid> Tokens;
 	PendingByToken.GenerateKeyArray(Tokens);
 	for (const FGuid Token : Tokens) AbortPreparedField({Token});

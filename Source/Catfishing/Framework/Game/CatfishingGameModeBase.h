@@ -167,6 +167,7 @@ public:
 
 private:
 	friend class FCatFishingBiteTimingWorldTest;
+	friend class FCatFishGatheringWorldTest;
 #if WITH_DEV_AUTOMATION_TESTS
 	friend struct CatR3Tests::FFixture;
 #endif
