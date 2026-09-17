@@ -26,6 +26,7 @@
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Equipment/CatEquipmentComponent.h"
+#include "Equipment/CatEquippedInstance.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "Equipment/CatEquipmentItemDefinition.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
@@ -47,13 +48,14 @@
 namespace
 {
 	/** 从实际装备来源授予的能力中定位指定类型，避免夹具另造无来源 Spec 而与正式输入重复响应。 */
-	FGameplayAbilitySpecHandle FindSourceAbilityHandle(const UCatAbilitySystemComponent* AbilitySystem, const UObject* SourceObject,
+	FGameplayAbilitySpecHandle FindSourceAbilityHandle(const UCatAbilitySystemComponent* AbilitySystem, const UCatInventoryItemInstance* SourceItem,
 		const UClass* AbilityClass)
 	{
-		if (!AbilitySystem || !SourceObject || !AbilityClass) return FGameplayAbilitySpecHandle();
+		if (!AbilitySystem || !SourceItem || !AbilityClass) return FGameplayAbilitySpecHandle();
 		for (const FGameplayAbilitySpec& Candidate : AbilitySystem->GetActivatableAbilities())
 		{
-			if (Candidate.SourceObject.Get() == SourceObject && Candidate.Ability && Candidate.Ability->IsA(AbilityClass))
+			const UCatEquippedInstance* Equipped = Cast<UCatEquippedInstance>(Candidate.SourceObject.Get());
+			if (Equipped && Equipped->GetSourceItem() == SourceItem && Candidate.Ability && Candidate.Ability->IsA(AbilityClass))
 			{
 				return Candidate.Handle;
 			}
