@@ -1,4 +1,4 @@
-# Catfishing 当前框架项目地图
+﻿# Catfishing 当前框架项目地图
 
 更新时间：2026-09-09
 文档状态：当前源码事实与 Frontend 实施中边界地图。
@@ -35,11 +35,11 @@
 | `Character/` | 猫身体 Actor、ASC Owner/Avatar 和身体宿主组件装配。 | `ACatCharacter` |
 | `AbilitySystem/` | Ability/AttributeSet/能力配置、Ability 输入路由和正式 GameplayEffect 写口；输入 Ability 按领域放在 `Fishing/InputAbilities/` 等子目录。 | `UCatAbilitySystemComponent`、`UCatAbilityInputBindingComponent`、`UCatSurvivalAttributeSet`、`UCatGE_PoisonDelta`、`UCatAbilitySettings` |
 | `Condition/` | Wet/Downed/Recovery 等离散身体状态。 | `UCatConditionComponent` |
-| `Equipment/` | 钓具选择读模型、Fishing 使用冻结、绑定鱼竿磨损和失败预算。 | `UCatEquipmentComponent`、`UCatEquipmentDefinition` |
+| `Equipment/` | 钓具选择读模型、Fishing 使用冻结、绑定鱼竿磨损和失败预算。 | `UCatEquipmentComponent`、`UCatEquipmentItemDefinition` |
 | `Run/` | StateTree 节点、Run 配置和供品结算写口。 | `CatRunStateTreeNodes.*`、`CatRunSettings.*` |
 | `Environment/` | 水域查询、WaterRegion、窝料聚鱼与环境配置。 | `UCatWaterQuerySubsystem`、`ACatWaterRegion` |
 | `Fishing/` | 钓鱼会话、阶段推进、搏斗协作、近岸抢抄、失败预算。 | `UCatFishingService`、`ACatFishingSession` |
-| `FishContainers/` | 鱼实例、容器快照、鱼护/鱼缸事务、吃鱼、售鱼和偷鱼 escrow。 | `UCatFishContainerService`、`UCatContainerReplicationComponent`、`ACatFishGuardActor`、`ACatFishTankActor` |
+| `FishContainers/` | 鱼实例、容器快照、鱼护/鱼缸事务与售鱼。进食能力读取该域的公共来源。 | `UCatFishContainerService`、`UCatContainerReplicationComponent`、`ACatFishGuardActor`、`ACatFishTankActor` |
 | `Inventory/` | 正式道具 Entry+Instance、背包/公共库存和库存槽位事务。 | `UCatInventoryComponent`（`FCatInventoryEntry` 与 Use 回执）、`CatInventoryItemDefinition`、`CatInventoryItemInstance`、`CatBackPackComponent`、`UCatInventoryStatics`、`UCatInventorySettings` |
 | `Collection/` | 捕获事实到 Grant、CapturePlan 投递、Grant ACK。 | `UCatRunImprintService` |
 | `Profile/` | LocalPlayer SaveGame、Grant Journal、装备选择、相册隐藏。 | `UCatProfileSubsystem`、`UCatProfileSaveGame` |
@@ -135,7 +135,7 @@
 6. `Source/Catfishing/Inventory/CatInventoryStatics.h/.cpp`
 7. `Source/Catfishing/Equipment/CatEquipmentLoadoutSnapshot.h`
 8. `Source/Catfishing/Equipment/CatEquipmentComponent.h/.cpp`
-9. `Source/Catfishing/Equipment/CatEquipmentDefinition.h/.cpp`
+9. `Source/Catfishing/Equipment/CatEquipmentItemDefinition.h/.cpp`
 
 ## 核心链路
 
@@ -157,7 +157,7 @@ Frontend 到玩法地图的 Session 与旅行事实仍由 `UCatOnlineSubsystem` 
 
 `UCatFishingService` 负责创建和定位钓鱼会话；真正的阶段和抢抄终态在 `ACatFishingSession`。搏斗阶段可以登记协作者，近岸抢抄只允许首个合法提交者通过 FishContainers 的容器提交链取得实物鱼。
 
-`UCatFishContainerService` 不是通用道具系统。它是鱼实例和鱼容器事务的服务器写口，管理个人鱼护、共享鱼缸、转移、吃鱼、售鱼和偷鱼 escrow。装备、窝料和草药等物品实例和数量归 `Inventory/`；`Equipment/` 只保存钓具选择读模型、Fishing 使用冻结、绑定鱼竿磨损和失败预算。
+`UCatFishContainerService` 不是通用道具系统。它是鱼实例和鱼容器事务的服务器写口，管理个人鱼护、共享鱼缸、转移与售鱼；吃鱼由 AbilitySystem/Items 的 ConsumeFish 能力和精确来源成本负责。装备、窝料和草药等物品实例和数量归 `Inventory/`；`Equipment/` 只保存钓具选择读模型、Fishing 使用冻结、绑定鱼竿磨损和失败预算。
 
 `UCatRunImprintService` 把已提交的领域事实转成 CapturePlan 和 Profile Grant。CapturePlan 是成像任务，Grant 是永久授予内容，Grant ACK 是客户端 durable 后的回执；三者不能互相替代。
 

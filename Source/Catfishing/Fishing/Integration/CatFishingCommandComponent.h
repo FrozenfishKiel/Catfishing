@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
@@ -59,28 +59,22 @@ public:
 	/** 选中鱼竿的库存 Use 进入权威放竿事务；只接受组件所属 Controller 和指定实例，失败不会改写装备选择。 */
 	FCatDomainCommandResult PlaceRodFromInventoryUseOnAuthority(APlayerController* RequestingController,
 		const FCatPlaceRodCommand& Command);
-	/** 选中窝料的持续 Use 开始入口；按固定来源实例激活对应 ServerOnly Ability，不在组件保存槽位或蓄力状态。 */
-	FCatDomainCommandResult BeginChumUseFromInventoryOnAuthority(APlayerController* RequestingController,
-		const FCatInventoryItemUseContext& UseContext, FGuid ChumItemInstanceId, int32  ChumItemId);
-	/** 选中窝料的持续 Use 结束入口；取消终止对应 Ability，正常结束只向其 AbilityTask 投递同一 Spec 的 Release。 */
-	FCatDomainCommandResult EndChumUseFromInventoryOnAuthority(APlayerController* RequestingController,
-		const FCatInventoryItemUseContext& UseContext, bool bCancelled);
 	/**
 	 * 窝料 Ability 的服务器释放任务结束后调用此提交口；它只接收 Ability 已冻结的来源事实和服务端任务时长，
 	 * 保留既有弹道、范围和精确实例扣量事务，不在命令组件重复保存持续 Use 状态。
 	 */
 	FCatDomainCommandResult CommitChumUseFromAbilityOnAuthority(APlayerController* RequestingController,
 		const FCatInventoryItemUseContext& UseContext, FGuid ChumItemInstanceId, int32  ChumItemId,
-		double HeldSeconds);
+		double HeldSeconds, TFunctionRef<bool()> PayResource);
 	/** 选中抄网的库存 Use 复用原 RequestScoop 命令，只在同步分派期间携带指定实例给 Session 权威复核。 */
 	FCatDomainCommandResult ScoopFromInventoryUseOnAuthority(APlayerController* RequestingController,
 		const FCatInventoryItemUseContext& UseContext, FGuid ScoopItemInstanceId);
+	/** 撤销尚未裁决的抄取请求并解除回调；队列晚到时因请求已移除而不执行捕获。 */
+	void CancelScoopUseFromAuthority(FGuid RequestId);
 	void DeliverResultFromAuthority(const FCatFishingCommandResult& Result);
 	void DeliverBeginCastResultFromAuthority(const FCatBeginCastResult& Result);
 	void DeliverPlaceChumResultFromAuthority(const FCatPlaceChumResult& Result);
 
-	UFUNCTION(BlueprintCallable, Category="Catfishing|Chum")
-	void SubmitPlaceChum(const FCatPlaceChumCommand& Command);
 	UFUNCTION(BlueprintCallable, Category="Catfishing|Fishing") void SubmitBeginCast(const FCatBeginCastCommand& Command);
 	UFUNCTION(BlueprintCallable, Category="Catfishing|Fishing") void SubmitPlaceRod(const FCatPlaceRodCommand& Command);
 	UFUNCTION(BlueprintCallable, Category="Catfishing|Fishing") void SubmitOperateRod(const FCatOperateRodCommand& Command);
@@ -143,8 +137,6 @@ private:
 	void ClientReceivePlaceChumResult(const FCatPlaceChumResult& Result);
 	UFUNCTION(Client, Reliable) void ClientReceiveBeginCastResult(const FCatBeginCastResult& Result);
 
-	UFUNCTION(Server, Reliable)
-	void ServerSubmitPlaceChum(const FCatPlaceChumCommand& Command);
 	UFUNCTION(Server, Reliable) void ServerSubmitBeginCast(const FCatBeginCastCommand& Command);
 	UFUNCTION(Server, Reliable) void ServerSubmitPlaceRod(const FCatPlaceRodCommand& Command);
 	UFUNCTION(Server, Reliable) void ServerSubmitOperateRod(const FCatOperateRodCommand& Command);
@@ -188,7 +180,7 @@ private:
 	void BeginCastFromViewOnAuthority(APlayerController* Controller, const FCatFishingInputEdge& Edge);
 	/** 服务器按 Ability 已冻结的窝料实例和按住时长投放；结束时重读原槽位，拒绝换物或移动后的迟到释放。 */
 	void ThrowChumFromChargeOnAuthority(APlayerController* Controller, const FCatInventoryItemUseContext& UseContext,
-		FGuid ChumItemInstanceId, int32  ChumItemId, double HeldSeconds);
+		FGuid ChumItemInstanceId, int32  ChumItemId, double HeldSeconds, TFunctionRef<bool()> PayResource);
 
 	/** 服务器记录的"本次左键按住=瞄准抛竿"关联 ID；只有同一次按住的松开才触发抛竿，防止提竿失败后的松开误抛。 */
 	FGuid ServerAimingCorrelationId;

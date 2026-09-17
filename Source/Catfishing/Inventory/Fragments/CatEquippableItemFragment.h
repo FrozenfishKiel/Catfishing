@@ -14,6 +14,6 @@ public:
 	/** 拿出本物品时采用的装备配置；策划选择资产，装备实例据此授予能力，宿主行为负责生成世界表现。 */
 	UPROPERTY(EditDefaultsOnly, Category="装备", meta=(DisplayName="装备定义"))
 	TObjectPtr<UCatEquippedDefinition> EquipmentDefinition;
-	/** 缺少装备定义时拒绝进入正式运行目录，避免拿出后没有行为。 */
+	/** 缺少装备定义、无效能力集或显式世界类无法加载时拒绝运行，避免拿出后才发现配置失效。 */
 	virtual bool IsRuntimeReady() const override;
 };

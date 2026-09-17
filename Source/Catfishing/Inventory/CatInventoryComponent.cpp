@@ -1,4 +1,4 @@
-#include "Inventory/CatInventoryComponent.h"
+﻿#include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatWorldDropProtectionComponent.h"
 #include "Growth/CatGrowthComponent.h"
 
@@ -1799,8 +1799,8 @@ void UCatInventoryComponent::FinishRemovalFromAuthority(const FGuid RequestId, c
 	if (bCommit && bBroadcast) BroadcastInventoryChange();
 }
 
-// 能力成本流程：按请求与实例去重，先占住处理状态，再扣真实数量；发布前缓存终态防止同步监听者重入。
-FCatDomainCommandResult UCatInventoryComponent::ConsumeAbilityItemFromAuthority(FGuid RequestId, FGuid ItemId, int32 Quantity)
+// 能力成本流程：按请求与实例去重，先占住处理状态再扣真实数量；缓存终态后按开关发布，延迟通知不延迟真实扣量。
+FCatDomainCommandResult UCatInventoryComponent::ConsumeAbilityItemFromAuthority(FGuid RequestId, FGuid ItemId, int32 Quantity, bool bPublishChange)
 {
 	FCatDomainCommandResult Result; Result.RequestId = RequestId;
 	if (!GetOwner() || !GetOwner()->HasAuthority() || !RequestId.IsValid() || !ItemId.IsValid() || Quantity < 0)
@@ -1819,7 +1819,7 @@ FCatDomainCommandResult UCatInventoryComponent::ConsumeAbilityItemFromAuthority(
 	Result.bCommitted = Quantity == 0 ? Slot != INDEX_NONE : ConsumeItemAtSlotInternal(Slot, Quantity, false);
 	Result.Error = Result.bCommitted ? ECatDomainCommandError::None : ECatDomainCommandError::InvalidPayload;
 	TerminalCache.Add(Key, Result);
-	if (Result.bCommitted && Quantity > 0) BroadcastInventoryChange(Slot);
+	if (Result.bCommitted && Quantity > 0 && bPublishChange) BroadcastInventoryChange(Slot);
 	return Result;
 }
 
@@ -2402,82 +2402,6 @@ bool UCatInventoryComponent::CanUseItemAtSlot(const int32 SlotIndex, APawn* User
 	}
 
 	return Entry.Instance->CanUseFromInventory(Entry, UserPawn);
-}
-
-// 结构化使用提交流程：
-// 1. 先确认当前组件仍是服务器正式库存，并且 RequestId、来源组件和槽位参数有效。
-// 2. 再按服务器当前槽位重读 entry、实例和定义；空格或坏实例按正式库存错误返回。
-// 3. 通过后把当前 entry 交给物品实例提交具体领域效果；库存组件不认识装备、GAS 或窝料的内部规则。
-// 4. 下游结果决定提交状态和错误；库存只在 RequestId 缺失时补回本次请求 ID，便于日志串联。
-// 5. 最后记录当前读取到的定义、实例和数量，供失败或成功回包诊断。
-FCatDomainCommandResult UCatInventoryComponent::UseItemAtSlotFromAuthority(
-	const FCatInventoryItemUseContext& UseContext)
-{
-	FCatDomainCommandResult Result;
-	Result.RequestId = UseContext.RequestId;
-
-	const AActor* OwningActor = GetOwner();
-	int32  ItemId = 0;
-	FGuid ItemInstanceId;
-	int32 StackCount = 0;
-	if (OwningActor == nullptr || !OwningActor->HasAuthority())
-	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-	}
-	else if (!UseContext.RequestId.IsValid()
-		|| (UseContext.SourceInventory != nullptr && UseContext.SourceInventory != this)
-		|| UseContext.InventorySlotIndex == INDEX_NONE)
-	{
-		Result.Error = ECatDomainCommandError::InvalidPayload;
-	}
-	else
-	{
-		FCatInventoryEntry* Entry = InventoryList.Entries.IsValidIndex(UseContext.InventorySlotIndex)
-			? &InventoryList.Entries[UseContext.InventorySlotIndex] : nullptr;
-		UCatInventoryItemInstance* Instance = Entry != nullptr ? Entry->Instance.Get() : nullptr;
-		UCatInventoryItemDefinition* Definition = Instance != nullptr ? Instance->GetItemDefinition() : nullptr;
-		if (Entry == nullptr || Instance == nullptr || Entry->StackCount <= 0
-			|| !Instance->GetItemInstanceId().IsValid())
-		{
-			Result.Error = ECatDomainCommandError::NotFound;
-		}
-		else if (Definition == nullptr || (Definition->GetItemId() == 0))
-		{
-			Result.Error = ECatDomainCommandError::InvalidPayload;
-		}
-		else if (IsBlockedByActiveFishingItemGate(UseContext.RequestingController, UseContext.UserPawn, Definition))
-		{
-			// 咬钩成立到本竿结局落定之间禁止主动掏道具；抄网已在闸门内单独放行。
-			// 这是本条唯一的权威拒绝点：随身使用与「指定宿主库存使用」两条 RPC 都汇到这里。
-			ItemId = Definition->GetItemId();
-			ItemInstanceId = Instance->GetItemInstanceId();
-			StackCount = Entry->StackCount;
-			Result.Error = ECatDomainCommandError::InvalidPhase;
-		}
-		else
-		{
-			ItemId = Definition->GetItemId();
-			ItemInstanceId = Instance->GetItemInstanceId();
-			StackCount = Entry->StackCount;
-			Result = Instance->UseFromInventorySlotFromAuthority(*Entry, UseContext);
-			if (!Result.RequestId.IsValid())
-			{
-				Result.RequestId = UseContext.RequestId;
-			}
-		}
-	}
-
-	UE_LOG(LogCatInventory, Log,
-		TEXT("Event=inventory_use_item Owner=%s Request=%s Slot=%d Definition=%s Item=%s Stack=%d Committed=%s Error=%s"),
-		*GetNameSafe(GetOwner()),
-		*UseContext.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-		UseContext.InventorySlotIndex,
-		*FString::FromInt(ItemId),
-		*ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
-		StackCount,
-		Result.bCommitted ? TEXT("true") : TEXT("false"),
-		*UEnum::GetValueAsString(Result.Error));
-	return Result;
 }
 
 // authority 库存移动流程：

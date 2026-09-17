@@ -63,6 +63,10 @@ void UCatItemGameplayAbility::ReceiveTargetData(const FGameplayAbilityTargetData
 	if (Data.Num() != 1 || !Data.Get(0) || Data.Get(0)->GetScriptStruct() != FCatItemAbilityTargetData::StaticStruct())
 	{ EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, true); return; }
 	UseTarget = *static_cast<const FCatItemAbilityTargetData*>(Data.Get(0)); bTargetAccepted = true;
+	UE_LOG(LogCatCharacter, Log, TEXT("Event=item_ability_target_received RequestId=%s Item=%s Ability=%s Owner=%s World=%s NetMode=%d Authority=%d LocalRole=%d PredictionKey=%d"),
+		*UseTarget.RequestId.ToString(), *UseTarget.ItemId.ToString(), *GetClass()->GetName(), *GetNameSafe(GetAvatarActorFromActorInfo()),
+		*GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), CurrentActorInfo->IsNetAuthority(),
+		int32(GetAvatarActorFromActorInfo()->GetLocalRole()), CurrentActivationInfo.GetActivationPredictionKey().Current);
 	GetWorld()->GetTimerManager().ClearTimer(TargetTimeout);
 	if (!ValidateUse()) { EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, true); return; }
 	const UCatItemUseFragment* Config = GetUseConfiguration();
@@ -124,9 +128,25 @@ bool UCatItemGameplayAbility::ValidateUse() const
 		const auto* GameMode = Character->GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>();
 		if (!GameMode || !GameMode->CanAcceptGameplayCommand(Character->GetController())) return false;
 		auto* Fishing = Character->GetWorld()->GetSubsystem<UCatFishingService>();
-		if (Fishing && Fishing->IsActiveItemUseBlockedForController(Character->GetController())) return false;
+		if (!AllowsUseDuringActiveFishing() && Fishing && Fishing->IsActiveItemUseBlockedForController(Character->GetController())) return false;
 	}
 	return true;
+}
+// 通用行为配置流程：要求效果清单非空；这里只验证配置入口存在，不保证 GE 的条件、免疫或执行结果一定产生收益，领域行为覆写各自约束。
+bool UCatItemGameplayAbility::ValidateUseConfiguration(const UCatItemUseFragment& Configuration, FText& OutError) const
+{
+	if (!Configuration.Effects.IsEmpty()) return true;
+	OutError = NSLOCTEXT("CatItem", "MissingUseEffect", "效果型使用至少需要一个使用效果，不能只消费物品而没有作用。");
+	return false;
+}
+// 单鱼配置流程：固定单条消费与成长效果类型，不解析 GE 内部修饰器；实际经验仍由本条鱼的重量和鱼种计算。
+bool UCatGA_ConsumeFish::ValidateUseConfiguration(const UCatItemUseFragment& Configuration, FText& OutError) const
+{
+	if (!Super::ValidateUseConfiguration(Configuration, OutError)) return false;
+	if (Configuration.ConsumeCount == 1 && Configuration.Effects.ContainsByPredicate([](const TSubclassOf<UGameplayEffect>& Effect)
+		{ return Effect && Effect->IsChildOf(UCatGE_FishExperience::StaticClass()); })) return true;
+	OutError = NSLOCTEXT("CatItem", "FishUseCount", "吃鱼的消耗数量必须为 1，且使用效果须包含 CatGE_FishExperience 或其子类；每次按这一条鱼的实际重量结算。");
+	return false;
 }
 // 参数收集流程：普通道具复制命名数值配置；需要实例数据的能力在此基础上覆盖已声明的参数。
 void UCatItemGameplayAbility::GatherEffectParameters(TMap<FGameplayTag, float>& Parameters) const
@@ -168,11 +188,15 @@ void UCatItemGameplayAbility::CommitUse()
 // 取消流程：只结束仍在等待或前摇的激活；成本已经提交后不再用表现中断否定权威结果。
 void UCatItemGameplayAbility::CancelPendingUse()
 {
+	if (IsActive() && !bTargetAccepted)
+		UE_LOG(LogCatCharacter, Warning, TEXT("Event=item_ability_target_timeout Ability=%s Owner=%s World=%s NetMode=%d Authority=%d PredictionKey=%d Result=NoTargetData"),
+			*GetClass()->GetName(), *GetNameSafe(GetAvatarActorFromActorInfo()), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()),
+			CurrentActorInfo && CurrentActorInfo->IsNetAuthority(), CurrentActivationInfo.GetActivationPredictionKey().Current);
 	if (IsActive() && !bUseCommitted)
 		CancelAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true);
 }
 // 收尾流程：提交作用域尚未退出时先让 GAS 延后结束；正式收尾清除超时、目标监听与复制数据，再回送权威结果。
-// 引擎结束任务和蒙太奇后清空本次来源；尚未取得请求 ID 的目标超时只能结束激活，不能构造带业务身份的回执。
+// 清空本次来源后才让引擎发布结束事件，避免结束监听者重激活后又被旧收尾擦掉；没有请求 ID 的超时不伪造业务回执。
 void UCatItemGameplayAbility::EndAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 	FGameplayAbilityActivationInfo ActivationInfo, bool bReplicateEndAbility, bool bWasCancelled)
 {
@@ -198,8 +222,8 @@ void UCatItemGameplayAbility::EndAbility(FGameplayAbilitySpecHandle Handle, cons
 			*UseTarget.RequestId.ToString(), *UseTarget.ItemId.ToString(), *GetClass()->GetName(), *GetNameSafe(GetWorld()),
 			GetWorld() ? int32(GetWorld()->GetNetMode()) : -1, bUseCommitted, bWasCancelled);
 	}
-	Super::EndAbility(Handle, ActorInfo, ActivationInfo, bReplicateEndAbility, bWasCancelled);
 	UseTarget = {}; CommittedSource = nullptr; bTargetAccepted = false; bResourceCommitted = false;
+	Super::EndAbility(Handle, ActorInfo, ActivationInfo, bReplicateEndAbility, bWasCancelled);
 }
 // 食用预检流程：公共规则通过后读取鱼实例与可食用标记，服务器再检查成长配置和本条鱼的实际经验。
 bool UCatGA_ConsumeFish::ValidateUse() const

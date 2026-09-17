@@ -6,6 +6,7 @@
 #include "AbilitySystem/BodyAction/Social/CatSocialBodyActionAbilities.h"
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "GameplayEffect.h"
+#include "AbilitySystem/Items/CatItemGameplayAbility.h"
 
 bool UCatAbilitySet::IsRuntimeReady() const
 {
@@ -39,10 +40,10 @@ bool UCatAbilitySet::IsRuntimeReady() const
 
 bool UCatAbilitySet::IsDefaultCharacterAbilitySetReady() const
 {
-	// 默认集合校验流程：角色保留四项 BodyAction 与无竿也可用的 X 取消；钓竿操作能力必须移出此集合。
-	if (!IsRuntimeReady() || GrantedAbilities.Num() != 5) return false;
+	// 默认集合校验流程：角色保留四项 BodyAction、无竿也可用的 X 取消及共享来源进食；钓竿操作能力必须移出此集合。
+	if (!IsRuntimeReady() || GrantedAbilities.Num() != 6) return false;
 	TSet<TSubclassOf<UGameplayAbility>> Expected = { UCatGA_BodyActionCampfirePlayback::StaticClass(),
-		UCatGA_BodyActionRequestManualHelp::StaticClass(), UCatGA_BodyActionRequestMischief::StaticClass(), UCatGA_BodyActionPlaceProtectionSign::StaticClass(), UCatGA_CancelBodyAction::StaticClass() };
+		UCatGA_BodyActionRequestManualHelp::StaticClass(), UCatGA_BodyActionRequestMischief::StaticClass(), UCatGA_BodyActionPlaceProtectionSign::StaticClass(), UCatGA_CancelBodyAction::StaticClass(), UCatGA_ConsumeFish::StaticClass() };
 	for (const FCatAbilitySetAbility& Entry : GrantedAbilities)
 	{
 		const bool bCancel = Entry.Ability == UCatGA_CancelBodyAction::StaticClass();

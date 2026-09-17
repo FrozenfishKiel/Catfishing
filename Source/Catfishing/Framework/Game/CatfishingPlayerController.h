@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Collection/CatImprintTypes.h"
@@ -70,13 +70,6 @@ public:
 	void EndSelectedItemUseFromInput(bool bCancelled);
 	/** 查询当前输入是否可以使用一个本地选中且有有效实例的背包槽位；不做服务器权限裁决。 */
 	bool CanUseSelectedBackpackItemFromInput() const;
-	/** 服务器复核当前本人背包槽位和实例身份后执行统一 Use；客户端本地选中不作为服务器状态或权限依据。 */
-	UFUNCTION(Server, Reliable)
-	void ServerUseSelectedBackpackItem(FGuid RequestId, int32 ExpectedSelectedSlot, FGuid ItemInstanceId,
-		FCatInventoryUseTarget Target = FCatInventoryUseTarget());
-	/** 服务器结束同一个持续使用实例；只接受 Begin 已记录的 RequestId 和实例身份，换格后也不会把结束事件投给新物品。 */
-	UFUNCTION(Server, Reliable)
-	void ServerEndSelectedBackpackItem(FGuid RequestId, FGuid ItemInstanceId, bool bCancelled);
 	bool IsQuickbarSelectionLocked() const;
 	void ParkHeldRodFromInput();
 	void PackHeldRodFromInput();
@@ -356,7 +349,7 @@ private:
 	void NativeInputTagCanceled(FGameplayTag InputTag);
 	/** 从当前 Pawn 解析正式个人背包；只接受 Character 构造的 BackPack，不把鱼护、鱼缸或商店库存误当快捷栏来源。 */
 	UCatBackPackComponent* GetControlledBackPack() const;
-	/** 结束本机和服务器同一持续 Use 事务的记录；换 Pawn、旅行和按键取消调用它，选择变更不得调用它。 */
+	/** 把松开或取消交给当前 Pawn 的物品能力组件；换 Pawn、旅行和按键取消复用此口，选择变更不结束原来源。 */
 	void ClearSelectedItemUseInput(bool bCancelled);
 	/** 当 Pawn 或输入组件在 owning client 就绪时通知 LocalPlayer UI；服务器远端 Controller 和非 Cat UI World 安全跳过。 */
 	void NotifyLocalPlayerUISubsystemPawnChanged();
@@ -395,24 +388,11 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UEnhancedInputComponent> NativeInputBoundComponent;
 
-	/** 本机持续使用事务的请求 ID；G 开始后只用它匹配松开或取消，避免选择变化改写结束目标。 */
-	FGuid ActiveSelectedItemUseRequestId;
 	/** 独立物品栏的本地焦点，初始第一格；仅本机输入修改，换 Pawn 重置，不复制、不持久化、不写入背包 Model。 */
 	int32 SelectedQuickbarSlotIndex = 0;
 	int32 AuthorityQuickbarSlotIndex = 0;
 	FGuid PendingQuickbarSelectionRequestId;
 	TMap<FGuid, TPair<int32, bool>> QuickbarSelectionResults;
-	/** 本机持续使用事务锁定的实例身份；服务器和客户端都据此拒绝把结束输入转给另一个同定义物品。 */
-	FGuid ActiveSelectedItemUseItemId;
-	/** 本机持续使用事务开始时的背包槽位；它与固定实例共同提供诊断上下文，结束不会改读之后的新选中格。 */
-	int32 ActiveSelectedItemUseSlotIndex = INDEX_NONE;
-	/** 当前持续使用所属的正式背包；Begin 成功时冻结，换格后 End 仍只回到这份原背包而非新焦点。 */
-	UPROPERTY(Transient)
-	TObjectPtr<UCatBackPackComponent> ActiveSelectedItemUseBackPack = nullptr;
-	/** 当前持续使用的原始实例；服务器用强引用保留它直到 End/Cancel，即使槽位已换物也能取消原来的持续效果。 */
-	UPROPERTY(Transient)
-	TObjectPtr<UCatInventoryItemInstance> ActiveSelectedItemUseInstance = nullptr;
-
 	/** 已安装 F8/F9 绑定的输入组件；输入组件重建后重新绑定一次，避免 SetupInputComponent 重入累积同一确认请求。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UInputComponent> AltarConfirmationInputBoundComponent;

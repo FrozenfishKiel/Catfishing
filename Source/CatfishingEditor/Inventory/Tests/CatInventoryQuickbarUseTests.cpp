@@ -1,4 +1,4 @@
-#if WITH_DEV_AUTOMATION_TESTS
+﻿#if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
 #include "CatSelectedUseInputTestAccess.h"
@@ -11,6 +11,7 @@
 #include "Character/CatCharacter.h"
 #include "AbilitySystem/Fishing/InputAbilities/CatFishingChumAbility.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Items/CatItemAbilityComponent.h"
 #include "Equipment/CatEquipmentItemDefinition.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Inventory/CatBackPackComponent.h"
@@ -28,7 +29,7 @@ namespace CatInventoryQuickbarUseTests
 		for (const FGameplayAbilitySpec& Spec : ASC->GetActivatableAbilities())
 			if (Spec.SourceObject.Get() == Entry->Instance && Spec.IsActive())
 				if (const UCatGA_FishingChum* Ability = Cast<UCatGA_FishingChum>(Spec.GetPrimaryInstance()))
-					return (!RequestId.IsValid() || Ability->MatchesActiveUseRequest(RequestId)) && Ability->IsWaitingForInputRelease();
+					return (!RequestId.IsValid() || Ability->GetUseTarget().RequestId == RequestId) && Ability->IsWaitingForInputRelease();
 		return false;
 	}
 	/** PIE 设置恢复命令：保存本测试临时覆盖的网络拓扑，结束后还原编辑器原有运行偏好。 */
@@ -189,11 +190,13 @@ namespace CatInventoryQuickbarUseTests
 			return false;
 		}
 
-		/** 用正确槽位配上错误实例 ID 调快捷栏 RPC；拒绝必须保持未蓄力，证明服务器不按定义或客户端选择猜测物品。 */
+		/** 请求不存在的来源身份后取消待处理输入；第一份真实窝料不得进入蓄力，不再测试已删除的槽位 RPC。 */
 		bool VerifyMismatchedSlotRejected()
 		{
-			HostController->ServerUseSelectedBackpackItem(FGuid::NewGuid(), FirstChumSlot, SecondChumId);
-			if (!Test->TestFalse(TEXT("slot/item mismatch does not begin a source chum ability"), IsChumUseWaiting(Cast<ACatCharacter>(HostController->GetPawn()), BackPack.Get(), FirstChumId, FGuid())))
+			auto* Items = HostController->GetPawn()->FindComponentByClass<UCatItemAbilityComponent>();
+			Items->RequestUse(BackPack.Get(), FGuid::NewGuid(), FGuid::NewGuid(), true);
+			Items->ReleaseUseInput(true);
+			if (!Test->TestFalse(TEXT("不存在的来源不会启动任何窝料能力"), IsChumUseWaiting(Cast<ACatCharacter>(HostController->GetPawn()), BackPack.Get(), FirstChumId, FGuid())))
 			{
 				return true;
 			}
@@ -201,17 +204,17 @@ namespace CatInventoryQuickbarUseTests
 			return false;
 		}
 
-		/** 开始第一份窝料并原样重放同一 RequestId；后者必须复用库存终态，不能建立第二次连续输入或重复消耗。 */
+		/** 开始第一份窝料后重复提交同一请求；活动按住来源阻止第二次输入，验证仍只有原蓄力且未扣量，不把它当作库存终态重放测试。 */
 		bool BeginAndReplayFirstChum()
 		{
 			FirstChumRequestId = FGuid::NewGuid();
-			HostController->ServerUseSelectedBackpackItem(FirstChumRequestId, FirstChumSlot, FirstChumId);
+			HostController->GetPawn()->FindComponentByClass<UCatItemAbilityComponent>()->RequestUse(BackPack.Get(), FirstChumId, FirstChumRequestId, true);
 			if (!Test->TestTrue(TEXT("listen host begins the first formal chum through selected-use gateway"),
 				IsChumUseWaiting(Cast<ACatCharacter>(HostController->GetPawn()), BackPack.Get(), FirstChumId, FirstChumRequestId)))
 			{
 				return true;
 			}
-			HostController->ServerUseSelectedBackpackItem(FirstChumRequestId, FirstChumSlot, FirstChumId);
+			HostController->GetPawn()->FindComponentByClass<UCatItemAbilityComponent>()->RequestUse(BackPack.Get(), FirstChumId, FirstChumRequestId, true);
 			const FCatInventoryEntry* FirstChumAfterReplay = BackPack->GetInventoryEntryAtSlot(FirstChumSlot);
 			if (!Test->TestTrue(TEXT("replaying the same request keeps one active formal chum session"),
 				IsChumUseWaiting(Cast<ACatCharacter>(HostController->GetPawn()), BackPack.Get(), FirstChumId, FirstChumRequestId))
@@ -225,7 +228,7 @@ namespace CatInventoryQuickbarUseTests
 			return false;
 		}
 
-		/** 交换两份窝料后仍以 Begin 的原 RequestId 与原实例取消；槽位旧身份再次 Use 必须被拒绝，取消则必须结束原持续会话。 */
+		/** 交换两份窝料后尝试启动第二来源；原按住能力仍活动时拒绝新输入，再通过原 Spec 取消，验证换格没有重定向来源。 */
 		bool SwapThenCancelOriginalChum()
 		{
 			if (!Test->TestTrue(TEXT("swap two formal chum slots while the first one is held"),
@@ -233,13 +236,13 @@ namespace CatInventoryQuickbarUseTests
 			{
 				return true;
 			}
-			HostController->ServerUseSelectedBackpackItem(FGuid::NewGuid(), FirstChumSlot, FirstChumId);
-			if (!Test->TestTrue(TEXT("old slot plus original item identity is rejected after the swap"),
+			HostController->GetPawn()->FindComponentByClass<UCatItemAbilityComponent>()->RequestUse(BackPack.Get(), SecondChumId, FGuid::NewGuid(), true);
+			if (!Test->TestTrue(TEXT("激活期间第二来源请求不替换原能力"),
 				IsChumUseWaiting(Cast<ACatCharacter>(HostController->GetPawn()), BackPack.Get(), FirstChumId, FirstChumRequestId)))
 			{
 				return true;
 			}
-			HostController->ServerEndSelectedBackpackItem(FirstChumRequestId, FirstChumId, true);
+			HostController->GetPawn()->FindComponentByClass<UCatItemAbilityComponent>()->ReleaseUseInput(true);
 			if (!Test->TestTrue(TEXT("changing slots does not redirect cancel and the original chum session closes"),
 				!IsChumUseWaiting(Cast<ACatCharacter>(HostController->GetPawn()), BackPack.Get(), FirstChumId, FirstChumRequestId)))
 			{
@@ -249,12 +252,12 @@ namespace CatInventoryQuickbarUseTests
 			return false;
 		}
 
-		/** 第二份窝料开始后从可见格移走再取消；原实例引用必须仍能清掉命令组件状态，后续 Use 才不会卡在旧 Phase。 */
+		/** 第二份窝料开始后移出库存，再发送输入取消；来源撤销和显式取消均应让原能力不再等待，不检查已删除的实例执行状态。 */
 		bool RemoveThenCancelSecondChum()
 		{
 			const int32 CurrentSecondChumSlot = BackPack->FindInventorySlotIndexFromInstanceId(SecondChumId);
 			SecondChumRequestId = FGuid::NewGuid();
-			HostController->ServerUseSelectedBackpackItem(SecondChumRequestId, CurrentSecondChumSlot, SecondChumId);
+			HostController->GetPawn()->FindComponentByClass<UCatItemAbilityComponent>()->RequestUse(BackPack.Get(), SecondChumId, SecondChumRequestId, true);
 			if (!Test->TestTrue(TEXT("the second formal chum begins before removal"), IsChumUseWaiting(Cast<ACatCharacter>(HostController->GetPawn()), BackPack.Get(), SecondChumId, SecondChumRequestId)))
 			{
 				return true;
@@ -265,7 +268,7 @@ namespace CatInventoryQuickbarUseTests
 			{
 				return true;
 			}
-			HostController->ServerEndSelectedBackpackItem(SecondChumRequestId, SecondChumId, true);
+			HostController->GetPawn()->FindComponentByClass<UCatItemAbilityComponent>()->ReleaseUseInput(true);
 			if (!Test->TestTrue(TEXT("removed active chum still cancels the original command session"),
 				!IsChumUseWaiting(Cast<ACatCharacter>(HostController->GetPawn()), BackPack.Get(), SecondChumId, SecondChumRequestId)))
 			{

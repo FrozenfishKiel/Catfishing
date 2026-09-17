@@ -1,4 +1,4 @@
-#include "Environment/CatChumPlacementService.h"
+﻿#include "Environment/CatChumPlacementService.h"
 
 #include "Equipment/Fragments/CatEquipmentFragment_Chum.h"
 
@@ -39,12 +39,12 @@ namespace CatChumPlacementServicePrivate
 }
 
 FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* RequestingController,
-	const FCatPlaceChumCommand& Command)
+	const FCatPlaceChumCommand& Command, TFunctionRef<bool()> PayResource)
 {
 	// 打窝服务流程：
 	// 1. 先验证服务器、玩家身份、命令幂等和玩法 gate，再用 ChumFieldSubsystem 重放首次终态。
-	// 2. 玩家窝料事实只从正式库存按实例 ID 读取，库存组件按当前槽位提交扣量；没有正式库存组件时直接失败。
-	// 3. 水域、距离和视线通过后先准备窝点，再直接提交正式库存扣量；Equipment 只在扣量后刷新钓鱼选择读模型。
+	// 2. 玩家窝料事实只从正式库存按实例 ID 读取；没有正式库存组件时直接失败，支付由能力提供的同步回调负责。
+	// 3. 水域、距离和视线通过后先准备窝点，再调用支付回调；支付失败中止准备，成功后继续激活并刷新钓具读模型。
 	// 4. 库存提交成功后才激活并复制窝点，保证世界影响不会脱离真实物品消耗单独成立。
 	using namespace CatChumPlacementServicePrivate;
 	UWorld* World = GetWorld();
@@ -134,8 +134,7 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 		&& FormalChumInstance->GetItemInstanceId() == Command.ChumItemInstanceId
 		&& Definition != nullptr
 		&& Definition->IsRuntimeDefinitionReady()
-		&& Definition->CanServeChumPlacement()
-		&& FormalChumInstance->ConsumesInventoryQuantityOnUse())
+		&& Definition->CanServeChumPlacement())
 	{
 		ChumItemId = FormalChumInstance->GetItemId();
 	}
@@ -147,7 +146,6 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 		|| !Definition->CanServeChumPlacement()
 		|| !Definition->IsRuntimeDefinitionReady()
 		|| FormalChumInstance == nullptr
-		|| !FormalChumInstance->ConsumesInventoryQuantityOnUse()
 		|| Command.Quantity > Definition->FindFragment<UCatEquipmentFragment_Chum>()->ChumInfluence.MaximumQuantityPerPlacement)
 	{
 		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::DefinitionUnavailable));
@@ -199,18 +197,10 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 	{
 		return FinalizeFirstResult(MakeError(Command.RequestId, Prepared.Error));
 	}
-	// 正式库存提交流程：先保存可恢复的库存快照，再扣除本次窝料数量；正式库存是事实写口，Equipment 只刷新选择读模型。
-	// 扣量失败只撤销窝点；扣量后若读模型刷新失败，还要恢复库存并撤销窝点准备，避免世界影响、正式库存和读模型看到三种事务结果。
-	const TArray<FCatInventoryEntry> SavedEntries = OwnerInventory->GetInventoryEntries();
-	if (!OwnerInventory->ConsumeItemAtSlot(FormalChumSlotIndex, Command.Quantity))
+	// 提交流程：所有水域与来源校验完成后同步调用能力支付；物品成本延迟库存通知，支付实现仍须保证不破坏待激活的窝点令牌。
+	// 窝点激活并记录终态后再发布库存和环境变化；不恢复整份库存，也不把只读装配刷新当作付款失败。
+	if (!PayResource())
 	{
-		Fields->AbortPreparedField(Prepared.CommitToken);
-		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::DependencyUnavailable));
-	}
-	if (Equipment != nullptr
-		&& !Equipment->RefreshLoadoutFromInventoryComponentFromAuthority())
-	{
-		OwnerInventory->ReplaceInventoryEntriesFromAuthority(SavedEntries, SavedEntries.Num());
 		Fields->AbortPreparedField(Prepared.CommitToken);
 		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::DependencyUnavailable));
 	}
@@ -222,9 +212,16 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 		Prepared.CommitToken);
 	if (!Activated.bCommitted)
 	{
+		// 支付完成后不能用库存快照抹掉其他成本或回调；异常也必须公开真实扣量，让能力撤销和客户端读模型收敛。
+		OwnerInventory->BroadcastInventoryChange(FormalChumSlotIndex);
+		if (Equipment) Equipment->RefreshLoadoutFromInventoryComponentFromAuthority();
+		UE_LOG(LogCatEnvironment, Error, TEXT("Event=chum_post_payment_activation_failed RequestId=%s ItemInstance=%s Result=ResourcePaidFieldUnavailable"),
+			*Command.RequestId.ToString(), *Command.ChumItemInstanceId.ToString());
 		return FinalizeFirstResult(MakeError(Command.RequestId, Activated.Error));
 	}
 	const FCatPlaceChumResult Frozen = FinalizeFirstResult(Activated);
+	OwnerInventory->BroadcastInventoryChange(FormalChumSlotIndex);
+	if (Equipment) Equipment->RefreshLoadoutFromInventoryComponentFromAuthority();
 	Fields->PublishActivatedField(Frozen.FieldId);
 	return Frozen;
 }

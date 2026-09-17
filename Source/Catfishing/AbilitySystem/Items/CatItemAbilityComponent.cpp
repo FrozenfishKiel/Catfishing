@@ -10,6 +10,7 @@
 #include "Items/Fish/CatFishPickupActor.h"
 #include "Data/CatFishCatalogSettings.h"
 #include "Data/CatFishDefinition.h"
+#include "Logging/CatLog.h"
 
 // 构造流程：该组件没有独立复制状态，来源与能力通过库存和 ASC 复制，Tick 只供短暂等待使用。
 UCatItemAbilityComponent::UCatItemAbilityComponent()
@@ -35,18 +36,17 @@ void UCatItemAbilityComponent::EndPlay(EEndPlayReason::Type Reason)
 	if (auto* ASC = UCatAbilitySystemComponent::FindCatAbilitySystemFromActor(GetOwner()); ASC && GetOwner()->HasAuthority())
 	{
 		for (const auto& Entry : Granted) { ASC->CancelAbilityHandle(Entry.Value); ASC->ClearAbility(Entry.Value); }
-		if (SharedConsumeHandle.IsValid()) { ASC->CancelAbilityHandle(SharedConsumeHandle); ASC->ClearAbility(SharedConsumeHandle); }
 	}
 	Granted.Reset(); PendingTarget = {}; SetComponentTickEnabled(false);
 	Super::EndPlay(Reason);
 }
-// 来源同步流程：只在服务器 ActorInfo 已建立后授予；离库后禁止再次激活，正在消费最后一件的能力允许正常结束。
+// 来源同步流程：服务器 ActorInfo 就绪后按当前库存授予；来源离库时先请求取消，再标记结束后移除。
+// 已进入提交锁的最后一件消费延后收尾，未提交的蓄力立即取消；共享进食能力由角色默认 AbilitySet 管理。
 void UCatItemAbilityComponent::RefreshGrantedAbilities()
 {
 	auto* Character = Cast<ACatCharacter>(GetOwner());
 	auto* ASC = Character ? Character->GetCatAbilitySystemComponent() : nullptr;
 	if (!Character || !Character->HasAuthority() || !ASC || ASC->GetAvatarActor() != Character) return;
-	if (!SharedConsumeHandle.IsValid()) SharedConsumeHandle = ASC->GiveAbility(FGameplayAbilitySpec(UCatGA_ConsumeFish::StaticClass(), 1));
 	TSet<FGuid> Present;
 	if (auto* Inventory = Character->GetInventoryComponent())
 		for (const FCatInventoryEntry& Entry : Inventory->GetInventoryEntries())
@@ -60,7 +60,7 @@ void UCatItemAbilityComponent::RefreshGrantedAbilities()
 				Granted.Add(Item->GetItemInstanceId(), ASC->GiveAbility(FGameplayAbilitySpec(Use->AbilityClass, 1, INDEX_NONE, Item)));
 		}
 	for (auto It = Granted.CreateIterator(); It; ++It)
-		if (!Present.Contains(It.Key())) { ASC->SetRemoveAbilityOnEnd(It.Value()); It.RemoveCurrent(); }
+		if (!Present.Contains(It.Key())) { ASC->CancelAbilityHandle(It.Value()); ASC->SetRemoveAbilityOnEnd(It.Value()); It.RemoveCurrent(); }
 }
 // 输入流程：本地控制者提交有效库存引用与身份；已有待处理意图时拒绝新输入，否则冻结来源及持续输入标记。
 // 能力配置已可读时由 CDO 采样一次目标，再匹配 Spec；等待期间不重新瞄准，最多等待两秒。
@@ -69,8 +69,13 @@ bool UCatItemAbilityComponent::RequestUse(UCatInventoryComponent* Inventory, FGu
 	auto* Pawn = Cast<APawn>(GetOwner());
 	if (!Pawn || !Pawn->IsLocallyControlled() || !IsValid(Inventory) || !ItemId.IsValid() || !RequestId.IsValid()) return false;
 	if (PendingTarget.RequestId.IsValid()) return false;
+	if (auto* ASC = UCatAbilitySystemComponent::FindCatAbilitySystemFromActor(GetOwner()))
+		if (const auto* Held = ASC->FindAbilitySpecFromHandle(HeldInputHandle); Held && Held->IsActive()) return false;
 	PendingTarget = {}; PendingTarget.Inventory = Inventory; PendingTarget.ItemId = ItemId; PendingTarget.RequestId = RequestId;
 	PendingTarget.bContinuousInput = bContinuousInput;
+	UE_LOG(LogCatCharacter, Log, TEXT("Event=item_use_requested RequestId=%s Item=%s Owner=%s World=%s NetMode=%d Authority=%d LocalRole=%d Source=%s"),
+		*RequestId.ToString(), *ItemId.ToString(), *GetNameSafe(GetOwner()), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()),
+		GetOwner()->HasAuthority(), int32(GetOwner()->GetLocalRole()), *GetNameSafe(Inventory->GetOwner()));
 	const auto* Entry = Inventory->GetInventoryEntryAtSlot(Inventory->FindInventorySlotIndexFromInstanceId(ItemId));
 	const auto* Use = Entry && Entry->Instance && Entry->Instance->GetItemDefinition()
 		? Entry->Instance->GetItemDefinition()->FindFragment<UCatItemUseFragment>() : nullptr;
@@ -87,6 +92,9 @@ bool UCatItemAbilityComponent::RequestUseCarriedFish(ACatFishPickupActor* Fish, 
 		|| PendingTarget.RequestId.IsValid() || ACatFishPickupActor::FindCarriedFish(Character) != Fish) return false;
 	PendingTarget = {}; PendingTarget.WorldFish = Fish; PendingTarget.ItemId = Fish->GetPresentationState().FishInstanceId;
 	PendingTarget.RequestId = RequestId; PendingDeadline = GetWorld()->GetTimeSeconds() + 2.0;
+	UE_LOG(LogCatCharacter, Log, TEXT("Event=item_use_requested RequestId=%s Item=%s Owner=%s World=%s NetMode=%d Authority=%d LocalRole=%d Source=%s"),
+		*RequestId.ToString(), *PendingTarget.ItemId.ToString(), *GetNameSafe(GetOwner()), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()),
+		GetOwner()->HasAuthority(), int32(GetOwner()->GetLocalRole()), *GetNameSafe(Fish));
 	if (!TryActivatePending()) SetComponentTickEnabled(true);
 	return true;
 }
@@ -110,6 +118,9 @@ bool UCatItemAbilityComponent::TryActivatePending()
 		const bool bSharedSource = (!Inventory || Inventory->GetOwner() != GetOwner()) && !Spec.SourceObject.IsValid();
 		if (!bOwnSource && !bSharedSource) continue;
 		PendingHandle = Spec.Handle;
+		const bool bHold = PendingTarget.bContinuousInput && Spec.Ability->GetClass()->GetDefaultObject<UCatItemGameplayAbility>()->UsesContinuousInput();
+		if (auto* MutableSpec = ASC->FindAbilitySpecFromHandle(Spec.Handle)) MutableSpec->InputPressed = bHold;
+		if (bHold) HeldInputHandle = Spec.Handle;
 		const bool bActivated = ASC->TryActivateAbility(PendingHandle);
 		// 已找到 Spec 的激活拒绝是明确终态，不能自动重试成下一次消费。
 		if (!bActivated)
@@ -117,6 +128,8 @@ bool UCatItemAbilityComponent::TryActivatePending()
 			FCatDomainCommandResult Result;
 			Result.RequestId = PendingTarget.RequestId;
 			Result.Error = ECatDomainCommandError::InvalidPhase;
+			UE_LOG(LogCatCharacter, Warning, TEXT("Event=item_use_activation_rejected RequestId=%s Item=%s Owner=%s World=%s NetMode=%d Result=InvalidPhase"),
+				*PendingTarget.RequestId.ToString(), *PendingTarget.ItemId.ToString(), *GetNameSafe(GetOwner()), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()));
 			PendingTarget = {}; PendingHandle = {};
 			if (auto* Pawn = Cast<APawn>(GetOwner()))
 				if (auto* Controller = Cast<ACatfishingPlayerController>(Pawn->GetController())) Controller->OnCampCommandResultReceived.Broadcast(Result);
@@ -141,8 +154,30 @@ void UCatItemAbilityComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
 	if ((!IsValid(PendingTarget.Inventory) && !IsValid(PendingTarget.WorldFish)) || GetWorld()->GetTimeSeconds() >= PendingDeadline)
 	{
 		FCatDomainCommandResult Result; Result.RequestId = PendingTarget.RequestId; Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		UE_LOG(LogCatCharacter, Warning, TEXT("Event=item_use_source_unavailable RequestId=%s Item=%s Owner=%s World=%s NetMode=%d Result=ReplicationTimeoutOrSourceLost"),
+			*PendingTarget.RequestId.ToString(), *PendingTarget.ItemId.ToString(), *GetNameSafe(GetOwner()), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()));
 		if (auto* Pawn = Cast<APawn>(GetOwner()))
 			if (auto* Controller = Cast<ACatfishingPlayerController>(Pawn->GetController())) Controller->OnCampCommandResultReceived.Broadcast(Result);
 		PendingTarget = {}; SetComponentTickEnabled(false);
 	}
+}
+
+// 输入结束流程：复制等待期间先记录松开或取消；已激活时只向原 Spec 投递事件，AbilityTask 使用自身激活键完成跨网络配对。
+void UCatItemAbilityComponent::ReleaseUseInput(bool bCancelled)
+{
+	if (PendingTarget.RequestId.IsValid())
+	{
+		if (bCancelled) { PendingTarget = {}; PendingHandle = {}; SetComponentTickEnabled(false); }
+		else PendingTarget.bContinuousInput = false;
+	}
+	auto* ASC = UCatAbilitySystemComponent::FindCatAbilitySystemFromActor(GetOwner());
+	const auto Handle = HeldInputHandle; HeldInputHandle = {};
+	auto* Spec = ASC ? ASC->FindAbilitySpecFromHandle(Handle) : nullptr;
+	if (!Spec || !Spec->IsActive()) return;
+	Spec->InputPressed = false;
+	if (bCancelled) { ASC->CancelAbilityHandle(Handle); return; }
+	const auto* Ability = Spec->GetPrimaryInstance();
+	if (!Ability) return;
+	ASC->AbilitySpecInputReleased(*Spec);
+	ASC->InvokeReplicatedEvent(EAbilityGenericReplicatedEvent::InputReleased, Handle, Ability->GetCurrentActivationInfo().GetActivationPredictionKey());
 }

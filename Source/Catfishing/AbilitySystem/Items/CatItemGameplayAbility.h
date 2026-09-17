@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "AbilitySystem/Abilities/CatGameplayAbility.h"
@@ -30,6 +30,10 @@ public:
 	const UCatItemUseFragment* GetUseConfiguration() const;
 	/** 预检目标访问、动作许可与来源绑定；派生能力只补充自己的领域规则。 */
 	virtual bool ValidateUse() const;
+	/** 检查配置能否被本行为完整执行，防止策划填入不会生效的字段；失败原因同时用于编辑器提示和运行拒绝。 */
+	virtual bool ValidateUseConfiguration(const UCatItemUseFragment& Configuration, FText& OutError) const;
+	/** 是否允许在自己的搏斗阶段使用；默认禁止，抄网行为按既定玩法显式放行。 */
+	virtual bool AllowsUseDuringActiveFishing() const { return false; }
 	/** 生成来源相关效果参数；普通道具只读配置，食物按真实重量计算。 */
 	virtual void GatherEffectParameters(TMap<FGameplayTag, float>& Parameters) const;
 	/** 成功后通知领域消费者；默认无额外副作用，不能从这里再次扣除物品。 */
@@ -38,6 +42,10 @@ public:
 	void SetResourceCommitted(bool bCommitted) const { bResourceCommitted = bCommitted; }
 	/** 按下时由本地输入采样目标；默认自用物品无需目标，目标型能力覆写但不能在这里执行玩法。 */
 	virtual void CaptureTarget(APlayerController* Controller, FCatItemAbilityTargetData& Target) const {}
+	/** 行为是否需要等待同一来源的松开事件；瞬时动作不会因按钮松开而被取消。 */
+	virtual bool UsesContinuousInput() const { return false; }
+	/** 世界产物与资源需要一同公开时延迟库存通知；领域提交方必须在终态写入后发布。 */
+	virtual bool DefersInventoryCostNotification() const { return false; }
 protected:
 	/** 当前激活的不可变来源意图；只在合法 TargetData 到达时写一次，结束清理。 */
 	UPROPERTY() FCatItemAbilityTargetData UseTarget;
@@ -68,10 +76,19 @@ class CATFISHING_API UCatGA_ConsumeFish : public UCatItemGameplayAbility
 {
 	GENERATED_BODY()
 public:
+	/** 一次食用结算一条实物鱼；拒绝零成本或多条成本与单鱼重量经验不一致的配置。 */
+	virtual bool ValidateUseConfiguration(const UCatItemUseFragment& Configuration, FText& OutError) const override;
 	/** 排除不可食用鱼，并在服务器检查成长系统能否接受本条鱼。 */
 	virtual bool ValidateUse() const override;
 	/** 按本条实物鱼的实际重量生成经验，保持逐条取整规则。 */
 	virtual void GatherEffectParameters(TMap<FGameplayTag, float>& Parameters) const override;
 	/** 首次确认消费后记录食用知识并释放隐藏鱼载体，不修改经验或库存。 */
 	virtual void OnUseCommitted(UCatInventoryItemInstance* ConsumedItem) override;
+};
+
+/** 自用效果型道具；沿共同提交点支付配置成本并施加 GE，供小鱼干等同类内容直接配置。 */
+UCLASS()
+class CATFISHING_API UCatGA_ApplyItemEffects : public UCatItemGameplayAbility
+{
+	GENERATED_BODY()
 };

@@ -1,4 +1,4 @@
-# 钓鱼 MVP 落地操作手册
+﻿# 钓鱼 MVP 落地操作手册
 
 > **2026-09-15 盘点：本手册已完成使命。** 步骤 1～3 要建的三棵 StateTree 已在 `Content/Data/StateTrees/`、路径已写进 `Config/DefaultGame.ini`（FishingSessionStateTree／RunFlowStateTree）；文内的选鱼时机、事件数、节点名与现行代码不符。现行接线看 `FishingBlueprintSetupGuide_zh-CN.md`，架构看 `FishingArchitecture_zh-CN.md`。文末「BakeGeometry 的坑」与资产损坏事故两段仍有用。
 
@@ -418,7 +418,7 @@ Event BeginPlay
 
 ### 3. 窝料来源能力与本地预览分工
 
-`UCatGA_FishingChum` 只在服务器运行，从来源实例冻结 Use 上下文并通过 `WaitInputRelease` 接收结束输入，再调用 `CommitChumUseFromAbilityOnAuthority`。扣量由原库存事务完成，窝点由环境服务创建。本地预览由该物品实例的输入通知和原生绘制消费者提供，不能依赖 ServerOnly Ability 在客户端激活。具体入口见 §5.3。
+`UCatGA_FishingChum` 使用本地预测与标准 TargetData/WaitInputRelease；原来源保存在能力中，预览读取同一活动能力。服务器落点校验后通过 GA 成本支付精确物品，再发布窝点和库存变化。当前接线见 [物品使用与策划配置](Architecture/物品使用与策划配置.md)。
 
 ---
 

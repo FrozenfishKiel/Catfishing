@@ -1,4 +1,4 @@
-#include "Equipment/CatEquipmentItemDefinition.h"
+﻿#include "Equipment/CatEquipmentItemDefinition.h"
 
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Bait.h"
@@ -6,7 +6,6 @@
 #include "Equipment/Fragments/CatEquipmentFragment_Scoop.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Chum.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
-#include "Equipment/CatEquipmentUseItemInstances.h"
 #include "Inventory/CatInventorySettings.h"
 #include "Inventory/Fragments/CatEquippableItemFragment.h"
 #include "Equipment/CatEquippedDefinition.h"
@@ -69,11 +68,6 @@ TSubclassOf<UCatInventoryItemInstance> UCatEquipmentItemDefinition::GetPreferred
 		return PreferredInstanceType->IsChildOf(UCatEquipmentInventoryItemInstance::StaticClass())
 			? PreferredInstanceType : nullptr;
 	}
-	// 未显式设置实例类型时仍按钓具片段推导旧使用实例；正式资产迁移会写入 PreferredInstanceType，本分支不负责创建装备运行对象。
-	if (CanServeFishingRod()) return UCatFishingRodEquipmentItemInstance::StaticClass();
-	if (CanServeFishingBait() || CanServeFishingFloat()) return UCatLoadoutEquipmentItemInstance::StaticClass();
-	if (CanServeScoopNet()) return UCatScoopNetEquipmentItemInstance::StaticClass();
-	if (CanServeChumPlacement()) return UCatChumEquipmentItemInstance::StaticClass();
 	return UCatEquipmentInventoryItemInstance::StaticClass();
 }
 

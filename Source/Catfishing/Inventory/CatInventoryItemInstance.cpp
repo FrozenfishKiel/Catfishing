@@ -1,4 +1,4 @@
-#include "Inventory/CatInventoryItemInstance.h"
+﻿#include "Inventory/CatInventoryItemInstance.h"
 #include "Inventory/Fragments/CatItemUseFragment.h"
 #include "Character/CatCharacter.h"
 #include "Inventory/CatInventoryStatics.h"
@@ -49,7 +49,6 @@ FCatDomainCommandResult UCatInventoryItemInstance::ExecuteInventoryActionFromAut
 	Result.RequestId = Context.RequestId;
 	if (!Context.UserPawn || !Context.UserPawn->HasAuthority() || !Context.SourceInventory || Entry.Instance != this)
 	{ Result.Error = ECatDomainCommandError::PermissionDenied; return Result; }
-	if (Action == CatInventoryActionTags::Use) return UseFromInventorySlotFromAuthority(Entry, Context);
 	if (Action == CatInventoryActionTags::Drop) return DropFromInventoryFromAuthority(Entry, Context, Quantity);
 	if (Action == CatInventoryActionTags::Place) return PlaceFromInventoryFromAuthority(Entry, Context, Quantity);
 	if (Action == CatInventoryActionTags::Carry) return CarryFromInventoryFromAuthority(Entry, Context);
@@ -254,16 +253,6 @@ bool UCatInventoryItemInstance::CanUseFromInventory(const FCatInventoryEntry& In
   && Config && Config->IsRuntimeReady() && InventoryEntry.StackCount >= Config->ConsumeCount;
 }
 
-// 旧库存命令拒绝流程：保留请求身份并返回阶段错误，普通物品只能通过来源能力提交；仍使用此虚函数的装备由派生类处理。
-FCatDomainCommandResult UCatInventoryItemInstance::UseFromInventorySlotFromAuthority(
- const FCatInventoryEntry& InventoryEntry, const FCatInventoryItemUseContext& UseContext)
-{
- // 普通物品必须由已授予的 GA 激活；旧服务器命令不能旁路目标验证、预测和成本提交。
- FCatDomainCommandResult Result; Result.RequestId = UseContext.RequestId;
- Result.Error = ECatDomainCommandError::InvalidPhase;
- return Result;
-}
-
 // 扣量读取流程：从有效使用配置读取每次消耗件数；配置无效返回零，返回值不持久化也不另存于快捷栏。
 int32 UCatInventoryItemInstance::GetInventoryUseQuantity() const
 {
@@ -272,30 +261,6 @@ int32 UCatInventoryItemInstance::GetInventoryUseQuantity() const
 }
 
 
-
-// 持续输入声明流程：基础实例没有按住后的第二阶段效果，返回 false 让 Controller 不保留无意义的输入会话。
-bool UCatInventoryItemInstance::UsesContinuousInput() const
-{
-	return false;
-}
-
-// 本地连续表现流程：基础实例没有按住表现，保留空实现让 Controller 不认识具体物品类型也能对称通知子类。
-void UCatInventoryItemInstance::SetUseInputActiveLocally(APlayerController* RequestingController, const bool bActive)
-{
-	(void)RequestingController;
-	(void)bActive;
-}
-
-// 持续使用结束流程：基础实例没有 Begin 阶段状态可结束；返回明确失败，防止输入层把 Release 解释为另一种默认物品行为。
-FCatDomainCommandResult UCatInventoryItemInstance::EndUseFromInventorySlotFromAuthority(
-	const FCatInventoryItemUseContext& UseContext, const bool bCancelled)
-{
-	(void)bCancelled;
-	FCatDomainCommandResult Result;
-	Result.RequestId = UseContext.RequestId;
-	Result.Error = ECatDomainCommandError::InvalidPayload;
-	return Result;
-}
 
 // 定义绑定扩展流程：基础库存实例没有额外状态要派生；子类可以读取当前定义补齐自己的运行字段。
 void UCatInventoryItemInstance::HandleItemDefinitionAssigned()

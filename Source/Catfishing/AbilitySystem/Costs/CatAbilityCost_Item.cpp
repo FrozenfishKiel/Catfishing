@@ -1,4 +1,4 @@
-#include "AbilitySystem/Costs/CatAbilityCost_Item.h"
+﻿#include "AbilitySystem/Costs/CatAbilityCost_Item.h"
 #include "AbilitySystem/Items/CatItemGameplayAbility.h"
 #include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatInventoryItemInstance.h"
@@ -24,7 +24,7 @@ bool UCatAbilityCost_Item::CheckCost(const UCatGameplayAbility* Ability, const F
 }
 
 // 支付流程：只在服务器处理；嘴叼鱼先准备独占再完成实物消费，库存来源按实例和请求键提交数量。
-// 库存的零数量也走终态去重；只有首次成功才允许能力施加效果，重复请求不产生第二次收益。
+// 库存的零数量也走终态去重；按能力约定决定是否延迟通知，延迟时由领域提交方负责发布，首次支付结果决定能否继续生效。
 void UCatAbilityCost_Item::ApplyCost(const UCatGameplayAbility* Ability, const FGameplayAbilityActorInfo* ActorInfo) const
 {
 	const UCatItemGameplayAbility* ItemAbility = Cast<UCatItemGameplayAbility>(Ability);
@@ -41,6 +41,6 @@ void UCatAbilityCost_Item::ApplyCost(const UCatGameplayAbility* Ability, const F
 		return;
 	}
 	if (!IsValid(Target.Inventory)) return;
-	const FCatDomainCommandResult Result = Target.Inventory->ConsumeAbilityItemFromAuthority(Target.RequestId, Target.ItemId, Config->ConsumeCount);
+	const FCatDomainCommandResult Result = Target.Inventory->ConsumeAbilityItemFromAuthority(Target.RequestId, Target.ItemId, Config->ConsumeCount, !ItemAbility->DefersInventoryCostNotification());
 	ItemAbility->SetResourceCommitted(Result.bCommitted && !Result.bTerminalReplay);
 }

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "GameplayAbilitySpecHandle.h"
@@ -30,13 +30,15 @@ public:
 	bool RequestUseCarriedFish(ACatFishPickupActor* Fish, FGuid RequestId);
 	/** 能力激活时读取一次本机输入；Spec 不匹配时拒绝，防止能力间串来源。 */
 	bool TakeLocalTarget(FGameplayAbilitySpecHandle Handle, FCatItemAbilityTargetData& OutTarget);
+	/** 松开或取消本地冻结的来源输入；通过同一 Spec 的标准 GAS 事件传递，不再发物品专用 RPC。 */
+	void ReleaseUseInput(bool bCancelled);
 private:
+	/** 本次本地按住的来源能力；激活前写入，松开清除，永远不通过新选中格寻找。 */
+	FGameplayAbilitySpecHandle HeldInputHandle;
 	/** 观察中的真实背包；只用于解绑通知，不保存库存副本。 */
 	UPROPERTY() TObjectPtr<UCatInventoryComponent> ObservedInventory;
 	/** 每份随身实例对应的能力句柄；仅服务器维护，客户端从 ASC 的 Spec 复制读取来源。 */
 	TMap<FGuid, FGameplayAbilitySpecHandle> Granted;
-	/** 公共容器及嘴叼进食的常驻能力句柄；不绑定固定物品，来源由每次目标数据给出。 */
-	FGameplayAbilitySpecHandle SharedConsumeHandle;
 	/** 唯一待处理本地意图；激活时被取走，等待期间的新请求被拒绝，超时或组件结束时清空。 */
 	UPROPERTY() FCatItemAbilityTargetData PendingTarget;
 	/** 本地正在启动的 Spec；能力读取输入时必须与它一致。 */

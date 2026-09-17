@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Environment/CatChumFieldTypes.h"
@@ -14,7 +14,7 @@ class CATFISHING_API UCatChumPlacementService final : public UWorldSubsystem
 	GENERATED_BODY()
 
 public:
-	/** 提交玩家打窝命令；服务只协调水域、窝点和库存扣量，窝料实例事实优先来自正式库存。 */
+	/** 校验正式来源与水域并准备窝点，再同步调用 PayResource 支付已检查的资源；回调不被保存，成功后激活窝点并发布库存通知。 */
 	FCatPlaceChumResult PlaceChum(APlayerController* RequestingController,
-		const FCatPlaceChumCommand& Command);
+		const FCatPlaceChumCommand& Command, TFunctionRef<bool()> PayResource);
 };

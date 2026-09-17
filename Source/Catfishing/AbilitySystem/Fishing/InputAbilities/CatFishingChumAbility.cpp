@@ -1,110 +1,73 @@
-#include "AbilitySystem/Fishing/InputAbilities/CatFishingChumAbility.h"
-
-#include "AbilitySystem/Tags/CatFishingAbilityTags.h"
-#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+﻿#include "AbilitySystem/Fishing/InputAbilities/CatFishingChumAbility.h"
 #include "Abilities/Tasks/AbilityTask_WaitInputRelease.h"
-#include "Equipment/CatEquipmentUseItemInstances.h"
+#include "AbilitySystemComponent.h"
+#include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventoryItemInstance.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
-#include "Logging/CatLog.h"
+#include "Framework/Game/CatfishingPlayerController.h"
+#include "Engine/World.h"
+#include "Misc/ScopeExit.h"
+#include "Inventory/Fragments/CatItemUseFragment.h"
 
-UCatGA_FishingChum::UCatGA_FishingChum()
+// 窝料配置流程：使用数量进入精确来源成本，必须大于零；窝点规则由领域片段提供，拒绝不会执行的自用效果。
+bool UCatGA_FishingChum::ValidateUseConfiguration(const UCatItemUseFragment& Configuration, FText& OutError) const
 {
-	// 构造流程：保留能力身份标签供来源 AbilitySet 精确授予；ServerOnly 使服务器任务成为蓄力时长的唯一权威。
-	SetAssetTags(FGameplayTagContainer(CatFishingAbilityTags::Ability_Fishing_Chum));
-	NetExecutionPolicy = EGameplayAbilityNetExecutionPolicy::ServerOnly;
+	if (Configuration.ConsumeCount > 0 && Configuration.Effects.IsEmpty() && Configuration.Magnitudes.IsEmpty()) return true;
+	OutError = NSLOCTEXT("CatItem", "ChumUseConfig", "窝料消耗必须大于 0，使用效果与效果参数必须为空；窝点作用请配置窝料影响片段。");
+	return false;
 }
 
-void UCatGA_FishingChum::ActivateAbility(const FGameplayAbilitySpecHandle Handle,
-	const FGameplayAbilityActorInfo* ActorInfo, const FGameplayAbilityActivationInfo ActivationInfo,
-	const FGameplayEventData* TriggerEventData)
+// 蓄力流程：目标已由共同入口验证；菜单直接走零蓄力，连续输入让两端建立同一激活键的释放任务，服务器不采信客户端持续时间。
+void UCatGA_FishingChum::CommitUse()
 {
-	// 激活流程：
-	// 1. 只接受权威 ActorInfo，来源实例由 CommandComponent 按 SourceObject 精确激活，客户端不创建第二条计时路径。
-	// 2. 从当前 AbilitySpec 的 SourceObject 读取物品实例已保存的 UseContext，并把它冻结在 Ability 内，后续换槽不影响本次扣量身份。
-	// 3. 创建 UE 原生 WaitInputRelease；引擎在服务器端并行计时，收到同一 Spec 的 Release 后才回调最终提交。
-	(void)TriggerEventData;
-	if (!ActorInfo || !ActorInfo->IsNetAuthority())
-	{
-		return;
-	}
-	const FGameplayAbilitySpec* Spec = GetCurrentAbilitySpec();
-	UCatChumEquipmentItemInstance* SourceItem = Spec ? Cast<UCatChumEquipmentItemInstance>(Spec->SourceObject.Get()) : nullptr;
-	if (!SourceItem || !SourceItem->TryGetActiveUseContext(ActiveUseContext)
-		|| !ActiveUseContext.RequestId.IsValid() || ActiveUseContext.RequestingController != ActorInfo->PlayerController.Get())
-	{
-		CancelAbility(Handle, ActorInfo, ActivationInfo, true);
-		return;
-	}
-	ActiveSourceItem = SourceItem;
-	UAbilityTask_WaitInputRelease* WaitForRelease = UAbilityTask_WaitInputRelease::WaitInputRelease(this, true);
-	if (!WaitForRelease)
-	{
-		CancelAbility(Handle, ActorInfo, ActivationInfo, true);
-		return;
-	}
-	WaitForRelease->OnRelease.AddDynamic(this, &ThisClass::HandleInputReleased);
+	if (!IsActive() || bWaitingForInputRelease) return;
+	if (!UseTarget.bContinuousInput) { HandleInputReleased(0.0f); return; }
 	bWaitingForInputRelease = true;
-	WaitForRelease->ReadyForActivation();
+	PreviewStartSeconds = GetWorld()->GetTimeSeconds();
+	if (CurrentActorInfo->IsNetAuthority() && !CurrentActorInfo->IsLocallyControlled())
+		if (auto* Spec = CurrentActorInfo->AbilitySystemComponent->FindAbilitySpecFromHandle(CurrentSpecHandle)) Spec->InputPressed = true;
+	auto* Release = UAbilityTask_WaitInputRelease::WaitInputRelease(this, true);
+	Release->OnRelease.AddDynamic(this, &ThisClass::HandleInputReleased);
+	Release->ReadyForActivation();
 }
 
-bool UCatGA_FishingChum::MatchesActiveUseRequest(const FGuid RequestId) const
+// 释放流程：客户端停止预览并等待权威结束；服务器重查原实例和当前槽，再让领域服务计算弹道、校验水域并准备窝点。
+// 服务同步调用支付回调时才 CommitAbility，物品成本延迟通知；提交锁延后取消，领域终态返回后记录成功并结束能力。
+void UCatGA_FishingChum::HandleInputReleased(float HeldSeconds)
 {
-	// 匹配流程：只比较激活时冻结的请求身份；实例和槽位由提交口再复核，防止迟到 End 影响后一次 左键 Use。
-	return RequestId.IsValid() && RequestId == ActiveUseContext.RequestId && ActiveSourceItem.IsValid();
-}
-
-bool UCatGA_FishingChum::IsWaitingForInputRelease() const
-{
-	// 查询流程：只返回 Task 已成功创建且尚未经过任意 End 路径的本地生命周期标记，不把它当作服务器计时或库存真相。
-	return bWaitingForInputRelease;
-}
-
-void UCatGA_FishingChum::EndAbility(const FGameplayAbilitySpecHandle Handle,
-	const FGameplayAbilityActorInfo* ActorInfo, const FGameplayAbilityActivationInfo ActivationInfo,
-	const bool bReplicateEndAbility, const bool bWasCancelled)
-{
-	// 收尾流程：先清除 Task 等待观察值和冻结来源弱引用，再交给 GAS 终止任务与复制状态；取消和正常释放共用该路径。
 	bWaitingForInputRelease = false;
-	if (UCatChumEquipmentItemInstance* SourceItem = ActiveSourceItem.Get())
+	if (!CurrentActorInfo || !CurrentActorInfo->IsNetAuthority()) return;
+	IncrementListLock(); ON_SCOPE_EXIT { DecrementListLock(); };
+	auto* Item = ResolveSourceItem();
+	auto* Controller = Cast<ACatfishingPlayerController>(CurrentActorInfo->PlayerController.Get());
+	auto* Commands = Controller ? Controller->GetFishingCommandComponent() : nullptr;
+	if (!Item || !Commands || !ValidateUse()) { EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, true); return; }
+	FCatInventoryItemUseContext Context;
+	Context.RequestId = UseTarget.RequestId; Context.RequestingController = Controller;
+	Context.UserPawn = Controller->GetPawn(); Context.SourceInventory = UseTarget.Inventory;
+	Context.InventorySlotIndex = UseTarget.Inventory->FindInventorySlotIndexFromInstanceId(UseTarget.ItemId);
+	const auto Result = Commands->CommitChumUseFromAbilityOnAuthority(Controller, Context, UseTarget.ItemId, Item->GetItemId(), FMath::Max(0.f, HeldSeconds), [this]()
 	{
-		// 正常 Release 与取消共用 GAS 收尾；只有 Release Task 才会消费，Abort 只清上下文并用当前 ASC 安全回收来源句柄。
-		SourceItem->AbortActiveUseFromAbility(ActiveUseContext.RequestId,
-			Cast<UCatAbilitySystemComponent>(ActorInfo ? ActorInfo->AbilitySystemComponent.Get() : nullptr));
-	}
-	ActiveSourceItem.Reset();
-	ActiveUseContext = FCatInventoryItemUseContext();
+		return CommitAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo) && bResourceCommitted;
+	});
+	bUseCommitted = Result.bCommitted;
+	EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, !bUseCommitted);
+}
+
+// 预览读取流程：只允许当前本地控制者读取仍等待的能力；换 Pawn 或结束后不沿物品实例残留显示弹道。
+bool UCatGA_FishingChum::TryGetLocalChargePreview(APlayerController* Controller, float& OutHeldSeconds) const
+{
+	OutHeldSeconds = 0.f;
+	if (!Controller || !Controller->IsLocalController() || !IsActive() || !bWaitingForInputRelease
+		|| Controller->GetPawn() != GetAvatarActorFromActorInfo()) return false;
+	OutHeldSeconds = FMath::Max(0.0, GetWorld()->GetTimeSeconds() - PreviewStartSeconds);
+	return true;
+}
+
+// 收尾流程：没有提交锁时释放本地预览状态，然后由共同入口销毁任务和发送唯一物品回执；锁内保持冻结来源到提交结束。
+void UCatGA_FishingChum::EndAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+	FGameplayAbilityActivationInfo ActivationInfo, bool bReplicateEndAbility, bool bWasCancelled)
+{
+	if (ScopeLockCount == 0) { bWaitingForInputRelease = false; PreviewStartSeconds = 0.0; }
 	Super::EndAbility(Handle, ActorInfo, ActivationInfo, bReplicateEndAbility, bWasCancelled);
-}
-
-void UCatGA_FishingChum::HandleInputReleased(const float ServerHeldSeconds)
-{
-	// 松开流程：
-	// 1. Task 已在服务器时钟上计算保持时长；先检查冻结来源仍有效，失效时直接取消而不猜测替代物。
-	// 2. 再把冻结 Context、实例和定义交给命令提交口，复用原有弹道、环境与精确库存消费事务。
-	// 3. 最后无论提交成功与否结束 Ability，确保下一次 Use 不会复用旧 RequestId 或 Task。
-	bWaitingForInputRelease = false;
-	const FGameplayAbilityActorInfo* ActorInfo = GetCurrentActorInfo();
-	UCatChumEquipmentItemInstance* SourceItem = ActiveSourceItem.Get();
-	UCatFishingCommandComponent* Commands = ResolveCommandComponent(ActorInfo);
-	if (!ActorInfo || !ActorInfo->IsNetAuthority() || !SourceItem || !Commands)
-	{
-		CancelAbility(GetCurrentAbilitySpecHandle(), ActorInfo, GetCurrentActivationInfo(), true);
-		return;
-	}
-	const FCatDomainCommandResult Result = Commands->CommitChumUseFromAbilityOnAuthority(
-		Cast<APlayerController>(ActorInfo->PlayerController.Get()), ActiveUseContext, SourceItem->GetItemInstanceId(),
-		SourceItem->GetItemId(), FMath::Max(0.0f, ServerHeldSeconds));
-	if (Result.bCommitted)
-	{
-		UE_LOG(LogCatFishing, Log, TEXT("Event=chum_source_ability_released RequestId=%s InstanceId=%s HeldSeconds=%.3f Committed=1 Error=%s"),
-			*ActiveUseContext.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *SourceItem->GetItemInstanceId().ToString(EGuidFormats::DigitsWithHyphens),
-			ServerHeldSeconds, *UEnum::GetValueAsString(Result.Error));
-	}
-	else
-	{
-		UE_LOG(LogCatFishing, Warning, TEXT("Event=chum_source_ability_released RequestId=%s InstanceId=%s HeldSeconds=%.3f Committed=0 Error=%s"),
-			*ActiveUseContext.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *SourceItem->GetItemInstanceId().ToString(EGuidFormats::DigitsWithHyphens),
-			ServerHeldSeconds, *UEnum::GetValueAsString(Result.Error));
-	}
-	EndAbility(GetCurrentAbilitySpecHandle(), ActorInfo, GetCurrentActivationInfo(), true, false);
 }

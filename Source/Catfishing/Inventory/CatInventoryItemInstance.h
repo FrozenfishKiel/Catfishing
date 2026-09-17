@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Framework/Core/CatDomainCommandTypes.h"
@@ -13,7 +13,7 @@ class UCatInventoryComponent;
 class UCatInventoryItemDefinition;
 struct FCatInventoryEntry;
 
-/** 库存物品 Use 的服务器上下文；服务器命令链传递这份事实，具体物品实例只读取它来决定自己的领域效果和回包。 */
+/** 服务器物品操作上下文；能力或库存操作入口冻结来源后传给领域行为，不由实例编排使用效果。 */
 struct FCatInventoryItemUseContext
 {
 	/** 本次 Use 意图的稳定请求 ID；服务器和下游领域命令用它做幂等和 UI 回包关联。 */
@@ -37,7 +37,7 @@ struct FCatInventoryItemUseContext
 	/** 原输入采样；无目标需求的物品忽略，目标型物品在服务器重新验证。 */
 	FCatInventoryUseTarget Target;
 
-	/** 仅服务器异步执行使用；领域完成后由库存缓存终态再通知请求方，禁止裸 UObject 捕获。 */
+	/** 异步领域操作的终态接收者；使用能力绑定弱引用回调并按请求身份结束，不经过库存效果回调。 */
 	TFunction<void(const FCatDomainCommandResult&)> OnCompleted;
 };
 
@@ -48,8 +48,6 @@ class CATFISHING_API UCatInventoryItemInstance : public UObject
 	GENERATED_BODY()
 
 public:
-	/** 本地采样入口；默认物品无需目标，各领域实例负责自己的目标解析。 */
-	virtual FCatInventoryUseTarget CaptureUseTarget(APlayerController* Controller) const { return {}; }
 	/** 查询定义声明的操作当前是否可用；客户端只读生成置灰原因，服务器执行前用同一规则复核。 */
 	virtual bool CanExecuteInventoryAction(const FGameplayTag& Action, const FCatInventoryEntry& Entry,
 		APawn* UserPawn, FText& OutReason) const;
@@ -116,23 +114,13 @@ public:
 	/** 菜单只读查询使用可用性；基础实例检查使用配置与数量，正式访问权限和提交条件由能力再次确认。 */
 	virtual bool CanUseFromInventory(const FCatInventoryEntry& InventoryEntry, APawn* UserPawn) const;
 
-	/** 尚未迁移的装备接收服务器库存使用上下文；基础实现拒绝执行，已配置使用能力的普通物品必须走 GA。 */
-	virtual FCatDomainCommandResult UseFromInventorySlotFromAuthority(
-		const FCatInventoryEntry& InventoryEntry, const FCatInventoryItemUseContext& UseContext);
 
-	/** 说明本实例的 Use 是否必须等待同一次输入结束；Controller 据此固定实例和请求 ID，避免松开时改用新选中物品。 */
-	virtual bool UsesContinuousInput() const;
 
 	/** 读取使用配置声明的消耗件数；零表示不扣数量或配置不可用，不能仅凭此值判断可用性。 */
 	virtual int32 GetInventoryUseQuantity() const;
 
 
-	/** 本地连续 Use 的表现边沿；Controller 对 Begin、Release、取消和拒绝都通知同一实例，基类不保存状态也不产生玩法效果。 */
-	virtual void SetUseInputActiveLocally(APlayerController* RequestingController, bool bActive);
 
-	/** 同一次持续 Use 的结束或取消入口；调用方只能传回 Begin 已固定的上下文，基类明确拒绝没有持续语义的物品。 */
-	virtual FCatDomainCommandResult EndUseFromInventorySlotFromAuthority(
-		const FCatInventoryItemUseContext& UseContext, bool bCancelled);
 
 protected:
 	/** 这份物品在当前世界中的原 Actor；拾取保存、落地复用，只有一个引用，不按堆叠数量保存多份。 */

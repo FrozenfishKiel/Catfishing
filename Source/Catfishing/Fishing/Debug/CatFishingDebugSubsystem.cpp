@@ -1,4 +1,4 @@
-#include "Fishing/Debug/CatFishingDebugSubsystem.h"
+﻿#include "Fishing/Debug/CatFishingDebugSubsystem.h"
 #include "Inventory/CatInventorySettings.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 
@@ -23,7 +23,8 @@
 #include "Data/CatFishDefinition.h"
 #include "Equipment/CatEquipmentItemDefinition.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
-#include "Equipment/CatEquipmentUseItemInstances.h"
+#include "AbilitySystem/Fishing/InputAbilities/CatFishingChumAbility.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
@@ -647,19 +648,19 @@ void UCatFishingDebugSubsystem::DrawCastAimPoint(APlayerController* Controller) 
 #endif
 }
 
-// 只读原窝料实例的本地按住状态，复用权威投掷的弹道计算；不依赖 ServerOnly Ability 在客户端激活。
+// 预览流程：读取本地预测能力的真实等待状态，复用权威弹道函数；不在库存实例保存第二份按住状态。
 void UCatFishingDebugSubsystem::DrawChumChargePreview(APlayerController* Controller) const
 {
 #if ENABLE_DRAW_DEBUG
 	UWorld* World = GetWorld();
 	const ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
-	const UCatInventoryComponent* Inventory = Character ? Character->GetInventoryComponent() : nullptr;
-	if (!World || !Inventory) return;
-	for (const FCatInventoryEntry& Entry : Inventory->GetInventoryEntries())
+	auto* ASC = Character ? Character->GetCatAbilitySystemComponent() : nullptr;
+	if (!World || !ASC) return;
+	for (const auto& Spec : ASC->GetActivatableAbilities())
 	{
-		const UCatChumEquipmentItemInstance* Chum = Cast<UCatChumEquipmentItemInstance>(Entry.Instance);
+		const auto* Chum = Cast<UCatGA_FishingChum>(Spec.GetPrimaryInstance());
 		float HeldSeconds = 0.0f;
-		if (!Chum || Entry.StackCount <= 0 || !Chum->TryGetLocalChargePreview(Controller, HeldSeconds)) continue;
+		if (!Chum || !Chum->TryGetLocalChargePreview(Controller, HeldSeconds)) continue;
 		const float Alpha = UCatFishingAimLibrary::ChargeAlphaFromHeldSeconds(HeldSeconds);
 		TArray<FVector> Path;
 		FVector Landing = FVector::ZeroVector;

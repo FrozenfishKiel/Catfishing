@@ -1,4 +1,4 @@
-#include "UI/Inventory/CatInventoryPageController.h"
+﻿#include "UI/Inventory/CatInventoryPageController.h"
 #include "AbilitySystem/Items/CatItemAbilityComponent.h"
 #include "Inventory/Fragments/CatItemUseFragment.h"
 
@@ -365,7 +365,7 @@ void UCatInventoryPageController::SubmitInventoryContextAction(const FGameplayTa
 		return;
 	}
 	Controller->ServerExecuteInventoryAction(RequestId, SourceHost, SourceSlotIndex, ItemInstanceId, Action, Quantity,
-		Action == CatInventoryActionTags::Use ? Instance->CaptureUseTarget(Controller) : FCatInventoryUseTarget());
+		FCatInventoryUseTarget());
 }
 
 // 菜单回调流程：取消不恢复旧 Tooltip，只清理控制器保存的来源上下文。

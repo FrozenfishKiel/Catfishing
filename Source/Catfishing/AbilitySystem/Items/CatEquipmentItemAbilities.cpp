@@ -7,6 +7,15 @@
 #include "Fishing/Integration/CatFishingAimLibrary.h"
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "Misc/ScopeExit.h"
+#include "Inventory/Fragments/CatItemUseFragment.h"
+
+// 装备配置流程：只接受零数量、空效果及空效果参数；这些行为只改变持有、装配或捕获状态，不支持额外自用效果。
+bool UCatEquipmentItemAbility::ValidateUseConfiguration(const UCatItemUseFragment& Configuration, FText& OutError) const
+{
+	if (Configuration.ConsumeCount == 0 && Configuration.Effects.IsEmpty() && Configuration.Magnitudes.IsEmpty()) return true;
+	OutError = NSLOCTEXT("CatItem", "EquipmentUseConfig", "拿竿、抄取和装配的使用消耗必须为 0，使用效果与效果参数必须为空；鱼饵在真咬阶段消耗。");
+	return false;
+}
 
 // 装备使用流程：服务器重查原物品并提交来源成本，再冻结领域上下文与弱引用回调，执行部署、装配或抄取。
 // 正式配置使用零数量成本；同步终态立即结束，异步结果保留能力等待回调，库存不再执行行为回调。
@@ -67,6 +76,16 @@ FCatDomainCommandResult UCatGA_UseScoopNet::ExecuteEquipmentUse(const FCatInvent
 	auto* Controller = Cast<ACatfishingPlayerController>(Context.RequestingController);
 	auto* Commands = Controller ? Controller->GetFishingCommandComponent() : nullptr;
 	return Definition.CanServeScoopNet() && Commands ? Commands->ScoopFromInventoryUseOnAuthority(Controller, Context, UseTarget.ItemId) : Result;
+}
+
+// 抄取收尾流程：服务器的前提交取消先移除排队请求；已确认捕获和提交锁内的收尾仍由原流程完成，避免取消推翻权威结果。
+void UCatGA_UseScoopNet::EndAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+	FGameplayAbilityActivationInfo ActivationInfo, bool bReplicateEndAbility, bool bWasCancelled)
+{
+	if (ScopeLockCount == 0 && IsActive() && bWasCancelled && !bUseCommitted && ActorInfo && ActorInfo->IsNetAuthority())
+		if (auto* Controller = Cast<ACatfishingPlayerController>(ActorInfo->PlayerController.Get()))
+			if (auto* Commands = Controller->GetFishingCommandComponent()) Commands->CancelScoopUseFromAuthority(UseTarget.RequestId);
+	Super::EndAbility(Handle, ActorInfo, ActivationInfo, bReplicateEndAbility, bWasCancelled);
 }
 
 // 装配流程：只接受定义明确声明的饵或漂目标槽，替换该槽实例并保留其他选择；装配不消耗鱼饵数量。

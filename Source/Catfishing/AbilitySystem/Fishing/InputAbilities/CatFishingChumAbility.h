@@ -1,45 +1,35 @@
-#pragma once
-
+﻿#pragma once
 #include "CoreMinimal.h"
-#include "AbilitySystem/Fishing/CatFishingGameplayAbility.h"
-#include "Inventory/CatInventoryItemInstance.h"
+#include "AbilitySystem/Items/CatItemGameplayAbility.h"
 #include "CatFishingChumAbility.generated.h"
 
-class UCatChumEquipmentItemInstance;
-
-/** 来源窝料实例专属的服务器 Ability；G 的连续 Use 激活它，并由 AbilityTask 持有服务器蓄力和松开生命周期。 */
+/** 窝料使用能力；预测蓄力表现并以标准松开事件提交原物品，实例只保存持久数据。 */
 UCLASS()
-class CATFISHING_API UCatGA_FishingChum : public UCatFishingGameplayAbility
+class CATFISHING_API UCatGA_FishingChum : public UCatItemGameplayAbility
 {
 	GENERATED_BODY()
-
 public:
-	/** 绑定打窝 Ability Tag 并改为 ServerOnly；能力只能由来源物品实例的 G Use 精确激活，不能绑定全局输入 Tag。 */
-	UCatGA_FishingChum();
-
-	/** 从来源 AbilitySpec 读取并冻结当前 UseContext，随后创建 WaitInputRelease 任务开始服务器蓄力。 */
-	virtual void ActivateAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
-		FGameplayAbilityActivationInfo ActivationInfo, const FGameplayEventData* TriggerEventData) override;
-
-	/** 命令适配层用请求 ID 定位精确活动 Ability，避免一个 Release 触及其他来源实例。 */
-	bool MatchesActiveUseRequest(FGuid RequestId) const;
-	/** 查询本实例是否仍由 WaitInputRelease 持有；测试和诊断据此观察真实 Task 生命周期，不读取组件影子时间。 */
-	bool IsWaitingForInputRelease() const;
-	/** Ability 结束时撤销 Task 等待标记；取消、失焦与正常松开都不能让来源实例留下活动假象。 */
+	/** 窝料必须消费正整数件数；世界窝点配置属于窝料片段，不接收自用 GE 配置。 */
+	virtual bool ValidateUseConfiguration(const UCatItemUseFragment& Configuration, FText& OutError) const override;
+	/** 窝料由按住和松开组成；菜单调用则在同一能力中立即提交零蓄力。 */
+	virtual bool UsesContinuousInput() const override { return true; }
+	/** 窝点与数量在同一提交中确认，环境服务记录终态后发布库存变化。 */
+	virtual bool DefersInventoryCostNotification() const override { return true; }
+	/** 查询真实任务等待状态，供本地预览和运行诊断观察。 */
+	bool IsWaitingForInputRelease() const { return bWaitingForInputRelease; }
+	/** 查询本地预测蓄力秒数；非本地或已结束时不展示预览。 */
+	bool TryGetLocalChargePreview(APlayerController* Controller, float& OutHeldSeconds) const;
+	/** 清除本次预测预览；提交锁尚未退出时按 GAS 规则延迟清理。 */
 	virtual void EndAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 		FGameplayAbilityActivationInfo ActivationInfo, bool bReplicateEndAbility, bool bWasCancelled) override;
-
+protected:
+	/** 目标校验完成后开始等待松开；这里不支付物品，落点和水域校验完成后才消费。 */
+	virtual void CommitUse() override;
 private:
-	/** AbilityTask 收到服务器确认的松开事件后，用服务器时长提交原有窝料事务并结束本次能力。 */
-	UFUNCTION()
-	void HandleInputReleased(float ServerHeldSeconds);
-
-	/** 本次连续 Use 冻结的库存上下文；激活时从来源实例读取，Task 结束前不再扫描当前选中格。 */
-	FCatInventoryItemUseContext ActiveUseContext;
-
-	/** 本次 Use 对应的运行物品实例；提交时用其稳定实例和定义身份阻止换物后松开。 */
-	TWeakObjectPtr<UCatChumEquipmentItemInstance> ActiveSourceItem;
-
-	/** 当前 AbilityTask 是否仍在等待本 Spec 的 Release；创建任务后写入，任务回调或任意 End 路径清除。 */
+	/** 当前能力是否仍等待释放；任务建立后写入，松开和结束立即清除。 */
 	bool bWaitingForInputRelease = false;
+	/** 本地预览起始世界秒数；仅供表现读取，权威蓄力由服务器任务时钟计算。 */
+	double PreviewStartSeconds = 0.0;
+	/** 标准输入释放任务给出的持续秒数；服务器复核来源并调用原有投放计算与消耗提交。 */
+	UFUNCTION() void HandleInputReleased(float HeldSeconds);
 };

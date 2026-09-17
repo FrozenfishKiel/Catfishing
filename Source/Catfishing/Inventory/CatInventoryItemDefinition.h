@@ -105,6 +105,10 @@ public:
 
 	/** 库存运行就绪边界；收货、生成实例和使用前都读它，缺稳定 ID 或实例类型时统一拒绝而不是生成半有效物品。 */
 	virtual bool IsInventoryRuntimeDefinitionReady() const;
+#if WITH_EDITOR
+	/** 校验物品身份、实例类型和每个内嵌片段；编辑器直接显示片段提供的配置错误。 */
+	virtual EDataValidationResult IsDataValid(FDataValidationContext& Context) const override;
+#endif
 
 	/** 解析这类物品默认生成的运行实例类型；没有显式配置时回到通用库存实例。 */
 	virtual TSubclassOf<UCatInventoryItemInstance> GetPreferredInstanceType() const;

@@ -1,6 +1,9 @@
 #include "Inventory/CatInventoryItemDefinition.h"
 
 #include "Inventory/CatInventoryItemInstance.h"
+#if WITH_EDITOR
+#include "Misc/DataValidation.h"
+#endif
 
 namespace CatInventoryActionTags
 {
@@ -169,3 +172,30 @@ bool UCatInventoryItemDefinition::IsSupportedForNetworking() const
 {
 	return true;
 }
+#if WITH_EDITOR
+// 资产验证流程：先保留父类结果，再核对身份与实例，并逐个调用片段校验；空片段直接报错，不创建运行对象。
+EDataValidationResult UCatInventoryItemDefinition::IsDataValid(FDataValidationContext& Context) const
+{
+	bool bValid = Super::IsDataValid(Context) != EDataValidationResult::Invalid;
+	if (GetItemId() <= 0 || !ResolveItemInstanceClass(this))
+	{
+		Context.AddError(NSLOCTEXT("CatItem", "InvalidIdentity", "物品必须登记正整数编号，并配置可实例化的物品实例类型。"));
+		bValid = false;
+	}
+	for (const UCatInventoryItemFragment* Fragment : Fragments)
+	{
+		if (!Fragment)
+		{
+			Context.AddError(NSLOCTEXT("CatItem", "NullFragment", "物品包含空片段，请删除空项或选择有效片段。"));
+			bValid = false;
+		}
+		else if (Fragment->IsDataValid(Context) == EDataValidationResult::Invalid) bValid = false;
+		else if (!Fragment->IsRuntimeReady())
+		{
+			Context.AddError(FText::Format(NSLOCTEXT("CatItem", "FragmentNotReady", "片段 {0} 的运行配置不完整，请检查其引用资产与必填参数。"), FText::FromString(Fragment->GetClass()->GetName())));
+			bValid = false;
+		}
+	}
+	return bValid ? EDataValidationResult::Valid : EDataValidationResult::Invalid;
+}
+#endif

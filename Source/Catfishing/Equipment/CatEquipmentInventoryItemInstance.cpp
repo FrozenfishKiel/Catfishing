@@ -1,4 +1,4 @@
-#include "Equipment/CatEquipmentInventoryItemInstance.h"
+﻿#include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "Equipment/CatEquippedDefinition.h"
 #include "Inventory/Fragments/CatEquippableItemFragment.h"
 
@@ -135,13 +135,12 @@ bool UCatEquipmentInventoryItemInstance::CanUseFromInventory(
 {
 	const UCatEquipmentItemDefinition* EquipmentDefinition = Cast<UCatEquipmentItemDefinition>(GetItemDefinition());
 	const ACatCharacter* Character = Cast<ACatCharacter>(UserPawn);
-	const bool bHasConcreteBehavior = GetClass() != UCatEquipmentInventoryItemInstance::StaticClass();
 	return InventoryEntry.Instance == this
 		&& InventoryEntry.StackCount > 0
 		&& GetItemInstanceId().IsValid()
 		&& EquipmentDefinition != nullptr
 		&& EquipmentDefinition->IsRuntimeDefinitionReady()
-		&& (bHasConcreteBehavior || Super::CanUseFromInventory(InventoryEntry, UserPawn))
+		&& Super::CanUseFromInventory(InventoryEntry, UserPawn)
 		&& Character != nullptr
 		&& Character->GetEquipmentComponent() != nullptr;
 }

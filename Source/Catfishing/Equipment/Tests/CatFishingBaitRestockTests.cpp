@@ -1,4 +1,4 @@
-#if WITH_DEV_AUTOMATION_TESTS
+﻿#if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
@@ -180,13 +180,10 @@ bool FCatFishingTrueBiteBaitTest::RunTest(const FString& Parameters)
 	const auto* NewBait = Inventory->GetInventoryEntryAtSlot(Inventory->FindFirstInventorySlotIndexByItemId(26));
 	if (!NewBait || !NewBait->Instance) return false;
 	const FGuid NewBaitId = NewBait->Instance->GetItemInstanceId();
-	FCatInventoryItemUseContext Selection;
-	Selection.RequestId = FGuid::NewGuid();
-	Selection.SourceInventory = Inventory;
-	Selection.InventorySlotIndex = Inventory->FindInventorySlotIndexFromInstanceId(NewBaitId);
-	Selection.UserPawn = Fixture.Character;
-	if (!TestTrue(TEXT("production inventory selection can change bait while waiting"),
-		Inventory->UseItemAtSlotFromAuthority(Selection).bCommitted)) return false;
+	const auto Current = Fixture.Equipment->GetSnapshot();
+	if (!TestTrue(TEXT("装配新鱼饵后真咬读取当前选择"), Fixture.Equipment->ConfigureLoadoutFromAuthority(
+		FGuid::NewGuid(), Current.Revision, Current.RodItemId, 26, Current.FloatItemId, Current.ScoopNetItemId, NAME_None,
+		Current.RodItemInstanceId, NewBaitId, Current.FloatItemInstanceId, Current.ScoopNetItemInstanceId).bCommitted)) return false;
 	TestEqual(TEXT("current selection is the new bait instance"), Fixture.Equipment->GetSnapshot().BaitItemInstanceId, NewBaitId);
 	bool bObservedCommitted = false;
 	const FDelegateHandle Observe = Inventory->OnInventoryObservedChanged.AddLambda([&]()

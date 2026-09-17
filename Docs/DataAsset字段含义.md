@@ -1,6 +1,10 @@
-# DataAsset 字段说明手册
+﻿# DataAsset 字段说明手册
 
 对应代码状态：2026-09-04；2026-09-11 更新身体意图耗体及相关搏斗字段；2026-09-14 按用户裁决移除偷鱼协议、草药恢复、渐进中毒和功能装备解锁门口径。给配数值/建资产的人看：每个 DataAsset 类型的字段含义、校验规则、注册方法。
+
+文档状态：物品使用字段于 2026-09-17 更新，其他领域字段保留各节来源。事实来源：`Source/Catfishing/Inventory/Fragments/CatItemUseFragment.h`、`Equipment/CatEquipmentItemDefinition.h`、`Equipment/CatEquippedDefinition.h`。
+
+物品行为、使用数量、前摇、效果与七件新道具规则见 [物品使用与策划配置](Architecture/物品使用与策划配置.md)。
 
 ## 0. 所有 DataAsset 共同的规矩
 
@@ -14,7 +18,7 @@
 | 类型 | 注册位置（DefaultGame.ini 的 section / 键） | 现有资产 |
 |---|---|---|
 | 猫种类 CatCharacterDefinition | `[CatAbilitySettings]` `+CharacterDefinitions=` | `/Game/Catfishing/Data/Character/Cat_Default` |
-| 装备 CatEquipmentDefinition | `[CatInventorySettings]` `+Definitions=(DefinitionId=...,ItemDefinition=...)` | `/Game/Catfishing/Data/Equipment/Equip_*` |
+| 装备物品 CatEquipmentItemDefinition | `[CatInventorySettings]` `+Definitions=(DefinitionId=...,ItemDefinition=...)` | `/Game/Catfishing/Data/Equipment/Equip_*` |
 | 鱼种 CatFishDefinition | `[CatFishCatalogSettings]` `+Definitions=` | `/Game/Catfishing/Data/Fish/Fish_*`；Showcase2 的 `River` 水域直接使用正式目录 |
 | 咬钩性格 CatBitePersonalityDefinition | `[CatFishingSettings]` `+BitePersonalities=` | `/Game/Catfishing/Data/Fish/Bite_*` |
 | 搏斗性格 CatFightPersonalityDefinition | `[CatFishingSettings]` `+FightPersonalities=` | `/Game/Catfishing/Data/Fish/Fight_*` |
@@ -91,11 +95,11 @@
 
 价格、速度、等待均需有限且非负，恢复比例在 (0,1]。辅助耗尽时主动地面力量为零，完全卸载之前不恢复；主控仍使用上述原放线恢复入口。实际公式、网络权威和验证见 `FishFightImplementationGuide_zh-CN.md` 顶部。
 
-## 2. 装备/道具：`UCatEquipmentDefinition` 与正式库存目录
+## 2. 装备/道具：`UCatEquipmentItemDefinition` 与正式库存目录
 
-`Equip_*` 资产可复用为库存定义。通用身份仍由 `UCatEquipmentDefinition` 保存，五组专属静态能力改由 Fragments 表达：鱼竿用 `UCatEquipmentFragment_Rod`，鱼饵用 `..._Bait`，鱼漂用 `..._Float`，抄网用 `..._Scoop`，窝料用 `..._Chum`。运行入口只查自己需要的片段并校验其 `IsRuntimeReady()`，不再通过其他领域字段的零值推测物品用途。
+`Equip_*` 资产可复用为库存定义。通用身份仍由 `UCatEquipmentItemDefinition` 保存，五组专属静态能力改由 Fragments 表达：鱼竿用 `UCatEquipmentFragment_Rod`，鱼饵用 `..._Bait`，鱼漂用 `..._Float`，抄网用 `..._Scoop`，窝料用 `..._Chum`。运行入口只查自己需要的片段并校验其 `IsRuntimeReady()`，不再通过其他领域字段的零值推测物品用途。
 
-**共同字段**：`EquipmentDefinitionId`(唯一 ID，也是库存目录 ID) · `LoadoutSlotId`(Rod/Bait/Float/ScoopNet 四个钓具选择槽位物品必填，非选择型道具不填) · `UseActorClass`(部署型物品 Use 到世界时生成的 Actor 类；鱼竿填 BP_CatFishingRodActor，其他部署物品填自己的 Actor) · `bRunConsumable`(是否一局内数量物：普通/特殊鱼饵、窝料和片段型耗材为 True，工具和部署型物品为 False) · `FunctionalRouteId`(装备运行目录必填,常规填 Route_Standard；只进入库存目录的片段型物品不靠它表达用途) · `bEnableRuntimeDefinition`(gate) · `PreferredInstanceType`（可显式指定 `UCatEquipmentInventoryItemInstance` 的子类；不填时使用默认装备实例，填入非装备实例子类会使定义不就绪）。功能装备 Demo 不做解锁门；不要在竿、饵、漂、抄网、鱼护等运行装备上继续配置 `RequiredUnlockId`。通用 `FProfileGrant`/`UnlockIds` 和皮肤定义上的外观解锁口径仍由 Profile/Collection 维护。
+**共同字段**：`EquipmentDefinitionId`(唯一 ID，也是库存目录 ID) · `LoadoutSlotId`(Rod/Bait/Float/ScoopNet 四个钓具选择槽位物品必填，非选择型道具不填) · `CatEquippableItemFragment.EquipmentDefinition`（引用独立 `UCatEquippedDefinition`；ActorClass 与 AbilitySetsToGrant 配在该装备资产） · `bRunConsumable`(是否一局内数量物：普通/特殊鱼饵、窝料和片段型耗材为 True，工具和部署型物品为 False) · `FunctionalRouteId`(装备运行目录必填,常规填 Route_Standard；只进入库存目录的片段型物品不靠它表达用途) · `bEnableRuntimeDefinition`(gate) · `PreferredInstanceType`（可显式指定 `UCatEquipmentInventoryItemInstance` 的子类；不填时使用默认装备实例，填入非装备实例子类会使定义不就绪）。功能装备 Demo 不做解锁门；不要在竿、饵、漂、抄网、鱼护等运行装备上继续配置 `RequiredUnlockId`。通用 `FProfileGrant`/`UnlockIds` 和皮肤定义上的外观解锁口径仍由 Profile/Collection 维护。
 
 **Rod（鱼竿）Fragment：`UCatEquipmentFragment_Rod`**：
 | 字段 | 含义 | 规格对应 |

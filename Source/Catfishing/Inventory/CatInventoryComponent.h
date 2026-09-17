@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
@@ -357,8 +357,8 @@ public:
 	/** 从指定格扣除数量；数量归零时清空格子并在安全时解除实例复制登记。 */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Catfishing|Inventory")
 	bool ConsumeItemAtSlot(int32 SlotIndex, int32 ConsumeCount);
-	/** 能力成本消费精确实例；首次成功后发布数量变化，重放只返回结果，绝不执行外部效果回调。 */
-	FCatDomainCommandResult ConsumeAbilityItemFromAuthority(FGuid RequestId, FGuid ItemId, int32 Quantity);
+	/** 能力成本消费精确实例并记录终态；默认发布数量变化，关闭通知时调用方须在同步提交完成后发布，重放不再扣量或调用外部效果。 */
+	FCatDomainCommandResult ConsumeAbilityItemFromAuthority(FGuid RequestId, FGuid ItemId, int32 Quantity, bool bPublishChange = true);
 
 	/** 丢弃、放置或 Carry 当前槽位的指定实例；Carry 只从鱼护或鱼缸移出数量一到嘴部且不做地面查询，其余动作生成或复用世界物并在空间检查成功后扣量，沿本库存终态缓存防止重复提交。 */
 	/** 菜单操作唯一库存提交；复核请求载荷、槽位身份及定义清单，再调用实例虚函数，终态缓存防止换格后重复作用于新物品。 */
@@ -399,8 +399,6 @@ public:
 	/** Use 预检交给实例语义决定；默认使用拥有者 Pawn，库存核心不认识 GAS、装备或窝料目标。 */
 	bool CanUseItemAtSlot(int32 SlotIndex, APawn* UserPawn = nullptr) const;
 
-	/** 服务器用结构化上下文使用指定槽位；库存组件先裁决 RequestId、当前槽位和物品实例，再把真实效果交给实例侧流程。 */
-	FCatDomainCommandResult UseItemAtSlotFromAuthority(const FCatInventoryItemUseContext& UseContext);
 
 	/** authority 把当前组件的一个槽位移动、合并或交换到另一个正式库存；组件负责幂等、格子写入和变化通知。 */
 	FCatDomainCommandResult MoveItemToInventoryFromAuthority(FGuid RequestId,

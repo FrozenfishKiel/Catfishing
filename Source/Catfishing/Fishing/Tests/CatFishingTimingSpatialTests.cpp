@@ -1,4 +1,4 @@
-#if WITH_DEV_AUTOMATION_TESTS
+﻿#if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "Equipment/CatEquippedDefinition.h"
 #include "Inventory/Fragments/CatEquippableItemFragment.h"
@@ -29,6 +29,7 @@
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Items/CatEquipmentItemAbilities.h"
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "Framework/Game/CatfishingPlayerState.h"
@@ -650,13 +651,13 @@ bool FCatScoopInventoryDeferredUseTest::RunTest(const FString& Parameters)
 		F.Controller->SetControlRotation(Context.Target.ViewDirection.Rotation());
 		int32 Completions=0; FCatDomainCommandResult Final;
 		Context.OnCompleted=[&](const FCatDomainCommandResult& Result) { ++Completions; Final=Result; };
-		const auto Begin=Inventory->ExecuteItemActionFromAuthority(Context, ItemId, CatInventoryActionTags::Use, 1);
+		const auto Begin=F.Controller->GetFishingCommandComponent()->ScoopFromInventoryUseOnAuthority(F.Controller, Context, ItemId);
 		TestTrue(TEXT("排队不误报失败或成功"), Begin.bPending && !Begin.bCommitted && Begin.Error==ECatDomainCommandError::None);
 		TestNull(TEXT("帧末之前不提前叼鱼"), F.Cat->GetMouthCarriedActor());
-		const auto PendingReplay=Inventory->ExecuteItemActionFromAuthority(Context, ItemId, CatInventoryActionTags::Use, 1);
+		const auto PendingReplay=F.Controller->GetFishingCommandComponent()->ScoopFromInventoryUseOnAuthority(F.Controller, Context, ItemId);
 		TestTrue(TEXT("处理中重放不重复排队且不伪装终态"), PendingReplay.bPending && !PendingReplay.bTerminalReplay);
 		auto Forged=Context; Forged.Target.Actor=nullptr;
-		TestEqual(TEXT("同请求替换目标被拒"), Inventory->ExecuteItemActionFromAuthority(Forged, ItemId, CatInventoryActionTags::Use, 1).Error, ECatDomainCommandError::InvalidPayload);
+		TestTrue(TEXT("内部重复提交不能替换已冻结的目标"), F.Controller->GetFishingCommandComponent()->ScoopFromInventoryUseOnAuthority(F.Controller, Forged, ItemId).bPending);
 		if (Scenario == 1) F.Controller->GetFishingCommandComponent()->ResetTransientCommandState();
 		if (Scenario == 2)
 		{
@@ -667,8 +668,12 @@ bool FCatScoopInventoryDeferredUseTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("异步完成只回调一次"), Completions, 1);
 		TestEqual(TEXT("成功、取消和失去抄网的事实正确"), Final.bCommitted, bExpectedSuccess);
 		TestEqual(TEXT("原目标成为嘴叼鱼，取消或失去抄网不拾取"), F.Cat->GetMouthCarriedActor(), bExpectedSuccess ? static_cast<AActor*>(Fish) : nullptr);
-		const auto Replay=Inventory->ExecuteItemActionFromAuthority(Context, ItemId, CatInventoryActionTags::Use, 1);
-		TestTrue(TEXT("最终库存结果可重放"), Replay.bTerminalReplay && !Replay.bPending && Replay.bReplayedTerminalCommitted==bExpectedSuccess);
+		// 生命周期重置清空领域请求历史；旧 GA 此时已经取消，不应在新生命周期重新提交旧上下文。
+		if (Scenario != 1)
+		{
+			const auto Replay=F.Controller->GetFishingCommandComponent()->ScoopFromInventoryUseOnAuthority(F.Controller, Context, ItemId);
+			TestTrue(TEXT("领域终态读取不重复捕获"), !Replay.bPending && Replay.bCommitted == bExpectedSuccess);
+		}
 		F.Wrapper.TickTestWorld(0.01f);
 		TestEqual(TEXT("重放不重复完成"), Completions, 1);
 	}
@@ -725,16 +730,26 @@ bool FCatFishingSessionScoopMouthCarryTest::RunTest(const FString& Parameters)
 	Context.Target.bHasViewRay=true; Context.Target.Actor=Encounter; Context.Target.ViewOrigin=F.Cat->GetPawnViewLocation();
 	Context.Target.ViewDirection=(Encounter->GetFishingCollisionCenter()-Context.Target.ViewOrigin).GetSafeNormal();
 	F.Controller->SetControlRotation(Context.Target.ViewDirection.Rotation());
-	FCatDomainCommandResult Final; int32 Completed=0;
-	Context.OnCompleted=[&](const FCatDomainCommandResult& Value){Final=Value;++Completed;};
-	TestTrue(TEXT("上钩鱼抄网沿统一库存入队"),Inventory->ExecuteItemActionFromAuthority(Context,Item,CatInventoryActionTags::Use,1).bPending);
+	// 从正式授予的来源 Spec 进入 GA；夹具只提供网络层已解码的目标，不越过能力的搏斗例外和资源校验。
+	auto* ASC = F.Cat->GetCatAbilitySystemComponent();
+	const auto* Spec = ASC->FindAbilitySpecFromClass(UCatGA_UseScoopNet::StaticClass());
+	if (!TestNotNull(TEXT("库存入库已授予抄网能力"), Spec)) return false;
+	FCatItemAbilityTargetData Target;
+	Target.Inventory = Inventory; Target.ItemId = Item; Target.RequestId = Context.RequestId; Target.Aim = Context.Target;
+	UGameplayAbility* Activated = nullptr;
+	// 夹具模拟远端已经发送的预测键；不授予客户端 Spec，也不修改生产能力的网络执行策略。
+	FPredictionKey ReceivedPredictionKey; ReceivedPredictionKey.Current = 1;
+	if (!TestTrue(TEXT("搏斗中激活正式抄网能力"), ASC->InternalTryActivateAbility(Spec->Handle, ReceivedPredictionKey, &Activated))) return false;
+	if (!TestNotNull(TEXT("真实抄网能力实例"), Activated)) return false;
+	ASC->AbilityTargetDataSetDelegate(Spec->Handle, Activated->GetCurrentActivationInfo().GetActivationPredictionKey())
+		.Broadcast(FGameplayAbilityTargetDataHandle(new FCatItemAbilityTargetData(Target)), FGameplayTag());
 	F.Wrapper.TickTestWorld(0.01f);
-	TestTrue(TEXT("统一Use最终成功"),Final.bCommitted && Completed==1);
+	TestFalse(TEXT("抄鱼后能力结束"), Activated->IsActive());
 	TestEqual(TEXT("会话捕获终态"),Session->GetSnapshot().Outcome,ECatFishingOutcome::Caught);
 	TestNotNull(TEXT("满体力上钩鱼直接叼嘴"),ACatFishPickupActor::FindCarriedFish(F.Cat));
 	TestEqual(TEXT("抄鱼不重复扣饵"),Inventory->CountVisibleInventoryQuantityByItemId(4),1);
-	const auto Replay=Inventory->ExecuteItemActionFromAuthority(Context,Item,CatInventoryActionTags::Use,1);
-	TestTrue(TEXT("终态重放不重复结算"),Replay.bTerminalReplay && Replay.bReplayedTerminalCommitted && Completed==1);
+	const auto Replay=F.Controller->GetFishingCommandComponent()->ScoopFromInventoryUseOnAuthority(F.Controller,Context,Item);
+	TestTrue(TEXT("读取权威终态不重复结算"),Replay.bCommitted);
 	return !HasAnyErrors();
 }
 #endif

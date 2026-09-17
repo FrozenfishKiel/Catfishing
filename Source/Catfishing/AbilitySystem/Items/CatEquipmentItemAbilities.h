@@ -11,6 +11,9 @@ UCLASS(Abstract)
 class CATFISHING_API UCatEquipmentItemAbility : public UCatItemGameplayAbility
 {
 	GENERATED_BODY()
+public:
+	/** 装配、拿竿和抄取不消费使用数量、不执行自用效果；拒绝会被领域流程忽略的配置。 */
+	virtual bool ValidateUseConfiguration(const UCatItemUseFragment& Configuration, FText& OutError) const override;
 protected:
 	/** 以冻结来源构造权威上下文后调用领域行为；异步抄取继续持有能力直至收到完成结果。 */
 	virtual void CommitUse() override;
@@ -37,8 +40,13 @@ class CATFISHING_API UCatGA_UseScoopNet : public UCatEquipmentItemAbility
 {
 	GENERATED_BODY()
 public:
+	/** 搏斗中仍可抄鱼；命中、距离、收鱼窗口继续由抄取领域复核。 */
+	virtual bool AllowsUseDuringActiveFishing() const override { return true; }
 	/** 冻结按下时的准星目标，随标准 TargetData 传输给服务器复核。 */
 	virtual void CaptureTarget(APlayerController* Controller, FCatItemAbilityTargetData& Target) const override;
+	/** 取消时先撤销原请求的待裁决捕获，再让共同能力释放目标和表现。 */
+	virtual void EndAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+		FGameplayAbilityActivationInfo ActivationInfo, bool bReplicateEndAbility, bool bWasCancelled) override;
 protected:
 	/** 提交原抄网实例及视线；捕获完成通过同一能力的结束回调收口。 */
 	virtual FCatDomainCommandResult ExecuteEquipmentUse(const FCatInventoryItemUseContext& Context, const UCatEquipmentItemDefinition& Definition) override;
