@@ -1,3 +1,4 @@
+#include "Equipment/CatEquippedInstance.h"
 #include "Inventory/CatInventorySettings.h"
 #include "Equipment/CatEquippedDefinition.h"
 #include "Inventory/Fragments/CatEquippableItemFragment.h"
@@ -491,8 +492,12 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 			if (!TestTrue(TEXT("remaining player can take rod from departed owner"), Fishing->OperateRod(Helper.Controller, Take).bCommitted)) return false;
 			TestEqual(TEXT("rod source resolves the exact custody ledger"), Fishing->ResolveRodEquipmentFromAuthority(Rod), RodLedger);
 			bool bHasSourceAbility = false;
+			// 装备能力沿装备实例追溯原物品；不能把随身使用能力的 SourceObject 契约套到持竿操作能力上。
 			for (const auto& Spec : Helper.Character->GetCatAbilitySystemComponent()->GetActivatableAbilities())
-				bHasSourceAbility |= Spec.SourceObject.Get() == ReleasedRod.Instance.Get();
+			{
+				const auto* Equipped = Cast<UCatEquippedInstance>(Spec.SourceObject.Get());
+				bHasSourceAbility |= Equipped && Equipped->GetSourceItem() == ReleasedRod.Instance.Get();
+			}
 			TestTrue(TEXT("retake grants abilities from original custodied rod instance"), bHasSourceAbility);
 		}
 		AddInfo(FString::Printf(TEXT("Event=owned_rod_service_lifecycle_verified Scenario=%d SessionId=%s RodItemInstanceId=%s Operators=%d Durability=%.3f Evidence=runtime_behavior"),

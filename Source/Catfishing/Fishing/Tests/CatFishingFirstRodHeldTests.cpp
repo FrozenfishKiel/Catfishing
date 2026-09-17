@@ -121,14 +121,17 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 		const FGuid SecondItemId = CatFishingTest::InstanceId(SecondInventoryItem);
 		TestNotEqual(TEXT("two physical rods have distinct instance IDs"), SecondItemId, ItemId);
 
-		// 正式选格链：同一实例进出 held storage，原格位不能被其他条目占用。
+		// 选格只定位来源，显式使用才拿出鱼竿；同一实例进出保管区，原格位仍不能被其他条目占用。
 		auto* BackPack = Cast<UCatBackPackComponent>(Character->GetInventoryComponent());
 		if (!TestNotNull(TEXT("character owns quickbar backpack"), BackPack)) return false;
 		const int32 FirstSlot = BackPack->FindInventorySlotIndexFromInstanceId(ItemId);
 		const int32 SecondSlot = BackPack->FindInventorySlotIndexFromInstanceId(SecondItemId);
-		TestTrue(TEXT("selecting rod equips without G"), Controller->RequestSelectQuickbarSlotFromInput(FirstSlot));
+		TestTrue(TEXT("选择第一根竿"), Controller->RequestSelectQuickbarSlotFromInput(FirstSlot));
+		TestNull(TEXT("仅选格不拿出鱼竿"), Fishing->FindRodOperatedBy(Player));
+		Controller->BeginSelectedItemUseFromInput();
+		Controller->EndSelectedItemUseFromInput(false);
 		auto* SelectedRod = Fishing->FindRodOperatedBy(Player);
-		if (!TestNotNull(TEXT("selection creates held rod"), SelectedRod)) return false;
+		if (!TestNotNull(TEXT("显式使用创建持竿"), SelectedRod)) return false;
 		TestEqual(TEXT("held reservation uses exact first identity"), BackPack->GetQuickbarHeldSlot().ItemInstanceId, ItemId);
 		TestFalse(TEXT("reservation rejects another instance"), BackPack->CanAcceptInventoryEntryAtSlot(SecondInventoryItem, FirstSlot));
 		FCatInventoryReceiveBatch NewRods;
@@ -144,7 +147,11 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("exact held instance can return through batch capacity preflight"), BackPack->CanFullyAcceptInventoryBatch(OriginalRod));
 		Controller->ServerSelectQuickbarSlot(FGuid::NewGuid(), SecondSlot, FGuid::NewGuid());
 		TestEqual(TEXT("stale target identity cannot release the held rod"), Fishing->FindRodOperatedBy(Player), SelectedRod);
-		TestTrue(TEXT("idle can switch directly to second rod"), Controller->RequestSelectQuickbarSlotFromInput(SecondSlot));
+		TestTrue(TEXT("选择第二根竿"), Controller->RequestSelectQuickbarSlotFromInput(SecondSlot));
+		TestEqual(TEXT("切格不会替换已拿出的原竿"), Fishing->FindRodOperatedBy(Player), SelectedRod);
+		Controller->PackHeldRodFromInput();
+		Controller->BeginSelectedItemUseFromInput();
+		Controller->EndSelectedItemUseFromInput(false);
 		SelectedRod = Fishing->FindRodOperatedBy(Player);
 		if (!TestNotNull(TEXT("second selection holds a rod"), SelectedRod)) return false;
 		TestEqual(TEXT("second selection equips exact second instance"), SelectedRod->GetPresentationState().ItemInstanceId, SecondItemId);
@@ -181,15 +188,21 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("E selects its restored quickbar slot"), Controller->GetSelectedQuickbarSlotIndex(), BackPack->GetQuickbarHeldSlot().SlotIndex);
 		const FGuid PackedActorId = SelectedRod->GetPresentationState().RodActorId;
 		Controller->PackHeldRodFromInput();
+		TestNull(TEXT("收竿不会自动重新拿出"), Fishing->FindRodOperatedBy(Player));
+		Controller->BeginSelectedItemUseFromInput();
+		Controller->EndSelectedItemUseFromInput(false);
 		auto* ReequippedRod = Fishing->FindRodOperatedBy(Player);
-		if (!TestNotNull(TEXT("X immediately equips the still-selected rod without switching away"), ReequippedRod)) return false;
-		TestEqual(TEXT("X re-equips the same second item"), ReequippedRod->GetPresentationState().ItemInstanceId, SecondItemId);
+		if (!TestNotNull(TEXT("显式使用仍选中的竿可重新拿出"), ReequippedRod)) return false;
+		TestEqual(TEXT("重新拿出仍是同一件第二根竿"), ReequippedRod->GetPresentationState().ItemInstanceId, SecondItemId);
 		TestEqual(TEXT("X preserves selected rod slot"), BackPack->GetQuickbarHeldSlot().SlotIndex, Controller->GetSelectedQuickbarSlotIndex());
 		TestNotEqual(TEXT("X retires the old world actor identity"), ReequippedRod->GetPresentationState().RodActorId, PackedActorId);
 		TestNotNull(TEXT("same instance remains in the active inventory"), BackPack->FindHeldInventoryEntryFromAuthority(SecondItemId));
 		Controller->ServerPackHeldRod(FGuid::NewGuid(), PackedActorId);
 		TestEqual(TEXT("late X targeting the retired actor cannot pack the newly equipped rod"), Fishing->FindRodOperatedBy(Player), ReequippedRod);
 		if (!TestTrue(TEXT("select first rod for remaining lifecycle scenarios"), Controller->RequestSelectQuickbarSlotFromInput(FirstSlot))) return false;
+		Controller->PackHeldRodFromInput();
+		Controller->BeginSelectedItemUseFromInput();
+		Controller->EndSelectedItemUseFromInput(false);
 		ACatFishingRodActor* Rod = Fishing->FindDeployedRod(Player);
 		if (!TestNotNull(TEXT("first R creates a registered rod"), Rod)) return false;
 		const UCatEquipmentItemDefinition* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentItemDefinition>(DefinitionItemId);
