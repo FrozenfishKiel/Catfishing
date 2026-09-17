@@ -2,7 +2,26 @@
 
 #include "Logging/CatLog.h"
 #include "Online/CatOnlineSettings.h"
+#include "Online/Voice/CatProximityVoiceComponent.h"
 #include "Net/UnrealNetwork.h"
+
+ACatfishingPlayerState::ACatfishingPlayerState()
+{
+	ProximityVoice = CreateDefaultSubobject<UCatProximityVoiceComponent>(TEXT("ProximityVoice"));
+}
+
+void ACatfishingPlayerState::OnSetUniqueId()
+{
+	Super::OnSetUniqueId();
+	if (ProximityVoice) ProximityVoice->RefreshPlayerBinding();
+}
+
+void ACatfishingPlayerState::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	// DestroyComponent 调用引擎的成对注销并清 bIsRegistered；只清静态表会让旧对象析构误删旅行后的新 Talker。
+	if (IsValid(ProximityVoice)) ProximityVoice->DestroyComponent();
+	Super::EndPlay(EndPlayReason);
+}
 
 // 玩家状态启动流程：先让父类完成 UniqueId 等引擎复制状态初始化，再按 Online 的暴露策略裁剪日志里的 StableNetId；
 // 本日志只用于诊断 PlayerState 装配，不把身份字符串复制给其他系统或作为权限缓存。

@@ -5,12 +5,17 @@
 #include "GameFramework/PlayerState.h"
 #include "CatfishingPlayerState.generated.h"
 
+class UCatProximityVoiceComponent;
+
 /** Lake 玩家身份与个人局状态宿主；复用 APlayerState::UniqueId，承载公开鱼图鉴摘要与房间管理身份。 */
 UCLASS()
 class CATFISHING_API ACatfishingPlayerState : public APlayerState
 {
 	GENERATED_BODY()
 public:
+	ACatfishingPlayerState();
+	/** 身份在服务器赋值或客户端复制后，把接收语音关联到同一 PlayerState。 */
+	virtual void OnSetUniqueId() override;
 	/** 注册公开鱼图鉴摘要与房主标记复制；StableNetId 继续复用 APlayerState::UniqueId。 */
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	/** 仅服务器接收 owning client 提交的公开鱼图鉴摘要；严格校验后整体复制给局内其他玩家查看。 */
@@ -30,7 +35,11 @@ public:
 protected:
 	/** 玩家状态进入 World 后记录继承 UniqueId 是否有效；原始值是否输出由 StableNetIdExposure 策略控制。 */
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 private:
+	/** 接收端语音表现由 Online/Voice 管理；不持有麦克风开关或第二份网络身份。 */
+	UPROPERTY(VisibleAnywhere, Category = "Voice")
+	TObjectPtr<UCatProximityVoiceComponent> ProximityVoice;
 	/** authority 在严格校验 owning client 摘要后整体替换的公开鱼图鉴；局内其他玩家可读，不含相册、Journal、解锁、装备或原始 StableNetId。 */
 	UPROPERTY(Replicated)
 	TArray<FCatFishCollectionRecord> PublicFishCollection;
