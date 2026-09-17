@@ -365,6 +365,26 @@ bool FCatFishingFormalPhysicalRunnerTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("periodic hitches preserve comparable production motion"),
 				FMath::Abs(Travel - Reference) < FMath::Max(35.0, .3 * FMath::Max(Travel, Reference)));
 		}
+		Body->SetMoveIntent(FVector::ZeroVector);
+		if (!TestTrue(TEXT("exhaustion clears the real receiver immediately"), Runner->SetFishExhaustedFromAuthority()
+			&& Receiver->GetLineForceNewtonsForDiagnostics().IsNearlyZero()
+			&& Receiver->GetQueuedLineImpulseNewtonSecondsForDiagnostics().IsNearlyZero())) return false;
+		const FVector ExhaustedImpulse = Receiver->GetSubmittedLineImpulseNewtonSecondsForDiagnostics();
+		const double ExhaustedLength = Runner->State.LineLengthCentimeters;
+		const uint64 ExhaustedStep = Runner->DiagnosticFixedStepSequence;
+		for (int32 Frame = 0; Frame < Rate * 2; ++Frame)
+		{
+			if (!TickConnected(1.0f / Rate)) return false;
+			if (!TestTrue(TEXT("exhausted production steps do not requeue carrier load"),
+				Receiver->GetLineForceNewtonsForDiagnostics().IsNearlyZero()
+				&& Receiver->GetQueuedLineImpulseNewtonSecondsForDiagnostics().IsNearlyZero()
+				&& Receiver->GetSubmittedLineImpulseNewtonSecondsForDiagnostics().Equals(ExhaustedImpulse, 1e-6))) return false;
+		}
+		TestTrue(TEXT("exhausted retrieval still advances the same runner and shortens line"),
+			Runner->IsRunning() && Runner->DiagnosticFixedStepSequence > ExhaustedStep
+			&& Runner->State.LineLengthCentimeters < ExhaustedLength);
+		TestTrue(TEXT("exhaustion preserves aim domain with no replicated tension"),
+			Rod->GetCarrierConstraintState().bFightActive && Rod->GetCarrierConstraintState().NormalizedTension == 0);
 		if (bHitch && Rate == 120)
 		{
 			// The active scheduler belongs to the real rod. Losing it must publish the existing failure terminal,

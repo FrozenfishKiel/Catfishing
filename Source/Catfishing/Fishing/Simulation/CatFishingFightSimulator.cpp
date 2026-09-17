@@ -346,7 +346,8 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 			if (bCMC)
 			{
 				FCatFightCMCPredictionQuery Query;
-				Query.ForceNewtons = Solved.Force; Query.Seconds = Dt;
+				// 力竭鱼仅被线带动；回收辅助力不能反向驱动持竿端。
+				Query.ForceNewtons = State.bFishExhausted ? FVector::ZeroVector : Solved.Force; Query.Seconds = Dt;
 				Query.TorqueStrengthMetersPerNewton = Config.RodPhysicsLengthCentimeters / (100 * Config.ForcePerStrengthNewtons);
 				Query.TravelAxis = HorizontalOutward; Query.TravelLimitCentimeters = CMCTravelLimit;
 				const auto Predicted = RodConstraint.PredictCMCEndpoint(Query);
@@ -356,7 +357,8 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 			else
 			{
 				Solved.RodEnd = RodConstraint.bPhysicalRodEndpoint
-					? FreePhysicalEndpoint + ApplyPointResponse(Solved.Force) * (100.0 * EndpointPositionFactor * Dt * Dt)
+					? FreePhysicalEndpoint + (State.bFishExhausted ? FVector::ZeroVector
+						: ApplyPointResponse(Solved.Force) * (100.0 * EndpointPositionFactor * Dt * Dt))
 					: RodTip;
 			}
 			// 沿本步冻结的拉力轴找第一个可行端点，避免距离平方在越过竿尖后出现第二个根。
@@ -520,7 +522,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	Result.CatDriveAccelerationCentimetersPerSecondSquared = CatDriveAcceleration;
 	Result.FishDriveAccelerationCentimetersPerSecondSquared = FishDriveAcceleration;
 	Result.LineTensionNewtons = LineTension;
-	Result.RodLineForceNewtons = Solved.Force;
+	Result.RodLineForceNewtons = State.bFishExhausted ? FVector::ZeroVector : Solved.Force;
 	Result.ConstraintErrorCentimeters = ConstraintError;
 	Result.RelativeConstraintSpeedCentimetersPerSecond = Dt > 0.0
 		? (IntendedDistance - Distance0 + RequestedReelDistance) / Dt : 0.0;

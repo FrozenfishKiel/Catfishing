@@ -525,6 +525,14 @@ bool UCatFishingFightRunner::SetFishExhaustedFromAuthority()
 		}
 	}
 	State.bFishExhausted = true;
+	if (ACatFishingRodActor* Rod = RodActor.Get(); Rod && Rod->IsUsingPhysicalRod())
+	{
+		Rod->GetPhysicalRodComponent()->ClearLineLoad(Session.IsValid() ? Session->GetSnapshot().FishingSessionId : FGuid());
+		UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_exhausted_line_load_cleared SessionId=%s RodActorId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Result=FishFollowsLineWithoutCarrierLoad"),
+			Session.IsValid() ? *Session->GetSnapshot().FishingSessionId.ToString() : TEXT("None"),
+			*Rod->GetPresentationState().RodActorId.ToString(), *GetNameSafe(Rod->GetWorld()), int32(Rod->GetNetMode()),
+			Rod->HasAuthority(), int32(Rod->GetLocalRole()));
+	}
 	State.FishEffortRatio = 0.0;
 	State.FishStamina = 0.0;
 	State.FishVelocityCentimetersPerSecond = FVector::ZeroVector;
@@ -1184,10 +1192,14 @@ void UCatFishingFightRunner::HandleFixedStep()
 	if (Rod->IsUsingPhysicalRod())
 	{
 		const FVector LineDirection = (Step.ProposedMouthWorldPosition - RodTip).GetSafeNormal();
-		// Publish tension exactly once. No already-netted carrier acceleration or second fish torque reaches physics.
-		Rod->GetPhysicalRodComponent()->SetLineLoad(SessionActor->GetSnapshot().FishingSessionId,
-			DiagnosticFixedStepSequence, Step.RodLineForceNewtons, Config.FixedStepSeconds, FMath::Max(0.15, Config.FixedStepSeconds * 3.0));
-		Rod->SetFightConstraintObservationFromAuthority(LineDirection, Step.NormalizedTension, Step.ConstraintErrorCentimeters, RodConstraint.bRodHeld, RotationResistance.MaximumFishTorqueStrengthMeters, RotationResistance.CatTorqueCapacityStrengthMeters, LineDirection);
+		// 力竭/终局当步就撤销排队载荷，不能等下一个固定步，也不能把辅助回收力送回猫端。
+		const bool bReleaseCarrierLoad = State.bFishExhausted || Step.Outcome != ECatFightStepOutcome::None;
+		if (bReleaseCarrierLoad)
+			Rod->GetPhysicalRodComponent()->ClearLineLoad(SessionActor->GetSnapshot().FishingSessionId);
+		else
+			Rod->GetPhysicalRodComponent()->SetLineLoad(SessionActor->GetSnapshot().FishingSessionId,
+				DiagnosticFixedStepSequence, Step.RodLineForceNewtons, Config.FixedStepSeconds, FMath::Max(0.15, Config.FixedStepSeconds * 3.0));
+		Rod->SetFightConstraintObservationFromAuthority(LineDirection, bReleaseCarrierLoad ? 0.0 : Step.NormalizedTension, Step.ConstraintErrorCentimeters, RodConstraint.bRodHeld, RotationResistance.MaximumFishTorqueStrengthMeters, RotationResistance.CatTorqueCapacityStrengthMeters, LineDirection);
 	}
 	const bool bConstraintActive = RodConstraint.bRodHeld
 		&& Step.NormalizedTension > UE_DOUBLE_SMALL_NUMBER;

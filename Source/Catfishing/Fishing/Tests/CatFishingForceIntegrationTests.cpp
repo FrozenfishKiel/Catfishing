@@ -109,6 +109,50 @@ bool FCatFishingCommonForceTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingExhaustedNoCarrierForceTest,
+	"Catfishing.Unit.Fishing.Simulation.ExhaustedFishFollowsMovingTipWithoutCarrierForce",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingExhaustedNoCarrierForceTest::RunTest(const FString& Parameters)
+{
+	const auto C = ForceConfig();
+	for (const bool bCMC : {false, true})
+	for (const auto Action : {ECatFightCatAction::None, ECatFightCatAction::Pull})
+	{
+		auto S = ForceState();
+		S.bFishExhausted = true;
+		S.FishStamina = S.FishEffortRatio = 0;
+		S.CatAction = Action;
+		S.MotionIntent = ECatFishMotionIntent::AutoHauling;
+		FCatFightRodConstraintInput Rod;
+		Rod.bRodHeld = Rod.bPhysicalRodEndpoint = true;
+		// 单步小幅转杆/后移，避免把超出有限回收力的大幅瞬移当成正常收线。
+		Rod.RodTipWorldPosition = FVector(-0.2, 0.3, 0);
+		Rod.RodPointInverseMassX = FVector(0.2, 0, 0);
+		Rod.RodPointInverseMassY = FVector(0, 0.2, 0);
+		Rod.PhysicsStepSeconds = C.FixedStepSeconds;
+		bool bPredictedCarrierForce = false;
+		if (bCMC) Rod.PredictCMCEndpoint = [&](const FCatFightCMCPredictionQuery& Query)
+		{
+			bPredictedCarrierForce |= !Query.ForceNewtons.IsNearlyZero();
+			FCatFightCMCPredictionResult Prediction;
+			Prediction.bSucceeded = true;
+			Prediction.RodTipWorldPosition = Rod.RodTipWorldPosition + Query.ForceNewtons;
+			return Prediction;
+		};
+		const auto Step = FCatFishingFightSimulator::Step(C, S, Rod, FVector::ZeroVector);
+		if (!TestTrue(TEXT("exhausted fish solves after tip rotation or backward movement"), Step.bSucceeded)) return false;
+		TestTrue(TEXT("fish follows the displaced tip"), Step.ProposedFishWorldPosition.X < S.FishWorldPosition.X);
+		TestTrue(TEXT("mouth remains inside the paid out line"), Step.StraightLineDistanceCentimeters <= Step.LineLengthCentimeters + 0.01);
+		TestTrue(TEXT("auxiliary retrieval never pulls the carrier"), Step.RodLineForceNewtons.IsNearlyZero() && !bPredictedCarrierForce);
+		TestEqual(TEXT("exhausted retrieval costs no cat stamina"), Step.CatStaminaDrain, 0.0);
+		if (Action == ECatFightCatAction::Pull)
+			TestTrue(TEXT("finite assisted reeling still shortens the line"), Step.ActualReelDistanceCentimeters > 0);
+		else TestEqual(TEXT("turning without reeling preserves paid out length"), Step.LineLengthCentimeters, S.LineLengthCentimeters);
+	}
+	return !HasAnyErrors();
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingActualEndpointTest,
 	"Catfishing.Unit.Fishing.Simulation.SampledRodEndpointAndPersonalProgressHaveSeparateAuthority",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
