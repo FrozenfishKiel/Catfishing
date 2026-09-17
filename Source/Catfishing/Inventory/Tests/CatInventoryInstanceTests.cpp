@@ -321,4 +321,64 @@ bool FCatInventoryAbilityCostTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatInventoryIntakeAllocationTest,
+	"Catfishing.Unit.Inventory.IntakePartialAndMixedBatchPreserveIdentity",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+// 先用单格库存检查定义收货的余数，再确认容量不足的实例批次不改数量、宿主或载体，随后验证单项合并转移载体。
+// 扩容后提交混合批次，回调检查条目和实例宿主已到位；解除监听后核对通知次数与原实例身份。
+bool FCatInventoryIntakeAllocationTest::RunTest(const FString& Parameters)
+{
+	FTestWorldWrapper Fixture;
+	if (!TestTrue(TEXT("创建世界"), Fixture.CreateTestWorld(EWorldType::Game))) return false;
+	AActor* Owner = Fixture.GetTestWorld()->SpawnActor<AActor>();
+	UCatInventoryComponent* Inventory = CatInventoryInstanceTests::AddInventoryComponent(*Owner, 1);
+	UCatInventoryItemDefinition* Definition = CatInventoryInstanceTests::CreateOrdinaryDefinition();
+	Definition->InventoryMaxStackCount = 4;
+	int32 Remaining = 6;
+	bool bFull = true;
+	UCatInventoryItemInstance* First = Inventory->AddEntry(Definition, Remaining, bFull);
+	TestNotNull(TEXT("部分接收创建首格"), First);
+	TestEqual(TEXT("满格后返回两份余数"), Remaining, 2);
+	TestFalse(TEXT("部分接收不报告完整成功"), bFull);
+	TestTrue(TEXT("先扣一份让出堆叠位置"), Inventory->ConsumeItemAtSlot(0, 1));
+	AActor* Carrier = Fixture.GetTestWorld()->SpawnActor<AActor>();
+	UCatInventoryItemInstance* Incoming = NewObject<UCatInventoryItemInstance>(Carrier);
+	Incoming->SetItemDefinition(Definition);
+	Incoming->SetRuntimeOwnerActor(Carrier);
+	Incoming->SetWorldActor(Carrier);
+	FCatInventoryReceiveBatch TooLarge;
+	TooLarge.InstanceEntries.Add({2, Incoming});
+	TestFalse(TEXT("整批不能部分接收"), Inventory->TryAddInventoryBatch(TooLarge));
+	TestEqual(TEXT("拒绝没有提前堆叠"), Inventory->GetInventoryEntryAtSlot(0)->StackCount, 3);
+	TestTrue(TEXT("拒绝保留来源载体"), Incoming->GetWorldActor() == Carrier);
+	TestTrue(TEXT("拒绝保留来源宿主"), Incoming->GetRuntimeOwnerActor() == Carrier);
+	Remaining = 2;
+	Inventory->AddEntry(Incoming, Remaining, bFull);
+	TestEqual(TEXT("按实例也返回一份余数"), Remaining, 1);
+	TestTrue(TEXT("合并接过唯一载体"), First->GetWorldActor() == Carrier && Incoming->GetWorldActor() == nullptr);
+	Inventory->SetInventorySlotCountFromAuthority(3);
+	UCatInventoryItemDefinition* Other = CatInventoryInstanceTests::CreateOrdinaryDefinition();
+	Other->ItemId += 1;
+	UCatInventoryItemInstance* Original = NewObject<UCatInventoryItemInstance>(Carrier);
+	Original->SetItemDefinition(Other);
+	const FGuid OriginalId = Original->GetItemInstanceId();
+	FCatInventoryReceiveBatch Mixed;
+	Mixed.DefinitionEntries.Add({1, Definition});
+	Mixed.InstanceEntries.Add({1, Original});
+	int32 Notifications = 0;
+	const FDelegateHandle Observer = Inventory->OnInventoryObservedChanged.AddLambda([&]()
+	{
+		++Notifications;
+		TestTrue(TEXT("通知前混合批次已全部到位"), Inventory->GetInventoryEntryAtSlot(1)->Instance
+			&& Inventory->GetInventoryEntryAtSlot(2)->Instance == Original);
+		TestTrue(TEXT("通知前原实例宿主已迁移"), Original->GetRuntimeOwnerActor() == Owner);
+	});
+	TestTrue(TEXT("混合批次完整收货"), Inventory->TryAddInventoryBatch(Mixed));
+	Inventory->OnInventoryObservedChanged.Remove(Observer);
+	TestEqual(TEXT("只通知一次"), Notifications, 1);
+	TestEqual(TEXT("原实例身份不变"), Original->GetItemInstanceId(), OriginalId);
+	return !HasAnyErrors();
+}
+
 #endif

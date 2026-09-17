@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
@@ -226,7 +226,7 @@ public:
 	/** 复制子对象入口；使用 registered subobject list，函数保留给引擎复制管线调用。 */
 	virtual bool ReplicateSubobjects(UActorChannel* Channel, FOutBunch* Bunch, FReplicationFlags* RepFlags) override;
 
-	/** 按定义资产把数量写入服务器正式库存；返回第一份被接收的实例，InOutCount 和 bOutFullyAdded 交回剩余数量，调用方可选择是否立即广播变化。 */
+	/** 按定义资产接收服务器库存可容纳的数量；返回首个发生增加的格子实例，InOutCount 返回余数，bOutFullyAdded 表示是否全收，通知可延迟。 */
 	UCatInventoryItemInstance* AddEntry(UCatInventoryItemDefinition* ItemDefinition,
 		int32& InOutCount, bool& bOutFullyAdded,
 		TSubclassOf<UCatInventoryItemInstance> ItemInstanceClass = nullptr,
@@ -274,9 +274,9 @@ public:
 	bool CanFullyAcceptInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch) const;
 
 	/**
-	 * authority 整批接收定义或现有实例；空批次成功，预检拒绝不写库存，写入失败恢复槽位与传入实例宿主。
-	 * 槽位快照不恢复实例合并中的世界载体转移；调用方仍须管理这类外部副作用。本入口不执行业务回调，也不缓存请求终态。
-	 * 默认在成功变更或写入后回滚时广播；关闭通知时由调用方在关联资源提交完整后统一发布。
+	 * authority 整批接收定义或现有实例；空批次成功，容量不足或实例准备失败时不提交本批次，不恢复实例初始化期间其他调用产生的变更。
+	 * 全部分配和实例准备完成后才迁移载体并写入正式条目；本入口不执行业务回调，也不缓存请求终态。
+	 * 非空批次成功后默认广播一次，拒绝不广播；关闭通知时由调用方在关联资源提交完整后统一发布。
 	 */
 	bool TryAddInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch, bool bBroadcastChange = true);
 
@@ -460,14 +460,21 @@ protected:
 	virtual bool CanAcceptInventoryDefinitionAtSlot(const UCatInventoryItemDefinition& IncomingDefinition,
 		int32 TargetSlotIndex) const;
 
-	/** 容量预演里的轻量格子；它只保存定义和数量，不创建运行实例或触发复制。 */
-	struct FSimulatedInventorySlot
+	/** 本次同步入库的槽位分配；预检和写入共用，不保存到组件或跨帧传递。 */
+	struct FInventoryIntakeSlot
 	{
-		/** 预演格子里当前物品的静态定义；空指针表示这个模拟格为空。 */
-		const UCatInventoryItemDefinition* ItemDefinition = nullptr;
-
-		/** 预演格子里当前数量；只服务容量计算，不写回正式库存。 */
+		/** 分配后的定义；空值表示仍为空格，由分配计算写入。 */
+		UCatInventoryItemDefinition* ItemDefinition = nullptr;
+		/** 接收格的原实例或待接收实例；空值时提交前按定义创建。 */
+		UCatInventoryItemInstance* Instance = nullptr;
+		/** 新格采用的实例类型；定义批次可指定，实例批次沿用来源类型。 */
+		TSubclassOf<UCatInventoryItemInstance> InstanceClass;
+		/** 分配后的份数；只在提交成功后写入正式条目。 */
 		int32 StackCount = 0;
+		/** 本次为该格分配的新增份数；分配时累加，提交与返回实例时据此跳过未变格。 */
+		int32 AddedCount = 0;
+		/** 合并数量时需要接过载体的来源实例；提交成功前不清除来源关联。 */
+		UCatInventoryItemInstance* WorldActorSource = nullptr;
 	};
 
 	/** 库存交换的内部结果；公开命令用它避免同一套移动规则复制两份。 */
@@ -486,14 +493,12 @@ protected:
 		UCatInventoryItemDefinition* ItemDefinition,
 		TSubclassOf<UCatInventoryItemInstance> ItemInstanceClass = nullptr);
 
-	/** 在模拟格子数组里尝试放入指定数量的同类定义；成功时扣减 InOutRemainingCount。 */
-	bool SimulateAddItemDefinition(TArray<FSimulatedInventorySlot>& SimulatedSlots,
-		const UCatInventoryItemDefinition& ItemDefinition, int32& InOutRemainingCount,
-		UCatInventoryItemInstance* IncomingInstance = nullptr) const;
+	/** 只读正式库存并输出临时槽位分配；余数指针仅供单项调用允许部分接收，省略时任一项不完整即失败。 */
+	bool AllocateInventoryIntake(const FCatInventoryReceiveBatch& Batch,
+		TArray<FInventoryIntakeSlot>& Slots, int32* OutRemaining = nullptr) const;
 
-	/** 用整批输入预演当前库存能否完整接收；成功时不会创建实例，也不会改变正式库存。 */
-	bool SimulateAddInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch,
-		TArray<FSimulatedInventorySlot>& SimulatedSlots) const;
+	/** 准备新实例并核对准备期间原条目未变，再迁移载体、写条目与复制登记；拒绝时不提交本批次，也不撤销重入变更，通知由调用方发布。 */
+	bool ApplyInventoryIntake(TArray<FInventoryIntakeSlot>& Slots);
 
 	/** 稳定物品发货预检的共用裁决；调用方可以来自目录 ID 或已解析定义，但最终都按同一份库存载荷签名回答。 */
 	ECatDomainCommandError ValidateInventoryDefinitionGrantFromAuthorityInternal(

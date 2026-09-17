@@ -1,4 +1,4 @@
-﻿#include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatWorldDropProtectionComponent.h"
 #include "Growth/CatGrowthComponent.h"
 
@@ -477,268 +477,46 @@ bool UCatInventoryComponent::AreInventoryEntriesEquivalent(const TArray<FCatInve
 	return true;
 }
 
-// 按定义入库流程：
-// 1. 先拒绝无定义、无数量、非 authority 和运行定义未就绪的请求；失败不会改 Entries 或广播变化。
-// 2. 再填充同类可堆叠格，并同步观察数量、槽位 owner 和实例运行宿主。
-// 3. 剩余数量按空格创建新实例，登记复制子对象并把 InOutCount 扣到实际剩余数量。
-// 4. 只要接收过至少一份物品就写 bOutFullyAdded；bBroadcastChange 为 true 时把本次调用作为完整事务广播。
-UCatInventoryItemInstance* UCatInventoryComponent::AddEntry(
-	UCatInventoryItemDefinition* ItemDefinition,
-	int32& InOutCount,
-	bool& bOutFullyAdded,
-	const TSubclassOf<UCatInventoryItemInstance> ItemInstanceClass,
+// 定义收货先拒绝预留期间或非权威调用，再计算可接收份数并准备、提交实例；拒绝时保持输入数量，完整接收标记为假。
+// 提交后写回余数与完整接收标记；有新增数量才按开关广播，并返回按格位顺序找到的首个接收实例。
+UCatInventoryItemInstance* UCatInventoryComponent::AddEntry(UCatInventoryItemDefinition* ItemDefinition,
+	int32& InOutCount, bool& bOutFullyAdded, const TSubclassOf<UCatInventoryItemInstance> ItemInstanceClass,
 	const bool bBroadcastChange)
 {
-	// 批次准备期间禁止重入写格；原实例和数量保持到统一提交或取消。
-	if (HasPreparedRemoval()) { bOutFullyAdded = false; return nullptr; }
 	bOutFullyAdded = false;
-	if (ItemDefinition == nullptr || InOutCount <= 0 || GetOwner() == nullptr || !GetOwner()->HasAuthority())
+	FCatInventoryReceiveBatch Batch;
+	Batch.DefinitionEntries.Add({InOutCount, ItemDefinition, ItemInstanceClass});
+	TArray<FInventoryIntakeSlot> Slots;
+	int32 Remaining = InOutCount;
+	if (HasPreparedRemoval() || !GetOwner() || !GetOwner()->HasAuthority()
+		|| !AllocateInventoryIntake(Batch, Slots, &Remaining) || !ApplyInventoryIntake(Slots)) return nullptr;
+	InOutCount = Remaining;
+	bOutFullyAdded = Remaining == 0;
+	for (const FInventoryIntakeSlot& Slot : Slots)
 	{
-		return nullptr;
+		if (Slot.AddedCount <= 0) continue;
+		if (bBroadcastChange) BroadcastInventoryChange();
+		return Slot.Instance;
 	}
-
-	if (!ItemDefinition->IsInventoryRuntimeDefinitionReady()
-		|| UCatInventoryItemDefinition::ResolveItemInstanceClass(ItemDefinition, ItemInstanceClass) == nullptr)
-	{
-		return nullptr;
-	}
-
-	// 随身携带总量是格数、单格堆叠之外的第三道（道具册：普通饵 8 份、窝料 5 份）。
-	// 超出的份数不入库，InOutCount 保留余数，bOutFullyAdded 随之为 false，上游整批预检据此整单拒绝。
-	const int32 CarryAllowance = GetRemainingCarryAllowanceForDefinition(*ItemDefinition);
-	const int32 RejectedByCarryLimit = FMath::Max(0, InOutCount - CarryAllowance);
-	if (RejectedByCarryLimit > 0)
-	{
-		InOutCount -= RejectedByCarryLimit;
-		UE_LOG(LogCatInventory, Log,
-			TEXT("Event=inventory_carry_limit_clamped Owner=%s Definition=%s Requested=%d Allowance=%d"),
-			*GetNameSafe(GetOwner()), *FString::FromInt(ItemDefinition->GetItemId()),
-			InOutCount + RejectedByCarryLimit, CarryAllowance);
-	}
-
-	UCatInventoryItemInstance* FirstAcceptedInstance = nullptr;
-	const int32 MaxStackCount = GetMaxStackCountForDefinition(*ItemDefinition);
-
-	if (MaxStackCount > 1)
-	{
-		for (int32 SlotIndex = 0; SlotIndex < InventoryList.Entries.Num(); ++SlotIndex)
-		{
-			if (InOutCount <= 0)
-			{
-				break;
-			}
-			FCatInventoryEntry& Entry = InventoryList.Entries[SlotIndex];
-			const UCatInventoryItemDefinition* ExistingDefinition =
-				Entry.Instance != nullptr ? Entry.Instance->GetItemDefinition() : nullptr;
-			if (ExistingDefinition == nullptr || !ExistingDefinition->CanStackWith(*ItemDefinition))
-			{
-				continue;
-			}
-			if (!CanAcceptInventoryDefinitionAtSlot(*ItemDefinition, SlotIndex))
-			{
-				continue;
-			}
-
-			const int32 AvailableSpace = FMath::Max(0, MaxStackCount - Entry.StackCount);
-			const int32 AddAmount = FMath::Min(InOutCount, AvailableSpace);
-			if (AddAmount <= 0)
-			{
-				continue;
-			}
-
-			Entry.StackCount += AddAmount;
-			Entry.LastObservedCount = Entry.StackCount;
-			Entry.SlotOwnerComponent = this;
-			SyncInventoryItemRuntimeOwner(Entry.Instance);
-			InOutCount -= AddAmount;
-			FirstAcceptedInstance = FirstAcceptedInstance != nullptr ? FirstAcceptedInstance : Entry.Instance.Get();
-			InventoryList.MarkItemDirty(Entry);
-		}
-	}
-
-	while (InOutCount > 0)
-	{
-		UCatInventoryItemInstance* NewInstance = CreateInventoryItemInstance(ItemDefinition, ItemInstanceClass);
-		if (NewInstance == nullptr)
-		{
-			break;
-		}
-
-		const int32 TargetIndex = FindAvailableSlot(NewInstance, InOutCount);
-		if (TargetIndex == INDEX_NONE)
-		{
-			break;
-		}
-
-		FCatInventoryEntry& TargetEntry = InventoryList.Entries[TargetIndex];
-		const int32 AddAmount = MaxStackCount > 1 ? FMath::Min(InOutCount, MaxStackCount) : 1;
-		TargetEntry.Instance = NewInstance;
-		TargetEntry.StackCount = AddAmount;
-		TargetEntry.LastObservedCount = AddAmount;
-		TargetEntry.SlotOwnerComponent = this;
-		InOutCount -= AddAmount;
-		FirstAcceptedInstance = FirstAcceptedInstance != nullptr ? FirstAcceptedInstance : NewInstance;
-
-		if (IsUsingRegisteredSubObjectList() && IsReadyForReplication())
-		{
-			AddReplicatedSubObject(NewInstance);
-		}
-
-		InventoryList.MarkItemDirty(TargetEntry);
-	}
-
-	InOutCount += RejectedByCarryLimit; // 余数交还调用方，让它看到真实的未入库份数。
-	bOutFullyAdded = InOutCount == 0;
-	if (FirstAcceptedInstance != nullptr)
-	{
-		if (bBroadcastChange)
-		{
-
-			BroadcastInventoryChange();
-		}
-	}
-
-	return FirstAcceptedInstance;
+	return nullptr;
 }
 
-// 按实例入库流程：
-// 1. 先拒绝空实例、无数量、非 authority 和缺定义的请求；失败不会占用或替换任何格子。
-// 2. 堆叠物优先合并到同定义格，并把观察数量、槽位 owner 和运行宿主同步到正式库存事实。
-//    接收格没有载体时接过来源的唯一 Actor 引用；已有载体则保留原引用，不为数量保存 Actor 数组。
-// 3. 剩余数量先放入传入实例，再按同定义补建实例；每个新占用格都会登记复制子对象并扣减 InOutCount。
-// 4. 接收过物品后更新 bOutFullyAdded；bBroadcastChange 为 true 时本次调用自成事务广播，否则等待外层批次统一通知。
+// 实例收货先核对预留状态与权威，再共用分配和提交；首个新增格复用来源实例，合并时按分配转移唯一载体。
+// 拒绝时保持输入数量并报告未完整接收；提交后写回余数和完整接收标记，仅数量增加且通知开启时广播。
 void UCatInventoryComponent::AddEntry(UCatInventoryItemInstance* ItemInstance, int32& InOutCount,
 	bool& bOutFullyAdded, const bool bBroadcastChange)
 {
-	// 实例收货同样受整批预留约束，不允许回调重入替换原槽。
-	if (HasPreparedRemoval()) { bOutFullyAdded = false; return; }
 	bOutFullyAdded = false;
-	if (ItemInstance == nullptr || InOutCount <= 0 || GetOwner() == nullptr || !GetOwner()->HasAuthority())
-	{
-		return;
-	}
-
-	const UCatInventoryItemDefinition* TargetDefinition = ItemInstance->GetItemDefinition();
-	if (TargetDefinition == nullptr)
-	{
-		return;
-	}
-
-	// 与按定义入库同一道随身携带总量；按实例入库同样要过（拾取地上的饵、从公库拖一叠饵进背包都走这里）。
-	const int32 CarryAllowance = GetRemainingCarryAllowanceForDefinition(*TargetDefinition);
-	const int32 RejectedByCarryLimit = FMath::Max(0, InOutCount - CarryAllowance);
-	if (RejectedByCarryLimit > 0)
-	{
-		InOutCount -= RejectedByCarryLimit;
-		UE_LOG(LogCatInventory, Log,
-			TEXT("Event=inventory_carry_limit_clamped Owner=%s Definition=%s Requested=%d Allowance=%d"),
-			*GetNameSafe(GetOwner()), *FString::FromInt(TargetDefinition->GetItemId()),
-			InOutCount + RejectedByCarryLimit, CarryAllowance);
-	}
-
-	UCatInventoryItemInstance* FirstAcceptedInstance = nullptr;
-	const int32 MaxStackCount = GetMaxStackCountForDefinition(*TargetDefinition);
-
-	if (MaxStackCount > 1)
-	{
-		for (int32 SlotIndex = 0; SlotIndex < InventoryList.Entries.Num(); ++SlotIndex)
-		{
-			if (InOutCount <= 0)
-			{
-				break;
-			}
-			FCatInventoryEntry& Entry = InventoryList.Entries[SlotIndex];
-			const UCatInventoryItemDefinition* ExistingDefinition =
-				Entry.Instance != nullptr ? Entry.Instance->GetItemDefinition() : nullptr;
-			if (ExistingDefinition == nullptr || !ExistingDefinition->CanStackWith(*TargetDefinition))
-			{
-				continue;
-			}
-			FCatInventoryEntry IncomingEntry(this);
-			IncomingEntry.Instance = ItemInstance;
-			IncomingEntry.StackCount = 1;
-			if (!CanAcceptInventoryEntryAtSlot(IncomingEntry, SlotIndex))
-			{
-				continue;
-			}
-
-			const int32 AvailableSpace = FMath::Max(0, MaxStackCount - Entry.StackCount);
-			const int32 AddAmount = FMath::Min(InOutCount, AvailableSpace);
-			if (AddAmount <= 0)
-			{
-				continue;
-			}
-
-			Entry.StackCount += AddAmount;
-			if (!Entry.Instance->GetWorldActor() && ItemInstance->GetWorldActor())
-			{
-				Entry.Instance->SetWorldActor(ItemInstance->GetWorldActor());
-				ItemInstance->SetWorldActor(nullptr);
-			}
-			Entry.LastObservedCount = Entry.StackCount;
-			Entry.SlotOwnerComponent = this;
-			SyncInventoryItemRuntimeOwner(Entry.Instance);
-			InOutCount -= AddAmount;
-			FirstAcceptedInstance = FirstAcceptedInstance != nullptr ? FirstAcceptedInstance : Entry.Instance.Get();
-			InventoryList.MarkItemDirty(Entry);
-		}
-	}
-
-	bool bOriginalInstanceConsumed = false;
-	while (InOutCount > 0)
-	{
-		UCatInventoryItemInstance* TargetInstance = nullptr;
-		if (!bOriginalInstanceConsumed)
-		{
-			TargetInstance = ItemInstance;
-			bOriginalInstanceConsumed = true;
-		}
-		else
-		{
-			TargetInstance = CreateInventoryItemInstance(
-				ItemInstance->GetItemDefinition(),
-				ItemInstance->GetClass());
-		}
-
-		if (TargetInstance == nullptr)
-		{
-			break;
-		}
-
-		const int32 TargetIndex = FindAvailableSlot(TargetInstance, InOutCount);
-		if (TargetIndex == INDEX_NONE)
-		{
-			break;
-		}
-
-		FCatInventoryEntry& TargetEntry = InventoryList.Entries[TargetIndex];
-		const int32 AddAmount = MaxStackCount > 1 ? FMath::Min(InOutCount, MaxStackCount) : 1;
-		TargetEntry.Instance = TargetInstance;
-		TargetEntry.StackCount = AddAmount;
-		TargetEntry.LastObservedCount = AddAmount;
-		TargetEntry.SlotOwnerComponent = this;
-		TargetInstance->SetRuntimeOwnerActor(GetOwner());
-		InOutCount -= AddAmount;
-		FirstAcceptedInstance = FirstAcceptedInstance != nullptr ? FirstAcceptedInstance : TargetInstance;
-
-		if (IsUsingRegisteredSubObjectList() && IsReadyForReplication())
-		{
-			AddReplicatedSubObject(TargetInstance);
-		}
-
-		InventoryList.MarkItemDirty(TargetEntry);
-	}
-
-	InOutCount += RejectedByCarryLimit; // 余数交还调用方，让它看到真实的未入库份数。
-	bOutFullyAdded = InOutCount == 0;
-	if (FirstAcceptedInstance != nullptr)
-	{
-		if (bBroadcastChange)
-		{
-
-			BroadcastInventoryChange();
-		}
-	}
+	FCatInventoryReceiveBatch Batch;
+	Batch.InstanceEntries.Add({InOutCount, ItemInstance});
+	TArray<FInventoryIntakeSlot> Slots;
+	int32 Remaining = InOutCount;
+	if (HasPreparedRemoval() || !GetOwner() || !GetOwner()->HasAuthority()
+		|| !AllocateInventoryIntake(Batch, Slots, &Remaining) || !ApplyInventoryIntake(Slots)) return;
+	const bool bChanged = Remaining != InOutCount;
+	InOutCount = Remaining;
+	bOutFullyAdded = Remaining == 0;
+	if (bChanged && bBroadcastChange) BroadcastInventoryChange();
 }
 
 // 可用槽查找流程：如果传入实例可堆叠则优先找同类未满格；否则返回第一处空格。
@@ -1023,96 +801,29 @@ bool UCatInventoryComponent::CanFullyAcceptInventoryBatch(const FCatInventoryRec
 		return false;
 	}
 
-	TArray<FSimulatedInventorySlot> SimulatedSlots;
-	return SimulateAddInventoryBatch(ReceiveBatch, SimulatedSlots);
+	TArray<FInventoryIntakeSlot> Slots;
+	return AllocateInventoryIntake(ReceiveBatch, Slots);
 }
 
-// 批次写入流程：
-// 1. 拒绝批次准备中或非 authority 的写入；空批次直接成功，其他批次先预演容量。
-// 2. 保存槽位与传入实例宿主，先静默写定义项、再写实例项；任一项不完整即恢复快照并返回失败。
-// 3. 恢复范围不包含实例合并时的世界载体转移；此类副作用仍由业务调用方负责。
-// 4. 成功变更或写入后回滚均按开关通知，预检拒绝不通知；本入口不执行业务回调或记录请求终态。
+// 批次收货先检查预留状态与权威，空批次直接成功；其他批次要求统一收货开启且每项都能完整分配。
+// 实例全部准备好且原条目未被重入改变后才提交载体、条目、宿主和复制；拒绝不提交本批次，也不回滚其他调用的变更。
+// 非空批次提交成功后按开关统一通知并记录结果；分配或准备失败只记录拒绝，不广播。
 bool UCatInventoryComponent::TryAddInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch,
 	const bool bBroadcastChange)
 {
-	// 批次准备期间禁止重入写格；原实例和数量保持到统一提交或取消。
-	if (HasPreparedRemoval()) return false;
-	AActor* OwningActor = GetOwner();
-	if (OwningActor == nullptr || !OwningActor->HasAuthority())
-	{
-		return false;
-	}
-
-	if (ReceiveBatch.IsEmpty())
-	{
-		return true;
-	}
-
-	if (!CanFullyAcceptInventoryBatch(ReceiveBatch))
+	if (HasPreparedRemoval() || !GetOwner() || !GetOwner()->HasAuthority()) return false;
+	if (ReceiveBatch.IsEmpty()) return true;
+	TArray<FInventoryIntakeSlot> Slots;
+	if (!CanReceiveUnifiedInventoryIntake() || !AllocateInventoryIntake(ReceiveBatch, Slots)
+		|| !ApplyInventoryIntake(Slots))
 	{
 		UE_LOG(LogCatInventory, Warning, TEXT("Event=inventory_batch_rejected Owner=%s Definitions=%d Instances=%d"),
-			*GetNameSafe(OwningActor), ReceiveBatch.DefinitionEntries.Num(), ReceiveBatch.InstanceEntries.Num());
+			*GetNameSafe(GetOwner()), ReceiveBatch.DefinitionEntries.Num(), ReceiveBatch.InstanceEntries.Num());
 		return false;
 	}
-
-	const TArray<FCatInventoryEntry> SavedEntries = InventoryList.Entries;
-	TMap<UCatInventoryItemInstance*, AActor*> PreviousRuntimeOwners;
-	for (const FCatInventoryInstanceEntry& Entry : ReceiveBatch.InstanceEntries)
-	{
-		if (Entry.ItemInstance != nullptr)
-		{
-			PreviousRuntimeOwners.FindOrAdd(Entry.ItemInstance, Entry.ItemInstance->GetRuntimeOwnerActor());
-		}
-	}
-	// 先恢复传入实例宿主，再恢复条目；延迟通知的事务失败时也不广播，避免观察者看到未成交的收货。
-	const auto RollbackBatch = [this, &SavedEntries, &PreviousRuntimeOwners, bBroadcastChange]()
-	{
-		for (const TPair<UCatInventoryItemInstance*, AActor*>& Pair : PreviousRuntimeOwners)
-		{
-			Pair.Key->SetRuntimeOwnerActor(Pair.Value);
-		}
-		ReplaceInventoryEntriesFromAuthority(SavedEntries, SavedEntries.Num(), bBroadcastChange);
-	};
-	bool bAnyMutation = false;
-	for (const FCatInventoryDefinitionEntry& DefinitionEntry : ReceiveBatch.DefinitionEntries)
-	{
-		int32 RemainingCount = DefinitionEntry.Count;
-		bool bAdded = false;
-		AddEntry(DefinitionEntry.ItemDefinition, RemainingCount, bAdded, DefinitionEntry.ItemInstanceClass, false);
-		bAnyMutation = bAnyMutation || RemainingCount != DefinitionEntry.Count;
-		if (!bAdded || RemainingCount != 0)
-		{
-			RollbackBatch();
-			UE_LOG(LogCatInventory, Error, TEXT("Event=inventory_batch_apply_failed Owner=%s Source=Definition Count=%d Remaining=%d"),
-				*GetNameSafe(OwningActor), DefinitionEntry.Count, RemainingCount);
-			return false;
-		}
-	}
-
-	for (const FCatInventoryInstanceEntry& InstanceEntry : ReceiveBatch.InstanceEntries)
-	{
-		int32 RemainingCount = InstanceEntry.Count;
-		bool bAdded = false;
-		AddEntry(InstanceEntry.ItemInstance, RemainingCount, bAdded, false);
-		bAnyMutation = bAnyMutation || RemainingCount != InstanceEntry.Count;
-		if (!bAdded || RemainingCount != 0)
-		{
-			RollbackBatch();
-			UE_LOG(LogCatInventory, Error, TEXT("Event=inventory_batch_apply_failed Owner=%s Source=Instance Count=%d Remaining=%d"),
-				*GetNameSafe(OwningActor), InstanceEntry.Count, RemainingCount);
-			return false;
-		}
-	}
-
-
-	if (bAnyMutation && bBroadcastChange)
-	{
-
-		BroadcastInventoryChange();
-	}
+	if (bBroadcastChange) BroadcastInventoryChange();
 	UE_LOG(LogCatInventory, Log, TEXT("Event=inventory_batch_accepted Owner=%s Definitions=%d Instances=%d Slots=%d"),
-		*GetNameSafe(OwningActor), ReceiveBatch.DefinitionEntries.Num(), ReceiveBatch.InstanceEntries.Num(),
-		InventoryList.Entries.Num());
+		*GetNameSafe(GetOwner()), ReceiveBatch.DefinitionEntries.Num(), ReceiveBatch.InstanceEntries.Num(), Slots.Num());
 	return true;
 }
 
@@ -2699,154 +2410,120 @@ bool UCatInventoryComponent::CanAcceptInventoryDefinitionAtSlot(const UCatInvent
 	return IsValidInventorySlotIndex(TargetSlotIndex);
 }
 
-// 容量预演单项流程：先合并同类未满格，再占用空格；实例批次复用实例接收规则，定义批次使用定义规则，保留格不能只凭同型号放行。
-bool UCatInventoryComponent::SimulateAddItemDefinition(TArray<FSimulatedInventorySlot>& SimulatedSlots,
-	const UCatInventoryItemDefinition& ItemDefinition, int32& InOutRemainingCount, UCatInventoryItemInstance* IncomingInstance) const
+// 从现有格建立临时分配，按输入顺序优先堆叠再占空格；每项读分配后的总量，因此批次内部共享携带额度。
+// 实例接收规则保留手持原格限制；仅分配载体转移意图，不提前修改来源实例。
+// 定义或数量非法即拒绝；先处理全部定义项，再处理实例项。仅单项调用提供余数指针时允许留下未接收数量，整批必须全部放下。
+bool UCatInventoryComponent::AllocateInventoryIntake(const FCatInventoryReceiveBatch& Batch,
+	TArray<FInventoryIntakeSlot>& Slots, int32* OutRemaining) const
 {
-	if (InOutRemainingCount <= 0)
-	{
-		return true;
-	}
-
-	// 预演必须和正式入库用同一道携带上限，否则整批预检会放行一个入库时会被削减的订单。
-	// 已带份数从**模拟格**里数，不从正式库存数：同一批里两行同类饵必须互相看得见彼此已经占掉的份额。
-	if (EnforcesCarryLimits())
-	{
-		const ECatInventoryCarryCategory Category = UCatInventorySettings::ResolveCarryCategory(ItemDefinition);
-		const int32 Limit = GetEffectiveCarryLimit(Category);
-		if (Category != ECatInventoryCarryCategory::None && Limit != MAX_int32)
-		{
-			int32 SimulatedCategoryTotal = 0;
-			for (const FSimulatedInventorySlot& SimulatedSlot : SimulatedSlots)
-			{
-				if (SimulatedSlot.ItemDefinition != nullptr && SimulatedSlot.StackCount > 0
-					&& UCatInventorySettings::ResolveCarryCategory(*SimulatedSlot.ItemDefinition) == Category)
-				{
-					SimulatedCategoryTotal += SimulatedSlot.StackCount;
-				}
-			}
-			if (SimulatedCategoryTotal + InOutRemainingCount > Limit)
-			{
-				return false;
-			}
-		}
-	}
-
-	FCatInventoryEntry IncomingEntry;
-	IncomingEntry.Instance = IncomingInstance;
-	IncomingEntry.StackCount = InOutRemainingCount;
-	const auto CanAcceptSlot = [&](const int32 SlotIndex)
-	{
-		return IncomingInstance ? CanAcceptInventoryEntryAtSlot(IncomingEntry, SlotIndex)
-			: CanAcceptInventoryDefinitionAtSlot(ItemDefinition, SlotIndex);
-	};
-	const int32 MaxStackCount = GetMaxStackCountForDefinition(ItemDefinition);
-	if (MaxStackCount > 1)
-	{
-		for (int32 SlotIndex = 0; SlotIndex < SimulatedSlots.Num(); ++SlotIndex)
-		{
-			if (InOutRemainingCount <= 0)
-			{
-				break;
-			}
-
-			FSimulatedInventorySlot& SimulatedSlot = SimulatedSlots[SlotIndex];
-			if (SimulatedSlot.ItemDefinition == nullptr
-				|| !SimulatedSlot.ItemDefinition->CanStackWith(ItemDefinition))
-			{
-				continue;
-			}
-			if (!CanAcceptSlot(SlotIndex))
-			{
-				continue;
-			}
-
-			const int32 AvailableSpace = FMath::Max(0, MaxStackCount - SimulatedSlot.StackCount);
-			const int32 AddAmount = FMath::Min(InOutRemainingCount, AvailableSpace);
-			SimulatedSlot.StackCount += AddAmount;
-			InOutRemainingCount -= AddAmount;
-		}
-	}
-
-	for (int32 SlotIndex = 0; SlotIndex < SimulatedSlots.Num(); ++SlotIndex)
-	{
-		if (InOutRemainingCount <= 0)
-		{
-			break;
-		}
-
-		FSimulatedInventorySlot& SimulatedSlot = SimulatedSlots[SlotIndex];
-		if (SimulatedSlot.ItemDefinition != nullptr)
-		{
-			continue;
-		}
-		if (!CanAcceptSlot(SlotIndex))
-		{
-			continue;
-		}
-
-		const int32 AddAmount = MaxStackCount > 1 ? FMath::Min(InOutRemainingCount, MaxStackCount) : 1;
-		SimulatedSlot.ItemDefinition = &ItemDefinition;
-		SimulatedSlot.StackCount = AddAmount;
-		InOutRemainingCount -= AddAmount;
-	}
-
-	return InOutRemainingCount <= 0;
-}
-
-// 批次预演流程：从当前正式库存复制轻量槽位，再按定义项和实例项逐个模拟接收。
-bool UCatInventoryComponent::SimulateAddInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch,
-	TArray<FSimulatedInventorySlot>& SimulatedSlots) const
-{
-	SimulatedSlots.Reset();
-	SimulatedSlots.Reserve(InventoryList.Entries.Num());
-
+	Slots.Reset(InventoryList.Entries.Num());
 	for (const FCatInventoryEntry& Entry : InventoryList.Entries)
 	{
-		FSimulatedInventorySlot& SimulatedSlot = SimulatedSlots.AddDefaulted_GetRef();
-		SimulatedSlot.ItemDefinition = Entry.Instance != nullptr ? Entry.Instance->GetItemDefinition() : nullptr;
-		SimulatedSlot.StackCount = Entry.StackCount;
+		FInventoryIntakeSlot& Slot = Slots.AddDefaulted_GetRef();
+		Slot.Instance = Entry.Instance;
+		Slot.ItemDefinition = Entry.Instance ? Entry.Instance->GetItemDefinition() : nullptr;
+		Slot.StackCount = Entry.StackCount;
 	}
-
-	for (const FCatInventoryDefinitionEntry& DefinitionEntry : ReceiveBatch.DefinitionEntries)
+	const auto Allocate = [&](UCatInventoryItemDefinition* Definition, UCatInventoryItemInstance* Instance,
+		TSubclassOf<UCatInventoryItemInstance> InstanceClass, const int32 Count)
 	{
-		if (DefinitionEntry.Count <= 0 || DefinitionEntry.ItemDefinition == nullptr)
+		if (!Definition || Count <= 0 || !Definition->IsInventoryRuntimeDefinitionReady()
+			|| !UCatInventoryItemDefinition::ResolveItemInstanceClass(Definition, InstanceClass)) return false;
+		int32 Remaining = Count;
+		int32 Allowance = Count;
+		const ECatInventoryCarryCategory Category = UCatInventorySettings::ResolveCarryCategory(*Definition);
+		if (EnforcesCarryLimits() && Category != ECatInventoryCarryCategory::None)
 		{
-			return false;
+			int64 Total = 0;
+			for (const FInventoryIntakeSlot& Slot : Slots)
+				if (Slot.ItemDefinition && UCatInventorySettings::ResolveCarryCategory(*Slot.ItemDefinition) == Category)
+					Total += Slot.StackCount;
+			Allowance = static_cast<int32>(FMath::Clamp<int64>(int64(GetEffectiveCarryLimit(Category)) - Total, 0, Count));
 		}
-
-		if (UCatInventoryItemDefinition::ResolveItemInstanceClass(
-				DefinitionEntry.ItemDefinition,
-				DefinitionEntry.ItemInstanceClass) == nullptr)
+		FCatInventoryEntry Incoming;
+		Incoming.Instance = Instance;
+		Incoming.StackCount = Count;
+		bool bOriginalPlaced = false;
+		bool bActorAssigned = Slots.ContainsByPredicate([&](const FInventoryIntakeSlot& Slot) { return Instance && Slot.WorldActorSource == Instance; });
+		const int32 MaxStack = GetMaxStackCountForDefinition(*Definition);
+		for (int32 Pass = 0; Pass < 2 && Allowance > 0; ++Pass)
 		{
-			return false;
+			for (int32 Index = 0; Index < Slots.Num() && Allowance > 0; ++Index)
+			{
+				FInventoryIntakeSlot& Slot = Slots[Index];
+				const bool bEmpty = Slot.ItemDefinition == nullptr;
+				if (Pass == 0 ? (bEmpty || MaxStack <= 1 || !Slot.ItemDefinition->CanStackWith(*Definition)) : !bEmpty) continue;
+				if (Instance ? !CanAcceptInventoryEntryAtSlot(Incoming, Index) : !CanAcceptInventoryDefinitionAtSlot(*Definition, Index)) continue;
+				const int32 Added = FMath::Min(Allowance, FMath::Max(0, MaxStack - Slot.StackCount));
+				if (Added <= 0) continue;
+				if (bEmpty)
+				{
+					Slot.ItemDefinition = Definition;
+					Slot.InstanceClass = InstanceClass;
+					Slot.Instance = !bOriginalPlaced ? Instance : nullptr;
+					bOriginalPlaced = Instance != nullptr;
+				}
+				else if (Instance && Instance->GetWorldActor() && !bActorAssigned && !Slot.WorldActorSource
+					&& (!Slot.Instance || !Slot.Instance->GetWorldActor()))
+				{
+					Slot.WorldActorSource = Instance;
+					bActorAssigned = true;
+				}
+				Slot.StackCount += Added;
+				Slot.AddedCount += Added;
+				Remaining -= Added;
+				Allowance -= Added;
+			}
 		}
+		if (OutRemaining) *OutRemaining = Remaining;
+		return OutRemaining || Remaining == 0;
+	};
+	for (const FCatInventoryDefinitionEntry& Entry : Batch.DefinitionEntries)
+		if (!Allocate(Entry.ItemDefinition, nullptr, Entry.ItemInstanceClass, Entry.Count)) return false;
+	for (const FCatInventoryInstanceEntry& Entry : Batch.InstanceEntries)
+		if (!Entry.ItemInstance || !Allocate(Entry.ItemInstance->GetItemDefinition(), Entry.ItemInstance, Entry.ItemInstance->GetClass(), Entry.Count)) return false;
+	return true;
+}
 
-		const UCatInventoryItemDefinition* ItemDefinition = DefinitionEntry.ItemDefinition;
-		int32 RemainingCount = DefinitionEntry.Count;
-		if (ItemDefinition == nullptr
-			|| !SimulateAddItemDefinition(SimulatedSlots, *ItemDefinition, RemainingCount))
-		{
-			return false;
-		}
-	}
-
-	for (const FCatInventoryInstanceEntry& InstanceEntry : ReceiveBatch.InstanceEntries)
+// 先保存条目用于核对实例初始化期间的重入，再为新增格创建所需实例；任一创建失败即拒绝本次提交。
+// 创建后检查预留状态、格数、实例指针和数量；任一不符就保留当前库存，不用旧快照覆盖重入调用的结果。
+// 核对通过后迁移分配中的载体，再写新增格的实例、数量、宿主和复制登记并标脏；全程不广播，由外层在提交后通知。
+bool UCatInventoryComponent::ApplyInventoryIntake(TArray<FInventoryIntakeSlot>& Slots)
+{
+	const TArray<FCatInventoryEntry> Before = InventoryList.Entries;
+	for (FInventoryIntakeSlot& Slot : Slots)
 	{
-		if (InstanceEntry.Count <= 0 || InstanceEntry.ItemInstance == nullptr)
+		if (Slot.AddedCount > 0 && !Slot.Instance)
 		{
-			return false;
-		}
-
-		const UCatInventoryItemDefinition* ItemDefinition = InstanceEntry.ItemInstance->GetItemDefinition();
-		int32 RemainingCount = InstanceEntry.Count;
-		if (ItemDefinition == nullptr
-			|| !SimulateAddItemDefinition(SimulatedSlots, *ItemDefinition, RemainingCount, InstanceEntry.ItemInstance))
-		{
-			return false;
+			Slot.Instance = CreateInventoryItemInstance(Slot.ItemDefinition, Slot.InstanceClass);
+			if (!Slot.Instance) return false;
 		}
 	}
-
+	if (HasPreparedRemoval() || Before.Num() != InventoryList.Entries.Num()) return false;
+	for (int32 Index = 0; Index < Before.Num(); ++Index)
+		if (Before[Index].Instance != InventoryList.Entries[Index].Instance
+			|| Before[Index].StackCount != InventoryList.Entries[Index].StackCount) return false;
+	for (FInventoryIntakeSlot& Slot : Slots)
+	{
+		if (Slot.WorldActorSource)
+		{
+			Slot.Instance->SetWorldActor(Slot.WorldActorSource->GetWorldActor());
+			Slot.WorldActorSource->SetWorldActor(nullptr);
+		}
+	}
+	for (int32 Index = 0; Index < Slots.Num(); ++Index)
+	{
+		const FInventoryIntakeSlot& Slot = Slots[Index];
+		if (Slot.AddedCount <= 0) continue;
+		FCatInventoryEntry& Entry = InventoryList.Entries[Index];
+		Entry.Instance = Slot.Instance;
+		Entry.StackCount = Entry.LastObservedCount = Slot.StackCount;
+		Entry.SlotOwnerComponent = this;
+		SyncInventoryItemRuntimeOwner(Entry.Instance);
+		if (Before[Index].Instance != Entry.Instance && IsUsingRegisteredSubObjectList() && IsReadyForReplication())
+			AddReplicatedSubObject(Entry.Instance);
+		InventoryList.MarkItemDirty(Entry);
+	}
 	return true;
 }
 
