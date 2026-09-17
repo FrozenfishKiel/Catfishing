@@ -241,7 +241,7 @@ AActor* UCatFishingAimLibrary::ResolveFishingViewTarget(APlayerController* Contr
 	};
 	for (TActorIterator<ACatFishEncounterActor> It(Controller->GetWorld()); It; ++It)
 	{
-		const UCatFishDefinition* Definition = GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(It->GetPresentationState().FishDefinitionId);
+		const UCatFishDefinition* Definition = GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(It->GetPresentationState().ItemId);
 		const double Radius = Definition ? Definition->ScoopTargetRadiusCentimeters : 0.0;
 		Consider(*It, It->GetFishingCollisionCenter(), FMath::Max(25.0, Radius));
 	}

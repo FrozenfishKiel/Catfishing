@@ -110,7 +110,12 @@ struct FCatPlaceChumCommand
 
 	/** 窝料定义身份；玩家投放时由服务器按 ChumItemInstanceId 复核和覆盖，自然事件直接写它来生成场地影响。 */
 	UPROPERTY(BlueprintReadWrite)
+	int32  ChumItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName ChumDefinitionId = NAME_None;
+
 
 	/** 本次投放消耗的窝料份数；库存扣量提交会从 ChumItemInstanceId 对应数量栈扣除这份数量。 */
 	UPROPERTY(BlueprintReadWrite)
@@ -158,7 +163,7 @@ struct FCatChumFieldState
 {
 	FGuid FieldId;
 	FCatWaterRegionHandle WaterRegion;
-	FName ChumDefinitionId = NAME_None;
+	int32  ChumItemId = 0;
 	FVector CenterWorldPoint = FVector::ZeroVector;
 	FCatChumRuntimeInfluence Influence;
 	double StartServerTime = 0.0;

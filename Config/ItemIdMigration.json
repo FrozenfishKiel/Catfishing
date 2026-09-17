@@ -1,0 +1,217 @@
+[
+  {
+    "item_id": 1,
+    "legacy_id": "Bait_Basic",
+    "definition": "/Game/Data/Equipment/DA_Bait_Basic.DA_Bait_Basic"
+  },
+  {
+    "item_id": 2,
+    "legacy_id": "BellFloat",
+    "definition": "/Game/Catfishing/Data/Equipment/Equip_Float_Bell.Equip_Float_Bell"
+  },
+  {
+    "item_id": 3,
+    "legacy_id": "Blackfish",
+    "definition": "/Game/Catfishing/Data/Fish/Fish_Blackfish.Fish_Blackfish"
+  },
+  {
+    "item_id": 4,
+    "legacy_id": "BugBait",
+    "definition": "/Game/Catfishing/Data/Equipment/Equip_Bait_Bug.Equip_Bait_Bug"
+  },
+  {
+    "item_id": 5,
+    "legacy_id": "BugChum",
+    "definition": "/Game/Catfishing/Data/Equipment/Equip_Chum_Bug.Equip_Chum_Bug"
+  },
+  {
+    "item_id": 6,
+    "legacy_id": "Chum_Basic",
+    "definition": "/Game/Data/Equipment/DA_Chum_Basic.DA_Chum_Basic"
+  },
+  {
+    "item_id": 7,
+    "legacy_id": "ElectricEel",
+    "definition": "/Game/Catfishing/Data/Fish/Fish_ElectricEel.Fish_ElectricEel"
+  },
+  {
+    "item_id": 8,
+    "legacy_id": "EstuaryBass",
+    "definition": "/Game/Catfishing/Data/Fish/Fish_EstuaryBass.Fish_EstuaryBass"
+  },
+  {
+    "item_id": 9,
+    "legacy_id": "FeatherFloat",
+    "definition": "/Game/Catfishing/Data/Equipment/Equip_Float_Feather.Equip_Float_Feather"
+  },
+  {
+    "item_id": 10,
+    "legacy_id": "FermentedGrainChum",
+    "definition": "/Game/Catfishing/Data/Equipment/Equip_Chum_FermentedGrain.Equip_Chum_FermentedGrain"
+  },
+  {
+    "item_id": 11,
+    "legacy_id": "FishGuard",
+    "definition": "/Game/Catfishing/Data/Items/Item_FishGuard.Item_FishGuard"
+  },
+  {
+    "item_id": 12,
+    "legacy_id": "Fish_Test01",
+    "definition": "/Game/Data/Fish/DA_Fish_Test01.DA_Fish_Test01"
+  },
+  {
+    "item_id": 13,
+    "legacy_id": "FlashingBait",
+    "definition": "/Game/Catfishing/Data/Equipment/Equip_Bait_Flashing.Equip_Bait_Flashing"
+  },
+  {
+    "item_id": 14,
+    "legacy_id": "Float_Basic",
+    "definition": "/Game/Data/Equipment/DA_Float_Basic.DA_Float_Basic"
+  },
+  {
+    "item_id": 15,
+    "legacy_id": "ForestLongtailFish",
+    "definition": "/Game/Catfishing/Data/Fish/Fish_ForestLongtail.Fish_ForestLongtail"
+  },
+  {
+    "item_id": 16,
+    "legacy_id": "FruitBait",
+    "definition": "/Game/Catfishing/Data/Equipment/Equip_Bait_Fruit.Equip_Bait_Fruit"
+  },
+  {
+    "item_id": 17,
+    "legacy_id": "FruitFragranceChum",
+    "definition": "/Game/Catfishing/Data/Equipment/Equip_Chum_FruitFragrance.Equip_Chum_FruitFragrance"
+  },
+  {
+    "item_id": 18,
+    "legacy_id": "GiantLureBait",
+    "definition": "/Game/Catfishing/Data/Equipment/Equip_Bait_GiantLure.Equip_Bait_GiantLure"
+  },
+  {
+    "item_id": 19,
+    "legacy_id": "HolyLightChum",
+    "definition": "/Game/Catfishing/Data/Equipment/Equip_Chum_HolyLight.Equip_Chum_HolyLight"
+  },
+  {
+    "item_id": 20,
+    "legacy_id": "LakeGiantShadow",
+    "definition": "/Game/Catfishing/Data/Fish/Fish_LakeGiantShadow.Fish_LakeGiantShadow"
+  },
+  {
+    "item_id": 21,
+    "legacy_id": "LittleColorFish",
+    "definition": "/Game/Catfishing/Data/Fish/Fish_LittleColor.Fish_LittleColor"
+  },
+  {
+    "item_id": 22,
+    "legacy_id": "LittleSilverFish",
+    "definition": "/Game/Catfishing/Data/Fish/Fish_LittleSilver.Fish_LittleSilver"
+  },
+  {
+    "item_id": 23,
+    "legacy_id": "Loach",
+    "definition": "/Game/Catfishing/Data/Fish/Fish_Loach.Fish_Loach"
+  },
+  {
+    "item_id": 24,
+    "legacy_id": "MeatBait",
+    "definition": "/Game/Catfishing/Data/Equipment/Equip_Bait_Meat.Equip_Bait_Meat"
+  },
+  {
+    "item_id": 25,
+    "legacy_id": "MoonlightBait",
+    "definition": "/Game/Catfishing/Data/Equipment/Equip_Bait_Moonlight.Equip_Bait_Moonlight"
+  },
+  {
+    "item_id": 26,
+    "legacy_id": "NectarBait",
+    "definition": "/Game/Catfishing/Data/Equipment/Equip_Bait_Nectar.Equip_Bait_Nectar"
+  },
+  {
+    "item_id": 27,
+    "legacy_id": "PetalFish",
+    "definition": "/Game/Catfishing/Data/Fish/Fish_Petal.Fish_Petal"
+  },
+  {
+    "item_id": 28,
+    "legacy_id": "Pike",
+    "definition": "/Game/Catfishing/Data/Fish/Fish_Pike.Fish_Pike"
+  },
+  {
+    "item_id": 29,
+    "legacy_id": "PufferFish",
+    "definition": "/Game/Catfishing/Data/Fish/Fish_Puffer.Fish_Puffer"
+  },
+  {
+    "item_id": 30,
+    "legacy_id": "RiverPatternFish",
+    "definition": "/Game/Catfishing/Data/Fish/Fish_RiverPattern.Fish_RiverPattern"
+  },
+  {
+    "item_id": 31,
+    "legacy_id": "Rod_Basic",
+    "definition": "/Game/Data/Equipment/DA_Rod_Basic.DA_Rod_Basic"
+  },
+  {
+    "item_id": 32,
+    "legacy_id": "SaltedFish",
+    "definition": "/Game/Catfishing/Data/Fish/Fish_Salted.Fish_Salted"
+  },
+  {
+    "item_id": 33,
+    "legacy_id": "ScoopNet_Basic",
+    "definition": "/Game/Data/Equipment/DA_ScoopNet_Basic.DA_ScoopNet_Basic"
+  },
+  {
+    "item_id": 34,
+    "legacy_id": "ShopRodT2",
+    "definition": "/Game/Catfishing/Data/Equipment/Equip_Rod_ShopT2.Equip_Rod_ShopT2"
+  },
+  {
+    "item_id": 35,
+    "legacy_id": "SilvermoonTrout",
+    "definition": "/Game/Catfishing/Data/Fish/Fish_SilvermoonTrout.Fish_SilvermoonTrout"
+  },
+  {
+    "item_id": 36,
+    "legacy_id": "SoundBait",
+    "definition": "/Game/Catfishing/Data/Equipment/Equip_Bait_Sound.Equip_Bait_Sound"
+  },
+  {
+    "item_id": 37,
+    "legacy_id": "StarterRodT1",
+    "definition": "/Game/Catfishing/Data/Equipment/Equip_Rod_StarterT1.Equip_Rod_StarterT1"
+  },
+  {
+    "item_id": 38,
+    "legacy_id": "StarterScoopNet",
+    "definition": "/Game/Catfishing/Data/Equipment/Equip_ScoopNet_Starter.Equip_ScoopNet_Starter"
+  },
+  {
+    "item_id": 39,
+    "legacy_id": "StinkyFish",
+    "definition": "/Game/Catfishing/Data/Fish/Fish_Stinky.Fish_Stinky"
+  },
+  {
+    "item_id": 40,
+    "legacy_id": "WindbellFish",
+    "definition": "/Game/Catfishing/Data/Fish/Fish_Windbell.Fish_Windbell"
+  },
+  {
+    "item_id": 41,
+    "legacy_id": "YarnBallFloat",
+    "definition": "/Game/Catfishing/Data/Equipment/Equip_Float_YarnBall.Equip_Float_YarnBall"
+  },
+  {
+    "item_id": 42,
+    "legacy_id": "FishTankCapacityT2",
+    "definition": "/Game/Catfishing/Data/Items/Item_FishTankCapacityT2.Item_FishTankCapacityT2"
+  },
+  {
+    "item_id": 43,
+    "legacy_id": "FishTankCapacityT3",
+    "definition": "/Game/Catfishing/Data/Items/Item_FishTankCapacityT3.Item_FishTankCapacityT3"
+  }
+]

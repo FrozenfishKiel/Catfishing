@@ -56,13 +56,13 @@ namespace CatRodReplacementTests
 			Character->SetPlayerState(PlayerState);
 			Controller->Possess(Character);
 			Equipment = Character->GetEquipmentComponent();
-			for (const FName Id : {FName(TEXT("StarterRodT1")), FName(TEXT("FeatherFloat"))})
+			for (const int32 Id : {37, 9})
 			{
 				if (!Test.TestTrue(TEXT("授予正式钓具"), Equipment->GrantEquipmentFromAuthority(
 					FGuid::NewGuid(), Equipment->GetSnapshot().Revision, Id).bCommitted)) return false;
 			}
 			if (!Test.TestTrue(TEXT("授予正式鱼饵"), Equipment->GrantInventoryQuantityFromAuthority(
-				FGuid::NewGuid(), Equipment->GetSnapshot().Revision, TEXT("BugBait"), 2).bCommitted)) return false;
+				FGuid::NewGuid(), Equipment->GetSnapshot().Revision, 4, 2).bCommitted)) return false;
 			OldItemId = Equipment->GetSnapshot().RodItemInstanceId;
 			return Test.TestTrue(TEXT("T1 自动选中"), OldItemId.IsValid());
 		}
@@ -78,14 +78,14 @@ namespace CatRodReplacementTests
 			if (!Test.TestNotNull(TEXT("创建 T1 世界鱼竿"), OldRod)) return false;
 			OldRod->SetInstigator(Character); // 和正式 PlaceRod 一样绑定原物品存储来源。
 			if (!Test.TestTrue(TEXT("绑定 T1 世界身份"), OldRod->InitializeAuthoritativeIdentity(
-				FGuid::NewGuid(), OldItemId, Loadout.RodDefinitionId, NAME_None, Controller->PlayerState, nullptr, true, false))) return false;
+				FGuid::NewGuid(), OldItemId, Loadout.RodItemId, NAME_None, Controller->PlayerState, nullptr, true, false))) return false;
 			OldRod->SetActorLocation(Controller->GetPawn()->GetActorLocation() + FVector(80, 0, 0));
 			if (!Test.TestTrue(TEXT("登记原鱼竿"), World->GetSubsystem<UCatFishingService>()->RegisterDeployedRod(
 				Controller->PlayerState, OldRod))) return false;
 			const FGuid SessionId = FGuid::NewGuid();
 			if (!Test.TestTrue(TEXT("绑定原鱼竿钓鱼会话"), Equipment->BeginFishingUse(SessionId,
-				OldItemId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId, Loadout.RodDefinitionId,
-				Loadout.BaitDefinitionId, Loadout.FloatDefinitionId, Equipment->GetSnapshot().Revision).bUseAccepted)) return false;
+				OldItemId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId, Loadout.RodItemId,
+				Loadout.BaitItemId, Loadout.FloatItemId, Equipment->GetSnapshot().Revision).bUseAccepted)) return false;
 			if (!Test.TestTrue(TEXT("提交鱼饵"), Equipment->CommitFishingBaitDeferred(SessionId).bApplied)) return false;
 			if (!Test.TestTrue(TEXT("耗尽 T1 实例耐久"), Equipment->ApplyFishingRodWear(
 				SessionId, 1, Loadout.RodDurability + 1).bRodBroken)) return false;
@@ -118,8 +118,8 @@ namespace CatRodReplacementTests
 			if (!Test.TestTrue(TEXT("公共仓库和玩家正式库存存在"), CampInventory && PlayerInventory)) return false;
 			if (!Test.TestTrue(TEXT("商店交付 T2 到公共仓库"),
 				CampInventory->GrantInventoryDefinitionFromAuthority(
-					FGuid::NewGuid(), TEXT("ShopRodT2"), 1).bCommitted)) return false;
-			const int32 CampIndex = CampInventory->FindFirstInventorySlotIndexByDefinitionId(TEXT("ShopRodT2"));
+					FGuid::NewGuid(), 34, 1).bCommitted)) return false;
+			const int32 CampIndex = CampInventory->FindFirstInventorySlotIndexByItemId(34);
 			const FCatInventoryEntry* SourceEntry = CampInventory->GetInventoryEntryAtSlot(CampIndex);
 			if (!Test.TestTrue(TEXT("仓库存在真实 T2"),
 				CampIndex != INDEX_NONE && SourceEntry && SourceEntry->Instance != nullptr)) return false;
@@ -167,9 +167,9 @@ bool FCatBrokenRodReplacementTest::RunTest(const FString& Parameters)
 			const FCatInventoryItemUseResult Use = Fixture.Equipment->Use(FGuid::NewGuid(), Fixture.Equipment->GetSnapshot().Revision, Fixture.NewItemId);
 			TestTrue(TEXT("玩家主动使用新竿"), Use.bCommitted);
 			const FCatEquipmentLoadoutSnapshot Loadout = Fixture.Equipment->GetSnapshot();
-			TestEqual(TEXT("主动使用后选中 T2"), Loadout.RodDefinitionId, FName(TEXT("ShopRodT2")));
+			TestEqual(TEXT("主动使用后选中 T2"), Loadout.RodItemId, 34);
 			TestEqual(TEXT("选中公共仓库交付的同一实例"), Loadout.RodItemInstanceId, Fixture.NewItemId);
-			const UCatEquipmentDefinition* T2 = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(TEXT("ShopRodT2"));
+			const UCatEquipmentDefinition* T2 = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(34);
 			if (!TestNotNull(TEXT("T2 正式资产可用于运行"), T2)) return false;
 			const UCatEquipmentFragment_Rod* T2RodFragment = T2->FindFragment<UCatEquipmentFragment_Rod>();
 			if (!TestNotNull(TEXT("T2 正式资产含鱼竿参数片段"), T2RodFragment)) return false;
@@ -186,7 +186,7 @@ bool FCatBrokenRodReplacementTest::RunTest(const FString& Parameters)
 			const UCatEquipmentInventoryItemInstance* UsedRod = Use.Item.StackCount > 0
 				? Cast<UCatEquipmentInventoryItemInstance>(Use.Item.Instance) : nullptr;
 			if (!TestTrue(TEXT("实际使用返回装备实例"), UsedRod != nullptr)) return false;
-			TestEqual(TEXT("实际使用的是 T2"), UsedRod->GetItemDefinitionId(), FName(TEXT("ShopRodT2")));
+			TestEqual(TEXT("实际使用的是 T2"), UsedRod->GetItemId(), 34);
 			UClass* RodClass = T2->UseActorClass.LoadSynchronous();
 			TestTrue(TEXT("T2 配置了可生成的正式鱼竿 Actor"), RodClass && RodClass->IsChildOf(ACatFishingRodActor::StaticClass()));
 		}
@@ -204,7 +204,7 @@ bool FCatHealthyRodSelectionPreservedTest::RunTest(const FString& Parameters)
 	CatRodReplacementTests::FFixture Fixture;
 	if (!Fixture.Initialize(*this) || !Fixture.ReceiveT2(*this, true)) return false;
 	TestEqual(TEXT("购买 T2 不抢占仍健康的 T1"), Fixture.Equipment->GetSnapshot().RodItemInstanceId, Fixture.OldItemId);
-	TestEqual(TEXT("健康选择的型号不变"), Fixture.Equipment->GetSnapshot().RodDefinitionId, FName(TEXT("StarterRodT1")));
+	TestEqual(TEXT("健康选择的型号不变"), Fixture.Equipment->GetSnapshot().RodItemId, 37);
 	return !HasAnyErrors();
 }
 

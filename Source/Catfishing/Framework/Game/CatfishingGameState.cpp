@@ -159,7 +159,7 @@ const FCatShopPublicEconomySnapshot& ACatfishingGameState::GetShopEconomySnapsho
 // 它不写任何人的图鉴——图鉴是每个人自己的 durable Profile，服务器只把「谁第一次记录到什么」这件公开事实说出去。
 void ACatfishingGameState::PublishFishSpeciesDiscoveryFromAuthority(const FCatFishSpeciesDiscoveryAnnouncement& Announcement)
 {
-	if (!HasAuthority() || !Announcement.AnnouncementId.IsValid() || Announcement.FishDefinitionId.IsNone())
+	if (!HasAuthority() || !Announcement.AnnouncementId.IsValid() || (Announcement.ItemId == 0))
 	{
 		return;
 	}
@@ -167,9 +167,9 @@ void ACatfishingGameState::PublishFishSpeciesDiscoveryFromAuthority(const FCatFi
 	ForceNetUpdate();
 	OnFishSpeciesDiscoveryChanged.Broadcast();
 	UE_LOG(LogCatfishing, Log,
-		TEXT("Event=fish_species_discovery_published AnnouncementId=%s PlayerId=%d FishDefinitionId=%s"),
+		TEXT("Event=fish_species_discovery_published AnnouncementId=%s PlayerId=%d ItemId=%s"),
 		*Announcement.AnnouncementId.ToString(EGuidFormats::DigitsWithHyphens),
-		Announcement.DiscovererPlayerId, *Announcement.FishDefinitionId.ToString());
+		Announcement.DiscovererPlayerId, *FString::FromInt(Announcement.ItemId));
 }
 
 // 新鱼种广播读取流程：返回服务器最终值或客户端最近复制值；调用方只能展示提示，不据它推进自己的图鉴。
@@ -207,9 +207,9 @@ void ACatfishingGameState::OnRep_LastFishSpeciesDiscovery()
 {
 	OnFishSpeciesDiscoveryChanged.Broadcast();
 	UE_LOG(LogCatfishing, Verbose,
-		TEXT("Event=fish_species_discovery_received AnnouncementId=%s PlayerId=%d FishDefinitionId=%s"),
+		TEXT("Event=fish_species_discovery_received AnnouncementId=%s PlayerId=%d ItemId=%s"),
 		*LastFishSpeciesDiscovery.AnnouncementId.ToString(EGuidFormats::DigitsWithHyphens),
-		LastFishSpeciesDiscovery.DiscovererPlayerId, *LastFishSpeciesDiscovery.FishDefinitionId.ToString());
+		LastFishSpeciesDiscovery.DiscovererPlayerId, *FString::FromInt(LastFishSpeciesDiscovery.ItemId));
 }
 
 // 全场钓鱼信号投递流程：服务器与每个客户端都会执行本体；这里只把标签和位置转成本机广播，不写任何玩法状态。

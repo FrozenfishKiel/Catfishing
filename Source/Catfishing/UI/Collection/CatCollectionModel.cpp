@@ -1,30 +1,10 @@
 #include "UI/Collection/CatCollectionModel.h"
 
-#include "Collection/CatFishCollectionLayers.h"
+#include "Inventory/CatInventorySettings.h"
 #include "Data/CatFishCatalogSettings.h"
 #include "Data/CatFishDefinition.h"
 #include "Engine/LocalPlayer.h"
 #include "Profile/CatProfileSubsystem.h"
-
-namespace
-{
-	/** 全库统一用词：已开页里没到条件的字段一律写「待解锁」，不显示灰掉的假数值（图鉴 §4 软性:171）。 */
-	FText PendingUnlockText()
-	{
-		return NSLOCTEXT("Catfishing", "CollectionPendingUnlock", "待解锁");
-	}
-
-	/** 首次遇上的条件回显：水域／时段／天气三轴（图鉴 §3.1.5:132）。任一轴没冻结到就写「未记录」，不编一个。 */
-	FText FormatFirstCondition(const FCatCaptureConditionSnapshot& Condition)
-	{
-		const auto Axis = [](const FName Value)
-		{
-			return Value.IsNone() ? FText::FromString(TEXT("未记录")) : FText::FromName(Value);
-		};
-		return FText::Format(NSLOCTEXT("Catfishing", "CollectionFirstCondition", "{0} · {1} · {2}"),
-			Axis(Condition.RegionId), Axis(Condition.TimeOfDayId), Axis(Condition.WeatherId));
-	}
-}
 
 // 绑定流程：从 LocalPlayer 取得 Profile 子系统并订阅图鉴变化；失败时不留下半套订阅。
 bool UCatCollectionModel::Bind(ULocalPlayer* InLocalPlayer)
@@ -54,110 +34,55 @@ void UCatCollectionModel::Unbind()
 	ViewState = FCatCollectionViewState();
 }
 
-// 刷新流程：以正式鱼目录为骨架铺满整本图鉴，再用 Profile durable 快照逐条覆盖解锁位
-// （图鉴 §3.1.5:130「开局满图都是影，你知道湖里有多少种，别的什么都不知道」）。
-// 没解锁的字段写「待解锁」而不是灰掉的 0.00kg；不可食用的鱼连吃鱼效果这一栏都不存在（§3.1.4:122）。
-// Journal、解锁清单和实物鱼都不进入 Collection UI；相册只带索引与隐藏位，不带图片路径。
+// 刷新流程：先确认账号与总表就绪，再按鱼目录建立卡片；只有成功捕获记录才开放名称和偏好。
+// 鱼饵仅取倍率大于 1 的关联，窝料只读现有三轴需求；不计算水中混合、概率或推荐分数。
 void UCatCollectionModel::Refresh()
 {
 	FCatCollectionViewState NewState;
 	TArray<FCatFishCollectionRecord> Records;
-	TArray<FCatLocalImprintRecord> ImprintRecords;
-	if (const UCatProfileSubsystem* Profile = BoundProfile.Get())
+	const UCatProfileSubsystem* Profile = BoundProfile.Get();
+	const UCatInventorySettings* Items = GetDefault<UCatInventorySettings>();
+	TArray<UCatInventoryItemDefinition*> Definitions;
+	FString Error;
+	NewState.bAvailable = Profile && Profile->GetFishCollectionSnapshot(Records)
+		&& Items->GetItemDefinitions(Definitions, Error);
+	NewState.TrackedItemId = NewState.bAvailable ? Profile->GetTrackedFish() : 0;
+	NewState.SummaryText = FText::FromString(NewState.bAvailable ? TEXT("鱼图鉴") : TEXT("图鉴数据未就绪"));
+	const FText Unknown = FText::FromString(TEXT("？？？"));
+	TSet<int32> Seen;
+	if (NewState.bAvailable)
 	{
-		NewState.bAvailable = Profile->GetFishCollectionSnapshot(Records);
-		Profile->GetLocalImprintSnapshot(ImprintRecords);
-	}
-
-	TMap<FName, const FCatFishCollectionRecord*> RecordsByFish;
-	RecordsByFish.Reserve(Records.Num());
-	for (const FCatFishCollectionRecord& Record : Records)
-	{
-		RecordsByFish.Add(Record.FishDefinitionId, &Record);
-	}
-
-	const UCatFishCatalogSettings* Catalog = GetDefault<UCatFishCatalogSettings>();
-	TSet<FName> CatalogFishIds;
-	const auto AppendEntry = [&NewState](const UCatFishDefinition* Definition, const FName FishDefinitionId,
-		const FCatFishCollectionRecord* Record)
-	{
-		FCatCollectionEntryView Entry;
-		Entry.FishDefinitionId = FishDefinitionId;
-		Entry.bHasKnowledgeLayer = CatFishCollectionLayers::HasKnowledgeLayer(Definition);
-		if (Record)
+		for (const auto& Reference : GetDefault<UCatFishCatalogSettings>()->Definitions)
 		{
-			Entry.State = Record->State;
-			Entry.bSilhouetteUnlocked = Record->bSilhouetteUnlocked;
-			Entry.bRecordedUnlocked = Record->bRecordedUnlocked;
-			Entry.bKnowledgeUnlocked = Record->bKnowledgeUnlocked;
-			Entry.BestWeightKilograms = Record->BestWeightKilograms;
-			Entry.EncounterCount = Record->EncounterCount;
+			const UCatFishDefinition* Fish = Reference.LoadSynchronous();
+			if (!Fish || Seen.Contains(Fish->ItemId) || Items->FindRuntimeDefinition(Fish->ItemId) != Fish) continue;
+			Seen.Add(Fish->ItemId);
+			FCatCollectionEntryView& Entry = NewState.Entries.AddDefaulted_GetRef();
+			Entry.ItemId = Fish->ItemId;
+			const auto* Record = Records.FindByPredicate([Fish](const auto& Value) { return Value.ItemId == Fish->ItemId; });
+			Entry.bRecordedUnlocked = Record && Record->bRecordedUnlocked;
+			Entry.Thumbnail = Fish->GetInventoryThumbnail();
+			Entry.BestWeightKilograms = Record ? Record->BestWeightKilograms : 0.0;
+			Entry.DisplayName = Entry.bRecordedUnlocked ? Fish->GetInventoryDisplayName() : Unknown;
+			Entry.BaitPreferenceText = Entry.ChumPreferenceText = Unknown;
+			if (!Entry.bRecordedUnlocked) continue;
+			// 推荐只按策划指定身份读图，不从权重或窝料轴推导；零或无效配置保留空格。
+			if (const auto* Bait = Items->FindRuntimeDefinition(Fish->RecommendedBaitItemId)) Entry.RecommendedBaitThumbnail = Bait->GetInventoryThumbnail();
+			if (const auto* Chum = Items->FindRuntimeDefinition(Fish->RecommendedChumItemId)) Entry.RecommendedChumThumbnail = Chum->GetInventoryThumbnail();
+			TArray<FString> Baits;
+			for (const auto& Weight : Fish->BaitWeightMultipliers)
+				// 中性倍率是 1；只有提高选鱼权重的关联才属于偏好，不把中性或抑制项列入。
+				if (Weight.Multiplier > 1.0)
+					if (const auto* Bait = Items->FindRuntimeDefinition(Weight.BaitItemId)) Baits.AddUnique(Bait->GetInventoryDisplayName().ToString());
+			Entry.BaitPreferenceText = FText::FromString(Baits.IsEmpty() ? TEXT("未配置") : FString::Join(Baits, TEXT("、")));
+			TArray<FString> Chum;
+			if (Fish->ChumPreference.Fishy > 0.0) Chum.Add(TEXT("腥"));
+			if (Fish->ChumPreference.Fragrant > 0.0) Chum.Add(TEXT("香"));
+			if (Fish->ChumPreference.Fermented > 0.0) Chum.Add(TEXT("发酵"));
+			Entry.ChumPreferenceText = FText::FromString(Chum.IsEmpty() ? TEXT("未配置") : FString::Join(Chum, TEXT("、")));
 		}
-		// 纯黑影不给名字：收集层解锁之后才写鱼名（图鉴 §3.1.5:130-132）。
-		Entry.DisplayName = Entry.bRecordedUnlocked && Definition
-			? Definition->GetInventoryDisplayName() : FText::GetEmpty();
-		Entry.BestWeightText = Entry.bRecordedUnlocked
-			? FText::AsNumber(Entry.BestWeightKilograms) : PendingUnlockText();
-		Entry.FirstConditionText = Entry.bRecordedUnlocked && Record
-			? FormatFirstCondition(Record->FirstCaptureCondition) : PendingUnlockText();
-		// 没有知识层的鱼这一栏整条不存在，连「待解锁」都不占位。
-		Entry.KnowledgeText = !Entry.bHasKnowledgeLayer
-			? FText::GetEmpty()
-			: (Entry.bKnowledgeUnlocked
-				? NSLOCTEXT("Catfishing", "CollectionKnowledgeUnlocked", "吃鱼效果已解锁")
-				: PendingUnlockText());
-
-		const FString NameValue = Entry.bRecordedUnlocked
-			? Entry.DisplayName.ToString() : TEXT("？？？");
-		Entry.DisplayText = FText::FromString(FString::Printf(TEXT("%s | %s | 最佳 %s | 首次 %s | 吃 %s | 交手 %d"),
-			*NameValue, *UEnum::GetValueAsString(Entry.State), *Entry.BestWeightText.ToString(),
-			*Entry.FirstConditionText.ToString(),
-			Entry.bHasKnowledgeLayer ? *Entry.KnowledgeText.ToString() : TEXT("—"),
-			Entry.EncounterCount));
-		NewState.Entries.Add(MoveTemp(Entry));
-	};
-
-	if (Catalog)
-	{
-		NewState.Entries.Reserve(Catalog->Definitions.Num());
-		for (const TSoftObjectPtr<UCatFishDefinition>& DefinitionRef : Catalog->Definitions)
-		{
-			const UCatFishDefinition* Definition = DefinitionRef.LoadSynchronous();
-			if (!Definition || !Definition->IsRuntimeDefinitionReady()
-				|| CatalogFishIds.Contains(Definition->FishDefinitionId))
-			{
-				continue;
-			}
-			CatalogFishIds.Add(Definition->FishDefinitionId);
-			AppendEntry(Definition, Definition->FishDefinitionId,
-				RecordsByFish.FindRef(Definition->FishDefinitionId));
-		}
+		NewState.Entries.Sort([](const auto& A, const auto& B) { return A.ItemId < B.ItemId; });
 	}
-	// 档案里有、目录里已经没有的鱼仍然显示：玩家挣来的那一页不能因为策划下线一条鱼就从图鉴上消失。
-	for (const FCatFishCollectionRecord& Record : Records)
-	{
-		if (!CatalogFishIds.Contains(Record.FishDefinitionId))
-		{
-			AppendEntry(nullptr, Record.FishDefinitionId, &Record);
-		}
-	}
-
-	NewState.Imprints.Reserve(ImprintRecords.Num());
-	for (const FCatLocalImprintRecord& Record : ImprintRecords)
-	{
-		FCatImprintAlbumEntryView Entry;
-		Entry.ImprintId = Record.ImprintId;
-		Entry.RunAlbumId = Record.RunAlbumId;
-		Entry.bRunAlbumCover = Record.bRunAlbumCover;
-		Entry.bHidden = Record.bHidden;
-		NewState.Imprints.Add(MoveTemp(Entry));
-	}
-
-	// 墓碑（2026-09-14，T43）：删除“已收集数/总数、相册 N 张”完成度摘要；页和个人最佳仍保留。
-	// Knowledge/Design/GDD 系统分册/印记.md:45 禁止印记数量/完成度，图鉴.md:19 定位为认识记录而非收集进度条。
-	NewState.SummaryText = NewState.bAvailable
-		? NSLOCTEXT("Catfishing", "CollectionKnowledgeSummary", "图鉴 · 认识的鱼与个人记录")
-		: FText::FromString(TEXT("图鉴：本地记录未就绪"));
 	ViewState = MoveTemp(NewState);
 	OnViewStateChanged.Broadcast();
 }
@@ -168,21 +93,13 @@ const FCatCollectionViewState& UCatCollectionModel::GetViewState() const
 	return ViewState;
 }
 
-// 印记隐藏流程：Model 是本页面唯一持有 Profile 引用的地方，所以一键隐藏从这里转交唯一 durable 写口；
-// 成功后立刻重读一次投影，页面上的隐藏标记不等下一次 Grant 落盘才更新。
-bool UCatCollectionModel::SetImprintHidden(const FGuid ImprintId, const bool bHidden)
+// 追踪提交流程：只允许当前有效投影里的已捕获鱼种；零为取消，持久化失败保持旧追踪。
+bool UCatCollectionModel::SetTrackedFish(const int32 ItemId)
 {
 	UCatProfileSubsystem* Profile = BoundProfile.Get();
-	if (!Profile || !ImprintId.IsValid())
-	{
-		return false;
-	}
-	const FCatDomainCommandResult Result = Profile->SetImprintHidden(FGuid::NewGuid(), ImprintId, bHidden);
-	if (Result.bCommitted)
-	{
-		Refresh();
-	}
-	return Result.bCommitted;
+	const auto* Entry = ViewState.Entries.FindByPredicate([ItemId](const auto& Value) { return Value.ItemId == ItemId; });
+	return ViewState.bAvailable && Profile && (ItemId == 0 || (Entry && Entry->bRecordedUnlocked))
+		&& Profile->SetTrackedFish(ItemId);
 }
 
 // Profile 变化流程：统一重读完整图鉴快照，避免 UI 保存增量私有状态。

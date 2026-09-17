@@ -185,8 +185,8 @@ public:
 
 	/** 提交当前钓鱼选择；实例 ID 用来锁定同定义下的具体物品，服务器仍以目录、解锁证明和库存事实作最终裁决。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Equipment")
-	void ServerConfigureEquipment(FGuid RequestId, int64 ExpectedRevision, FName RodDefinitionId,
-		FName BaitDefinitionId, FName FloatDefinitionId, FName ScoopNetDefinitionId,
+	void ServerConfigureEquipment(FGuid RequestId, int64 ExpectedRevision, int32  RodItemId,
+		int32  BaitItemId, int32  FloatItemId, int32  ScoopNetItemId,
 		FGuid RodItemInstanceId, FGuid BaitItemInstanceId, FGuid FloatItemInstanceId,
 		FGuid ScoopNetItemInstanceId);
 

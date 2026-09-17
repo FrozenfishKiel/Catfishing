@@ -17,7 +17,7 @@ namespace CatFishCatalogSettingsPrivate
 	{
 		// 每个鱼种使用独立稳定随机流，避免增删其他候选时改变本鱼个体重量；主随机流只负责鱼种抽取。
 		const uint32 Seed = HashCombineFast(GetTypeHash(Context.RandomSeed),
-			GetTypeHash(Definition.FishDefinitionId));
+			GetTypeHash(Definition.ItemId));
 		FRandomStream WeightRandom(static_cast<int32>(Seed));
 		return FMath::Min(Definition.MaximumWeightKilograms, (1.0 + Context.CatchWeightBonus)
 			* WeightRandom.FRandRange(static_cast<float>(Definition.MinimumWeightKilograms),
@@ -34,13 +34,13 @@ namespace CatFishCatalogSettingsPrivate
 }
 
 // ID 查询流程：遍历显式清单并同步解析定义；只接受唯一完整 ID，重复命中立即返回空以阻止数据冲突进入事务。
-UCatFishDefinition* UCatFishCatalogSettings::FindRuntimeDefinition(const FName FishDefinitionId) const
+UCatFishDefinition* UCatFishCatalogSettings::FindRuntimeDefinition(const int32  ItemId) const
 {
 	UCatFishDefinition* Match = nullptr;
 	for (const TSoftObjectPtr<UCatFishDefinition>& DefinitionRef : Definitions)
 	{
 		UCatFishDefinition* Definition = DefinitionRef.LoadSynchronous();
-		if (!Definition || !Definition->IsRuntimeDefinitionReady() || Definition->FishDefinitionId != FishDefinitionId)
+		if (!Definition || !Definition->IsRuntimeDefinitionReady() || Definition->ItemId != ItemId)
 		{
 			continue;
 		}
@@ -74,7 +74,7 @@ FCatFishBiteTimingDefaults UCatFishCatalogSettings::ResolveBiteTiming(const UCat
 	FCatFishBiteTimingDefaults Result;
 	Result.ProbeDurationSeconds = Definition.ProbeDurationSeconds;
 	Result.TrueBiteWindowSeconds = Definition.TrueBiteWindowSeconds;
-	if (const FCatFishBiteTimingDefaults* Override = BiteTimingOverridesByFishDefinitionId.Find(Definition.FishDefinitionId))
+	if (const FCatFishBiteTimingDefaults* Override = BiteTimingOverridesByItemId.Find(Definition.ItemId))
 	{
 		if (Result.ProbeDurationSeconds == 0.0) Result.ProbeDurationSeconds = Override->ProbeDurationSeconds;
 		if (Result.TrueBiteWindowSeconds == 0.0) Result.TrueBiteWindowSeconds = Override->TrueBiteWindowSeconds;
@@ -125,7 +125,7 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
         double Weight = 0.0;
     };
     TArray<FCandidate> Candidates;
-    TSet<FName> Seen;
+    TSet<int32> Seen;
     double TotalWeight = 0.0;
     int32 InvalidStrengthCoefficientCount = 0;
     for (const TSoftObjectPtr<UCatFishDefinition>& Ref : Definitions)
@@ -137,17 +137,17 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
             || !FCatFishEligibilityPolicy::PassesWeather(*Fish, Context.Weather, bEnableWeatherEligibilityFilter)) continue;
         const double Membership[] = {Fish->ChumPreference.Fishy, Fish->ChumPreference.Fragrant, Fish->ChumPreference.Fermented};
         if (Membership[SelectedClass] <= 0.0) continue;
-        if (Seen.Contains(Fish->FishDefinitionId))
+        if (Seen.Contains(Fish->ItemId))
         {
             UE_LOG(LogCatFishing, Warning, TEXT("Event=fish_selection_duplicate_id Fish=%s Region=%s Result=Rejected"),
-                *Fish->FishDefinitionId.ToString(), *Context.WaterRegion.RegionId.ToString());
+                *FString::FromInt(Fish->ItemId), *Context.WaterRegion.RegionId.ToString());
             return Result;
         }
-        Seen.Add(Fish->FishDefinitionId);
+        Seen.Add(Fish->ItemId);
         const double K = Fish->FishStrengthPerKilogram;
         if (!FMath::IsFinite(K) || K <= 0.0) { ++InvalidStrengthCoefficientCount; continue; }
         const double Kg = CatFishCatalogSettingsPrivate::SampleIndividualWeight(*Fish, Context);
-        const double Weight = Fish->FindBaitMultiplierOrNeutral(Context.BaitDefinitionId);
+        const double Weight = Fish->FindBaitMultiplierOrNeutral(Context.BaitItemId);
         if (!FMath::IsFinite(K) || K <= 0.0 || !FMath::IsFinite(Kg) || Kg <= 0.0
             || !FMath::IsFinite(K * Kg) || !FMath::IsFinite(Weight) || Weight <= 0.0) continue;
         Candidates.Add({Fish, Kg, K * Kg, Weight});
@@ -160,7 +160,7 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
     if (Candidates.IsEmpty()) return SelectFromBasePool(Context, TEXT("SelectedClassEmpty"));
     if (!FMath::IsFinite(TotalWeight) || TotalWeight <= 0.0) return SelectFromBasePool(Context, TEXT("ZeroTotalWeight"));
     Candidates.Sort([](const FCandidate& A, const FCandidate& B)
-    { return A.Definition->FishDefinitionId.LexicalLess(B.Definition->FishDefinitionId); });
+    { return A.Definition->ItemId < B.Definition->ItemId; });
     double Cursor = Random.GetFraction() * TotalWeight;
     const FCandidate* Selected = &Candidates.Last();
     for (const FCandidate& Candidate : Candidates)
@@ -169,7 +169,7 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
         if (Cursor < 0.0) { Selected = &Candidate; break; }
     }
     Result.bSelected = true;
-    Result.FishDefinitionId = Selected->Definition->FishDefinitionId;
+    Result.ItemId = Selected->Definition->ItemId;
     Result.WeightKilograms = Selected->WeightKilograms;
     Result.BaseFishStrength = Selected->BaseFishStrength;
     Result.SelectedFinalWeight = Selected->Weight;
@@ -204,25 +204,25 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectFromBasePool(const FCatFi
 	TArray<FBasePoolCandidate> Candidates;
 	int32 InvalidStrengthCoefficientCount = 0;
 	double TotalProbability = 0.0;
-	TSet<FName> SeenIds;
+	TSet<int32> SeenIds;
 	for (const FCatFishBasePoolEntry& Entry : BasePool)
 	{
-		if (Entry.FishDefinitionId.IsNone() || !FMath::IsFinite(Entry.Probability) || Entry.Probability <= 0.0
-			|| SeenIds.Contains(Entry.FishDefinitionId) || !FindRuntimeDefinition(Entry.FishDefinitionId))
+		if ((Entry.ItemId == 0) || !FMath::IsFinite(Entry.Probability) || Entry.Probability <= 0.0
+			|| SeenIds.Contains(Entry.ItemId) || !FindRuntimeDefinition(Entry.ItemId))
 		{
 			UE_LOG(LogCatFishing, Warning, TEXT("Event=fish_selection_base_pool_invalid Region=%s Fish=%s Reason=InvalidOrDuplicateMapping Result=Rejected"),
-				*Context.WaterRegion.RegionId.ToString(), *Entry.FishDefinitionId.ToString());
+				*Context.WaterRegion.RegionId.ToString(), *FString::FromInt(Entry.ItemId));
 			return Result;
 		}
-		SeenIds.Add(Entry.FishDefinitionId);
+		SeenIds.Add(Entry.ItemId);
 	}
 	for (const FCatFishBasePoolEntry& Entry : BasePool)
 	{
-		if (Entry.FishDefinitionId.IsNone() || !FMath::IsFinite(Entry.Probability) || Entry.Probability <= 0.0)
+		if ((Entry.ItemId == 0) || !FMath::IsFinite(Entry.Probability) || Entry.Probability <= 0.0)
 		{
 			continue;
 		}
-		UCatFishDefinition* Definition = FindRuntimeDefinition(Entry.FishDefinitionId);
+		UCatFishDefinition* Definition = FindRuntimeDefinition(Entry.ItemId);
 		if (!Definition
 			|| !CatFishCatalogSettingsPrivate::PassesWaterRegionGate(*Definition, Context.WaterRegion.RegionId)
 			|| !FCatFishEligibilityPolicy::PassesActivePlayerCount(*Definition, Context.ActivePlayerCount)
@@ -266,7 +266,7 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectFromBasePool(const FCatFi
 	// 名册顺序不参与随机：按 ID 排序后再抽，保证同一种子在增删无关名额时抽到同一条。
 	Candidates.Sort([](const FBasePoolCandidate& Left, const FBasePoolCandidate& Right)
 	{
-		return Left.Definition->FishDefinitionId.LexicalLess(Right.Definition->FishDefinitionId);
+		return Left.Definition->ItemId < Right.Definition->ItemId;
 	});
 	FRandomStream Random(Context.RandomSeed);
 	double Cursor = Random.FRandRange(0.0f, static_cast<float>(TotalProbability));
@@ -281,7 +281,7 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectFromBasePool(const FCatFi
 		}
 	}
 	Result.bSelected = true;
-	Result.FishDefinitionId = Selected->Definition->FishDefinitionId;
+	Result.ItemId = Selected->Definition->ItemId;
 	Result.WeightKilograms = Selected->WeightKilograms;
 	Result.BaseFishStrength = Selected->BaseFishStrength;
 	Result.SelectedFinalWeight = Selected->Probability;
@@ -291,7 +291,7 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectFromBasePool(const FCatFi
 	UE_LOG(LogCatFishing, Display,
 		TEXT("Event=fish_selection_base_pool_used Region=%s Reason=%s Fish=%s WeightKg=%.3f Probability=%.4f ")
 		TEXT("PoolCandidates=%d RandomSeed=%d"),
-		*Context.WaterRegion.RegionId.ToString(), FallbackReason, *Result.FishDefinitionId.ToString(),
+		*Context.WaterRegion.RegionId.ToString(), FallbackReason, *FString::FromInt(Result.ItemId),
 		Result.WeightKilograms, Result.SelectedNormalizedProbability, Candidates.Num(), Context.RandomSeed);
 	return Result;
 }

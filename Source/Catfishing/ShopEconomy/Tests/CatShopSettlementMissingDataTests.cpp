@@ -20,6 +20,7 @@
 #include "Inventory/CatInventoryItemDefinition.h"
 #include "Inventory/CatInventoryItemInstance.h"
 #include "Inventory/CatInventorySettings.h"
+#include "Inventory/Tests/CatItemCatalogTestFixture.h"
 #include "ShopEconomy/CatShopEconomyService.h"
 #include "ShopEconomy/CatShopEconomySettings.h"
 #include "ShopEconomy/CatShopInventoryComponent.h"
@@ -35,12 +36,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatShopSettlementMissingDataTest,
 bool FCatShopSettlementMissingDataTest::RunTest(const FString&)
 {
 	auto* Settings = GetMutableDefault<UCatShopEconomySettings>();
-	auto* Catalog = GetMutableDefault<UCatInventorySettings>();
-	TGuardValue<TArray<FCatInventoryCatalogDefinition>> Definitions(Catalog->Definitions, Catalog->Definitions);
+	FCatItemCatalogTestFixture Definitions;
 	TGuardValue<TSoftObjectPtr<UDataTable>> TableGuard(Settings->DefaultShopCatalogTable, Settings->DefaultShopCatalogTable);
-	TGuardValue<FName> DriedId(Settings->SettlementDriedFishDefinitionId, TEXT("BlockerDried"));
+	TGuardValue<int32> DriedId(Settings->SettlementDriedItemId, 1667860);
 	TStrongObjectPtr<UCatInventoryItemDefinition> Dried(NewObject<UCatInventoryItemDefinition>());
-	Dried->InventoryDefinitionId = Settings->SettlementDriedFishDefinitionId;
+	Dried->ItemId = Settings->SettlementDriedItemId;
 	Dried->InventoryMaxStackCount = 100;
 	// 0 缺定义；1 缺兑换价；2 单件缺价；3 真正交付失败仍回滚。
 	for (int32 Scenario = 0; Scenario < 4; ++Scenario)
@@ -54,16 +54,16 @@ bool FCatShopSettlementMissingDataTest::RunTest(const FString&)
 		auto* Camp = World->SpawnActor<ACatCampInventoryActor>();
 		auto* Guard = World->SpawnActor<ACatFishGuardActor>();
 		auto* Inventory = Camp->GetInventoryComponent();
-		if (!Mode || !Shop || !Guard || !Inventory->AddItemDefinition(Catalog->FindRuntimeDefinition(TEXT("BugBait")), 2)
+		if (!Mode || !Shop || !Guard || !Inventory->AddItemDefinition(Definitions.Settings->FindRuntimeDefinition(4), 2)
 			|| !Shop->RestoreWalletFromAuthority(27)) return false;
-		Catalog->Definitions.RemoveAll([&](const auto& Entry) { return Entry.DefinitionId == Dried->InventoryDefinitionId; });
-		if (Scenario > 0) Catalog->Definitions.Add({Dried->InventoryDefinitionId, Dried.Get()});
+		Definitions.Remove(Dried->ItemId);
+		if (Scenario > 0) Definitions.Add(Dried.Get());
 		TStrongObjectPtr<UDataTable> Table(NewObject<UDataTable>());
 		Table->RowStruct = FCatShopCatalogTableRow::StaticStruct();
 		if (Scenario != 1)
 		{
 			FCatShopCatalogTableRow Row;
-			Row.DefinitionId = Dried->InventoryDefinitionId;
+			Row.ItemId = Dried->ItemId;
 			Row.UnitPrice = 13;
 			Table->AddRow(TEXT("Dried"), Row);
 		}
@@ -75,7 +75,7 @@ bool FCatShopSettlementMissingDataTest::RunTest(const FString&)
 		TestEqual(TEXT("wallet cleared unless actual delivery fails"), Shop->GetWalletSnapshot().Balance, Scenario == 3 ? 16777216 : 0);
 		if (Scenario != 3)
 		{
-			TestEqual(TEXT("unpriced inventory retired"), Inventory->CountVisibleInventoryQuantityByDefinitionId(TEXT("BugBait")), 0);
+			TestEqual(TEXT("unpriced inventory retired"), Inventory->CountVisibleInventoryQuantityByItemId(4), 0);
 			TestTrue(TEXT("unpriced world guard retired"), Guard->IsActorBeingDestroyed());
 			TestEqual(TEXT("repeat graduation is idempotent"), Shop->ConvertSettlementLeftoversToDriedFish(), 0);
 		}

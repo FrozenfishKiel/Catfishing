@@ -66,7 +66,7 @@ bool ACatFishBuyerActor::TryAppraiseFish(UCatFishInventoryItemInstance* Fish, in
 	if (!Fish) return false;
 	FCatShopFishSaleLine Line;
 	Line.FishInstanceId = Fish->GetItemInstanceId();
-	Line.FishDefinitionId = Fish->GetItemDefinitionId();
+	Line.ItemId = Fish->GetItemId();
 	Line.WeightKilograms = Fish->GetFishWeightKilograms();
 	return UCatShopEconomyTransactionExecutionCalculation::TryCalculateFishSale(
 		GetDefault<UCatShopEconomySettings>()->DefaultFishSalePriceTable.LoadSynchronous(), {Line}, OutPrice);

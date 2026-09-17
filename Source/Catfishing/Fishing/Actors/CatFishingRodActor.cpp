@@ -314,7 +314,7 @@ void ACatFishingRodActor::OnRep_GripCanonicalLocalTransform()
 }
 
 bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActorId, const FGuid InItemInstanceId,
-	const FName InRodDefinitionId, const FName InRodSkinDefinitionId, APlayerState* InOwnerPlayerState,
+	const int32  InRodItemId, const FName InRodSkinDefinitionId, APlayerState* InOwnerPlayerState,
 	APlayerState* InOperatorPlayerState, const bool bInDeployed, const bool bInBroken)
 {
 	// 权威身份初始化流程：
@@ -323,7 +323,7 @@ bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActor
 	// 3. 首次写入时构造完整 PresentationState，并立即分发表现变化和请求复制。
 	// 只有服务器能设身份；Actor 身份、物品实例身份和定义身份缺一不可，否则收杆时无法证明该还哪一件物品。
 	if (!HasAuthority() || !InRodActorId.IsValid() || !InItemInstanceId.IsValid()
-		|| InRodDefinitionId.IsNone() || !InOwnerPlayerState)
+		|| (InRodItemId == 0) || !InOwnerPlayerState)
 	{
 		return false;
 	}
@@ -340,7 +340,7 @@ bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActor
 		// 这样既能防止同一个 Actor 承载第二根竿，也不会让旧测试夹具的表现字段重放破坏正式身份。
 		return PresentationState.RodActorId == InRodActorId
 			&& PresentationState.ItemInstanceId == InItemInstanceId
-			&& PresentationState.RodDefinitionId == InRodDefinitionId
+			&& PresentationState.RodItemId == InRodItemId
 			&& PresentationState.OwnerPlayerState == InOwnerPlayerState;
 	}
 
@@ -350,7 +350,7 @@ bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActor
 	Next.RodActorId = InRodActorId;
 	Next.RodActorRevision = 1; // 首次初始化即为 Revision 1，后续每次权威变更递增
 	Next.ItemInstanceId = InItemInstanceId;
-	Next.RodDefinitionId = InRodDefinitionId;
+	Next.RodItemId = InRodItemId;
 	Next.RodSkinDefinitionId = InRodSkinDefinitionId;
 	Next.OwnerPlayerState = InOwnerPlayerState;
 	Next.OperatorPlayerState = InOperatorPlayerState;
@@ -441,11 +441,11 @@ bool ACatFishingRodActor::CommitAuthoritativeMutation(const FCatFishingRodPresen
 	{
 		return false;
 	}
-	// 身份类字段（Id/DefinitionId/Owner）不可被这条“可变状态”写口覆盖，只保留传入 Next 里的可变部分
+	// 身份类字段（Id/ItemId/Owner）不可被这条“可变状态”写口覆盖，只保留传入 Next 里的可变部分
 	FCatFishingRodPresentationState Committed = Next;
 	Committed.RodActorId = PresentationState.RodActorId;
 	Committed.ItemInstanceId = PresentationState.ItemInstanceId;
-	Committed.RodDefinitionId = PresentationState.RodDefinitionId;
+	Committed.RodItemId = PresentationState.RodItemId;
 	Committed.OwnerPlayerState = PresentationState.OwnerPlayerState;
 	PrepareOperatorMemberships(Committed);
 	Committed.RodActorRevision = PresentationState.RodActorRevision + 1; // 每次成功提交 Revision 自增一

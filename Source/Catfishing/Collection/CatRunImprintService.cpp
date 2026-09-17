@@ -9,9 +9,9 @@
 namespace
 {
 	/** 「接收者|鱼种」复合键；首钓判定与知识层去重共用同一个拼法，避免两处各拼一份走形。 */
-	FString MakeRecipientFishKey(const FString& RecipientStableNetId, const FName FishDefinitionId)
+	FString MakeRecipientFishKey(const FString& RecipientStableNetId, const int32  ItemId)
 	{
-		return FString::Printf(TEXT("%s|%s"), *RecipientStableNetId, *FishDefinitionId.ToString());
+		return FString::Printf(TEXT("%s|%s"), *RecipientStableNetId, *FString::FromInt(ItemId));
 	}
 }
 
@@ -33,7 +33,6 @@ void UCatRunImprintService::Deinitialize()
 	CaptureGrantByRequest.Reset();
 	FishRecordGrantByRecipientAndFish.Reset();
 	KnowledgeGrantByRecipientAndFish.Reset();
-	SilhouetteGrantByRecipientAndEncounter.Reset();
 	UnlockGrantByRecipientAndUnlockId.Reset();
 	AlbumByRun.Reset();
 	Super::Deinitialize();
@@ -48,30 +47,30 @@ FGuid UCatRunImprintService::RecordCommittedCapture(const FCatCaptureCommittedRe
 		return *Existing;
 	}
 	if (!bCommandsOpen || !Capture.CaptureRequestId.IsValid() || !Capture.FishInstance.FishInstanceId.IsValid()
-		|| Capture.FishInstance.FishDefinitionId.IsNone() || RecipientStableNetId.IsEmpty()
+		|| (Capture.FishInstance.ItemId == 0) || RecipientStableNetId.IsEmpty()
 		|| !FMath::IsFinite(Capture.FishInstance.WeightKilograms) || Capture.FishInstance.WeightKilograms <= 0.0)
 	{
 		return FGuid();
 	}
 	FCatProfileGrant Grant;
 	Grant.Kind = ECatProfileGrantKind::FishRecorded;
-	Grant.FishDefinitionId = Capture.FishInstance.FishDefinitionId;
+	Grant.ItemId = Capture.FishInstance.ItemId;
 	Grant.WeightKilograms = Capture.FishInstance.WeightKilograms;
 	Grant.CaptureCondition = Condition;
 	Grant.RecipientStableNetId = RecipientStableNetId;
-	const FName GrantedFishDefinitionId = Grant.FishDefinitionId;
+	const int32  GrantedItemId = Grant.ItemId;
 	// 首钓判定必须在写进本局事实之前问；下面那行 Add 自己就会让同一问题从此返回 false。
-	const bool bFirstRecordOfThisSpecies = IsFirstFishRecordForRecipient(RecipientStableNetId, GrantedFishDefinitionId);
+	const bool bFirstRecordOfThisSpecies = IsFirstFishRecordForRecipient(RecipientStableNetId, GrantedItemId);
 	const FGuid GrantId = EnqueueGrant(MoveTemp(Grant));
 	if (GrantId.IsValid())
 	{
 		CaptureGrantByRequest.Add(Capture.CaptureRequestId, GrantId);
 		// 本局的「这个人已经收集过这种鱼」事实：首钓判定先读它，不必等客户端落盘再经 PlayerState 绕回来。
 		FishRecordGrantByRecipientAndFish.Add(
-			MakeRecipientFishKey(RecipientStableNetId, GrantedFishDefinitionId), GrantId);
+			MakeRecipientFishKey(RecipientStableNetId, GrantedItemId), GrantId);
 		if (bFirstRecordOfThisSpecies)
 		{
-			AnnounceFishSpeciesDiscovery(RecipientStableNetId, GrantedFishDefinitionId, GrantId);
+			AnnounceFishSpeciesDiscovery(RecipientStableNetId, GrantedItemId, GrantId);
 		}
 	}
 	return GrantId;
@@ -82,10 +81,10 @@ FGuid UCatRunImprintService::RecordCommittedCapture(const FCatCaptureCommittedRe
 // 因为「我的图鉴记上了」这件事的唯一事实源是本机 durable Profile，服务器不替任何人写图鉴。
 // AnnouncementId 复用 FishRecorded 的 GrantId：同一次首记天然只有一条广播，客户端据它去重。
 void UCatRunImprintService::AnnounceFishSpeciesDiscovery(const FString& RecipientStableNetId,
-	const FName FishDefinitionId, const FGuid AnnouncementId) const
+	const int32  ItemId, const FGuid AnnouncementId) const
 {
 	ACatfishingGameState* GameState = GetWorld() ? GetWorld()->GetGameState<ACatfishingGameState>() : nullptr;
-	if (!GameState || !AnnouncementId.IsValid() || FishDefinitionId.IsNone())
+	if (!GameState || !AnnouncementId.IsValid() || (ItemId == 0))
 	{
 		return;
 	}
@@ -93,56 +92,29 @@ void UCatRunImprintService::AnnounceFishSpeciesDiscovery(const FString& Recipien
 	const APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
 	FCatFishSpeciesDiscoveryAnnouncement Announcement;
 	Announcement.AnnouncementId = AnnouncementId;
-	Announcement.FishDefinitionId = FishDefinitionId;
+	Announcement.ItemId = ItemId;
 	// 解锁者已经离局时仍然播报：鱼种确实是第一次被记录到，只是没有名字可显示，由 UI 决定占位写法。
 	Announcement.DiscovererDisplayName = PlayerState ? PlayerState->GetPlayerName() : FString();
 	Announcement.DiscovererPlayerId = PlayerState ? PlayerState->GetPlayerId() : 0;
 	GameState->PublishFishSpeciesDiscoveryFromAuthority(Announcement);
 }
 
-// 剪影归档流程：按接收者+咬钩机会重放既有 Grant，再验证命令门与稳定字段；首次建立不可撤销的 FishSilhouette Grant。
-// 这一层只记「你碰到过这条鱼」，因此不带重量、不带首次条件，也不因为后续跑鱼/断竿/放弃而回滚。
-FGuid UCatRunImprintService::RecordFishEncounterSilhouette(const FName FishDefinitionId,
-	const FString& RecipientStableNetId, const FGuid EncounterKey)
-{
-	const FString EncounterGrantKey = FString::Printf(TEXT("%s|%s"), *RecipientStableNetId,
-		*EncounterKey.ToString(EGuidFormats::Digits));
-	if (const FGuid* Existing = SilhouetteGrantByRecipientAndEncounter.Find(EncounterGrantKey))
-	{
-		return *Existing;
-	}
-	if (!bCommandsOpen || FishDefinitionId.IsNone() || RecipientStableNetId.IsEmpty() || !EncounterKey.IsValid())
-	{
-		return FGuid();
-	}
-	FCatProfileGrant Grant;
-	Grant.Kind = ECatProfileGrantKind::FishSilhouette;
-	Grant.FishDefinitionId = FishDefinitionId;
-	Grant.RecipientStableNetId = RecipientStableNetId;
-	const FGuid GrantId = EnqueueGrant(MoveTemp(Grant));
-	if (GrantId.IsValid())
-	{
-		SilhouetteGrantByRecipientAndEncounter.Add(EncounterGrantKey, GrantId);
-	}
-	return GrantId;
-}
-
 // 知识层归档流程：按接收者+鱼种重放既有 Grant，再验证命令门与稳定字段；吃第二条同种鱼不再生成新的待 ACK Grant。
 // 归属就是吃的人——别人钓的鱼被自己吃掉，效果记进自己的图鉴（图鉴 §3.1.4:124）。
-FGuid UCatRunImprintService::RecordFishKnowledge(const FName FishDefinitionId, const FString& RecipientStableNetId)
+FGuid UCatRunImprintService::RecordFishKnowledge(const int32  ItemId, const FString& RecipientStableNetId)
 {
-	const FString KnowledgeKey = MakeRecipientFishKey(RecipientStableNetId, FishDefinitionId);
+	const FString KnowledgeKey = MakeRecipientFishKey(RecipientStableNetId, ItemId);
 	if (const FGuid* Existing = KnowledgeGrantByRecipientAndFish.Find(KnowledgeKey))
 	{
 		return *Existing;
 	}
-	if (!bCommandsOpen || FishDefinitionId.IsNone() || RecipientStableNetId.IsEmpty())
+	if (!bCommandsOpen || (ItemId == 0) || RecipientStableNetId.IsEmpty())
 	{
 		return FGuid();
 	}
 	FCatProfileGrant Grant;
 	Grant.Kind = ECatProfileGrantKind::FishKnowledge;
-	Grant.FishDefinitionId = FishDefinitionId;
+	Grant.ItemId = ItemId;
 	Grant.RecipientStableNetId = RecipientStableNetId;
 	const FGuid GrantId = EnqueueGrant(MoveTemp(Grant));
 	if (GrantId.IsValid())
@@ -156,13 +128,13 @@ FGuid UCatRunImprintService::RecordFishKnowledge(const FName FishDefinitionId, c
 // 摘要读不到（玩家已断线、或本机 Profile 持久化关闭导致摘要为空）时只能回答 false——宁可不抛印记，
 // 也不能把每一条鱼都当成首钓；「印记宁缺毋滥」是印记册的既定口径。
 bool UCatRunImprintService::IsFirstFishRecordForRecipient(const FString& RecipientStableNetId,
-	const FName FishDefinitionId) const
+	const int32  ItemId) const
 {
-	if (RecipientStableNetId.IsEmpty() || FishDefinitionId.IsNone())
+	if (RecipientStableNetId.IsEmpty() || (ItemId == 0))
 	{
 		return false;
 	}
-	if (FishRecordGrantByRecipientAndFish.Contains(MakeRecipientFishKey(RecipientStableNetId, FishDefinitionId)))
+	if (FishRecordGrantByRecipientAndFish.Contains(MakeRecipientFishKey(RecipientStableNetId, ItemId)))
 	{
 		return false;
 	}
@@ -175,7 +147,7 @@ bool UCatRunImprintService::IsFirstFishRecordForRecipient(const FString& Recipie
 	}
 	for (const FCatFishCollectionRecord& Record : PlayerState->GetPublicFishCollection())
 	{
-		if (Record.FishDefinitionId == FishDefinitionId && Record.bRecordedUnlocked)
+		if (Record.ItemId == ItemId && Record.bRecordedUnlocked)
 		{
 			return false;
 		}
@@ -235,7 +207,7 @@ bool UCatRunImprintService::CanAcceptImprintCandidate(const FCatImprintCandidate
 	{
 		return Existing->RunId == Candidate.RunId && Existing->EventType == Candidate.EventType
 			&& Existing->SubjectId == Candidate.SubjectId
-			&& Existing->FishDefinitionId == Candidate.FishDefinitionId
+			&& Existing->ItemId == Candidate.ItemId
 			&& Existing->ParticipantCount == Candidate.ParticipantCount
 			&& Existing->bAllActivePlayersPresent == Candidate.bAllActivePlayersPresent
 			&& Existing->ParticipantStableNetIds == Candidate.ParticipantStableNetIds;

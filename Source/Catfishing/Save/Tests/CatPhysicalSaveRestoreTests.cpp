@@ -44,15 +44,15 @@ bool FCatPhysicalCharacterSaveRestoreConsumerTest::RunTest(const FString& Parame
 	FCatSavedPlayerRunState& Saved = Save->PendingRestoreSaveGame->PlayerSnapshot;
 	Saved.CharacterTransform = FTransform(FRotator(0, 30, 0), FVector(400, 100, 20));
 	UCatEquipmentComponent* Equipment = Cat->GetEquipmentComponent();
-	if (!TestTrue(TEXT("夹具实际发放两份鱼饵"), Equipment->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(), Equipment->GetSnapshot().Revision, TEXT("BugBait"), 2).bCommitted)) return false;
+	if (!TestTrue(TEXT("夹具实际发放两份鱼饵"), Equipment->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(), Equipment->GetSnapshot().Revision, 4, 2).bCommitted)) return false;
 	FText Failure;
 	const TArray<FCatInventoryEntry> Before = CatFishingTest::Entries(Equipment);
-	Saved.EquipmentSnapshot.BaitDefinitionId = Equipment->GetSnapshot().BaitDefinitionId;
+	Saved.EquipmentSnapshot.BaitItemId = Equipment->GetSnapshot().BaitItemId;
 	Saved.EquipmentSnapshot.BaitItemInstanceId = Equipment->GetSnapshot().BaitItemInstanceId;
 	for (const FCatInventoryEntry& Slot : Before)
 	{
 		FCatSavedRunInventorySlot& SavedSlot = Saved.InventorySlots.AddDefaulted_GetRef();
-		SavedSlot.DefinitionId = CatFishingTest::DefinitionId(Slot);
+		SavedSlot.ItemId = CatFishingTest::ItemId(Slot);
 		SavedSlot.ItemInstanceId = CatFishingTest::InstanceId(Slot);
 		SavedSlot.Quantity = Slot.StackCount;
 		SavedSlot.RodDurability = CatFishingTest::Durability(Slot);

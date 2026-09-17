@@ -54,7 +54,12 @@ struct FCatImprintCandidate
 
 	/** 鱼相关候选的稳定鱼种上下文；仅供成像计划与表现读取，候选本身绝不据此生成剪影或其他永久 Grant。 */
 	UPROPERTY(BlueprintReadOnly)
+	int32  ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName FishDefinitionId = NAME_None;
+
 
 	/** 服务器裁决的参与人数；原始 StableNetId 数组保存在服务私有记录。 */
 	UPROPERTY(BlueprintReadOnly)

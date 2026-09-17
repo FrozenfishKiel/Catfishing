@@ -1,52 +1,63 @@
 #include "Inventory/CatInventorySettings.h"
 
-#include "Data/CatFishCatalogSettings.h"
-#include "Data/CatFishDefinition.h"
 #include "Equipment/CatEquipmentDefinition.h"
+#include "Logging/CatLog.h"
 
-// 目录项校验流程：稳定 ID 和定义资产必须互相对齐，避免无效 ID 被错误映射到另一种物品。
-bool FCatInventoryCatalogDefinition::IsRuntimeReady() const
+// 全表读取流程：先验证表类型，再检查每行的编号、行名、定义和唯一性；全部成立后才发布按编号排序的结果。
+// 失败时清空输出，避免坏行让不同系统只看到各自能解析的部分物品。
+bool UCatInventorySettings::GetItemDefinitions(TArray<UCatInventoryItemDefinition*>& OutDefinitions, FString& OutError) const
 {
-	UCatInventoryItemDefinition* Definition = ItemDefinition.LoadSynchronous();
-	if (DefinitionId.IsNone() || Definition == nullptr || !Definition->IsInventoryRuntimeDefinitionReady())
+	OutDefinitions.Reset();
+	OutError.Reset();
+	const UDataTable* Table = ItemCatalog.LoadSynchronous();
+	if (!Table || Table->GetRowStruct() != FCatItemCatalogRow::StaticStruct() || Table->GetRowMap().IsEmpty())
 	{
+		OutError = TEXT("Item catalog is missing, empty, or has the wrong row type.");
 		return false;
 	}
-
-	return Definition->GetInventoryDefinitionId() == DefinitionId;
+	TSet<int32> SeenIds;
+	TSet<FSoftObjectPath> SeenDefinitions;
+	TArray<UCatInventoryItemDefinition*> Candidates;
+	for (const TPair<FName, uint8*>& Pair : Table->GetRowMap())
+	{
+		const FCatItemCatalogRow& Row = *reinterpret_cast<const FCatItemCatalogRow*>(Pair.Value);
+		UCatInventoryItemDefinition* Definition = Row.ItemDefinition.LoadSynchronous();
+		if (Row.ItemId <= 0 || Pair.Key.ToString() != FString::FromInt(Row.ItemId)
+			|| SeenIds.Contains(Row.ItemId) || SeenDefinitions.Contains(Row.ItemDefinition.ToSoftObjectPath())
+			|| !Definition || Definition->ItemId != Row.ItemId)
+		{
+			OutError = FString::Printf(TEXT("Invalid item catalog row: %s"), *Pair.Key.ToString());
+			return false;
+		}
+		SeenIds.Add(Row.ItemId);
+		SeenDefinitions.Add(Row.ItemDefinition.ToSoftObjectPath());
+		Candidates.Add(Definition);
+	}
+	Candidates.Sort([](const UCatInventoryItemDefinition& A, const UCatInventoryItemDefinition& B)
+	{
+		return A.ItemId < B.ItemId;
+	});
+	OutDefinitions = MoveTemp(Candidates);
+	return true;
 }
 
-// 定义资产查找流程：只接受唯一且可运行的目录项；重复 ID 直接失败，防止不同机器解析出不同物品。
-UCatInventoryItemDefinition* UCatInventorySettings::FindRuntimeDefinition(const FName DefinitionId) const
+// 数字查询流程：拒绝无效编号，取得完整有效目录后只返回身份匹配且可运行的定义；没有任何旧目录回退。
+UCatInventoryItemDefinition* UCatInventorySettings::FindRuntimeDefinition(const int32 ItemId) const
 {
-	if (DefinitionId.IsNone())
+	if (ItemId <= 0) return nullptr;
+	TArray<UCatInventoryItemDefinition*> Items;
+	FString Error;
+	if (!GetItemDefinitions(Items, Error))
 	{
+		UE_LOG(LogCatfishing, Error, TEXT("Event=item_catalog_rejected ItemId=%d Reason=%s"), ItemId, *Error);
 		return nullptr;
 	}
-
-	UCatInventoryItemDefinition* Match = nullptr;
-	for (const FCatInventoryCatalogDefinition& Definition : Definitions)
+	for (UCatInventoryItemDefinition* Definition : Items)
 	{
-		if (Definition.DefinitionId != DefinitionId || !Definition.IsRuntimeReady())
-		{
-			continue;
-		}
-
-		if (Match != nullptr)
-		{
-			return nullptr;
-		}
-
-		Match = Definition.ItemDefinition.LoadSynchronous();
+		if (Definition->ItemId == ItemId)
+			return Definition->IsInventoryRuntimeDefinitionReady() ? Definition : nullptr;
 	}
-
-	if (Match != nullptr)
-	{
-		return Match;
-	}
-
-	const UCatFishCatalogSettings* FishCatalog = GetDefault<UCatFishCatalogSettings>();
-	return FishCatalog != nullptr ? FishCatalog->FindRuntimeDefinition(DefinitionId) : nullptr;
+	return nullptr;
 }
 
 // 玩家随身容量读取流程：只把配置值夹到非负；InventorySettings 是随身库存容量的唯一配置源。

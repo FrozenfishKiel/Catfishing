@@ -1,4 +1,4 @@
-﻿#include "Equipment/CatEquipmentUseItemInstances.h"
+#include "Equipment/CatEquipmentUseItemInstances.h"
 
 #include "Character/CatCharacter.h"
 #include "Fishing/Integration/CatFishingAimLibrary.h"
@@ -38,8 +38,8 @@ namespace CatEquipmentUseItemInstances
 	{
 		const FCatEquipmentLoadoutSnapshot& Current = Equipment.GetSnapshot();
 		return Equipment.ConfigureLoadoutFromAuthority(Context.RequestId, Current.Revision,
-			Current.RodDefinitionId, bBait ? Definition.EquipmentDefinitionId : Current.BaitDefinitionId,
-			bBait ? Current.FloatDefinitionId : Definition.EquipmentDefinitionId, Current.ScoopNetDefinitionId, NAME_None,
+			Current.RodItemId, bBait ? Definition.ItemId : Current.BaitItemId,
+			bBait ? Current.FloatItemId : Definition.ItemId, Current.ScoopNetItemId, NAME_None,
 			Current.RodItemInstanceId, bBait ? Instance.GetItemInstanceId() : Current.BaitItemInstanceId,
 			bBait ? Current.FloatItemInstanceId : Instance.GetItemInstanceId(), Current.ScoopNetItemInstanceId);
 	}
@@ -112,7 +112,7 @@ FCatDomainCommandResult UCatChumEquipmentItemInstance::UseFromInventorySlotFromA
 		}
 		ActiveUseAbilityHandles.Append(MoveTemp(SetHandles));
 	}
-	Result = Commands->BeginChumUseFromInventoryOnAuthority(Controller, Context, GetItemInstanceId(), GetItemDefinitionId());
+	Result = Commands->BeginChumUseFromInventoryOnAuthority(Controller, Context, GetItemInstanceId(), GetItemId());
 	if (!Result.bCommitted) { ActiveUseAbilityHandles.TakeFromAbilitySystem(ASC); bHasActiveUseContext = false; }
 	// 右键菜单没有后续松开输入，沿同一能力立即提交零蓄力投放；左键才等待原请求的 Release。
 	if (Result.bCommitted && !Context.bContinuousInput) return EndUseFromInventorySlotFromAuthority(Context, false);

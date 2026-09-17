@@ -41,7 +41,7 @@ namespace CatItemTooltipTests
 	UCatEquipmentInventoryItemInstance* CreateRod()
 	{
 		UCatEquipmentDefinition* Definition = NewObject<UCatEquipmentDefinition>();
-		Definition->EquipmentDefinitionId = TEXT("TooltipRod");
+		Definition->ItemId = 1588535;
 		Definition->FunctionalRouteId = TEXT("TooltipRod");
 		Definition->bEnableRuntimeDefinition = true;
 		Definition->DisplayName = FText::FromString(TEXT("测试鱼竿"));

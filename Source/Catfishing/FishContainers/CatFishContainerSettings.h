@@ -13,9 +13,9 @@ struct FCatSharedFishTankCapacityUpgrade
 {
 	GENERATED_BODY()
 
-	/** 这一档在商店出售表里的 DefinitionId；它不指向任何库存定义资产，交付路由按它认出「这是设施升级、不是入库物」。 */
+	/** 本档扩容服务商品的数字物品编号；策划配置，商店从总表读取定义，交付路由按本表调整容量而不生成库存实例，0 表示未配置。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Capacity")
-	FName UpgradeDefinitionId = NAME_None;
+	int32  UpgradeItemId = 0;
 
 	/** 买下这一档之后鱼缸的槽位容量；必须比前一档大，否则整张升级表按未配置处理。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Capacity", meta = (ClampMin = "1"))
@@ -50,10 +50,10 @@ public:
 	int32 GetSharedFishTankCapacityForTier(int32 TierIndex) const;
 
 	/**
-	 * 把一个商店 DefinitionId 解析成它对应的升级档序号（从 1 开始，1 表示第一档升级）。
+	 * 把一个商店 ItemId 解析成它对应的升级档序号（从 1 开始，1 表示第一档升级）。
 	 * 不是升级商品时返回 INDEX_NONE；商店交付路由用它区分「设施升级」和「入库物」。
 	 */
-	int32 FindSharedFishTankUpgradeTierByDefinitionId(FName UpgradeDefinitionId) const;
+	int32 FindSharedFishTankUpgradeTierByItemId(int32  UpgradeItemId) const;
 
 	/** 一只可交互鱼护箱子的容量；0 表示 Unset，箱子不会自行选择默认。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Capacity", meta = (ClampMin = "0"))

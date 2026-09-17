@@ -2066,7 +2066,7 @@ void ACatfishingGameModeBase::LogStinkyOfferingFishBindingDiagnostics() const
 	{
 		return;
 	}
-	if (RunSettings->StinkyOfferingFishDefinitionIds.IsEmpty())
+	if (RunSettings->StinkyOfferingItemIds.IsEmpty())
 	{
 		UE_LOG(LogCatRun, Warning,
 			TEXT("Event=RunStinkyOfferingBindingUnconfigured World=%s Result=StinkyDiscountNeverApplies"),
@@ -2074,12 +2074,12 @@ void ACatfishingGameModeBase::LogStinkyOfferingFishBindingDiagnostics() const
 		return;
 	}
 	int32 ResolvedStinkyFishCount = 0;
-	for (const FName StinkyFishDefinitionId : RunSettings->StinkyOfferingFishDefinitionIds)
+	for (const int32  StinkyItemId : RunSettings->StinkyOfferingItemIds)
 	{
-		const bool bResolved = Catalog->FindRuntimeDefinition(StinkyFishDefinitionId) != nullptr;
+		const bool bResolved = Catalog->FindRuntimeDefinition(StinkyItemId) != nullptr;
 		ResolvedStinkyFishCount += bResolved ? 1 : 0;
-		UE_LOG(LogCatRun, Log, TEXT("Event=RunStinkyOfferingBinding World=%s FishDefinitionId=%s ResolvedInCatalog=%s"),
-			GetWorld() ? *GetWorld()->GetName() : TEXT("None"), *StinkyFishDefinitionId.ToString(),
+		UE_LOG(LogCatRun, Log, TEXT("Event=RunStinkyOfferingBinding World=%s ItemId=%s ResolvedInCatalog=%s"),
+			GetWorld() ? *GetWorld()->GetName() : TEXT("None"), *FString::FromInt(StinkyItemId),
 			bResolved ? TEXT("true") : TEXT("false"));
 	}
 	if (ResolvedStinkyFishCount == 0)
@@ -2087,7 +2087,7 @@ void ACatfishingGameModeBase::LogStinkyOfferingFishBindingDiagnostics() const
 		// 一条都对不上＝这局的臭鱼折扣永远不会触发，而且不会有任何现象暴露它。
 		UE_LOG(LogCatRun, Warning,
 			TEXT("Event=RunStinkyOfferingBindingUnresolved World=%s ConfiguredIds=%d Result=StinkyDiscountNeverApplies"),
-			GetWorld() ? *GetWorld()->GetName() : TEXT("None"), RunSettings->StinkyOfferingFishDefinitionIds.Num());
+			GetWorld() ? *GetWorld()->GetName() : TEXT("None"), RunSettings->StinkyOfferingItemIds.Num());
 	}
 }
 
@@ -2262,9 +2262,9 @@ void ACatfishingGameModeBase::SubmitNaturalChumFieldIfConfigured()
 	{
 		return;
 	}
-	FName ChumDefinitionId;
+	int32  ChumItemId;
 	FName AnchorId;
-	if (!GetDefault<UCatEnvironmentSettings>()->TryGetNaturalChumField(ChumDefinitionId, AnchorId))
+	if (!GetDefault<UCatEnvironmentSettings>()->TryGetNaturalChumField(ChumItemId, AnchorId))
 	{
 		return;
 	}
@@ -2275,7 +2275,7 @@ void ACatfishingGameModeBase::SubmitNaturalChumFieldIfConfigured()
 	{
 		return;
 	}
-	UCatEquipmentDefinition* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(ChumDefinitionId);
+	UCatEquipmentDefinition* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(ChumItemId);
 	if (!Definition || !Definition->CanServeChumPlacement())
 	{
 		return;
@@ -2304,7 +2304,7 @@ void ACatfishingGameModeBase::SubmitNaturalChumFieldIfConfigured()
 	Request.StableNetId = TEXT("Environment");
 	Request.Command.RequestId = FGuid::NewGuid();
 	Request.Command.ExpectedWaterRegionHandle = Match->ExpectedWaterRegionHandle;
-	Request.Command.ChumDefinitionId = ChumDefinitionId;
+	Request.Command.ChumItemId = ChumItemId;
 	Request.Command.Quantity = 1;
 	Request.Command.ClientCandidateWorldPoint = Match->GetActorLocation();
 	Request.ServerCorrectedCenter = Match->GetActorLocation();
@@ -2323,7 +2323,7 @@ void ACatfishingGameModeBase::SubmitNaturalChumFieldIfConfigured()
 	UE_LOG(LogCatEnvironment, Log, TEXT("Event=natural_chum_terminal RequestId=%s RunId=%s Day=%d EnvironmentEvent=%s Definition=%s Anchor=%s Committed=%s Error=%s Revision=%lld"),
 		*Request.Command.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
 		*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Phase.DayIndex,
-		*RunPublicState.Environment.ActiveEventId.ToString(), *ChumDefinitionId.ToString(), *AnchorId.ToString(),
+		*RunPublicState.Environment.ActiveEventId.ToString(), *FString::FromInt(ChumItemId), *AnchorId.ToString(),
 		Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error),
 		Result.ChumFieldSetRevision);
 }

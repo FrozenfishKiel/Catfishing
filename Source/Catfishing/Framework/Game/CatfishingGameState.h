@@ -55,7 +55,12 @@ struct FCatFishSpeciesDiscoveryAnnouncement
 
 	/** 被首次记录的鱼种稳定 ID；UI 按它取展示名，不复制鱼定义本身。 */
 	UPROPERTY(BlueprintReadOnly)
+	int32  ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName FishDefinitionId = NAME_None;
+
 };
 
 /** Lake 共享比赛状态；复制由服务器 GameMode 组合的 Run/Environment、Social 求助与 Shop 公开经济事实。 */

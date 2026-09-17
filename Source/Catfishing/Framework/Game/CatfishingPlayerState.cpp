@@ -47,17 +47,17 @@ bool ACatfishingPlayerState::SetPublicFishCollectionFromAuthority(const TArray<F
 	{
 		return false;
 	}
-	TSet<FName> UniqueFishIds;
+	TSet<int32> UniqueFishIds;
 	for (const FCatFishCollectionRecord& Record : Records)
 	{
 		const bool bAnyLayerUnlocked = Record.bSilhouetteUnlocked || Record.bRecordedUnlocked || Record.bKnowledgeUnlocked;
-		if (Record.FishDefinitionId.IsNone() || !bAnyLayerUnlocked
+		if ((Record.ItemId == 0) || !bAnyLayerUnlocked
 			|| !FMath::IsFinite(Record.BestWeightKilograms) || Record.BestWeightKilograms < 0.0
-			|| Record.EncounterCount < 0 || UniqueFishIds.Contains(Record.FishDefinitionId))
+			|| Record.EncounterCount < 0 || UniqueFishIds.Contains(Record.ItemId))
 		{
 			return false;
 		}
-		UniqueFishIds.Add(Record.FishDefinitionId);
+		UniqueFishIds.Add(Record.ItemId);
 	}
 	PublicFishCollection = Records;
 	ForceNetUpdate();

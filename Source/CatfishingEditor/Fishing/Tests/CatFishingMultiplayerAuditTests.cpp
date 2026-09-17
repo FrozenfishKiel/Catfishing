@@ -1,4 +1,5 @@
 #include "Inventory/CatInventorySettings.h"
+#include "Inventory/Tests/CatItemCatalogTestFixture.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Bait.h"
 #include "Fishing/Tests/CatFishingEquipmentTestFixtures.h"
@@ -34,38 +35,36 @@ bool FCatBorrowedRodReservationAudit::RunTest(const FString& Parameters)
 	struct FRestoreSettings
 	{
 		UCatInventorySettings* Settings = GetMutableDefault<UCatInventorySettings>();
-		TArray<FCatInventoryCatalogDefinition> Definitions = Settings->Definitions;
+		FCatItemCatalogTestFixture Catalog{false};
 		int32 Capacity = Settings->PlayerInventorySlotCapacity;
 		~FRestoreSettings()
 		{
-			Settings->Definitions = Definitions;
 			Settings->PlayerInventorySlotCapacity = Capacity;
 		}
 	} Restore;
-	Restore.Settings->Definitions.Reset();
 	Restore.Settings->PlayerInventorySlotCapacity = 12;
 	TArray<TStrongObjectPtr<UCatEquipmentDefinition>> Definitions;
-	const auto AddDefinition = [&](const FName Id, const CatFishingTest::EFixtureKind Kind)
+	const auto AddDefinition = [&](const int32 Id, const CatFishingTest::EFixtureKind Kind)
 	{
 		UCatEquipmentDefinition* Definition = NewObject<UCatEquipmentDefinition>();
 		Definitions.Emplace(Definition);
-		Definition->EquipmentDefinitionId = Id;
+		Definition->ItemId = Id;
 		CatFishingTest::Configure(Definition, Kind);
-		Definition->FunctionalRouteId = Id;
+		Definition->FunctionalRouteId = FName(*FString::FromInt(Id));
 		Definition->bEnableRuntimeDefinition = true;
-		Restore.Settings->Definitions.Add({Id, Definition});
+		Restore.Catalog.Add(Definition);
 		return Definition;
 	};
-	UCatEquipmentDefinition* RodDefinition = AddDefinition(TEXT("AuditRod"), CatFishingTest::EFixtureKind::Rod);
+	UCatEquipmentDefinition* RodDefinition = AddDefinition(1733530, CatFishingTest::EFixtureKind::Rod);
 	CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->MaximumRodDurability = 100.0;
 	CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->MaximumLineLengthCentimeters = 1500.0;
 	CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->HighTensionWearMultiplier = 1.0;
 	RodDefinition->UseActorClass = ACatFishingRodActor::StaticClass();
-	UCatEquipmentDefinition* BaitDefinition = AddDefinition(TEXT("AuditBait"), CatFishingTest::EFixtureKind::Bait);
+	UCatEquipmentDefinition* BaitDefinition = AddDefinition(1599647, CatFishingTest::EFixtureKind::Bait);
 	BaitDefinition->bRunConsumable = true;
 	CatFishingTest::Fragment<UCatEquipmentFragment_Bait>(BaitDefinition)->BiteRateMultiplier = 1.0;
 	CatFishingTest::Fragment<UCatEquipmentFragment_Bait>(BaitDefinition)->MinimumBiteDelayMultiplier = 1.0;
-	CatFishingTest::Fragment<UCatEquipmentFragment_Float>(AddDefinition(TEXT("AuditFloat"), CatFishingTest::EFixtureKind::Float))->MaximumCastDistanceCentimeters = 1000.0;
+	CatFishingTest::Fragment<UCatEquipmentFragment_Float>(AddDefinition(1014238, CatFishingTest::EFixtureKind::Float))->MaximumCastDistanceCentimeters = 1000.0;
 	for (const auto& Definition : Definitions)
 	{
 		if (!TestTrue(TEXT("audit definitions are valid"), Definition->IsRuntimeDefinitionReady())) return false;
@@ -83,12 +82,12 @@ bool FCatBorrowedRodReservationAudit::RunTest(const FString& Parameters)
 		if (!Character || !Player) return nullptr;
 		Character->SetPlayerState(Player);
 		UCatEquipmentComponent* Equipment = Character->GetEquipmentComponent();
-		for (const FName Id : {FName(TEXT("AuditRod")), FName(TEXT("AuditFloat"))})
+		for (const int32 Id : {1733530, 1014238})
 		{
 			if (!Equipment->GrantEquipmentFromAuthority(FGuid::NewGuid(), Equipment->GetSnapshot().Revision, Id).bCommitted) return nullptr;
 		}
 		if (!Equipment->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(), Equipment->GetSnapshot().Revision,
-			TEXT("AuditBait"), 4).bCommitted) return nullptr;
+			1599647, 4).bCommitted) return nullptr;
 		const auto Loadout = Equipment->GetSnapshot();
 		return Equipment->Use(FGuid::NewGuid(), Loadout.Revision, Loadout.RodItemInstanceId).bCommitted ? Equipment : nullptr;
 	};
@@ -101,8 +100,8 @@ bool FCatBorrowedRodReservationAudit::RunTest(const FString& Parameters)
 	// 与 FishingService::BeginCast 一样由抛竿者协调，但显式指定场景竿的原库存宿主。
 	const FGuid BorrowedSessionId = FGuid::NewGuid();
 	const auto Borrowed = FisherEquipment->BeginFishingUse(BorrowedSessionId, OwnerRodId,
-		FisherLoadout.BaitItemInstanceId, FisherLoadout.FloatItemInstanceId, FisherLoadout.RodDefinitionId,
-		FisherLoadout.BaitDefinitionId, FisherLoadout.FloatDefinitionId, FisherLoadout.Revision,
+		FisherLoadout.BaitItemInstanceId, FisherLoadout.FloatItemInstanceId, FisherLoadout.RodItemId,
+		FisherLoadout.BaitItemId, FisherLoadout.FloatItemId, FisherLoadout.Revision,
 		CatFishingTest::Inventory(OwnerEquipment));
 	AddInfo(FString::Printf(TEXT("Event=multiplayer_borrowed_rod_probe UseAccepted=%s Error=%s"),
 		Borrowed.bUseAccepted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Borrowed.Error)));
@@ -110,11 +109,11 @@ bool FCatBorrowedRodReservationAudit::RunTest(const FString& Parameters)
 	const auto CurrentLoadout = FisherEquipment->GetSnapshot();
 	const FGuid OwnSessionId = FGuid::NewGuid();
 	const auto Own = FisherEquipment->BeginFishingUse(OwnSessionId, CurrentLoadout.RodItemInstanceId,
-		CurrentLoadout.BaitItemInstanceId, CurrentLoadout.FloatItemInstanceId, CurrentLoadout.RodDefinitionId,
-		CurrentLoadout.BaitDefinitionId, CurrentLoadout.FloatDefinitionId, CurrentLoadout.Revision);
+		CurrentLoadout.BaitItemInstanceId, CurrentLoadout.FloatItemInstanceId, CurrentLoadout.RodItemId,
+		CurrentLoadout.BaitItemId, CurrentLoadout.FloatItemId, CurrentLoadout.Revision);
 	TestTrue(TEXT("control: own deployed rod binds its use record"), Own.bUseAccepted);
 	TestTrue(TEXT("shared rod: another fisher binds use without reserving bait"), Borrowed.bUseAccepted);
-	TestEqual(TEXT("two casts leave all fisher bait available before true bite"), CatFishingTest::Inventory(FisherEquipment)->CountVisibleInventoryQuantityByDefinitionId(TEXT("AuditBait")), 4);
+	TestEqual(TEXT("two casts leave all fisher bait available before true bite"), CatFishingTest::Inventory(FisherEquipment)->CountVisibleInventoryQuantityByItemId(1599647), 4);
 	if (Borrowed.bUseAccepted)
 	{
 		TestTrue(TEXT("borrowed session locks the original owner rod"), OwnerEquipment->IsFishingRodInUse(OwnerRodId));
@@ -122,8 +121,8 @@ bool FCatBorrowedRodReservationAudit::RunTest(const FString& Parameters)
 		const double OwnerBeforeWear = OwnerEquipment->GetSnapshot().RodDurability;
 		const double FisherBeforeWear = FisherEquipment->GetSnapshot().RodDurability;
 		TestTrue(TEXT("borrowed session commits its fisher bait"), FisherEquipment->CommitFishingBaitDeferred(BorrowedSessionId).bApplied);
-		TestEqual(TEXT("borrowed true bite spends exactly one caster bait"), CatFishingTest::Inventory(FisherEquipment)->CountVisibleInventoryQuantityByDefinitionId(TEXT("AuditBait")), 3);
-		TestEqual(TEXT("borrowed true bite preserves all deployer bait"), CatFishingTest::Inventory(OwnerEquipment)->CountVisibleInventoryQuantityByDefinitionId(TEXT("AuditBait")), 4);
+		TestEqual(TEXT("borrowed true bite spends exactly one caster bait"), CatFishingTest::Inventory(FisherEquipment)->CountVisibleInventoryQuantityByItemId(1599647), 3);
+		TestEqual(TEXT("borrowed true bite preserves all deployer bait"), CatFishingTest::Inventory(OwnerEquipment)->CountVisibleInventoryQuantityByItemId(1599647), 4);
 		const auto Wear = FisherEquipment->ApplyFishingRodWear(BorrowedSessionId, 1, 7.0);
 		TestTrue(TEXT("borrowed rod applies exact wear"), Wear.bApplied);
 		TestEqual(TEXT("owner read model follows the worn original instance"), OwnerEquipment->GetSnapshot().RodDurability, OwnerBeforeWear - 7.0);
@@ -163,7 +162,7 @@ namespace CatFishingMultiplayerAudit
 				{
 					APlayerState* Owner = Server->GetFirstPlayerController()->PlayerState;
 					if (!Owner) return TimedOut();
-					const UCatEquipmentDefinition* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(TEXT("StarterRodT1"));
+					const UCatEquipmentDefinition* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(37);
 					if (!Test->TestNotNull(TEXT("formal starter rod definition"), Definition)) return true;
 					UClass* RodClass = bFormal ? Definition->UseActorClass.LoadSynchronous() : ACatFishingRodActor::StaticClass();
 					if (!Test->TestNotNull(TEXT("rod actor class is available"), RodClass)) return true;
@@ -176,7 +175,7 @@ namespace CatFishingMultiplayerAudit
 					// 原生和正式蓝图分别验证，区分玩法 getter 与视觉 RodTipMarker 的口径。
 					Rod->ConfigureCanonicalAnchorsFromAuthority(CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(Definition)->RodTipLocalTransform,
 						CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(Definition)->StandLocalTransform, CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(Definition)->GripLocalTransform);
-					Rod->InitializeAuthoritativeIdentity(RodId, FGuid::NewGuid(), Definition->EquipmentDefinitionId,
+					Rod->InitializeAuthoritativeIdentity(RodId, FGuid::NewGuid(), Definition->ItemId,
 						TEXT("AuditSkin"), Owner, nullptr, true, false);
 					Rod->FinishSpawning(SpawnTransform);
 					Rod->bAlwaysRelevant = true;

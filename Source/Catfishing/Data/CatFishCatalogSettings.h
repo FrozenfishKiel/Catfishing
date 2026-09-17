@@ -56,7 +56,12 @@ struct FCatFishBasePoolEntry
 
 	/** 名册成员的鱼种稳定 ID；必须能在 Definitions 里解析出唯一就绪鱼定义，否则拒绝名册。 */
 	UPROPERTY(EditAnywhere, Config)
+	int32  ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName FishDefinitionId = NAME_None;
+
 
 	/** 该成员在基础池里的相对概率（子表「基础池概率」列，已提为暂定正式）；<= 0 拒绝名册。 */
 	UPROPERTY(EditAnywhere, Config, meta = (ClampMin = "0.0"))
@@ -71,16 +76,16 @@ class CATFISHING_API UCatFishCatalogSettings : public UDeveloperSettings
 
 public:
 	/** 按稳定 ID 查找完整且启用的鱼定义；重复 ID 或加载失败返回空。 */
-	UCatFishDefinition* FindRuntimeDefinition(FName FishDefinitionId) const;
+	UCatFishDefinition* FindRuntimeDefinition(int32  ItemId) const;
 
 	FCatFishSelectionResult SelectRuntimeDefinition(const FCatFishSelectionContext& Context) const;
 
 	/** 两字段独立解析：资产为 0 时先取逐鱼覆盖，再取档位默认；非法值原样交由会话拒绝，0 仍表示缺配。 */
 	FCatFishBiteTimingDefaults ResolveBiteTiming(const UCatFishDefinition& Definition) const;
 
-	/** 设计表逐鱼覆盖；键必须是资产内部 FishDefinitionId，资产正值优先，不写回资产。 */
+	/** 设计表逐鱼覆盖；键必须是资产内部 ItemId，资产正值优先，不写回资产。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Bite")
-	TMap<FName, FCatFishBiteTimingDefaults> BiteTimingOverridesByFishDefinitionId;
+	TMap<int32, FCatFishBiteTimingDefaults> BiteTimingOverridesByItemId;
 
 	/** 未配置逐鱼值时的旧档位折中回退；不代表正式鱼表，也不包含完美窗。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Bite")

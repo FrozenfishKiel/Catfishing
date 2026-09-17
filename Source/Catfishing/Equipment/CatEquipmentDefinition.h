@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "Inventory/CatInventoryItemDefinition.h"
@@ -19,9 +19,6 @@ class CATFISHING_API UCatEquipmentDefinition : public UCatInventoryItemDefinitio
 	GENERATED_BODY()
 
 public:
-	/** 库存目录读取装备资产时使用 EquipmentDefinitionId；商店和背包只消费库存定义的稳定身份。 */
-	virtual FName GetInventoryDefinitionId() const override;
-
 	/** 库存表现读取装备资产自己的显示名；背包和商店把缺省回退留在各自展示模型里。 */
 	virtual FText GetInventoryDisplayName() const override;
 
@@ -73,9 +70,10 @@ public:
 	/** 判断这份定义能否填入指定钓具槽；Profile、存档和读模型用它校验现有四个选择槽。 */
 	bool CanServeFishingLoadoutSlot(FName SlotId) const;
 
-	/** 装备/道具稳定 ID；Profile 选择、运行装配和鱼偏好只引用该值。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Identity")
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName EquipmentDefinitionId = NAME_None;
+
 
 	/** 跨局 Profile 选择使用的稳定槽位 ID；非装配型消耗品保持 None。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Loadout")

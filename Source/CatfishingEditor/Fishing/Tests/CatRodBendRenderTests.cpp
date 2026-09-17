@@ -41,7 +41,7 @@ bool FCatRodBendRenderTest::RunTest(const FString& Parameters)
 	ACatFishingRodActor* Rod = World->SpawnActor<ACatFishingRodActor>(RodClass);
 	APlayerState* Owner = World->SpawnActor<APlayerState>();
 	Rod->ConfigureCanonicalAnchorsFromAuthority(FTransform(FVector(161.52, -1.30, 151.89)), FTransform::Identity, FTransform::Identity);
-	Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid(), TEXT("Rod_Basic"), NAME_None, Owner, nullptr, true, false);
+	Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid(), 31, NAME_None, Owner, nullptr, true, false);
 	FActorSpawnParameters Spawn;
 	Spawn.Owner = Rod;
 	ACatFishingHookActor* Hook = World->SpawnActor<ACatFishingHookActor>(HookClass, FTransform::Identity, Spawn);

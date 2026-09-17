@@ -17,25 +17,25 @@ bool FCatFishingCatalogTimingDefaultsTest::RunTest(const FString& Parameters)
 	if (!Wrapper.CreateTestWorld(EWorldType::Game)) return false;
 	auto* Session = Wrapper.GetTestWorld()->SpawnActor<ACatFishingSession>();
 	const auto* Catalog = GetDefault<UCatFishCatalogSettings>();
-	const TMap<FName, FVector2D> Expected = {
-		{TEXT("RiverPatternFish"), {1.5, 9.0}},
-		{TEXT("LittleSilverFish"), {2.0, 11.0}},
-		{TEXT("LittleColorFish"), {2.0, 11.0}},
-		{TEXT("ForestLongtailFish"), {3.0, 15.0}},
-		{TEXT("SilvermoonTrout"), {3.0, 15.0}},
-		{TEXT("LakeGiantShadow"), {2.5, 13.0}},
-		{TEXT("PetalFish"), {2.5, 13.0}},
-		{TEXT("WindbellFish"), {2.5, 13.0}},
-		{TEXT("SaltedFish"), {2.5, 13.0}},
-		{TEXT("StinkyFish"), {2.0, 11.0}},
-		{TEXT("Blackfish"), {3.0, 15.0}},
-		{TEXT("Loach"), {1.5, 9.0}},
-		{TEXT("EstuaryBass"), {2.5, 13.0}},
-		{TEXT("PufferFish"), {2.5, 13.0}},
-		{TEXT("ElectricEel"), {2.5, 13.0}},
-		{TEXT("Pike"), {3.0, 15.0}}
+	const TMap<int32, FVector2D> Expected = {
+		{30, {1.5, 9.0}},
+		{22, {2.0, 11.0}},
+		{21, {2.0, 11.0}},
+		{15, {3.0, 15.0}},
+		{35, {3.0, 15.0}},
+		{20, {2.5, 13.0}},
+		{27, {2.5, 13.0}},
+		{40, {2.5, 13.0}},
+		{32, {2.5, 13.0}},
+		{39, {2.0, 11.0}},
+		{3, {3.0, 15.0}},
+		{23, {1.5, 9.0}},
+		{8, {2.5, 13.0}},
+		{29, {2.5, 13.0}},
+		{7, {2.5, 13.0}},
+		{28, {3.0, 15.0}}
 	};
-	TestTrue(TEXT("迁移后没有重复逐鱼配置"), Catalog->BiteTimingOverridesByFishDefinitionId.IsEmpty());
+	TestTrue(TEXT("迁移后没有重复逐鱼配置"), Catalog->BiteTimingOverridesByItemId.IsEmpty());
 	TestEqual(TEXT("正式配置四键齐全"), Catalog->BiteTimingDefaultsByRarityTier.Num(), 4);
 	TestEqual(TEXT("正式鱼目录包含16条"), Catalog->Definitions.Num(), 16);
 	TSet<FName> SeenTiers;
@@ -43,7 +43,7 @@ bool FCatFishingCatalogTimingDefaultsTest::RunTest(const FString& Parameters)
 	{
 		auto* Fish = Ref.LoadSynchronous();
 		if (!TestNotNull(TEXT("正式鱼资产只读加载"), Fish)) return false;
-		const auto* Timing = Expected.Find(Fish->FishDefinitionId);
+		const auto* Timing = Expected.Find(Fish->ItemId);
 		if (!TestNotNull(TEXT("正式资产内部ID命中设计表"), Timing)) return false;
 		SeenTiers.Add(Fish->RarityTierId);
 		Session->FishDefinition = Fish;
@@ -57,7 +57,7 @@ bool FCatFishingCatalogTimingDefaultsTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("正式16条均不走任何旧兜底"), FString(ProbeSource) == TEXT("Asset") && FString(ResponseSource) == TEXT("Asset"));
 		TestTrue(TEXT("响应在8到15秒内，绝不落全局3秒"), Response >= 8.0 && Response <= 15.0);
 		AddInfo(FString::Printf(TEXT("Event=formal_fish_timing_verified Fish=%s RarityTierId=%s ProbeSeconds=%.3f ProbeSource=%s ResponseSeconds=%.3f ResponseSource=%s"),
-			*Fish->FishDefinitionId.ToString(), *Fish->RarityTierId.ToString(), Probe, ProbeSource, Response, ResponseSource));
+			*FString::FromInt(Fish->ItemId), *Fish->RarityTierId.ToString(), Probe, ProbeSource, Response, ResponseSource));
 	}
 	TestEqual(TEXT("正式加载覆盖四档且不含旧Event"), SeenTiers.Num(), 4);
 	return !HasAnyErrors();
@@ -75,12 +75,12 @@ bool FCatFishingCatalogTimingOverridesTest::RunTest(const FString& Parameters)
 	Session->FishDefinition = Fish;
 	auto* Catalog = GetMutableDefault<UCatFishCatalogSettings>();
 	TGuardValue<TMap<FName, FCatFishBiteTimingDefaults>> RestoreDefaults(Catalog->BiteTimingDefaultsByRarityTier, Catalog->BiteTimingDefaultsByRarityTier);
-    TGuardValue<TMap<FName, FCatFishBiteTimingDefaults>> RestoreOverrides(Catalog->BiteTimingOverridesByFishDefinitionId, Catalog->BiteTimingOverridesByFishDefinitionId);
+    TGuardValue<TMap<int32, FCatFishBiteTimingDefaults>> RestoreOverrides(Catalog->BiteTimingOverridesByItemId, Catalog->BiteTimingOverridesByItemId);
     // 显式构造兼容消费者，生产16鱼不再依赖逐鱼配置。
     FCatFishBiteTimingDefaults LegacyDefaults; LegacyDefaults.ProbeDurationSeconds=1.75; LegacyDefaults.TrueBiteWindowSeconds=10.0;
     FCatFishBiteTimingDefaults FishOverride; FishOverride.ProbeDurationSeconds=2.0; FishOverride.TrueBiteWindowSeconds=11.0;
     Catalog->BiteTimingDefaultsByRarityTier.Add(TEXT("Common"), LegacyDefaults);
-    Catalog->BiteTimingOverridesByFishDefinitionId.Add(TEXT("LittleSilverFish"), FishOverride);
+    Catalog->BiteTimingOverridesByItemId.Add(22, FishOverride);
 	Fish->RarityTierId = TEXT("Common");
 	double Probe = 0.0, Response = 0.0;
 	Fish->ProbeDurationSeconds = 6.25;
@@ -94,7 +94,7 @@ bool FCatFishingCatalogTimingOverridesTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("响应为逐鱼12秒"), Response, 12.0);
 	TestTrue(TEXT("试探独立回到配置"), Session->TryResolveProbeDurationSeconds(Probe));
 	TestEqual(TEXT("试探为Common默认"), Probe, 1.75);
-	Fish->FishDefinitionId = TEXT("LittleSilverFish");
+	Fish->ItemId = 22;
 	TestTrue(TEXT("逐鱼覆盖优先于旧Common档"), Session->TryResolveProbeDurationSeconds(Probe));
 	TestEqual(TEXT("小银鱼逐鱼试探2秒"), Probe, 2.0);
 	TestTrue(TEXT("资产响应优先于逐鱼覆盖"), Session->TryResolveTrueBiteWindowSeconds(Response));
@@ -106,14 +106,14 @@ bool FCatFishingCatalogTimingOverridesTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("响应独立落逐鱼覆盖"), Session->TryResolveTrueBiteWindowSeconds(Response));
 	TestEqual(TEXT("小银鱼逐鱼响应11秒"), Response, 11.0);
 	{
-		TGuardValue<FCatFishBiteTimingDefaults> Override(Catalog->BiteTimingOverridesByFishDefinitionId.FindChecked(TEXT("LittleSilverFish")), {});
+		TGuardValue<FCatFishBiteTimingDefaults> Override(Catalog->BiteTimingOverridesByItemId.FindChecked(22), {});
 		Fish->ProbeDurationSeconds = 0.0;
 		Session->TryResolveProbeDurationSeconds(Probe);
 		Session->TryResolveTrueBiteWindowSeconds(Response);
 		TestEqual(TEXT("逐鱼零值再落档位试探"), Probe, 1.75);
 		TestEqual(TEXT("逐鱼零值再落档位响应"), Response, 10.0);
 	}
-	Fish->FishDefinitionId = NAME_None;
+	Fish->ItemId = 0;
 	for (const double Invalid : {-1.0, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()})
 	{
 		Fish->ProbeDurationSeconds = Fish->TrueBiteWindowSeconds = Invalid;
@@ -168,21 +168,21 @@ bool FCatFishFormalBasePoolTest::RunTest(const FString& Parameters)
 	Context.ActivePlayerCount = 1;
 	Context.CombinedFishingStrength = Context.CombinedFightStamina = 1000000.0;
 	Context.StrengthPerKilogram = Balance->StrengthPerKilogram;
-	Context.BaitDefinitionId = TEXT("BugBait");
-	TSet<FName> SeenFish;
+	Context.BaitItemId = 4;
+	TSet<int32> SeenFish;
 	for (int32 Seed = 0; Seed < 64; ++Seed)
 	{
 		Context.RandomSeed = Seed;
 		const auto Result = Catalog->SelectRuntimeDefinition(Context);
 		if (!TestTrue(TEXT("零窝料走正式基础池且确实选中"), Result.bSelected && Result.bFromBasePool)) return false;
-		const auto* Entry = Catalog->BasePool.FindByPredicate([&](const auto& Candidate) { return Candidate.FishDefinitionId == Result.FishDefinitionId; });
+		const auto* Entry = Catalog->BasePool.FindByPredicate([&](const auto& Candidate) { return Candidate.ItemId == Result.ItemId; });
 		if (!TestNotNull(TEXT("只抽正式四条名册成员"), Entry)) return false;
 		TestEqual(TEXT("正式概率和为1，结果保留名册概率"), Result.SelectedNormalizedProbability, Entry->Probability, 1e-6);
 		TestTrue(TEXT("抽中鱼拥有实际正重量与力量"), Result.WeightKilograms > 0.0 && Result.BaseFishStrength > 0.0);
-		SeenFish.Add(Result.FishDefinitionId);
+		SeenFish.Add(Result.ItemId);
 	}
 	TestEqual(TEXT("固定64种子实际抽到全部四鱼"), SeenFish.Num(), 4);
-	for (const auto& Id : SeenFish) AddInfo(FString::Printf(TEXT("Event=formal_empty_chum_verified Fish=%s"), *Id.ToString()));
+	for (const auto& Id : SeenFish) AddInfo(FString::Printf(TEXT("Event=formal_empty_chum_verified Fish=%s"), *FString::FromInt(Id)));
 	return !HasAnyErrors();
 }
 
@@ -192,14 +192,14 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishBasePoolStrengthMigrationTest,
 bool FCatFishBasePoolStrengthMigrationTest::RunTest(const FString& Parameters)
 {
 	const auto* Formal = GetDefault<UCatFishCatalogSettings>();
-	auto* Source = Formal->FindRuntimeDefinition(TEXT("RiverPatternFish"));
+	auto* Source = Formal->FindRuntimeDefinition(30);
 	if (!TestNotNull(TEXT("正式鱼模板可只读加载"), Source)) return false;
 	auto* Fish = DuplicateObject<UCatFishDefinition>(Source, GetTransientPackage());
 	auto* Catalog = NewObject<UCatFishCatalogSettings>();
 	Catalog->Definitions = {Fish};
 	Catalog->BasePool.Reset();
 	auto& Entry = Catalog->BasePool.AddDefaulted_GetRef();
-	Entry.FishDefinitionId = Fish->FishDefinitionId;
+	Entry.ItemId = Fish->ItemId;
 	Entry.Probability = 1.0;
 	FCatFishSelectionContext Context;
 	Context.WaterRegion.RegionId = TEXT("River");

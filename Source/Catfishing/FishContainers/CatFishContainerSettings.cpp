@@ -34,7 +34,7 @@ int32 UCatFishContainerSettings::GetSharedFishTankCapacityForTier(const int32 Ti
 	for (int32 Index = 0; Index < TierIndex; ++Index)
 	{
 		const FCatSharedFishTankCapacityUpgrade& Upgrade = SharedFishTankCapacityUpgrades[Index];
-		if (Upgrade.UpgradeDefinitionId.IsNone() || Upgrade.Capacity <= PreviousCapacity)
+		if ((Upgrade.UpgradeItemId == 0) || Upgrade.Capacity <= PreviousCapacity)
 		{
 			return 0;
 		}
@@ -44,16 +44,16 @@ int32 UCatFishContainerSettings::GetSharedFishTankCapacityForTier(const int32 Ti
 }
 
 // 升级商品识别流程：按稳定 ID 在升级表里查序号；重复 ID 与空 ID 都当成没配，返回 INDEX_NONE 让交付按普通入库物处理。
-int32 UCatFishContainerSettings::FindSharedFishTankUpgradeTierByDefinitionId(const FName UpgradeDefinitionId) const
+int32 UCatFishContainerSettings::FindSharedFishTankUpgradeTierByItemId(const int32  UpgradeItemId) const
 {
-	if (UpgradeDefinitionId.IsNone())
+	if ((UpgradeItemId == 0))
 	{
 		return INDEX_NONE;
 	}
 	int32 FoundTier = INDEX_NONE;
 	for (int32 Index = 0; Index < SharedFishTankCapacityUpgrades.Num(); ++Index)
 	{
-		if (SharedFishTankCapacityUpgrades[Index].UpgradeDefinitionId != UpgradeDefinitionId)
+		if (SharedFishTankCapacityUpgrades[Index].UpgradeItemId != UpgradeItemId)
 		{
 			continue;
 		}

@@ -5,6 +5,8 @@
 #include "Components/BoxComponent.h"
 #include "Components/SphereComponent.h"
 #include "Engine/GameInstance.h"
+#include "Engine/LocalPlayer.h"
+#include "Engine/Engine.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Fishing/Tests/CatFishingEquipmentTestFixtures.h"
 #include "Framework/Game/CatfishingPlayerController.h"
@@ -47,17 +49,17 @@ bool FCatLegacyBackpackFishRestoreTest::RunTest(const FString& Parameters)
 	FCatSavedPlayerRunState& Saved = Save->PendingRestoreSaveGame->PlayerSnapshot;
 	Saved.CharacterTransform = FTransform(FRotator(0, 30, 0), FVector(400, 100, 20));
 	Saved.InventorySlots.SetNum(2);
-	Saved.InventorySlots[0].DefinitionId = TEXT("BugBait");
+	Saved.InventorySlots[0].ItemId = 4;
 	Saved.InventorySlots[0].ItemInstanceId = FGuid::NewGuid();
 	Saved.InventorySlots[0].Quantity = 2;
 	const FGuid BaitId = Saved.InventorySlots[0].ItemInstanceId;
-	Saved.EquipmentSnapshot.BaitDefinitionId = TEXT("BugBait");
+	Saved.EquipmentSnapshot.BaitItemId = 4;
 	Saved.EquipmentSnapshot.BaitItemInstanceId = BaitId;
 	FText Failure;
-	const int32 FishSlotIndex = Saved.InventorySlots.IndexOfByPredicate([](const auto& Slot) { return Slot.DefinitionId.IsNone(); });
+	const int32 FishSlotIndex = Saved.InventorySlots.IndexOfByPredicate([](const auto& Slot) { return (Slot.ItemId == 0); });
 	if (!TestTrue(TEXT("old backpack has a spare slot"), FishSlotIndex != INDEX_NONE)) return false;
 	auto& FishSlot = Saved.InventorySlots[FishSlotIndex];
-	FishSlot.DefinitionId = TEXT("LittleSilverFish");
+	FishSlot.ItemId = 22;
 	FishSlot.ItemInstanceId = FGuid::NewGuid();
 	FishSlot.Quantity = 1;
 	FishSlot.FishSessionId = FGuid::NewGuid();
@@ -72,13 +74,15 @@ bool FCatLegacyBackpackFishRestoreTest::RunTest(const FString& Parameters)
 	if (!Version) return false;
 	Version->SetPropertyValue_InContainer(Save->PendingRestoreSaveGame, 6);
 	const FString SlotName = TEXT("CatBlockerLegacy_") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
-	struct FCleanup { FString Slot; ~FCleanup() { UGameplayStatics::DeleteGameInSlot(Slot, 0); } } Cleanup{SlotName};
+	struct FCleanup { FString Slot; ~FCleanup() { UGameplayStatics::DeleteGameInSlot(Slot, 0); UGameplayStatics::DeleteGameInSlot(Slot + TEXT("_BeforeNumericIds"), 0); } } Cleanup{SlotName};
 	if (!UGameplayStatics::SaveGameToSlot(Save->PendingRestoreSaveGame, SlotName, 0)) return false;
 	Save->PendingRestoreSaveGame = Cast<UCatRunSaveGame>(UGameplayStatics::LoadGameFromSlot(SlotName, 0));
 	if (!Save->PendingRestoreSaveGame) return false;
-	Save->PendingRestoreSaveGame->HandlePostLoad();
-	TestEqual(TEXT("v6 schema migrates to v7"), Save->PendingRestoreSaveGame->FormatVersion, 7);
-	TestEqual(TEXT("engine version migrates as well"), Save->PendingRestoreSaveGame->GetSavedDataVersion(), 7);
+	auto* Local = NewObject<ULocalPlayer>(GEngine);
+	Local->SetControllerId(0);
+	Save->PendingRestoreSaveGame->InitializeSaveGame(Local, SlotName, true);
+	TestEqual(TEXT("v6 schema migrates to v8"), Save->PendingRestoreSaveGame->FormatVersion, 8);
+	TestEqual(TEXT("engine version migrates as well"), Save->PendingRestoreSaveGame->GetSavedDataVersion(), 8);
 	const auto* OriginalDisk = Cast<UCatRunSaveGame>(UGameplayStatics::LoadGameFromSlot(SlotName, 0));
 	TestTrue(TEXT("migration never rewrites source disk"), OriginalDisk && OriginalDisk->FormatVersion == 6 && OriginalDisk->GetSavedDataVersion() == 6);
 	World->SpawnActor<ACatCampInventoryActor>();
@@ -108,10 +112,10 @@ bool FCatLegacyBackpackFishRestoreTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("legacy fish quantity preserved in original slot"), After[FishSlotIndex].StackCount, 1);
 	TestEqual(TEXT("legacy fish identity preserved"), Cat->GetInventoryComponent()->FindInventorySlotIndexFromInstanceId(FishId), FishSlotIndex);
 	auto* Fish = NewObject<UCatFishInventoryItemInstance>(Cat);
-	Fish->SetItemDefinition(GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(TEXT("LittleSilverFish")));
+	Fish->SetItemDefinition(GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(22));
 	if (!Fish->InitializeFishFromAuthority(FGuid::NewGuid(), FGuid::NewGuid(), TEXT("LegacyFixture"), 1.0)) return false;
 	TestTrue(TEXT("local backpack intake continues accepting fish"), Cat->GetInventoryComponent()->AddItemInstance(Fish, 1));
-	AddInfo(FString::Printf(TEXT("Event=blocker_legacy_backpack_verified FishDefinitionId=LittleSilverFish ItemInstanceId=%s SlotIndex=%d Result=PlayerRestoredFishPreserved"), *FishId.ToString(), FishSlotIndex));
+	AddInfo(FString::Printf(TEXT("Event=blocker_legacy_backpack_verified ItemId=LittleSilverFish ItemInstanceId=%s SlotIndex=%d Result=PlayerRestoredFishPreserved"), *FishId.ToString(), FishSlotIndex));
 	const FTransform Later(FVector(700, 100, 20));
 	if (!Physical->TeleportBodyFromAuthority(Later, TEXT("AfterRestoreMovement"))) return false;
 	const uint32 RestoredEpoch = Physical->GetResetEpoch();

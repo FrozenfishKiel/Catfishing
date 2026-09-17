@@ -13,7 +13,7 @@ bool FCatShopFishSalePriceRow::IsRuntimeReady() const
 // 商店解锁条件当前没有可信事实源，非空时直接挡在运行目录外，避免字段看似可配但购买路径实际绕过它。
 bool FCatShopCatalogEntry::IsRuntimeReady() const
 {
-	if (!bEnabled || EntryId.IsNone() || DefinitionId.IsNone()
+	if (!bEnabled || EntryId.IsNone() || (ItemId == 0)
 		|| PurchaseQuantity <= 0 || UnitPrice < 0 || !RequiredShopUnlockId.IsNone()
 		|| !(bUnlimitedStock || InitialStock > 0))
 	{
@@ -30,7 +30,7 @@ bool FCatShopCatalogTableRow::TryBuildCatalogEntry(const FName RowName, FCatShop
 {
 	OutEntry = FCatShopCatalogEntry();
 	OutEntry.EntryId = EntryId.IsNone() ? RowName : EntryId;
-	OutEntry.DefinitionId = DefinitionId;
+	OutEntry.ItemId = ItemId;
 	OutEntry.DisplayCategoryId = DisplayCategoryId;
 	OutEntry.DisplayCategoryNameOverride = DisplayCategoryNameOverride;
 	OutEntry.PurchaseQuantity = PurchaseQuantity;
@@ -51,7 +51,7 @@ bool FCatShopCatalogTableRow::TryBuildCatalogEntry(const FName RowName, FCatShop
 	{
 		return OutEntry.IsRuntimeReady();
 	}
-	if (!OutEntry.bEnabled || OutEntry.EntryId.IsNone() || OutEntry.DefinitionId.IsNone()
+	if (!OutEntry.bEnabled || OutEntry.EntryId.IsNone() || (OutEntry.ItemId == 0)
 		|| OutEntry.PurchaseQuantity <= 0 || OutEntry.UnitPrice < 0 || !OutEntry.RequiredShopUnlockId.IsNone())
 	{
 		return false;

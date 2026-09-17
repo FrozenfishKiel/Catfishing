@@ -30,7 +30,12 @@ struct FCatFishTankOccupant
 
 	/** 鱼种稳定 ID；配合 UCatFishDataStatics::FindFishPresentationDefinition 取网格与动画。 */
 	UPROPERTY(BlueprintReadOnly, Category = "Catfishing|FishContainers")
+	int32  ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName FishDefinitionId = NAME_None;
+
 
 	/** 该个体的真实重量（千克）；缸内游动表现按它取统一可视缩放，同鱼种不同个体大小不同。 */
 	UPROPERTY(BlueprintReadOnly, Category = "Catfishing|FishContainers")
@@ -120,7 +125,7 @@ public:
 	/**
 	 * 声明：把鱼缸推进到指定容量档，并按新档位扩容正式鱼库存；成功后返回 true。
 	 * 实现：复用 CanApplyCapacityUpgradeFromAuthority 的同一套前置，再写档位与槽位数，最后刷新只读摘要。
-	 * 边界：只缩不扩的方向不做——容量只升不降；档位不连续或配置缺失时整笔拒绝，不部分生效。
+	 * 边界：不允许缩小容量；档位不连续或配置缺失时整笔拒绝，不部分生效。
 	 *      幂等键是车内升级子项身份；两档使用不同子项号，同一子项重放不再升档。
 	 */
 	bool ApplyCapacityUpgradeFromAuthority(int32 TargetTier, const FGuid& RequestId, bool bPublish = true);

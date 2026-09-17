@@ -88,7 +88,7 @@ public:
 	bool TryClassifyOfferingWeight(double WeightKilograms, ECatOfferingWeightClass& OutWeightClass, int32& OutOfferingPoints) const;
 
 	/** 臭鱼供品 ID 是配置层对鱼定义的污染标记；夜晚结算只用它计算增益折扣，不改变鱼本身或捕获记录。 */
-	bool IsStinkyOfferingFish(FName FishDefinitionId) const;
+	bool IsStinkyOfferingFish(int32  ItemId) const;
 
 	/**
 	 * 把日程里的基础目标按当前策略换算成这一天的绝对目标。
@@ -140,7 +140,7 @@ public:
 
 	/** 会污染供品增益的鱼定义 ID；每条命中鱼让达标世界进度增益减少 25%，最多减到 0 且不会倒扣。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning|Offering")
-	TArray<FName> StinkyOfferingFishDefinitionIds;
+	TArray<int32> StinkyOfferingItemIds;
 
 	/** 人数缩放策略；默认 Undecided，必须显式选择某一档才能使用配置日程，两档对同一份日程的读法不同。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning")

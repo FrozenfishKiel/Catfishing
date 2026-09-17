@@ -38,13 +38,13 @@ namespace CatFishingBaitRestockTests
 			if (!Test.TestTrue(TEXT("创建角色、玩家状态和公共仓库"), Character && PlayerState && Camp)) return false;
 			Character->SetPlayerState(PlayerState);
 			Equipment = Character->GetEquipmentComponent();
-			for (const FName Id : {FName(TEXT("StarterRodT1")), FName(TEXT("FeatherFloat"))})
+			for (const int32 Id : {37, 9})
 			{
 				if (!Test.TestTrue(TEXT("授予正式钓具"), Equipment->GrantEquipmentFromAuthority(
 					FGuid::NewGuid(), Equipment->GetSnapshot().Revision, Id).bCommitted)) return false;
 			}
 			if (!Test.TestTrue(TEXT("授予正式红虫饵"), Equipment->GrantInventoryQuantityFromAuthority(
-				FGuid::NewGuid(), Equipment->GetSnapshot().Revision, TEXT("BugBait"), BaitQuantity).bCommitted)) return false;
+				FGuid::NewGuid(), Equipment->GetSnapshot().Revision, 4, BaitQuantity).bCommitted)) return false;
 			return Test.TestTrue(TEXT("部署鱼竿实例"), Equipment->Use(FGuid::NewGuid(),
 				Equipment->GetSnapshot().Revision, Equipment->GetSnapshot().RodItemInstanceId).bCommitted);
 		}
@@ -54,15 +54,15 @@ namespace CatFishingBaitRestockTests
 		{
 			const FCatEquipmentLoadoutSnapshot Loadout = Equipment->GetSnapshot();
 			return Equipment->BeginFishingUse(SessionId, Loadout.RodItemInstanceId, Loadout.BaitItemInstanceId,
-				Loadout.FloatItemInstanceId, Loadout.RodDefinitionId, Loadout.BaitDefinitionId,
-				Loadout.FloatDefinitionId, Loadout.Revision);
+				Loadout.FloatItemInstanceId, Loadout.RodItemId, Loadout.BaitItemId,
+				Loadout.FloatItemId, Loadout.Revision);
 		}
 
 		// 统计玩家正式背包中可见的红虫总数；测试用它确认公共仓库转移后库存事实没有丢数量或重复堆栈。
 		int32 Quantity() const
 		{
 			const UCatInventoryComponent* PlayerInventory = Character ? Character->GetInventoryComponent() : nullptr;
-			return PlayerInventory ? PlayerInventory->CountVisibleInventoryQuantityByDefinitionId(TEXT("BugBait")) : 0;
+			return PlayerInventory ? PlayerInventory->CountVisibleInventoryQuantityByItemId(4) : 0;
 		}
 
 		// 从公共仓库补回鱼饵：
@@ -76,8 +76,8 @@ namespace CatFishingBaitRestockTests
 			if (!Test.TestTrue(TEXT("公共仓库和玩家正式库存存在"), CampInventory && PlayerInventory)) return false;
 			if (!Test.TestTrue(TEXT("同种鱼饵交付公共仓库"),
 				CampInventory->GrantInventoryDefinitionFromAuthority(
-					FGuid::NewGuid(), TEXT("BugBait"), 3).bCommitted)) return false;
-			const int32 SourceIndex = CampInventory->FindFirstInventorySlotIndexByDefinitionId(TEXT("BugBait"));
+					FGuid::NewGuid(), 4, 3).bCommitted)) return false;
+			const int32 SourceIndex = CampInventory->FindFirstInventorySlotIndexByItemId(4);
 			const FCatInventoryEntry* SourceEntry = CampInventory->GetInventoryEntryAtSlot(SourceIndex);
 			const TArray<FCatInventoryEntry> PlayerEntries = PlayerInventory->GetInventoryEntries();
 			const int32 TargetIndex = PlayerEntries.IndexOfByPredicate(
@@ -175,9 +175,9 @@ bool FCatFishingTrueBiteBaitTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("cast binds the rod without reserving bait"), Fixture.Begin(SessionId).bUseAccepted)) return false;
 	TestEqual(TEXT("both portions remain in inventory before bite"), Fixture.Quantity(), 2);
 	if (!Fixture.Equipment->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(), Fixture.Equipment->GetSnapshot().Revision,
-		TEXT("NectarBait"), 2).bCommitted) return false;
+		26, 2).bCommitted) return false;
 	auto* Inventory = Fixture.Character->GetInventoryComponent();
-	const auto* NewBait = Inventory->GetInventoryEntryAtSlot(Inventory->FindFirstInventorySlotIndexByDefinitionId(TEXT("NectarBait")));
+	const auto* NewBait = Inventory->GetInventoryEntryAtSlot(Inventory->FindFirstInventorySlotIndexByItemId(26));
 	if (!NewBait || !NewBait->Instance) return false;
 	const FGuid NewBaitId = NewBait->Instance->GetItemInstanceId();
 	FCatInventoryItemUseContext Selection;
@@ -197,11 +197,11 @@ bool FCatFishingTrueBiteBaitTest::RunTest(const FString& Parameters)
 	Inventory->OnInventoryObservedChanged.Remove(Observe);
 	TestTrue(TEXT("inventory observer sees closed transaction before notification"), bObservedCommitted);
 	TestEqual(TEXT("old bait remains untouched"), Fixture.Quantity(), 2);
-	TestEqual(TEXT("exactly one current bait consumed"), Inventory->CountVisibleInventoryQuantityByDefinitionId(TEXT("NectarBait")), 1);
+	TestEqual(TEXT("exactly one current bait consumed"), Inventory->CountVisibleInventoryQuantityByItemId(26), 1);
 	TestEqual(TEXT("old stack identity is preserved"), Inventory->GetInventoryEntryAtSlot(Inventory->FindInventorySlotIndexFromInstanceId(CastBaitInstance))->Instance->GetItemInstanceId(), CastBaitInstance);
 	TestTrue(TEXT("terminal closes without refund"), Fixture.Equipment->ReleaseFishingUse(SessionId).bApplied);
 	TestFalse(TEXT("terminal replay changes nothing"), Fixture.Equipment->ReleaseFishingUse(SessionId).bApplied);
-	TestEqual(TEXT("terminal cannot refund the consumed bait"), Inventory->CountVisibleInventoryQuantityByDefinitionId(TEXT("NectarBait")), 1);
+	TestEqual(TEXT("terminal cannot refund the consumed bait"), Inventory->CountVisibleInventoryQuantityByItemId(26), 1);
 
 	const FGuid MissingSession = FGuid::NewGuid();
 	if (!Fixture.Begin(MissingSession).bUseAccepted) return false;
@@ -218,7 +218,7 @@ bool FCatFishingTrueBiteBaitTest::RunTest(const FString& Parameters)
 	AddExpectedErrorPlain(TEXT("Event=fishing_bait_commit_rejected"), EAutomationExpectedErrorFlags::Contains, 2);
 	TestFalse(TEXT("missing current bait refuses consumption"), Fixture.Equipment->CommitFishingBaitDeferred(MissingSession).bApplied);
 	TestEqual(TEXT("no bait remains in the personal inventory"), Fixture.Quantity(), 0);
-	TestEqual(TEXT("missing current selection cannot debit the old cast bait moved to camp"), CampInventory->CountVisibleInventoryQuantityByDefinitionId(TEXT("BugBait")), 2);
+	TestEqual(TEXT("missing current selection cannot debit the old cast bait moved to camp"), CampInventory->CountVisibleInventoryQuantityByItemId(4), 2);
 	Fixture.Equipment->ReleaseFishingUse(MissingSession);
 	TestEqual(TEXT("a session released before bite cannot commit later"), Fixture.Equipment->CommitFishingBaitDeferred(MissingSession).Error, ECatDomainCommandError::InvalidPhase);
 
@@ -230,10 +230,10 @@ bool FCatFishingTrueBiteBaitTest::RunTest(const FString& Parameters)
 	int32 EmptyCount = 0;
 	for (const auto& Entry : FullInventory->GetInventoryEntries()) if (!Entry.Instance || Entry.StackCount == 0) ++EmptyCount;
 	for (int32 Index = 0; Index < EmptyCount; ++Index)
-		if (!Full.Equipment->GrantEquipmentFromAuthority(FGuid::NewGuid(), Full.Equipment->GetSnapshot().Revision, TEXT("FeatherFloat")).bCommitted) return false;
+		if (!Full.Equipment->GrantEquipmentFromAuthority(FGuid::NewGuid(), Full.Equipment->GetSnapshot().Revision, 9).bCommitted) return false;
 	TestTrue(TEXT("full inventory cannot block terminal release"), Full.Equipment->ReleaseFishingUse(FullSession).bApplied);
 	TestFalse(TEXT("no pending refund keeps rod locked"), Full.Equipment->IsFishingRodInUse(Full.Equipment->GetSnapshot().RodItemInstanceId));
-	FullInventory->RemoveItemInstanceFromIndex(FullInventory->FindFirstInventorySlotIndexByDefinitionId(TEXT("FeatherFloat")));
+	FullInventory->RemoveItemInstanceFromIndex(FullInventory->FindFirstInventorySlotIndexByItemId(9));
 	FullInventory->BroadcastInventoryChange();
 	TestEqual(TEXT("later free slots do not mint bait"), Full.Quantity(), 0);
 	return !HasAnyErrors();

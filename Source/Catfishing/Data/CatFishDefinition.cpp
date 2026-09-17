@@ -21,21 +21,21 @@ bool UCatFishDefinition::IsRuntimeDefinitionReady() const
 		&& FMath::IsFinite(ChumPreference.Fragrant) && FMath::IsFinite(ChumPreference.Fermented)
 		&& ChumPreference.Fishy >= 0.0 && ChumPreference.Fragrant >= 0.0
 		&& ChumPreference.Fermented >= 0.0;
-	TSet<FName> SeenBaitIds;
+	TSet<int32> SeenBaitIds;
 	bool bBaitMultipliersValid = true;
 	for (const FCatBaitWeightMultiplier& Entry : BaitWeightMultipliers)
 	{
-		if (Entry.BaitDefinitionId.IsNone() || !FMath::IsFinite(Entry.Multiplier) || Entry.Multiplier <= 0.0
-			|| SeenBaitIds.Contains(Entry.BaitDefinitionId))
+		if ((Entry.BaitItemId == 0) || !FMath::IsFinite(Entry.Multiplier) || Entry.Multiplier <= 0.0
+			|| SeenBaitIds.Contains(Entry.BaitItemId))
 		{
 			bBaitMultipliersValid = false;
 			break;
 		}
-		SeenBaitIds.Add(Entry.BaitDefinitionId);
+		SeenBaitIds.Add(Entry.BaitItemId);
 	}
 	// 成长系数只需有限非负；零收益鱼仍可正常出鱼，食用资格由成长入口另行裁决。
 	const bool bFoodReady = FMath::IsFinite(EatingExperiencePerKilogram) && EatingExperiencePerKilogram >= 0.0;
-	return bEnableRuntimeDefinition && !FishDefinitionId.IsNone() && !RarityTierId.IsNone()
+	return bEnableRuntimeDefinition && !(ItemId == 0) && !RarityTierId.IsNone()
 		&& LoadRuntimePresentationDefinition() != nullptr
 		&& BodyClass != ECatFishBodyClass::Unknown
 		&& RegionIds.Num() > 0
@@ -100,22 +100,17 @@ UCatFishPresentationDefinition* UCatFishDefinition::LoadRuntimePresentationDefin
 	return Presentation && Presentation->IsRuntimeDefinitionReady() ? Presentation : nullptr;
 }
 
-double UCatFishDefinition::FindBaitMultiplierOrNeutral(const FName BaitDefinitionId) const
+// 鱼饵权重读取流程：按数字编号逐项匹配配置，命中返回配置倍率；未命中返回 1.0，保持原权重且不写回资产。
+double UCatFishDefinition::FindBaitMultiplierOrNeutral(const int32  BaitItemId) const
 {
 	for (const FCatBaitWeightMultiplier& Entry : BaitWeightMultipliers)
 	{
-		if (Entry.BaitDefinitionId == BaitDefinitionId)
+		if (Entry.BaitItemId == BaitItemId)
 		{
 			return Entry.Multiplier;
 		}
 	}
 	return 1.0;
-}
-
-// 鱼库存 ID 读取流程：鱼种稳定 ID 就是库存稳定 ID，避免同一实物鱼在 Fishing 和 Inventory 之间出现双身份。
-FName UCatFishDefinition::GetInventoryDefinitionId() const
-{
-	return FishDefinitionId;
 }
 
 // 鱼展示名读取流程：直接复用鱼表展示名；空文本交给 UI 回退到稳定 ID。

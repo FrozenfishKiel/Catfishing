@@ -17,6 +17,7 @@
 #include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatInventoryItemInstance.h"
 #include "Inventory/CatInventorySettings.h"
+#include "Inventory/Tests/CatItemCatalogTestFixture.h"
 #include "UObject/StrongObjectPtr.h"
 
 #include <limits>
@@ -29,12 +30,12 @@ namespace CatRodDurabilityTests
 		/** 正式库存目录默认对象；本测试把临时装备定义注册到这里，验证路径与运行时一致。 */
 		UCatInventorySettings* InventorySettings = GetMutableDefault<UCatInventorySettings>();
 		/** 进入测试前的正式库存目录；析构时写回，防止本测试定义泄漏到后续用例。 */
-		TArray<FCatInventoryCatalogDefinition> SavedInventoryDefinitions = InventorySettings->Definitions;
+		FCatItemCatalogTestFixture Catalog{false};
 		/** 进入测试前的玩家背包容量；测试需要固定容量，结束后恢复项目默认对象。 */
 		int32 SavedCapacity = InventorySettings->PlayerInventorySlotCapacity;
 		/** 进入测试前的数量堆叠容量；测试需要固定堆叠上限，结束后恢复项目默认对象。 */
 		int32 SavedStackCapacity = InventorySettings->DefaultQuantityStackCapacity;
-		/** 本测试创建的装备定义保活集合；目录身份仍由 InventorySettings::Definitions 持有。 */
+		/** 本测试创建的装备定义保活集合；目录身份仍由 临时数字总表 持有。 */
 		TArray<TStrongObjectPtr<UCatEquipmentDefinition>> CreatedDefinitions;
 		/** 本测试持有的 authority World；析构由 FTestWorldWrapper 负责关闭。 */
 		FTestWorldWrapper WorldWrapper;
@@ -48,34 +49,30 @@ namespace CatRodDurabilityTests
 		// 夹具恢复流程：测试结束时恢复正式库存目录和容量配置；测试创建的运行对象交给 WorldWrapper 清理。
 		~FFixture()
 		{
-			InventorySettings->Definitions = SavedInventoryDefinitions;
 			InventorySettings->PlayerInventorySlotCapacity = SavedCapacity;
 			InventorySettings->DefaultQuantityStackCapacity = SavedStackCapacity;
 		}
 
 		// 测试定义注册流程：创建一条内存装备定义，写入正式库存目录映射，并返回对象给调用方补齐对应能力字段。
-		UCatEquipmentDefinition* AddDefinition(const FName Id, const FName LoadoutSlotId = NAME_None)
+		UCatEquipmentDefinition* AddDefinition(const int32 Id, const FName LoadoutSlotId = NAME_None)
 		{
 			UCatEquipmentDefinition* Definition = NewObject<UCatEquipmentDefinition>();
 			CreatedDefinitions.Emplace(Definition);
-			Definition->EquipmentDefinitionId = Id;
-			Definition->FunctionalRouteId = Id;
+			Definition->ItemId = Id;
+			Definition->FunctionalRouteId = FName(*FString::FromInt(Id));
 			Definition->LoadoutSlotId = LoadoutSlotId;
 			Definition->bEnableRuntimeDefinition = true;
-			FCatInventoryCatalogDefinition& CatalogEntry = InventorySettings->Definitions.AddDefaulted_GetRef();
-			CatalogEntry.DefinitionId = Id;
-			CatalogEntry.ItemDefinition = TSoftObjectPtr<UCatInventoryItemDefinition>(Definition);
+			Catalog.Add(Definition);
 			return Definition;
 		}
 
 		// 夹具初始化流程：先替换正式库存目录和容量配置，再创建 authority World、角色、PlayerState 和真实组件，最后通过公开授予入口拿到可部署鱼竿。
 		bool Initialize(FAutomationTestBase& Test)
 		{
-			InventorySettings->Definitions.Reset();
 			InventorySettings->PlayerInventorySlotCapacity = 12;
 			InventorySettings->DefaultQuantityStackCapacity = 20;
 			UCatEquipmentDefinition* Rod =
-				AddDefinition(TEXT("DurabilityTestRod"), UCatEquipmentDefinition::FishingRodLoadoutSlotId());
+				AddDefinition(1767918, UCatEquipmentDefinition::FishingRodLoadoutSlotId());
 			UCatEquipmentFragment_Rod* RodFragment = NewObject<UCatEquipmentFragment_Rod>(Rod);
 			Rod->Fragments.Add(RodFragment);
 			RodFragment->FishingStrength = 25.0; // 竿强度按鱼竿表 1 级树枝竿；耐久与强度是两个量，本夹具只动耐久。
@@ -84,14 +81,14 @@ namespace CatRodDurabilityTests
 			RodFragment->HighTensionWearMultiplier = 1.0;
 			Rod->UseActorClass = ACatFishingRodActor::StaticClass();
 			UCatEquipmentDefinition* Bait =
-				AddDefinition(TEXT("DurabilityTestBait"), UCatEquipmentDefinition::FishingBaitLoadoutSlotId());
+				AddDefinition(1622907, UCatEquipmentDefinition::FishingBaitLoadoutSlotId());
 			UCatEquipmentFragment_Bait* BaitFragment = NewObject<UCatEquipmentFragment_Bait>(Bait);
 			Bait->Fragments.Add(BaitFragment);
 			Bait->bRunConsumable = true;
 			BaitFragment->BiteRateMultiplier = 1.0;
 			BaitFragment->MinimumBiteDelayMultiplier = 1.0;
 			UCatEquipmentDefinition* Float =
-				AddDefinition(TEXT("DurabilityTestFloat"), UCatEquipmentDefinition::FishingFloatLoadoutSlotId());
+				AddDefinition(1593892, UCatEquipmentDefinition::FishingFloatLoadoutSlotId());
 			UCatEquipmentFragment_Float* FloatFragment = NewObject<UCatEquipmentFragment_Float>(Float);
 			Float->Fragments.Add(FloatFragment);
 			FloatFragment->MaximumCastDistanceCentimeters = 1000.0;
@@ -108,13 +105,13 @@ namespace CatRodDurabilityTests
 			Character->SetPlayerState(PlayerState);
 			Equipment = Character->GetEquipmentComponent();
 			if (!Test.TestNotNull(TEXT("character owns real equipment component"), Equipment)) return false;
-			for (const FName Id : {FName(TEXT("DurabilityTestRod")), FName(TEXT("DurabilityTestFloat"))})
+			for (const int32 Id : {1767918, 1593892})
 			{
 				if (!Test.TestTrue(TEXT("grants real equipment instance"), Equipment->GrantEquipmentFromAuthority(
 					FGuid::NewGuid(), Equipment->GetSnapshot().Revision, Id).bCommitted)) return false;
 			}
 			if (!Test.TestTrue(TEXT("grants bait for several sessions"), Equipment->GrantInventoryQuantityFromAuthority(
-				FGuid::NewGuid(), Equipment->GetSnapshot().Revision, TEXT("DurabilityTestBait"), 8).bCommitted)) return false;
+				FGuid::NewGuid(), Equipment->GetSnapshot().Revision, 1622907, 8).bCommitted)) return false;
 			RodId = Equipment->GetSnapshot().RodItemInstanceId;
 			return Test.TestTrue(TEXT("grants full durable rod with stable instance identity"),
 				RodId.IsValid() && Equipment->GetSnapshot().RodDurability == 100.0);
@@ -131,7 +128,7 @@ namespace CatRodDurabilityTests
 			const FCatEquipmentLoadoutSnapshot Loadout = Equipment->GetSnapshot();
 			if (!Test.TestTrue(TEXT("freezes fishing use of the deployed rod"), Equipment->BeginFishingUse(SessionId,
 				Loadout.RodItemInstanceId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId,
-				Loadout.RodDefinitionId, Loadout.BaitDefinitionId, Loadout.FloatDefinitionId,
+				Loadout.RodItemId, Loadout.BaitItemId, Loadout.FloatItemId,
 				Loadout.Revision).bUseAccepted)) return false;
 			return !bCommitBait || Test.TestTrue(TEXT("commits this session bait"),
 				Equipment->CommitFishingBaitDeferred(SessionId).bApplied);
@@ -269,7 +266,7 @@ bool FCatPurchasedRodIndependenceTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("previous session releases"), Equipment->ReleaseFishingUse(OldSession).bApplied);
 	if (!TestTrue(TEXT("recalled rod returns to inventory"), Equipment->UnUse(FGuid::NewGuid(), Fixture.RodId).bCommitted)) return false;
 	if (!TestTrue(TEXT("shop grant creates another rod instance"), Equipment->GrantEquipmentFromAuthority(
-		FGuid::NewGuid(), Equipment->GetSnapshot().Revision, TEXT("DurabilityTestRod")).bCommitted)) return false;
+		FGuid::NewGuid(), Equipment->GetSnapshot().Revision, 1767918).bCommitted)) return false;
 	FGuid NewRodId;
 	int32 RodCount = 0;
 	const UCatInventoryComponent* Inventory = Fixture.Character ? Fixture.Character->GetInventoryComponent() : nullptr;
@@ -282,7 +279,7 @@ bool FCatPurchasedRodIndependenceTest::RunTest(const FString& Parameters)
 		{
 			continue;
 		}
-		if (RodInstance->GetItemDefinitionId() != FName(TEXT("DurabilityTestRod"))) continue;
+		if (RodInstance->GetItemId() != 1767918) continue;
 		++RodCount;
 		if (RodInstance->GetItemInstanceId() != Fixture.RodId)
 		{
@@ -294,8 +291,8 @@ bool FCatPurchasedRodIndependenceTest::RunTest(const FString& Parameters)
 		|| !TestTrue(TEXT("new purchase has a separate identity"), NewRodId.IsValid())) return false;
 	const FCatEquipmentLoadoutSnapshot Loadout = Equipment->GetSnapshot();
 	if (!TestTrue(TEXT("selects new rod by its exact instance"), Equipment->ConfigureLoadoutFromAuthority(
-		FGuid::NewGuid(), Loadout.Revision, Loadout.RodDefinitionId, Loadout.BaitDefinitionId,
-		Loadout.FloatDefinitionId, NAME_None, NAME_None, NewRodId, Loadout.BaitItemInstanceId,
+		FGuid::NewGuid(), Loadout.Revision, Loadout.RodItemId, Loadout.BaitItemId,
+		Loadout.FloatItemId, 0, NAME_None, NewRodId, Loadout.BaitItemInstanceId,
 		Loadout.FloatItemInstanceId, FGuid()).bCommitted)) return false;
 	double OldDurability = 0.0;
 	bool bOldBroken = true;
@@ -327,7 +324,7 @@ bool FCatRodSessionDurabilityTest::RunTest(const FString& Parameters)
 	ACatFishingRodActor* Rod = World->SpawnActor<ACatFishingRodActor>();
 	APlayerState* Owner = Fixture.Character->GetPlayerState();
 	if (!TestTrue(TEXT("initializes the deployed rod projection"), Rod && Rod->InitializeAuthoritativeIdentity(
-		FGuid::NewGuid(), Fixture.RodId, TEXT("DurabilityTestRod"), TEXT("TestSkin"), Owner, Owner, true, false))) return false;
+		FGuid::NewGuid(), Fixture.RodId, 1767918, TEXT("TestSkin"), Owner, Owner, true, false))) return false;
 	const auto MakeSession = [&](const FGuid Id)
 	{
 		ACatFishingSession* Session = World->SpawnActor<ACatFishingSession>();

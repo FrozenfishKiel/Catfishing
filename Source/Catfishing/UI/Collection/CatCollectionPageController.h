@@ -37,8 +37,11 @@ public:
 	/** 处理页面关闭意图；已经关闭时不重新打开。 */
 	void RequestCloseCollectionFromWidget();
 
-	/** 把页面上的「一键隐藏这张印记」转交给 Model 的 Profile 写口；页面自己不持有 Profile 引用。 */
-	bool RequestSetImprintHiddenFromWidget(FGuid ImprintId, bool bHidden);
+	/** 把页面追踪意图交给同源 Model；零表示取消。 */
+	bool RequestTrackFish(int32 ItemId);
+
+	/** 库存追踪只订阅已有 Model，不创建第二份图鉴或复制持久化状态。 */
+	UCatCollectionModel* GetCollectionModel() const;
 
 private:
 	/** 成对加入/移出视口并申请/释放模态输入；打开时先用当前 Model 投影重绘一次，避免显示上一次的过期记录。 */
@@ -61,7 +64,7 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatCollectionWidget> BoundView;
 
-	/** 本页面唯一的图鉴 Model；它只读 LocalPlayer Profile 的 durable 图鉴快照，不访问实物鱼容器。 */
+	/** 本页面唯一图鉴 Model；通过 LocalPlayer 的 Profile 协调器读取账号专用图鉴快照，也供库存追踪订阅，不访问旧本机图鉴或实物容器。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatCollectionModel> CollectionModel;
 

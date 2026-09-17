@@ -44,7 +44,7 @@ bool FCatDropWholeTrajectoryTest::RunTest(const FString& Parameters)
 	auto* Cat = World->SpawnActor<ACatCharacter>(FVector(0,0,100), FRotator::ZeroRotator);
 	auto* Item = World->SpawnActor<ACatItem>();
 	auto* Definition = NewObject<UCatInventoryItemDefinition>();
-	Definition->InventoryDefinitionId = TEXT("Batch7DDrop");
+	Definition->ItemId = 1767827;
 	Definition->InventoryMaxStackCount = 1;
 	Definition->WorldActorClass = ACatItem::StaticClass();
 	auto* Instance = NewObject<UCatInventoryItemInstance>(Item);

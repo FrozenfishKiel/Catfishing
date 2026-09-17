@@ -36,7 +36,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingFirstRodHeldTest,
 bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
-	for (const FName DefinitionId : {FName(TEXT("StarterRodT1")), FName(TEXT("ShopRodT2"))})
+	for (const int32  DefinitionItemId : {37, 34})
 	{
 		FTestWorldWrapper WorldWrapper;
 		if (!TestTrue(TEXT("creates authority world"), WorldWrapper.CreateTestWorld(EWorldType::Game))) return false;
@@ -80,7 +80,7 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 		Ground->SetActorLocation(FVector(0.0, 0.0, -10.0));
 		UCatEquipmentComponent* Equipment = Character->GetEquipmentComponent();
 		if (!TestTrue(TEXT("grants formal rod instance"), Equipment->GrantEquipmentFromAuthority(
-			FGuid::NewGuid(), Equipment->GetSnapshot().Revision, DefinitionId).bCommitted)) return false;
+			FGuid::NewGuid(), Equipment->GetSnapshot().Revision, DefinitionItemId).bCommitted)) return false;
 		const FGuid ItemId = Equipment->GetSnapshot().RodItemInstanceId;
 		UCatFishingService* Fishing = World->GetSubsystem<UCatFishingService>();
 		UCatFishingCommandComponent* Commands = Controller->GetFishingCommandComponent();
@@ -107,13 +107,13 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 		}
 
 		// 第二根必须先有独立库存实例；使用不同正式型号同时覆盖备用竿的定义与 Actor 选择。
-		const FName SecondDefinitionId = DefinitionId == FName(TEXT("StarterRodT1"))
-			? FName(TEXT("ShopRodT2")) : FName(TEXT("StarterRodT1"));
+		const int32  SecondDefinitionItemId = DefinitionItemId == 37
+			? 34 : 37;
 		if (!TestTrue(TEXT("grants a second physical formal rod"), Equipment->GrantEquipmentFromAuthority(
-			FGuid::NewGuid(), Equipment->GetSnapshot().Revision, SecondDefinitionId).bCommitted)) return false;
+			FGuid::NewGuid(), Equipment->GetSnapshot().Revision, SecondDefinitionItemId).bCommitted)) return false;
 		const TArray<FCatInventoryEntry> SecondInventorySlotEntries = CatFishingTest::Entries(Equipment);
 		const FCatInventoryEntry* SecondInventorySlot = SecondInventorySlotEntries.FindByPredicate(
-			[SecondDefinitionId](const FCatInventoryEntry& Slot) { return CatFishingTest::DefinitionId(Slot) == SecondDefinitionId && Slot.StackCount == 1; });
+			[SecondDefinitionItemId](const FCatInventoryEntry& Slot) { return CatFishingTest::ItemId(Slot) == SecondDefinitionItemId && Slot.StackCount == 1; });
 		if (!TestNotNull(TEXT("second formal rod has its own inventory instance"), SecondInventorySlot)) return false;
 		const FCatInventoryEntry SecondInventoryItem = *SecondInventorySlot;
 		const FGuid SecondItemId = CatFishingTest::InstanceId(SecondInventoryItem);
@@ -190,7 +190,7 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("select first rod for remaining lifecycle scenarios"), Controller->RequestSelectQuickbarSlotFromInput(FirstSlot))) return false;
 		ACatFishingRodActor* Rod = Fishing->FindDeployedRod(Player);
 		if (!TestNotNull(TEXT("first R creates a registered rod"), Rod)) return false;
-		const UCatEquipmentDefinition* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(DefinitionId);
+		const UCatEquipmentDefinition* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(DefinitionItemId);
 		TestEqual(TEXT("spawns the formal configured Blueprint"), Rod->GetClass(), Definition->UseActorClass.Get());
 		TestEqual(TEXT("first R already operates the new rod"), Fishing->FindRodOperatedBy(Player), Rod);
 		TestEqual(TEXT("first R is held"), Rod->GetPresentationState().PoseMode, ECatFishingRodPoseMode::Held);
@@ -355,10 +355,10 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 			|| !TestTrue(TEXT("R deploys the physical spare rod"), Second.bCommitted)) return false;
 		ACatFishingRodActor* SecondRod = Fishing->FindDeployedRodById(Second.RodActorId);
 		if (!TestNotNull(TEXT("second rod is independently registered"), SecondRod)) return false;
-		const UCatEquipmentDefinition* SecondDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(SecondDefinitionId);
+		const UCatEquipmentDefinition* SecondDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(SecondDefinitionItemId);
 		TestEqual(TEXT("spare uses its own formal Blueprint class"), SecondRod->GetClass(), SecondDefinition->UseActorClass.Get());
 		TestEqual(TEXT("spare uses its own physical instance"), SecondRod->GetPresentationState().ItemInstanceId, SecondItemId);
-		TestEqual(TEXT("spare preserves its definition"), SecondRod->GetPresentationState().RodDefinitionId, SecondDefinitionId);
+		TestEqual(TEXT("spare preserves its definition"), SecondRod->GetPresentationState().RodItemId, SecondDefinitionItemId);
 		TestEqual(TEXT("held plus grounded rods consume both deployment slots"), Fishing->GetDeployedRodCount(Player), 2);
 		TestEqual(TEXT("first rod stays grounded"), Rod->GetPresentationState().PoseMode, ECatFishingRodPoseMode::Grounded);
 		TestEqual(TEXT("first rod has no operator"), Rod->GetOperatorCount(), 0);
@@ -394,7 +394,7 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("direct R request cannot pick up a distant owned rod"), Fishing->OperateRod(Controller, OperateFirst).bCommitted);
 		TestTrue(TEXT("rejected remote pickup leaves the parked pose untouched"), Rod->GetActorTransform().Equals(FarPose));
 		if (!TestTrue(TEXT("grants a third physical rod to distinguish the deployment limit from missing inventory"),
-			Equipment->GrantEquipmentFromAuthority(FGuid::NewGuid(), Equipment->GetSnapshot().Revision, DefinitionId).bCommitted)) return false;
+			Equipment->GrantEquipmentFromAuthority(FGuid::NewGuid(), Equipment->GetSnapshot().Revision, DefinitionItemId).bCommitted)) return false;
 		Character->GetPhysicalBodyComponent()->TeleportBodyFromAuthority(FTransform(Character->GetActorRotation(), OriginalLocation - FVector(600.0, 0.0, 0.0)), TEXT("TestPosition"));
 		const FCatEquipmentLoadoutSnapshot BeforeThird = Equipment->GetSnapshot();
 		AddExpectedErrorPlain(TEXT("Reason=DeploymentLimitReached"), EAutomationExpectedErrorFlags::Contains, 1);
@@ -423,7 +423,7 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 		const FCatInventoryEntry* ReturnedSecond = ReturnedSecondEntries.FindByPredicate(
 			[SecondItemId](const FCatInventoryEntry& Slot) { return CatFishingTest::InstanceId(Slot) == SecondItemId; });
 		if (!TestNotNull(TEXT("X returns the same second physical inventory instance"), ReturnedSecond)) return false;
-		TestEqual(TEXT("returned second rod preserves definition"), CatFishingTest::DefinitionId(*ReturnedSecond), CatFishingTest::DefinitionId(SecondInventoryItem));
+		TestEqual(TEXT("returned second rod preserves definition"), CatFishingTest::ItemId(*ReturnedSecond), CatFishingTest::ItemId(SecondInventoryItem));
 		TestEqual(TEXT("returned second rod preserves durability"), CatFishingTest::Durability(*ReturnedSecond), CatFishingTest::Durability(SecondInventoryItem));
 		TestEqual(TEXT("returned second rod preserves quantity"), ReturnedSecond->StackCount, 1);
 		TestFalse(TEXT("packing second never returns first rod's instance"), CatFishingTest::Entries(Equipment).ContainsByPredicate(
@@ -464,7 +464,7 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 		for (const auto& Entry : GuestInventory->GetInventoryEntries())
 			if (!Entry.Instance || Entry.StackCount == 0) ++EmptySlots;
 		for (int32 Index = 0; Index < EmptySlots; ++Index)
-			if (!GuestEquipment->GrantEquipmentFromAuthority(FGuid::NewGuid(), GuestEquipment->GetSnapshot().Revision, TEXT("FeatherFloat")).bCommitted) return false;
+			if (!GuestEquipment->GrantEquipmentFromAuthority(FGuid::NewGuid(), GuestEquipment->GetSnapshot().Revision, 9).bCommitted) return false;
 		AddExpectedErrorPlain(TEXT("Reason=InventoryReturnRejected"), EAutomationExpectedErrorFlags::Contains, 1);
 		AddExpectedErrorPlain(TEXT("Event=fishing_command_result Type=ECatFishingCommandType::PackRod Committed=false"), EAutomationExpectedErrorFlags::Contains, 1);
 		const auto FullPackEdge = GuestCommands->SubmitCancel();
@@ -473,7 +473,7 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("failed shared pack leaves the world rod deployed"), Rod->GetPresentationState().bDeployed);
 		TestNotNull(TEXT("failed shared pack restores the same source item"), Character->GetInventoryComponent()->FindHeldInventoryEntryFromAuthority(ItemId));
 		TestNull(TEXT("failed shared pack leaves no duplicate target held item"), GuestInventory->FindHeldInventoryEntryFromAuthority(ItemId));
-		GuestInventory->RemoveItemInstanceFromIndex(GuestInventory->FindFirstInventorySlotIndexByDefinitionId(TEXT("FeatherFloat")));
+		GuestInventory->RemoveItemInstanceFromIndex(GuestInventory->FindFirstInventorySlotIndexByItemId(9));
 		FCatFishingCommandResult SharedPack;
 		const auto SharedPackEdge = GuestCommands->SubmitCancel();
 		if (!TestTrue(TEXT("guest X packs the empty grounded shared rod"), GuestCommands->TryGetResult(SharedPackEdge.RequestId, SharedPack) && SharedPack.bCommitted)) return false;

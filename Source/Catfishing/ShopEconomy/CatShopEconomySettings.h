@@ -40,6 +40,11 @@ public:
 
 	/** 毕业兑换物；单价只读取 DefaultShopCatalogTable 中同一商品的配置。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Settlement")
-	FName SettlementDriedFishDefinitionId = TEXT("buff_driedfish");
+	int32 SettlementDriedItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
+	FName SettlementDriedFishDefinitionId = NAME_None;
+
 
 };

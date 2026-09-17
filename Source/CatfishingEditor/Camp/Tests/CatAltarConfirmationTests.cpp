@@ -625,7 +625,7 @@ namespace CatAltarConfirmationTests
 		/** 在祭坛供品半径中放入项目真实散鱼和带库存鱼护；取消路径以散鱼仍在证明未提前消费，正式提交后用鱼护库存清空证明整批结算。 */
 		bool SeedGroundOffering(ACatAltarActor& InAltar)
 		{
-			UCatFishDefinition* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatFishDefinition>(TEXT("SilvermoonTrout"));
+			UCatFishDefinition* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatFishDefinition>(35);
 			if (!Test->TestNotNull(TEXT("formal SilvermoonTrout definition resolves for altar offering"), Definition)) return false;
 			ACatFishPickupActor* Fish = ServerWorld->SpawnActor<ACatFishPickupActor>(InAltar.GetActorLocation() + FVector(50.0f, 0.0f, 40.0f), FRotator::ZeroRotator);
 			if (!Test->TestNotNull(TEXT("server creates a real available fish at the altar"), Fish)) return false;

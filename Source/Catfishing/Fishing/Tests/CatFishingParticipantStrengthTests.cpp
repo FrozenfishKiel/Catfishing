@@ -90,7 +90,7 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 	Runner->RodActor = Rod;
 	Runner->AbilitySystem = PrimaryASC;
 	if (!TestTrue(TEXT("初始化并登记真实鱼竿"), Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid(),
-		TEXT("ParticipantStrengthRod"), NAME_None, PrimaryPlayer, nullptr, true, false)
+		1705868, NAME_None, PrimaryPlayer, nullptr, true, false)
 		&& World->GetSubsystem<UCatFishingService>()->RegisterDeployedRod(PrimaryPlayer, Rod))
 		|| !TestTrue(TEXT("主位以真实手爪握住新竿"), Rod->BeginPhysicalHoldFromAuthority(PrimaryPlayer, true))
 		|| !TestTrue(TEXT("如同R部署事务，握持成功后显式授予部署者主控"),

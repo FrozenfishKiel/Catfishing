@@ -107,7 +107,7 @@ void UCatInventoryQuickbarWidget::RefreshSlots()
 		SlotWidget->SetSlotContext(Index, CurrentBackPack, Entries[Index]);
 		const auto& Held = CurrentBackPack->GetQuickbarHeldSlot();
 		if (Held.ItemInstanceId.IsValid() && Held.SlotIndex == Index)
-			SlotWidget->SetHeldItemPresentation(GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(Held.DefinitionId), Held.bInUse);
+			SlotWidget->SetHeldItemPresentation(GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(Held.ItemId), Held.bInUse);
 		SlotWidget->SetAcceptsSlotInput(false);
 		SlotWidget->SetSelectedFromModel(Index == SelectedSlotIndex);
 		QuickbarSlotWrapBox->AddChildToWrapBox(SlotWidget);

@@ -16,7 +16,12 @@ struct FCatShopEntryView
 
 	/** 商品指向的装备或消耗品定义；UI 用它显示名字，不能据此直接发放物品。 */
 	UPROPERTY(BlueprintReadOnly)
+	int32  ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName DefinitionId = NAME_None;
+
 
 	/** 商品所属展示分类；WBP 本地分类按钮只用它过滤 DisplayedEntries，不修改 Model 的真实商品数组。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -74,7 +79,7 @@ struct FCatShopEntryView
 	UPROPERTY(BlueprintReadOnly)
 	FText ActionText;
 
-	/** 商品行当前显示名；优先来自商店表展示覆盖，未配置时回退到 DefinitionId 或 EntryId。 */
+	/** 商品行当前显示名；优先来自商店表展示覆盖，未配置时回退到 ItemId 或 EntryId。 */
 	UPROPERTY(BlueprintReadOnly)
 	FText DisplayNameText;
 
@@ -122,7 +127,12 @@ struct FCatShopCartLineView
 
 	/** 购物车行指向的装备或耗材定义；WBP 可用它回退展示图标或名字。 */
 	UPROPERTY(BlueprintReadOnly)
+	int32  ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName DefinitionId = NAME_None;
+
 
 	/** 商品所属展示分类；购物车本身不按分类过滤，但可用它做视觉分组或调试显示。 */
 	UPROPERTY(BlueprintReadOnly)

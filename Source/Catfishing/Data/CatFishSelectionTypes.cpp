@@ -13,7 +13,7 @@ bool FCatFishEligibilityPolicy::PassesTimeOfDay(const UCatFishDefinition& Defini
 	}
 	if (Definition.TimeOfDay.IsEmpty())
 	{
-		UE_LOG(LogCatFishing, Warning, TEXT("Event=fish_eligibility_unconfigured Fish=%s Axis=TimeOfDay Result=Rejected"), *Definition.FishDefinitionId.ToString());
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=fish_eligibility_unconfigured Fish=%s Axis=TimeOfDay Result=Rejected"), *FString::FromInt(Definition.ItemId));
 		return false;
 	}
 	return TimeOfDay != ECatEnvironmentTimeOfDay::Unknown && Definition.TimeOfDay.Contains(TimeOfDay);
@@ -29,7 +29,7 @@ bool FCatFishEligibilityPolicy::PassesWeather(const UCatFishDefinition& Definiti
 	}
 	if (Definition.Weather.IsEmpty())
 	{
-		UE_LOG(LogCatFishing, Warning, TEXT("Event=fish_eligibility_unconfigured Fish=%s Axis=Weather Result=Rejected"), *Definition.FishDefinitionId.ToString());
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=fish_eligibility_unconfigured Fish=%s Axis=Weather Result=Rejected"), *FString::FromInt(Definition.ItemId));
 		return false;
 	}
 	return Weather != ECatEnvironmentWeather::Unknown && Definition.Weather.Contains(Weather);

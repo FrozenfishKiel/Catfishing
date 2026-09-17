@@ -125,30 +125,30 @@ namespace CatInventoryNetwork
 			switch (Stage)
 			{
 			case 1:
-				if (!DoClientsShow(TEXT("BugBait"), NAME_None, 0, 4)) return false;
+				if (!DoClientsShow(4, 0, 0, 4)) return false;
 				return MoveServerEntryToSlotFour();
 			case 2:
-				if (!DoClientsShow(NAME_None, TEXT("BugBait"), 0, 4)) return false;
+				if (!DoClientsShow(0, 4, 0, 4)) return false;
 				return ClearServerSlotFour();
 			case 3:
-				if (!DoClientsShow(NAME_None, NAME_None, 0, 4)) return false;
+				if (!DoClientsShow(0, 0, 0, 4)) return false;
 				return AddServerEntriesForExchange();
 			case 4:
-				if (!DoClientsShow(TEXT("BugBait"), TEXT("FlashingBait"), 0, 1)) return false;
+				if (!DoClientsShow(4, 13, 0, 1)) return false;
 				return ExchangeServerEntries();
 			case 5:
-				if (!DoClientsShow(TEXT("FlashingBait"), TEXT("BugBait"), 0, 1)) return false;
+				if (!DoClientsShow(13, 4, 0, 1)) return false;
 				return ReplaceServerEntriesFromAuthority();
 			case 6:
-				if (!DoClientsShow(TEXT("BugBait"), TEXT("FlashingBait"), 0, 1)) return false;
+				if (!DoClientsShow(4, 13, 0, 1)) return false;
 				return ResizeServerSnapshot(2, 7);
 			case 7:
 				if (ClientModels[0]->GetInventoryList().Num() != 2 || ClientModels[1]->GetInventoryList().Num() != 2) return false;
-				if (!DoClientsShow(TEXT("BugBait"), TEXT("FlashingBait"), 0, 1)) return false;
+				if (!DoClientsShow(4, 13, 0, 1)) return false;
 				return ResizeServerSnapshot(48, 8);
 			case 8:
 				if (ClientModels[0]->GetInventoryList().Num() != 48 || ClientModels[1]->GetInventoryList().Num() != 48) return false;
-				if (!DoClientsShow(TEXT("BugBait"), TEXT("FlashingBait"), 0, 1) || !DoClientsShow(NAME_None, NAME_None, 2, 47)) return false;
+				if (!DoClientsShow(4, 13, 0, 1) || !DoClientsShow(0, 0, 2, 47)) return false;
 				Test->AddInfo(TEXT("Event=inventory_ui_multiclient_replication Result=AddMoveClearExchangeReplaceShrinkGrowOnBothRemoteModels"));
 				return true;
 			default:
@@ -210,7 +210,7 @@ namespace CatInventoryNetwork
 				return true;
 			}
 
-			UCatInventoryItemDefinition* BugBait = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(TEXT("BugBait"));
+			UCatInventoryItemDefinition* BugBait = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(4);
 			UCatInventoryComponent* ServerInventory = ServerCamp->GetInventoryComponent();
 			if (!Test->TestNotNull(TEXT("formal BugBait definition loads for replication"), BugBait)
 				|| !Test->TestTrue(TEXT("server adds first formal inventory entry"), ServerInventory->AddItemDefinition(BugBait, 1)))
@@ -239,7 +239,7 @@ namespace CatInventoryNetwork
 		}
 
 		/** 逐客户端对比正式复制条目与组件独立 Model 中两个关心格；空 FName 表示该格必须为空，从而专门捕获“物品移走后旧格仍显示”的回归。 */
-		bool DoClientsShow(const FName ExpectedFirstDefinition, const FName ExpectedSecondDefinition,
+		bool DoClientsShow(const int32 ExpectedFirstDefinition, const int32 ExpectedSecondDefinition,
 			const int32 FirstSlot, const int32 SecondSlot)
 		{
 			for (int32 ClientIndex = 0; ClientIndex < RequiredRemoteClientCount; ++ClientIndex)
@@ -257,7 +257,7 @@ namespace CatInventoryNetwork
 
 		/** 读取一个客户端正式组件和同一客户端 Model 的原样槽位列表；两者都必须符合期望，避免仅验证复制或仅验证 UI 数据源。 */
 		bool DoesClientSlotMatch(const ACatCampInventoryActor& ClientCamp, const UCatInventoryModel& ClientModel,
-			const int32 SlotIndex, const FName ExpectedDefinition) const
+			const int32 SlotIndex, const int32 ExpectedDefinition) const
 		{
 			if (SlotIndex == INDEX_NONE)
 			{
@@ -275,13 +275,13 @@ namespace CatInventoryNetwork
 			const FCatInventoryEntry& ModelEntry = ModelEntries[SlotIndex];
 			const bool bComponentOccupied = ReplicatedEntry->Instance != nullptr && ReplicatedEntry->StackCount > 0;
 			const bool bModelOccupied = ModelEntry.Instance != nullptr && ModelEntry.StackCount > 0;
-			const bool bExpectedOccupied = !ExpectedDefinition.IsNone();
+			const bool bExpectedOccupied = !ExpectedDefinition == 0;
 			if (bComponentOccupied != bExpectedOccupied || bModelOccupied != bExpectedOccupied)
 			{
 				return false;
 			}
-			return !bExpectedOccupied || (ReplicatedEntry->Instance->GetItemDefinitionId() == ExpectedDefinition
-				&& ModelEntry.Instance->GetItemDefinitionId() == ExpectedDefinition
+			return !bExpectedOccupied || (ReplicatedEntry->Instance->GetItemId() == ExpectedDefinition
+				&& ModelEntry.Instance->GetItemId() == ExpectedDefinition
 				&& ReplicatedEntry->StackCount == ModelEntry.StackCount);
 		}
 
@@ -314,8 +314,8 @@ namespace CatInventoryNetwork
 		{
 			UCatInventoryComponent* ServerInventory = ServerCamp->GetInventoryComponent();
 			UCatInventorySettings* Settings = GetMutableDefault<UCatInventorySettings>();
-			UCatInventoryItemDefinition* BugBait = Settings->FindRuntimeDefinition(TEXT("BugBait"));
-			UCatInventoryItemDefinition* FlashingBait = Settings->FindRuntimeDefinition(TEXT("FlashingBait"));
+			UCatInventoryItemDefinition* BugBait = Settings->FindRuntimeDefinition(4);
+			UCatInventoryItemDefinition* FlashingBait = Settings->FindRuntimeDefinition(13);
 			if (!Test->TestNotNull(TEXT("formal BugBait remains available"), BugBait)
 				|| !Test->TestNotNull(TEXT("formal FlashingBait definition loads"), FlashingBait)
 				|| !Test->TestTrue(TEXT("server adds exchange source"), ServerInventory->AddItemDefinition(BugBait, 1))

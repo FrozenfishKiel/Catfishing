@@ -51,7 +51,7 @@ bool FCatFishingFormalPhysicalRunnerTest::RunTest(const FString& Parameters)
 	UClass* CatClass = LoadClass<ACatCharacter>(nullptr,
 		TEXT("/Game/Character/BP_CatCharacter.BP_CatCharacter_C"));
 	UStateTree* Tree = LoadObject<UStateTree>(nullptr, TEXT("/Game/Data/StateTrees/ST_FishFight.ST_FishFight"));
-	const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(TEXT("StarterRodT1"));
+	const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(37);
 	UCatFishDefinition* FishAsset = LoadObject<UCatFishDefinition>(nullptr,
 		TEXT("/Game/Catfishing/Data/Fish/Fish_RiverPattern.Fish_RiverPattern"));
 	if (!TestTrue(TEXT("formal cat, rod definition, fish definition and behavior tree load"),
@@ -135,11 +135,11 @@ bool FCatFishingFormalPhysicalRunnerTest::RunTest(const FString& Parameters)
 		const double MaximumStamina = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
 		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 50);
 		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), static_cast<float>(MaximumStamina));
-		for (const FName Id : {FName(TEXT("StarterRodT1")), FName(TEXT("FeatherFloat"))})
+		for (const int32 Id : {37, 9})
 			if (!TestTrue(TEXT("grants the current formal equipment definition"), Equipment->GrantEquipmentFromAuthority(
 				FGuid::NewGuid(), Equipment->GetSnapshot().Revision, Id).bCommitted)) return false;
 		if (!TestTrue(TEXT("grants a real consumable bait"), Equipment->GrantInventoryQuantityFromAuthority(
-			FGuid::NewGuid(), Equipment->GetSnapshot().Revision, TEXT("BugBait"), 1).bCommitted)) return false;
+			FGuid::NewGuid(), Equipment->GetSnapshot().Revision, 4, 1).bCommitted)) return false;
 		auto* Service = World->GetSubsystem<UCatFishingService>();
 		auto* Commands = Controller->GetFishingCommandComponent();
 		const auto R = Commands->SubmitRodInteract();
@@ -155,7 +155,7 @@ bool FCatFishingFormalPhysicalRunnerTest::RunTest(const FString& Parameters)
 		const FGuid SessionId = FGuid::NewGuid();
 		if (!TestTrue(TEXT("reserves the actual deployed rod and bait/float instances"), Equipment->BeginFishingUse(SessionId,
 			Loadout.RodItemInstanceId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId,
-			Loadout.RodDefinitionId, Loadout.BaitDefinitionId, Loadout.FloatDefinitionId, Loadout.Revision).bUseAccepted)
+			Loadout.RodItemId, Loadout.BaitItemId, Loadout.FloatItemId, Loadout.Revision).bUseAccepted)
 			|| !TestTrue(TEXT("commits the hooked bait through its resource transaction"), Equipment->CommitFishingBaitDeferred(SessionId).bApplied)) return false;
 		ON_SCOPE_EXIT { Equipment->ReleaseFishingUse(SessionId); };
 		double InitialDurability = 0;
@@ -176,12 +176,12 @@ bool FCatFishingFormalPhysicalRunnerTest::RunTest(const FString& Parameters)
 		const double InitialLineLength = FVector::Distance(FishStart, Rod->GetRodTipWorldTransform().GetLocation());
 		const FGuid CastAttemptId = FGuid::NewGuid();
 		if (!TestTrue(TEXT("initializes the encounter through its real identity receiver"), Fish->InitializeAuthoritativeIdentity(
-			SessionId, CastAttemptId, FishDefinition->FishDefinitionId, InitialLineLength, 1))) return false;
+			SessionId, CastAttemptId, FishDefinition->ItemId, InitialLineLength, 1))) return false;
 		Session->FishDefinition = FishDefinition;
 		Session->FishWeightKilograms = 30;
 		Session->Snapshot.FishingSessionId = SessionId;
 		Session->Snapshot.CastAttemptId = CastAttemptId;
-		Session->Snapshot.FishDefinitionId = FishDefinition->FishDefinitionId;
+		Session->Snapshot.ItemId = FishDefinition->ItemId;
 		Session->Snapshot.FishWeightKilograms = 30;
 		Session->Snapshot.Phase = ECatFishingPhase::HookedFight;
 		Service->Sessions.Add(SessionId, Session);
@@ -347,7 +347,7 @@ bool FCatFishingFormalPhysicalRunnerTest::RunTest(const FString& Parameters)
 			&& !bBroken && InitialDurability == Session->GetSnapshot().RodDurabilityRemaining);
 		// 阈值只在开场/换主裁决。已建立的正式固定步链即使主控属性越过瞬断门，也不能额外判终局。
 		Session->SelectionResolution = ECatFishSelectionResolution::Selected;
-		Session->AttemptSnapshot.RodDefinitionId = TEXT("StarterRodT1");
+		Session->AttemptSnapshot.RodItemId = 37;
 		Session->Snapshot.FishStrength = 1000000.0;
 		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 1000000.0);
 		FCatFightStepResult NoWearStep;

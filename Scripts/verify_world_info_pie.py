@@ -168,7 +168,7 @@ def tick(delta):
             guard.set_actor_location(tank.get_actor_location() + unreal.Vector(-80, -210, 0), False, True)
             definition = unreal.load_asset('/Game/Catfishing/Data/Fish/Fish_Blackfish')
             check(definition.minimum_weight_kilograms <= 5.0 <= definition.maximum_weight_kilograms, 'fixture weight lies within real fish definition bounds')
-            unreal.SystemLibrary.execute_console_command(server, 'cat.Fishing.Debug.GiveFish {} 5 {}'.format(definition.fish_definition_id, players.index(remote_server)), host)
+            unreal.SystemLibrary.execute_console_command(server, 'cat.Fishing.Debug.GiveFish {} 5 {}'.format(definition.item_id, players.index(remote_server)), host)
             fish = next(iter(unreal.GameplayStatics.get_all_actors_of_class(server, unreal.CatFishPickupActor)))
             fish.set_actor_location(tank.get_actor_location() + unreal.Vector(-180, -50, 80), False, True)
             check(fish.interact(remote_server, unreal.GuidLibrary.new_guid()), 'real world fish enters mouth via authority interaction')

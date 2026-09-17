@@ -94,7 +94,7 @@ public:
 		TFunctionRef<bool(TFunctionRef<bool()>)> CommitDeliveryAndPayment);
 
 	/** 按鱼种收购表和实际千克重量估一条鱼的收入；UI 与服务器预检复用同一纯算式，缺表或缺行返回 false。 */
-	bool TryAppraiseFishSale(FName FishDefinitionId, double WeightKilograms, int32& OutSaleValue) const;
+	bool TryAppraiseFishSale(int32  ItemId, double WeightKilograms, int32& OutSaleValue) const;
 
 	/** 在售鱼协调器占用实物前预检整单；只读余额、命令门、重放缓存与价格表，不使用 ExpectedRevision 裁决库存并发。 */
 	bool ValidateFishSale(const FCatShopFishSaleCommand& Command, ECatDomainCommandError& OutError,
@@ -147,7 +147,7 @@ public:
 	int32 ConvertSettlementLeftoversToDriedFish();
 	/** 失败专属：清世界资源和公款，不产出小鱼干。 */
 	void ClearFailedRunResourcesFromAuthority();
-	bool TryGetOriginalItemPrice(FName DefinitionId, int32& OutPrice) const;
+	bool TryGetOriginalItemPrice(int32  ItemId, int32& OutPrice) const;
 
 #if !UE_BUILD_SHIPPING
 	/** 开发期救援入口：只在人工 ForceNextDay 需要从失败结算夜回到白天前重新打开商店写口；它不清公款、账本、货架或幂等缓存，后续日进货仍由 AdvanceShopDay 按正式天数处理。 */

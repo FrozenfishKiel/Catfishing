@@ -63,7 +63,7 @@ bool FCatFishingOperatorRunnerIntegrationTest::RunTest(const FString& Parameters
 	ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), 30.0f);
 	ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 100.0f);
 	if (!TestTrue(TEXT("the operator is admitted and borrows a real rod deployed by another player"), Mode->CanAcceptFishingCommand(Controller)
-		&& Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid(), TEXT("OperatorSamplingRod"), NAME_None, Deployer, nullptr, true, false)
+		&& Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid(), 1997958, NAME_None, Deployer, nullptr, true, false)
 		&& World->GetSubsystem<UCatFishingService>()->RegisterDeployedRod(Deployer, Rod))) return false;
 	const auto HoldAndAuthorize = [&]()
 	{

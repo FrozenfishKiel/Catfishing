@@ -1,197 +1,98 @@
 #pragma once
-
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
-#include "Framework/Core/CatProfileContracts.h"
+#include "Styling/SlateBrush.h"
 #include "CatCollectionWidget.generated.h"
 
-class UButton;
 class UCatCollectionPageController;
-class UTextBlock;
+class UCatFishCardWidget;
+class SUniformGridPanel;
 
-/** 图鉴 UI 的单行展示投影；它来自鱼目录骨架 ＋ Profile durable 快照，不引用任何实物鱼容器。 */
+/** 图鉴与库存追踪共用的鱼卡投影；只含允许展示的信息，未捕获时偏好与名字均已脱敏。 */
 USTRUCT(BlueprintType)
 struct FCatCollectionEntryView
 {
 	GENERATED_BODY()
-
-	/** 鱼定义稳定 ID；图鉴只展示记录，不反向查找鱼护中的实物鱼。 */
-	UPROPERTY(BlueprintReadOnly)
-	FName FishDefinitionId = NAME_None;
-
-	/** 鱼名；未解锁收集层时留空——纯黑影不给名字（图鉴 §3.1.5:130）。 */
-	UPROPERTY(BlueprintReadOnly)
-	FText DisplayName;
-
-	/** 本地 Profile 记录的整页层级；UI 不通过它补 Grant。 */
-	UPROPERTY(BlueprintReadOnly)
-	ECatFishCollectionState State = ECatFishCollectionState::Unknown;
-
-	/** 线索层已解锁：轮廓清晰，给窝料与鱼饵偏好、出现条件。 */
-	UPROPERTY(BlueprintReadOnly)
-	bool bSilhouetteUnlocked = false;
-
-	/** 收集层已解锁：名字、彩页、出没区域、个人最佳重量、首次遇上的条件回显。 */
-	UPROPERTY(BlueprintReadOnly)
-	bool bRecordedUnlocked = false;
-
-	/** 知识层已解锁：吃鱼效果补齐。 */
-	UPROPERTY(BlueprintReadOnly)
-	bool bKnowledgeUnlocked = false;
-
-	/**
-	 * 这条鱼有没有知识层。不可食用的咸鱼与湖心巨影没有（图鉴 §3.1.4:122）——
-	 * 没有的信息在页面上不存在，连「待解锁」都不留一行。
-	 */
-	UPROPERTY(BlueprintReadOnly)
-	bool bHasKnowledgeLayer = false;
-
-	/** 本地记录中的最佳重量，单位千克；只在收集层解锁后有意义。 */
-	UPROPERTY(BlueprintReadOnly)
-	double BestWeightKilograms = 0.0;
-
-	/** 个人最佳重量的成文；收集层未解锁时是「待解锁」，不给灰掉的 0.00kg。 */
-	UPROPERTY(BlueprintReadOnly)
-	FText BestWeightText;
-
-	/** 首次遇上的条件回显（水域／时段／天气）；收集层未解锁时是「待解锁」。 */
-	UPROPERTY(BlueprintReadOnly)
-	FText FirstConditionText;
-
-	/** 吃鱼效果一栏的成文；没有知识层的鱼这一栏是空的（整栏不存在），未解锁时才是「待解锁」。 */
-	UPROPERTY(BlueprintReadOnly)
-	FText KnowledgeText;
-
-	/** 合格交手累计次数；只用于展示进度。 */
-	UPROPERTY(BlueprintReadOnly)
-	int32 EncounterCount = 0;
-
-	/** 给 TextBlock 直接绑定的中文行文本。 */
-	UPROPERTY(BlueprintReadOnly)
-	FText DisplayText;
+	/** 总表数字鱼种编号；用于选中与追踪，不是实物 GUID。 */
+	UPROPERTY(BlueprintReadOnly) int32 ItemId = 0;
+	/** 卡片名称；Model 仅在成功捕获后提供真名，否则为问号。 */
+	UPROPERTY(BlueprintReadOnly) FText DisplayName;
+	/** 对应鱼自己的图片；本版按用户确认直接压暗作未解锁占位，不使用其他鱼冒充。 */
+	UPROPERTY(BlueprintReadOnly) TSoftObjectPtr<UTexture2D> Thumbnail;
+	/** 是否已成功捕获；页面据此开放选择和追踪，吃鱼记录不能置真。 */
+	UPROPERTY(BlueprintReadOnly) bool bRecordedUnlocked = false;
+	/** 倍率大于 1 的鱼饵名称；Model 按鱼定义关联编号查总表，未解锁只给问号，卡片直接展示。 */
+	UPROPERTY(BlueprintReadOnly) FText BaitPreferenceText;
+	/** 现有窝料需求类别；按腥、香、发酵属性展示，未解锁只含问号。 */
+	UPROPERTY(BlueprintReadOnly) FText ChumPreferenceText;
+	/** 策划指定推荐鱼饵的总表图片；Model 仅为已解锁鱼解析，无配置或无效 ID 时为空。 */
+	UPROPERTY(BlueprintReadOnly) TSoftObjectPtr<UTexture2D> RecommendedBaitThumbnail;
+	/** 策划指定推荐窝料的总表图片；团队库存只展示，不反推类别或自行选择替代物品。 */
+	UPROPERTY(BlueprintReadOnly) TSoftObjectPtr<UTexture2D> RecommendedChumThumbnail;
+	/** 个人最佳重量保留在读模型供已有记录消费者读取；本版鱼卡不绘制这一栏。 */
+	UPROPERTY(BlueprintReadOnly) double BestWeightKilograms = 0.0;
 };
 
-/** 相册里一张印记的只读投影；只带稳定 ID 与本人隐藏位，不带图片路径，也不含别人的相册。 */
-USTRUCT(BlueprintType)
-struct FCatImprintAlbumEntryView
-{
-	GENERATED_BODY()
-
-	/** 稳定印记 ID；隐藏开关按它提交。 */
-	UPROPERTY(BlueprintReadOnly)
-	FGuid ImprintId;
-
-	/** 该印记所属的一局相册 ID。 */
-	UPROPERTY(BlueprintReadOnly)
-	FGuid RunAlbumId;
-
-	/** 是否是那一局的篝火封面。 */
-	UPROPERTY(BlueprintReadOnly)
-	bool bRunAlbumCover = false;
-
-	/** 本人是否已在自己的相册里隐藏它。 */
-	UPROPERTY(BlueprintReadOnly)
-	bool bHidden = false;
-};
-
-/** 图鉴/相册界面的完整只读投影；它和地面鱼护等实物容器完全分开。 */
+/** 当前账号的鱼卡集合；不可用与空集合明确区分，追踪只保存数字身份。 */
 USTRUCT(BlueprintType)
 struct FCatCollectionViewState
 {
 	GENERATED_BODY()
-
-	/** Profile 是否已能提供 durable 图鉴快照；false 表示数据未就绪，不代表空图鉴。 */
-	UPROPERTY(BlueprintReadOnly)
-	bool bAvailable = false;
-
-	/**
-	 * 图鉴条目展示副本，以鱼目录为骨架：每一种正式鱼都有一行，没解锁的那些就是纯黑影
-	 * （图鉴 §3.1.5:130「开局满图都是影，你知道湖里有多少种」）。
-	 * 数组只读，不包含 Journal、相册隐藏写口或实物鱼引用。
-	 */
-	UPROPERTY(BlueprintReadOnly)
-	TArray<FCatCollectionEntryView> Entries;
-
-	/** 本人相册索引；一键隐藏的列表来源，不含别人的印记。 */
-	UPROPERTY(BlueprintReadOnly)
-	TArray<FCatImprintAlbumEntryView> Imprints;
-
-	/** 给 WBP 顶部文本直接绑定的摘要。 */
-	UPROPERTY(BlueprintReadOnly)
-	FText SummaryText;
+	/** 账号档案与物品目录均可读时为真；否则界面显示未就绪，不能提交追踪。 */
+	UPROPERTY(BlueprintReadOnly) bool bAvailable = false;
+	/** 按数字身份排序的真实鱼种；页面按每跨页十二张划分。 */
+	UPROPERTY(BlueprintReadOnly) TArray<FCatCollectionEntryView> Entries;
+	/** 已持久化的追踪鱼种；零表示未追踪。 */
+	UPROPERTY(BlueprintReadOnly) int32 TrackedItemId = 0;
+	/** 标题或未就绪提示；不含日期与完成度。 */
+	UPROPERTY(BlueprintReadOnly) FText SummaryText;
 };
 
-/** 图鉴/相册 WBP 基类；它只读 Profile 记录，不和地面鱼护、商店或 HUD 混在一起。 */
+/** 正式 WBP 的双页书本基类；选择、翻页只改变页面状态，追踪通过控制器提交持久化。 */
 UCLASS(BlueprintType, Blueprintable)
 class CATFISHING_API UCatCollectionWidget : public UUserWidget
 {
 	GENERATED_BODY()
-
 public:
-	/** 接收 Collection Model 的只读投影并同步给 WBP；不访问任何鱼护容器。 */
+	/** 更新同源鱼卡并校正页码；无效或已消失的选择清除。 */
 	void RenderCollection(const FCatCollectionViewState& ViewState);
-
-	/** 暴露最近一次图鉴投影给蓝图表现；它没有 Profile 引用，不能被蓝图当作图鉴写入口。 */
-	UFUNCTION(BlueprintPure, Category = "Catfishing|Collection")
+	/** 只读返回最近投影供检查；不暴露 Profile 写权限。 */
+	UFUNCTION(BlueprintPure, Category="Catfishing|Collection")
 	const FCatCollectionViewState& GetLastCollectionViewState() const;
-
-	/** 提交关闭图鉴页意图；按钮、图鉴键和 Escape 都走这个入口，输入恢复只由 PageController 成对处理。 */
-	UFUNCTION(BlueprintCallable, Category = "Catfishing|Collection")
-	void RequestCloseCollection();
-
-	/**
-	 * 本人一键隐藏／取消隐藏相册里的任意一张印记（印记册：本人可隐藏任意一张，只影响自己这份索引）。
-	 * 它只转交意图，真正的 durable 写口在 UCatProfileSubsystem::SetImprintHidden；
-	 * 不发服务器 RPC，不删图片，也不撤下其他参与者手里的同一张印记。
-	 */
-	UFUNCTION(BlueprintCallable, Category = "Catfishing|Collection")
-	bool RequestSetImprintHidden(FGuid ImprintId, bool bHidden);
-
+	/** 关闭页并交还输入；按钮和关闭键走同一个控制器入口。 */
+	UFUNCTION(BlueprintCallable, Category="Catfishing|Collection") void RequestCloseCollection();
 protected:
-	/** Slate 构造完成后对可选关闭按钮去重绑定；没有该按钮的 WBP 仍可用图鉴键或 Escape 关闭。 */
-	virtual void NativeConstruct() override;
-
-	/** 离开视口时解除关闭按钮绑定，避免重建 Slate 后重复提交关闭意图。 */
-	virtual void NativeDestruct() override;
-
-	/** 在子控件消费之前处理关闭键，避免焦点落在列表控件上后无法关闭整页。 */
-	virtual FReply NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
-
-	/** 根控件直接收到按键时复用同一关闭判断；其余输入保持默认传播。 */
-	virtual FReply NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
-
-	/** WBP 可选渲染扩展点；正式列表表现可在蓝图里根据 Entries 构建。 */
-	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category = "Catfishing|Collection")
-	void BP_RenderCollection(const FCatCollectionViewState& ViewState);
-
+	/** 构造分层书本、鱼卡网格和按钮，背景不包含动态文字与鱼图。 */
+	virtual TSharedRef<SWidget> RebuildWidget() override;
+	/** 释放 Slate 网格及卡片引用；重新打开时允许重建。 */
+	virtual void ReleaseSlateResources(bool bReleaseChildren) override;
+	/** 子控件消费前先处理图鉴关闭键，保持输入恢复。 */
+	virtual FReply NativeOnPreviewKeyDown(const FGeometry& Geometry, const FKeyEvent& Event) override;
+	/** 根页收到关闭键时复用同一入口。 */
+	virtual FReply NativeOnKeyDown(const FGeometry& Geometry, const FKeyEvent& Event) override;
 private:
-	/** 只为页面关闭与印记隐藏解析 owning LocalPlayer 的图鉴页面控制器；图鉴数据仍由 Model 单向推送。 */
+	/** 只绘制当前跨页的真实条目；最后一页不填假鱼种。 */
+	void RefreshCards();
+	/** 只记录待操作鱼种，不改变鱼卡追踪外观或账号记录。 */
+	void SelectFish(int32 ItemId);
+	/** 从本地玩家 UI 解析已有页面控制器，避免第二套数据入口。 */
 	UCatCollectionPageController* ResolveCollectionPageController() const;
-
-	/** 关闭条件读取页面控制器的唯一打开状态；接受 Escape 与配置解析出的图鉴键。 */
-	bool ShouldCloseCollectionFromKey(const FKeyEvent& InKeyEvent) const;
-
-	/** 最近一次图鉴只读投影；本 Widget 不持有 Profile 子系统。 */
-	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Collection", meta = (AllowPrivateAccess = "true"))
-	FCatCollectionViewState LastCollectionViewState;
-
-	/** 给 WBP TextBlock 直接绑定的图鉴摘要文本。 */
-	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Collection", meta = (AllowPrivateAccess = "true"))
-	FText BlueprintSummaryText;
-
-	/** 给 WBP TextBlock 直接绑定的图鉴列表文本；简单 WBP 可先显示它，复杂列表再用 Entries 创建行控件。 */
-	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Collection", meta = (AllowPrivateAccess = "true"))
-	FText BlueprintEntriesText;
-
-	/** WBP Designer 中的图鉴摘要文本控件；存在时 RenderCollection 会直接写入记录数量。 */
-	UPROPERTY(Transient, meta = (BindWidgetOptional))
-	TObjectPtr<UTextBlock> SummaryTextBlock;
-
-	/** WBP Designer 中的图鉴列表文本控件；存在时 RenderCollection 会直接写入只读记录列表。 */
-	UPROPERTY(Transient, meta = (BindWidgetOptional))
-	TObjectPtr<UTextBlock> EntriesTextBlock;
-
-	/** WBP Designer 中的可选关闭按钮；存在时点击只提交关闭意图，不改变任何图鉴记录。 */
-	UPROPERTY(Transient, meta = (BindWidgetOptional))
-	TObjectPtr<UButton> CloseButton;
+	/** 对照控制器打开状态与正式输入配置判断关闭键。 */
+	bool ShouldCloseCollectionFromKey(const FKeyEvent& Event) const;
+	/** 最近一次只读鱼卡数据；由 Model 推送，页面不改解锁记录。 */
+	UPROPERTY(Transient) FCatCollectionViewState LastCollectionViewState;
+	/** 当前跨页索引；零起始，刷新时按真实鱼数夹限。 */
+	int32 PageIndex = 0;
+	/** 页面待操作的鱼种；只决定按钮操作对象，不控制常驻高亮，不等于账号追踪。 */
+	int32 SelectedItemId = 0;
+	/** 最近一次按钮提交失败的短提示；选择、翻页或下一次操作清除，不表示追踪事实。 */
+	FText TrackingErrorText;
+	/** 当前页卡片保活；重建时释放旧卡和选择回调。 */
+	UPROPERTY(Transient) TArray<TObjectPtr<UCatFishCardWidget>> Cards;
+	/** 独立书本背景画刷；反射保活纹理，文字与卡片叠加绘制。 */
+	UPROPERTY(Transient) FSlateBrush BookBrush;
+	/** 正式中文字体资产；书页生命周期保活。 */
+	UPROPERTY(Transient) TObjectPtr<UObject> FontAsset;
+	/** 当前 Slate 卡片网格；释放 Slate 时清空，防止持有旧控件树。 */
+	TSharedPtr<SUniformGridPanel> Grid;
 };

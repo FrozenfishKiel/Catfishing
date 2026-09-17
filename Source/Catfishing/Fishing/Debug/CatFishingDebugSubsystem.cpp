@@ -45,7 +45,7 @@
 #if !UE_BUILD_SHIPPING
 namespace CatFishingDebugCommands
 {
-	// 鱼定义选择流程：显式参数先按稳定 FishDefinitionId 查找，再同步加载配置里的候选资产名做兼容。
+	// 鱼定义选择流程：显式参数先按稳定 ItemId 查找，再同步加载配置里的候选资产名做兼容。
 	// 没有参数时优先返回可进鱼缸展示的正式鱼，若都不可展示则退到第一条可运行定义。
 	// 同步加载只发生在非 Shipping 调试命令里，避免正式链路为验收便利付成本。
 	static UCatFishDefinition* ResolveFishDefinition(const TArray<FString>& Args)
@@ -58,7 +58,7 @@ namespace CatFishingDebugCommands
 		if (!Args.IsEmpty() && !Args[0].IsEmpty())
 		{
 			const FName RequestedName(*Args[0]);
-			if (UCatFishDefinition* Definition = Catalog->FindRuntimeDefinition(RequestedName))
+			if (UCatFishDefinition* Definition = Catalog->FindRuntimeDefinition(FCString::Atoi(*Args[0])))
 			{
 				return Definition;
 			}
@@ -147,7 +147,7 @@ namespace CatFishingDebugCommands
 				TEXT("Event=fishing_debug_give_fish_rejected Reason=InvalidPayload World=%s Controller=%s FishDefinition=%s WeightKg=%.3f"),
 				World ? *World->GetName() : TEXT("None"),
 				*GetNameSafe(Controller),
-				Definition ? *Definition->FishDefinitionId.ToString() : TEXT("None"), WeightKilograms);
+				Definition ? *FString::FromInt(Definition->ItemId) : TEXT("None"), WeightKilograms);
 			return;
 		}
 
@@ -179,18 +179,18 @@ namespace CatFishingDebugCommands
 			}
 			UE_LOG(LogCatFishing, Warning,
 				TEXT("Event=fishing_debug_give_fish_rejected Reason=SpawnFailed FishDefinition=%s PlayerIndex=%d"),
-				*Definition->FishDefinitionId.ToString(), PlayerIndex);
+				*FString::FromInt(Definition->ItemId), PlayerIndex);
 			return;
 		}
 		UE_LOG(LogCatFishing, Log,
 			TEXT("Event=fishing_debug_dead_fish_spawned Pickup=%s FishDefinition=%s WeightKg=%.3f PlayerIndex=%d"),
-			*GetNameSafe(Pickup), *Definition->FishDefinitionId.ToString(), WeightKilograms, PlayerIndex);
+			*GetNameSafe(Pickup), *FString::FromInt(Definition->ItemId), WeightKilograms, PlayerIndex);
 	}
 
 	/** 非 Shipping 构建里的死鱼生成入口；只生成世界 Actor，不直接改背包或鱼护。 */
 	static FAutoConsoleCommandWithWorldAndArgs CmdGiveFish(
 		TEXT("cat.Fishing.Debug.GiveFish"),
-		TEXT("在玩家前方生成可按 E 叼起的死鱼。参数：FishDefinitionId WeightKg PlayerIndex。"),
+		TEXT("在玩家前方生成可按 E 叼起的死鱼。参数：ItemId WeightKg PlayerIndex。"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&GiveFishToPlayer),
 		ECVF_Cheat);
 
@@ -217,27 +217,26 @@ namespace CatFishingDebugCommands
 		}
 
 		int32 Granted = 0;
-		const auto GrantItem = [&](const FName DefinitionId)
+		const auto GrantItem = [&](const int32  ItemId)
 		{
 			if (Equipment->GrantEquipmentFromAuthority(FGuid::NewGuid(),
-				Equipment->GetSnapshot().Revision, DefinitionId).bCommitted)
+				Equipment->GetSnapshot().Revision, ItemId).bCommitted)
 			{
 				++Granted;
 			}
 		};
-		const auto GrantStack = [&](const FName DefinitionId, const int32 Quantity)
+		const auto GrantStack = [&](const int32  ItemId, const int32 Quantity)
 		{
 			if (Equipment->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(),
-				Equipment->GetSnapshot().Revision, DefinitionId, Quantity).bCommitted)
+				Equipment->GetSnapshot().Revision, ItemId, Quantity).bCommitted)
 			{
 				++Granted;
 			}
 		};
 		// 一级竿＋羽毛漂是正式起步装（道具册鱼竿/鱼漂表首行）；抄网与鱼护非必带但手验收鱼要用。
-		for (const FName DefinitionId : {FName(TEXT("StarterRodT1")), FName(TEXT("FeatherFloat")),
-			FName(TEXT("StarterScoopNet")), FName(TEXT("FishGuard"))})
+		for (const int32  ItemId : {37, 9, 38, 11})
 		{
-			GrantItem(DefinitionId);
+			GrantItem(ItemId);
 		}
 		// 饵和窝料各有各的随身携带上限（道具册：普通饵 8 份、窝料 5 份），超出的份数库存那边会直接不收。
 		// 所以这里按各自上限夹一次，免得作弊指令看着给了 8 份窝料、实际只进 5 份，让人以为是 bug。
@@ -246,8 +245,8 @@ namespace CatFishingDebugCommands
 			? FMath::Min(Portions, InventorySettings->GetBaitCarryLimit()) : Portions;
 		const int32 ChumPortions = InventorySettings
 			? FMath::Min(Portions, InventorySettings->GetChumCarryLimit()) : Portions;
-		GrantStack(TEXT("BugBait"), BaitPortions);
-		GrantStack(TEXT("BugChum"), ChumPortions);
+		GrantStack(4, BaitPortions);
+		GrantStack(5, ChumPortions);
 
 		// 竿要真的拿在手上才是「装备即状态」的钓鱼待机（钓鱼规则 §1:25），否则还得手动点一下背包。
 		const FGuid RodInstanceId = Equipment->GetSnapshot().RodItemInstanceId;
@@ -357,11 +356,11 @@ void UCatFishingDebugSubsystem::Deinitialize()
 	Super::Deinitialize();
 }
 
-FString UCatFishingDebugSubsystem::FormatFishTypeLine(const FName FishDefinitionId)
+FString UCatFishingDebugSubsystem::FormatFishTypeLine(const int32  ItemId)
 {
-	return FishDefinitionId.IsNone()
+	return (ItemId == 0)
 		? FString(TEXT("FISH TYPE  --"))
-		: FString::Printf(TEXT("FISH TYPE  %s"), *FishDefinitionId.ToString());
+		: FString::Printf(TEXT("FISH TYPE  %s"), *FString::FromInt(ItemId));
 }
 
 // 右上角数值面板：
@@ -382,13 +381,13 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 		GetWorld(), Controller->PlayerState);
 	const FCatFishingSessionSnapshot* SessionSnapshot = Session ? &Session->GetSnapshot() : nullptr;
 	FString FishTypeLine = FormatFishTypeLine(
-		SessionSnapshot ? SessionSnapshot->FishDefinitionId : NAME_None);
+		SessionSnapshot ? SessionSnapshot->ItemId : 0);
 
 	FString FishLine = TEXT("FISH  Stamina --  Strength --");
-	if (SessionSnapshot && !SessionSnapshot->FishDefinitionId.IsNone())
+	if (SessionSnapshot && !(SessionSnapshot->ItemId == 0))
 	{
 		const UCatFishDefinition* FishDefinition = GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(
-			SessionSnapshot->FishDefinitionId);
+			SessionSnapshot->ItemId);
 		if (FishDefinition)
 		{
 			double StaminaScale = 1.0;
@@ -411,14 +410,14 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 	const UCatEquipmentComponent* Equipment = Character ? Character->GetEquipmentComponent() : nullptr;
 	const UCatInventoryComponent* Inventory = Character ? Character->GetInventoryComponent() : nullptr;
 	const FCatEquipmentLoadoutSnapshot* Loadout = Equipment ? &Equipment->GetSnapshot() : nullptr;
-	FName RodDefinitionId = Loadout ? Loadout->RodDefinitionId : NAME_None;
+	int32  RodItemId = Loadout ? Loadout->RodItemId : 0;
 	if (SessionSnapshot && SessionSnapshot->RodActor)
 	{
-		RodDefinitionId = SessionSnapshot->RodActor->GetPresentationState().RodDefinitionId;
+		RodItemId = SessionSnapshot->RodActor->GetPresentationState().RodItemId;
 	}
 	FString RodLine = TEXT("ROD   Durability --  Strength --");
 	if (const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(
-		RodDefinitionId))
+		RodItemId))
 	{
 		double CurrentDurability = 0.0;
 		bool bHasCurrentDurability = false;
@@ -428,20 +427,20 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 			CurrentDurability = SessionSnapshot->RodDurabilityRemaining;
 			bHasCurrentDurability = true;
 		}
-		else if (Inventory && Loadout && Loadout->RodDefinitionId == RodDefinitionId)
+		else if (Inventory && Loadout && Loadout->RodItemId == RodItemId)
 		{
 			const int32 RodSlotIndex = Inventory->FindInventorySlotIndexFromInstanceId(Loadout->RodItemInstanceId);
 			const FCatInventoryEntry* RodEntry = Inventory->GetInventoryEntryAtSlot(RodSlotIndex);
 			const UCatEquipmentInventoryItemInstance* RodInstance = RodEntry
 				? Cast<UCatEquipmentInventoryItemInstance>(RodEntry->Instance) : nullptr;
 			if (RodEntry && RodEntry->StackCount > 0
-				&& RodInstance && RodInstance->GetItemDefinitionId() == RodDefinitionId)
+				&& RodInstance && RodInstance->GetItemId() == RodItemId)
 			{
 				CurrentDurability = RodInstance->GetRodDurability();
 				bHasCurrentDurability = true;
 			}
 		}
-		if (!bHasCurrentDurability && Loadout && Loadout->RodDefinitionId == RodDefinitionId)
+		if (!bHasCurrentDurability && Loadout && Loadout->RodItemId == RodItemId)
 		{
 			CurrentDurability = Loadout->RodDurability;
 			bHasCurrentDurability = true;
@@ -860,7 +859,7 @@ void UCatFishingDebugSubsystem::DrawScoopTargetCircle(APlayerController* Control
 	if (!World || !Pawn || !Fish || !Settings) return;
 	const UCatFishCatalogSettings* Catalog = GetDefault<UCatFishCatalogSettings>();
 	const UCatFishDefinition* FishDefinition = Catalog
-		? Catalog->FindRuntimeDefinition(Fish->GetPresentationState().FishDefinitionId) : nullptr;
+		? Catalog->FindRuntimeDefinition(Fish->GetPresentationState().ItemId) : nullptr;
 	const double Radius = FishDefinition ? FishDefinition->ScoopTargetRadiusCentimeters : 0.0;
 	if (Radius <= 0.0) return;
 

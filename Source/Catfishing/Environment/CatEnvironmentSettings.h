@@ -28,7 +28,7 @@ public:
 		ECatEnvironmentWeather Weather, FName& OutEventId) const;
 
 	/** 读取当前公共自然事件对共享 WaterRegion 的显式聚鱼输入；任一事件、区域或三轴 Unset 都返回 false。 */
-	bool TryGetNaturalChumField(FName& OutChumDefinitionId, FName& OutAnchorId) const;
+	bool TryGetNaturalChumField(int32& OutChumItemId, FName& OutAnchorId) const;
 
 	/** 正式环境运行 gate；默认关闭，配置提供者保持 Unknown 并拒绝发布伪造天气。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Runtime")
@@ -56,7 +56,12 @@ public:
 
 	/** 自然事件使用的唯一 ready ChumDefinition；None 表示不创建空间窝点。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Event")
+	int32  NaturalChumItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
 	FName NaturalChumDefinitionId = NAME_None;
+
 
 	/** 自然事件落点的唯一 ChumFieldAnchor；锚点冻结 exact WaterHandle 与世界位置。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Event")

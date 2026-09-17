@@ -46,7 +46,7 @@ namespace CatFishingTest
 	{
 		return Inventory(Equipment)->GetInventoryEntries();
 	}
-	inline FName DefinitionId(const FCatInventoryEntry& Entry) { return Entry.Instance ? Entry.Instance->GetItemDefinitionId() : NAME_None; }
+	inline int32  ItemId(const FCatInventoryEntry& Entry) { return Entry.Instance ? Entry.Instance->GetItemId() : 0; }
 	inline FGuid InstanceId(const FCatInventoryEntry& Entry) { return Entry.Instance ? Entry.Instance->GetItemInstanceId() : FGuid(); }
 	inline double Durability(const FCatInventoryEntry& Entry)
 	{

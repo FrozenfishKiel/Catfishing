@@ -57,12 +57,12 @@ namespace CatFishSelectionPolicyTestsPrivate
 		return Presentation;
 	}
 
-	static UCatFishDefinition* MakeFishDefinition(const FName FishId, const double SpawnWeight,
+	static UCatFishDefinition* MakeFishDefinition(const int32 FishId, const double SpawnWeight,
 		UCatFishPresentationDefinition* Presentation)
 	{
 		UCatFishDefinition* Definition = NewObject<UCatFishDefinition>(GetTransientPackage());
 		Definition->bEnableRuntimeDefinition = true;
-		Definition->FishDefinitionId = FishId;
+		Definition->ItemId = FishId;
 		Definition->PresentationDefinition = Presentation;
 		Definition->BodyClass = ECatFishBodyClass::Standard;
 		Definition->RarityTierId = TEXT("TestRarity");
@@ -71,7 +71,7 @@ namespace CatFishSelectionPolicyTestsPrivate
 		Definition->Weather = {ECatEnvironmentWeather::Clear};
 		Definition->SpawnWeight = 999.0; // 历史载荷不得影响新概率。
         Definition->ChumPreference.Fishy = 1.0;
-        Definition->BaitWeightMultipliers.Add({TEXT("TestBait"), SpawnWeight});
+        Definition->BaitWeightMultipliers.Add({1560925, SpawnWeight});
 		Definition->FishStrengthPerKilogram = 10.0; // 力量系数K 逐鱼配；力量 = 重量 x K。
 		Definition->MinimumWeightKilograms = 1.0;
 		Definition->MaximumWeightKilograms = 1.0;
@@ -131,7 +131,7 @@ bool FCatFishSelectionBasePoolFallbackTest::RunTest(const FString& Parameters)
 	UCatFishPresentationDefinition* Presentation =
 		CatFishSelectionPolicyTestsPrivate::MakePresentationDefinition();
 	UCatFishDefinition* PoolFish = CatFishSelectionPolicyTestsPrivate::MakeFishDefinition(
-		TEXT("PoolFish"), 1.0, Presentation);
+		1802929, 1.0, Presentation);
 	if (!TestNotNull(TEXT("creates transient catalog settings"), Settings)
 		|| !TestNotNull(TEXT("creates transient presentation"), Presentation)
 		|| !TestNotNull(TEXT("creates transient base pool fish"), PoolFish))
@@ -176,13 +176,13 @@ bool FCatFishSelectionBasePoolFallbackTest::RunTest(const FString& Parameters)
 
 	// 名册填上之后，「候选为空」必须落基础池而不是空钩（2026-09-08 李前臻裁）。
 	FCatFishBasePoolEntry& Entry = Settings->BasePool.AddDefaulted_GetRef();
-	Entry.FishDefinitionId = TEXT("PoolFish");
+	Entry.ItemId = 1802929;
 	Entry.Probability = 1.0;
 	const FCatFishSelectionResult FromPool = Settings->SelectRuntimeDefinition(Context);
 	TestTrue(TEXT("an empty candidate set falls back to the base pool"), FromPool.bSelected);
 	TestTrue(TEXT("the fallback marks itself as base pool sourced"), FromPool.bFromBasePool);
 	TestEqual(TEXT("the fallback picks the only roster member"),
-		FromPool.FishDefinitionId, FName(TEXT("PoolFish")));
+		FromPool.ItemId, 1802929);
 	TestEqual(TEXT("the fallback still derives strength from weight times the fish's own coefficient"),
 		FromPool.BaseFishStrength, FromPool.WeightKilograms * PoolFish->FishStrengthPerKilogram, 1e-6);
 	return !HasAnyErrors();
@@ -195,9 +195,9 @@ bool FCatFishSelectionPostFilterNormalizationTest::RunTest(const FString& Parame
 	UCatFishPresentationDefinition* Presentation =
 		CatFishSelectionPolicyTestsPrivate::MakePresentationDefinition();
 	UCatFishDefinition* LightFish = CatFishSelectionPolicyTestsPrivate::MakeFishDefinition(
-		TEXT("LightFish"), 1.0, Presentation);
+		1580847, 1.0, Presentation);
 	UCatFishDefinition* HeavyFish = CatFishSelectionPolicyTestsPrivate::MakeFishDefinition(
-		TEXT("HeavyFish"), 3.0, Presentation);
+		1409676, 3.0, Presentation);
 	if (!TestNotNull(TEXT("creates transient catalog settings"), Settings)
 		|| !TestNotNull(TEXT("creates transient presentation"), Presentation)
 		|| !TestNotNull(TEXT("creates first transient fish"), LightFish)
@@ -228,7 +228,7 @@ bool FCatFishSelectionPostFilterNormalizationTest::RunTest(const FString& Parame
 	Context.CombinedFishingStrength = 10.0;
 	Context.CombinedFightStamina = 10.0;
 	Context.RandomSeed = 20260901;
-	Context.BaitDefinitionId = TEXT("TestBait");
+	Context.BaitItemId = 1560925;
 	// 跨原轻松/高风险带，仍必须用原始权重 1:3 一起归一化，不能先选带或乘挑战倍率。
 	// 墓碑（2026-09-14，鱼册 §3.1.2／设计修改记录④）：空窝用基础池，归一化夹具改为非空窝。
 	// 两条鱼同属腥类，TestBait 的倍率为1:3，旧 SpawnWeight 不参与抽取。
@@ -244,21 +244,21 @@ bool FCatFishSelectionPostFilterNormalizationTest::RunTest(const FString& Parame
 		BypassedResult.EligibleCandidateCount, 2);
 	TestEqual(TEXT("both fish participate in final weight normalization"),
 		BypassedResult.PositiveWeightCandidateCount, 2);
-	const double ExpectedProbability = BypassedResult.FishDefinitionId == TEXT("HeavyFish") ? 0.75 : 0.25;
+	const double ExpectedProbability = BypassedResult.ItemId == 1409676 ? 0.75 : 0.25;
 	TestEqual(TEXT("reported probability is normalized only across remaining candidates"),
 		BypassedResult.SelectedNormalizedProbability, ExpectedProbability, UE_DOUBLE_SMALL_NUMBER);
 	TestEqual(TEXT("selected individual weight is frozen once"),
 		BypassedResult.WeightKilograms, 1.0, UE_DOUBLE_SMALL_NUMBER);
 	TestEqual(TEXT("fish strength is sampled weight times that fish's own strength coefficient"),
-		BypassedResult.BaseFishStrength, BypassedResult.FishDefinitionId == TEXT("HeavyFish") ? 12.0 : 5.0,
+		BypassedResult.BaseFishStrength, BypassedResult.ItemId == 1409676 ? 12.0 : 5.0,
 		UE_DOUBLE_SMALL_NUMBER);
 	TestEqual(TEXT("challenge no longer scales raw ecological weights"), BypassedResult.SelectedFinalWeight,
-		BypassedResult.FishDefinitionId == TEXT("HeavyFish") ? 3.0 : 1.0, UE_DOUBLE_SMALL_NUMBER);
+		BypassedResult.ItemId == 1409676 ? 3.0 : 1.0, UE_DOUBLE_SMALL_NUMBER);
 
     Context.CombinedFishingStrength = 0.0;
     Context.CombinedFightStamina = 0.0;
     const auto WeakCat = Settings->SelectRuntimeDefinition(Context);
-    TestEqual(TEXT("zero cat resources do not change the selected fish"), WeakCat.FishDefinitionId, BypassedResult.FishDefinitionId);
+    TestEqual(TEXT("zero cat resources do not change the selected fish"), WeakCat.ItemId, BypassedResult.ItemId);
     TestEqual(TEXT("zero cat resources do not remove strong fish"), WeakCat.EligibleCandidateCount, 2);
 	AddExpectedMessage(TEXT("Event=fish_selection_strength_coefficient_unset"), ELogVerbosity::Warning);
 	// 候选被筛空之后会落基础池；本用例没配名册，所以兜底也拿不出鱼，这条是预期日志不是失败。
@@ -284,16 +284,16 @@ bool FCatFishSelectionPostFilterNormalizationTest::RunTest(const FString& Parame
         Context.RandomSeed = Seed;
         const auto Mixed = Settings->SelectRuntimeDefinition(Context);
         TestTrue(TEXT("mixed chum selects a fish"), Mixed.bSelected);
-        const bool bFragrant = Mixed.FishDefinitionId == TEXT("HeavyFish");
+        const bool bFragrant = Mixed.ItemId == 1409676;
         FragrantCount += bFragrant ? 1 : 0;
         TestEqual(TEXT("bait cannot change class probability"), Mixed.SelectedNormalizedProbability,
             bFragrant ? 0.75 : 0.25, 0.000001);
-        TestEqual(TEXT("selection replay stays deterministic"), Settings->SelectRuntimeDefinition(Context).FishDefinitionId, Mixed.FishDefinitionId);
+        TestEqual(TEXT("selection replay stays deterministic"), Settings->SelectRuntimeDefinition(Context).ItemId, Mixed.ItemId);
     }
     TestTrue(TEXT("mixed class frequency follows 1:3 chum"), FragrantCount > 1400 && FragrantCount < 1600);
     Context.ChumSample.EffectiveChumVector.Fragrant = 0.0;
     TestEqual(TEXT("pure fishy chum cannot pick fragrant fish despite its larger bait weight"),
-        Settings->SelectRuntimeDefinition(Context).FishDefinitionId, LightFish->FishDefinitionId);
+        Settings->SelectRuntimeDefinition(Context).ItemId, LightFish->ItemId);
 	Settings->bEnableTimeOfDayEligibilityFilter = true;
 	const FCatFishSelectionResult EnabledResult = Settings->SelectRuntimeDefinition(Context);
 	TestFalse(TEXT("enabling the time gate activates the existing definition data"), EnabledResult.bSelected);
@@ -331,13 +331,13 @@ bool FCatFormalFishSelectionWeightStrengthTest::RunTest(const FString& Parameter
 	const FCatFishSelectionResult Replay = Settings->SelectRuntimeDefinition(Context);
 	if (!TestTrue(TEXT("formal River catalog still selects an eligible individual"), First.bSelected)
 		|| !TestEqual(TEXT("same opportunity replays the fish id"),
-			Replay.FishDefinitionId, First.FishDefinitionId)
+			Replay.ItemId, First.ItemId)
 		|| !TestEqual(TEXT("same opportunity replays the individual weight"),
 			Replay.WeightKilograms, First.WeightKilograms, UE_DOUBLE_SMALL_NUMBER))
 	{
 		return false;
 	}
-	const UCatFishDefinition* Definition = Settings->FindRuntimeDefinition(First.FishDefinitionId);
+	const UCatFishDefinition* Definition = Settings->FindRuntimeDefinition(First.ItemId);
 	TestNotNull(TEXT("selected formal fish resolves"), Definition);
 	TestTrue(TEXT("selected weight stays inside its formal definition"), Definition
 		&& First.WeightKilograms >= Definition->MinimumWeightKilograms
@@ -422,14 +422,14 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishBasePoolInvalidMappingTest,
 bool FCatFishBasePoolInvalidMappingTest::RunTest(const FString&)
 {
 	auto* Settings = NewObject<UCatFishCatalogSettings>();
-	auto* Fish = CatFishSelectionPolicyTestsPrivate::MakeFishDefinition(TEXT("TestFish"), 1.0,
+	auto* Fish = CatFishSelectionPolicyTestsPrivate::MakeFishDefinition(1241638, 1.0,
 		CatFishSelectionPolicyTestsPrivate::MakePresentationDefinition());
 	Settings->Definitions = {Fish};
 	FCatFishSelectionContext Context;
 	Context.WaterRegion.RegionId = TEXT("TestLake");
 	Context.ActivePlayerCount = 1;
 	FCatFishBasePoolEntry Entry;
-	Entry.FishDefinitionId = Fish->FishDefinitionId;
+	Entry.ItemId = Fish->ItemId;
 	Entry.Probability = 1.0;
 	Settings->BasePool = {Entry, Entry};
 	AddExpectedMessage(TEXT("Event=fish_selection_base_pool_invalid"), ELogVerbosity::Warning,
@@ -439,7 +439,7 @@ bool FCatFishBasePoolInvalidMappingTest::RunTest(const FString&)
 	Settings->BasePool[0].Probability = -1.0;
 	TestFalse(TEXT("非法权重拒绝整份映射"), Settings->SelectFromBasePool(Context, TEXT("Test")).bSelected);
 	Settings->BasePool[0].Probability = 1.0;
-	Settings->BasePool[0].FishDefinitionId = TEXT("NotInCatalog");
+	Settings->BasePool[0].ItemId = 1374701;
 	TestFalse(TEXT("未知成员拒绝，不回全鱼池"), Settings->SelectFromBasePool(Context, TEXT("Test")).bSelected);
 	return !HasAnyErrors();
 }

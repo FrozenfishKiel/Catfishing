@@ -56,11 +56,13 @@ bool UCatBackPackComponent::ReserveQuickbarHeldSlotFromAuthority(const int32 Slo
 	if (QuickbarHeldSlot.ItemInstanceId.IsValid()) return QuickbarHeldSlot.ItemInstanceId == ItemId;
 	QuickbarHeldSlot.SlotIndex = SlotIndex;
 	QuickbarHeldSlot.ItemInstanceId = ItemId;
-	QuickbarHeldSlot.DefinitionId = Entry->Instance->GetItemDefinition()->GetInventoryDefinitionId();
+	QuickbarHeldSlot.ItemId = Entry->Instance->GetItemDefinition()->GetItemId();
 	OnRep_QuickbarHeldSlot();
 	GetOwner()->ForceNetUpdate();
 	return true;
 }
+// 接回预留流程：先确认服务器持有的实例和空格，再校验已有预留是否一致；成功写入格位、实例和数字物品身份并刷新复制。
+// 参数 ItemId 是实例 GUID；已有同实例同格预留时幂等返回，不重复通知，只有首次预留才写入数字物品编号。
 bool UCatBackPackComponent::ReserveExistingHeldQuickbarSlotFromAuthority(const int32 SlotIndex, const FGuid ItemId)
 {
 	const auto* Entry = FindHeldInventoryEntryFromAuthority(ItemId);
@@ -70,7 +72,7 @@ bool UCatBackPackComponent::ReserveExistingHeldQuickbarSlotFromAuthority(const i
 		return QuickbarHeldSlot.ItemInstanceId == ItemId && QuickbarHeldSlot.SlotIndex == SlotIndex;
 	QuickbarHeldSlot.SlotIndex = SlotIndex;
 	QuickbarHeldSlot.ItemInstanceId = ItemId;
-	QuickbarHeldSlot.DefinitionId = Entry->Instance->GetItemDefinition()->GetInventoryDefinitionId();
+	QuickbarHeldSlot.ItemId = Entry->Instance->GetItemDefinition()->GetItemId();
 	OnRep_QuickbarHeldSlot();
 	GetOwner()->ForceNetUpdate();
 	return true;

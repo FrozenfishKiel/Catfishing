@@ -36,7 +36,12 @@ struct FCatFishPickupPresentationState
 
 	UPROPERTY(BlueprintReadOnly) FGuid FishingSessionId;
 	UPROPERTY(BlueprintReadOnly) FGuid FishInstanceId;
-	UPROPERTY(BlueprintReadOnly) FName FishDefinitionId = NAME_None;
+	UPROPERTY(BlueprintReadOnly) int32  ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
+	FName FishDefinitionId = NAME_None;
+
 	UPROPERTY(BlueprintReadOnly) double WeightKilograms = 0.0;
 	/** 与水中 Encounter 完全相同的服务器冻结统一 Mesh 缩放。 */
 	UPROPERTY(BlueprintReadOnly) double VisualScale = 1.0;
@@ -209,7 +214,7 @@ private:
 	TWeakObjectPtr<UCatInventoryComponent> InventoryStoreTarget;
 	FTransform LandedMeshBaseTransform = FTransform::Identity;
 	FTransform CarriedMeshBaseTransform = FTransform::Identity;
-	FName AppliedPresentationFishDefinitionId = NAME_None;
+	int32  AppliedPresentationItemId = 0;
 	/** 抛钩会话冻结的图鉴首次条件（地域＋时段＋天气）；库存落地的鱼没有新捕获条件，保持全 None。 */
 	FCatCaptureConditionSnapshot CaptureCondition;
 	/** 这一竿的上钩者；图鉴收集层的唯一收件人，实物被别人叼走也不改。库存落地的鱼为空（早已归档）。 */

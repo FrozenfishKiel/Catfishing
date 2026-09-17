@@ -190,7 +190,7 @@ bool ACatAltarActor::CollectOffering(TArray<TWeakObjectPtr<ACatFishPickupActor>>
 	const UCatRunSettings* Settings = GetDefault<UCatRunSettings>();
 	TSet<FGuid> Seen;
 	// 两种来源只在取身份与重量处不同，分类和点数保持一个口径；重复身份不会二次计分或消费。
-	const auto AddFish = [&](FGuid Id, FName DefinitionId, double Weight)
+	const auto AddFish = [&](FGuid Id, int32  ItemId, double Weight)
 	{
 		if (!Id.IsValid() || Seen.Contains(Id)) return false;
 		ECatOfferingWeightClass WeightClass;
@@ -203,7 +203,7 @@ bool ACatAltarActor::CollectOffering(TArray<TWeakObjectPtr<ACatFishPickupActor>>
 		case ECatOfferingWeightClass::Large: ++OutCommand.LargeFishCount; break;
 		case ECatOfferingWeightClass::Giant: ++OutCommand.GiantFishCount; break;
 		}
-		if (Settings->IsStinkyOfferingFish(DefinitionId)) ++OutCommand.StinkyFishCount;
+		if (Settings->IsStinkyOfferingFish(ItemId)) ++OutCommand.StinkyFishCount;
 		OutPoints += Points;
 		Seen.Add(Id);
 		return true;
@@ -213,7 +213,7 @@ bool ACatAltarActor::CollectOffering(TArray<TWeakObjectPtr<ACatFishPickupActor>>
 		const FCatFishPickupPresentationState& Fish = It->GetPresentationState();
 		if (Fish.State != ECatFishPickupState::Available || It->GetAttachParentActor() || It->IsHidden()
 			|| FVector::DistSquared(It->GetActorLocation(), GetActorLocation()) > FMath::Square(OfferingRadiusCentimeters)) continue;
-		if (!AddFish(Fish.FishInstanceId, Fish.FishDefinitionId, Fish.WeightKilograms))
+		if (!AddFish(Fish.FishInstanceId, Fish.ItemId, Fish.WeightKilograms))
 		{
 			OutError = NSLOCTEXT("Catfishing", "AltarInvalidFish", "供品身份或重量无效，请检查供品");
 			return false;
@@ -235,7 +235,7 @@ bool ACatAltarActor::CollectOffering(TArray<TWeakObjectPtr<ACatFishPickupActor>>
 			if (!Entry->Instance && Entry->StackCount == 0) continue;
 			const UCatFishInventoryItemInstance* Fish = Cast<UCatFishInventoryItemInstance>(Entry->Instance);
 			if (!Fish || Entry->StackCount != 1 || !Fish->GetFishDefinition()
-				|| !AddFish(Fish->GetItemInstanceId(), Fish->GetFishDefinition()->FishDefinitionId, Fish->GetFishWeightKilograms()))
+				|| !AddFish(Fish->GetItemInstanceId(), Fish->GetFishDefinition()->ItemId, Fish->GetFishWeightKilograms()))
 			{
 				OutError = NSLOCTEXT("Catfishing", "AltarInvalidGuardFish", "鱼护内供品身份或重量无效");
 				return false;

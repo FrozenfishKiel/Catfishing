@@ -103,10 +103,10 @@ bool UCatRunSettings::TryClassifyOfferingWeight(const double WeightKilograms,
 	return true;
 }
 
-// 臭鱼判定流程：只把配置中的稳定 FishDefinitionId 当作增益折扣来源；未配置或普通鱼都返回 false，避免按显示名猜测。
-bool UCatRunSettings::IsStinkyOfferingFish(const FName FishDefinitionId) const
+// 臭鱼判定流程：只把配置中的稳定 ItemId 当作增益折扣来源；未配置或普通鱼都返回 false，避免按显示名猜测。
+bool UCatRunSettings::IsStinkyOfferingFish(const int32  ItemId) const
 {
-	return !FishDefinitionId.IsNone() && StinkyOfferingFishDefinitionIds.Contains(FishDefinitionId);
+	return !(ItemId == 0) && StinkyOfferingItemIds.Contains(ItemId);
 }
 
 // 成功结算资格计算流程：先要求策略总开关显式启用，再要求世界进度达到策划案的 100；毕业裁决只看世界进度。

@@ -104,7 +104,7 @@ bool FCatFishingPhysicalGripGraphTest::RunTest(const FString& Parameters)
 		const FTransform Pose(FRotator::ZeroRotator, FVector(0, 0, 200));
 		auto* Rod = World->SpawnActorDeferred<ACatFishingRodActor>(ACatFishingRodActor::StaticClass(), Pose);
 		if (!Rod || !Rod->ConfigureCanonicalAnchorsFromAuthority(FTransform(FVector(50, 0, 0)), FTransform::Identity, FTransform::Identity)
-			|| !Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid(), TEXT("PhysicalTestRod"), NAME_None, Owner, nullptr, true, false)) return static_cast<ACatFishingRodActor*>(nullptr);
+			|| !Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid(), 1519377, NAME_None, Owner, nullptr, true, false)) return static_cast<ACatFishingRodActor*>(nullptr);
 		Rod->FinishSpawning(Pose);
 		return Rod;
 	};
@@ -292,7 +292,7 @@ bool FCatFishingPhysicalCouplingTest::RunTest(const FString& Parameters)
 		{
 			auto* Result = World->SpawnActorDeferred<ACatFishingRodActor>(ACatFishingRodActor::StaticClass(), FTransform::Identity);
 			if (!Result || !Result->ConfigureCanonicalAnchorsFromAuthority(FTransform(FVector(60, 0, 0)), FTransform::Identity, FTransform::Identity)
-				|| !Result->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid(), TEXT("CoupledRod"), NAME_None, Players[0], nullptr, true, false)) return nullptr;
+				|| !Result->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid(), 1341440, NAME_None, Players[0], nullptr, true, false)) return nullptr;
 			Result->FinishSpawning(FTransform::Identity);
 			return Result->BeginPhysicalHoldFromAuthority(Players[0], true) && Result->SetPrimaryOperatorFromAuthority(Players[0], Result->GetPresentationState().RodActorRevision)
 				&& Result->GetPhysicalRodComponent()->CommitPrimaryHold(Players[0]) ? Result : nullptr;

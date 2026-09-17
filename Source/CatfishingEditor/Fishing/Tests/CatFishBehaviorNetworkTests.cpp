@@ -129,7 +129,7 @@ namespace CatFishBehaviorNetwork
 				for (const auto& Reference : Catalog->Definitions)
 				{
 					UCatFishDefinition* Candidate = Reference.LoadSynchronous();
-					if (Candidate && Catalog->FindRuntimeDefinition(Candidate->FishDefinitionId) == Candidate)
+					if (Candidate && Catalog->FindRuntimeDefinition(Candidate->ItemId) == Candidate)
 					{
 						Definition = Candidate;
 						break;
@@ -159,7 +159,7 @@ namespace CatFishBehaviorNetwork
 				ServerFish = Server->SpawnActorDeferred<ACatFishEncounterActor>(FishClass, Transform);
 				if (!Test->TestNotNull(TEXT("服务器生成正式鱼Actor"), ServerFish.Get())) return true;
 				if (!Test->TestTrue(TEXT("服务器通过原身份写口初始化"), ServerFish->InitializeAuthoritativeIdentity(
-					SessionId, CastId, Definition->FishDefinitionId, 600.0, VisualScale))) return true;
+					SessionId, CastId, Definition->ItemId, 600.0, VisualScale))) return true;
 				ServerFish->bAlwaysRelevant = true;
 				ServerFish->FinishSpawning(Transform);
 				if (USkeletalMeshComponent* ServerMesh = ServerFish->FindComponentByClass<USkeletalMeshComponent>())
@@ -205,7 +205,7 @@ namespace CatFishBehaviorNetwork
 			const auto& State = ClientFish->GetPresentationState();
 			Test->TestTrue(TEXT("快照来自独立客户端世界的真实复制Actor"), ClientFish != ServerFish.Get()
 				&& ClientFish->GetWorld() != ServerFish->GetWorld() && !ClientFish->HasAuthority());
-			Test->TestEqual(TEXT("正式鱼身份随同复制"), State.FishDefinitionId, ServerFish->GetPresentationState().FishDefinitionId);
+			Test->TestEqual(TEXT("正式鱼身份随同复制"), State.ItemId, ServerFish->GetPresentationState().ItemId);
 			Test->TestEqual(TEXT("抛竿关联身份随同复制"), State.CastAttemptId, CastId);
 			Test->TestTrue(TEXT("鱼钩也来自独立客户端ActorChannel"), ClientHook != ServerHook.Get() && !ClientHook->HasAuthority());
 			Test->TestEqual(TEXT("钩与鱼保持同一抛竿身份"), ClientHook->GetPresentationState().CastAttemptId, CastId);

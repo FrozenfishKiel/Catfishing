@@ -318,15 +318,15 @@ TArray<FCatFishTankOccupant> ACatFishTankActor::GetTankOccupants() const
 		{
 			continue;
 		}
-		const FName FishDefinitionId = Fish->GetItemDefinitionId();
+		const int32  ItemId = Fish->GetItemId();
 		const double WeightKilograms = Fish->GetFishWeightKilograms();
-		if (FishDefinitionId.IsNone() || !FMath::IsFinite(WeightKilograms) || WeightKilograms <= 0.0)
+		if ((ItemId == 0) || !FMath::IsFinite(WeightKilograms) || WeightKilograms <= 0.0)
 		{
 			continue;
 		}
 		FCatFishTankOccupant& Occupant = Occupants.AddDefaulted_GetRef();
 		Occupant.FishInstanceId = Fish->GetItemInstanceId();
-		Occupant.FishDefinitionId = FishDefinitionId;
+		Occupant.ItemId = ItemId;
 		Occupant.WeightKilograms = WeightKilograms;
 	}
 	return Occupants;

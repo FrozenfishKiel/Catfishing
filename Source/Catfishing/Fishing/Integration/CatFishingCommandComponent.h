@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
@@ -61,7 +61,7 @@ public:
 		const FCatPlaceRodCommand& Command);
 	/** 选中窝料的持续 Use 开始入口；按固定来源实例激活对应 ServerOnly Ability，不在组件保存槽位或蓄力状态。 */
 	FCatDomainCommandResult BeginChumUseFromInventoryOnAuthority(APlayerController* RequestingController,
-		const FCatInventoryItemUseContext& UseContext, FGuid ChumItemInstanceId, FName ChumDefinitionId);
+		const FCatInventoryItemUseContext& UseContext, FGuid ChumItemInstanceId, int32  ChumItemId);
 	/** 选中窝料的持续 Use 结束入口；取消终止对应 Ability，正常结束只向其 AbilityTask 投递同一 Spec 的 Release。 */
 	FCatDomainCommandResult EndChumUseFromInventoryOnAuthority(APlayerController* RequestingController,
 		const FCatInventoryItemUseContext& UseContext, bool bCancelled);
@@ -70,7 +70,7 @@ public:
 	 * 保留既有弹道、范围和精确实例扣量事务，不在命令组件重复保存持续 Use 状态。
 	 */
 	FCatDomainCommandResult CommitChumUseFromAbilityOnAuthority(APlayerController* RequestingController,
-		const FCatInventoryItemUseContext& UseContext, FGuid ChumItemInstanceId, FName ChumDefinitionId,
+		const FCatInventoryItemUseContext& UseContext, FGuid ChumItemInstanceId, int32  ChumItemId,
 		double HeldSeconds);
 	/** 选中抄网的库存 Use 复用原 RequestScoop 命令，只在同步分派期间携带指定实例给 Session 权威复核。 */
 	FCatDomainCommandResult ScoopFromInventoryUseOnAuthority(APlayerController* RequestingController,
@@ -188,7 +188,7 @@ private:
 	void BeginCastFromViewOnAuthority(APlayerController* Controller, const FCatFishingInputEdge& Edge);
 	/** 服务器按 Ability 已冻结的窝料实例和按住时长投放；结束时重读原槽位，拒绝换物或移动后的迟到释放。 */
 	void ThrowChumFromChargeOnAuthority(APlayerController* Controller, const FCatInventoryItemUseContext& UseContext,
-		FGuid ChumItemInstanceId, FName ChumDefinitionId, double HeldSeconds);
+		FGuid ChumItemInstanceId, int32  ChumItemId, double HeldSeconds);
 
 	/** 服务器记录的"本次左键按住=瞄准抛竿"关联 ID；只有同一次按住的松开才触发抛竿，防止提竿失败后的松开误抛。 */
 	FGuid ServerAimingCorrelationId;

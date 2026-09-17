@@ -2,7 +2,7 @@
 
 在编辑器 Python 控制台调用 migrate(level_package, rack_cm, store_cm,
 driedfish_package, stock_policies, apply=True)。位置必须由关卡负责人提供，单位厘米。
-stock_policies 按新增 DefinitionId 提供原目录字段（库存／每日补货策略），不猜进货量。
+stock_policies 按新增数字 ItemId 提供原目录字段（库存／每日补货策略），不猜进货量。
 运行前须通过 Catfishing.Unit.Save.MultiStorageFishTierWalletWorldColdDiskRoundTrip。
 小鱼干定义及其既定使用行为由道具负责人提供，本脚本不生成无效果的占位道具。
 """
@@ -17,8 +17,9 @@ import unreal
 
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = "/Game/Catfishing/Data/Shop/DT_ShopCatalog_Default"
-ITEM_ID = "buff_driedfish"
-REQUIRED_ROWS = {"FishGuard", "StarterScoopNet", "FishTankCapacityT2", "FishTankCapacityT3", ITEM_ID}
+# 只读正式配置；缺失小鱼干定义时不生成新编号或无效果占位道具。
+ITEM_ID = int(unreal.get_default_object(unreal.CatShopEconomySettings).get_editor_property("settlement_dried_item_id"))
+REQUIRED_ROWS = {11, 38, 42, 43} | ({ITEM_ID} if ITEM_ID > 0 else set())
 
 
 def _design_prices():
@@ -47,7 +48,7 @@ def _design_prices():
     if not toy_price:
         raise RuntimeError("Toy rod price needs an explicit design mapping")
     prices["ShopRodT2"] = int(toy_price.group(1))
-    aliases = {"gear_net": "StarterScoopNet", "gear_keepnet": "FishGuard", ITEM_ID: ITEM_ID}
+    aliases = {"gear_net": "StarterScoopNet", "gear_keepnet": "FishGuard", "buff_driedfish": "buff_driedfish"}
     with (items / "道具总表/道具.csv").open(encoding="utf-8-sig", newline="") as handle:
         for row in csv.reader(handle):
             if row and row[-1] in aliases:
@@ -58,17 +59,21 @@ def _design_prices():
         raise RuntimeError("Tank/item prices need an explicit current design mapping")
     tier2, tier3 = next(iter(upgrade_prices))
     prices.update(FishTankCapacityT2=int(tier2), FishTankCapacityT3=int(tier3))
-    return prices
+    # 策划源表的历史标签只在导入边界解释，输出始终使用已冻结的数字身份。
+    ids = {row["legacy_id"]: row["item_id"] for row in json.loads((ROOT / "Config/ItemIdMigration.json").read_text(encoding="utf-8-sig"))}
+    if ITEM_ID > 0:
+        ids["buff_driedfish"] = ITEM_ID
+    return {ids[name]: price for name, price in prices.items() if name in ids}
 
 
 def _prepare_rows(rows, stock_policies):
     prices = _design_prices()
-    unresolved = sorted({row["DefinitionId"] for row in rows if row["DefinitionId"] not in prices})
+    unresolved = sorted({row["ItemId"] for row in rows if row["ItemId"] not in prices})
     if unresolved:
         raise RuntimeError(f"Content owner must resolve legacy definitions against design before applying: {unresolved}")
-    if len({row["DefinitionId"] for row in rows}) != len(rows):
+    if len({row["ItemId"] for row in rows}) != len(rows):
         raise RuntimeError("Resolve duplicate definition rows before original-price migration")
-    missing = REQUIRED_ROWS - {row["DefinitionId"] for row in rows}
+    missing = REQUIRED_ROWS - {row["ItemId"] for row in rows}
     if missing - stock_policies.keys():
         raise RuntimeError(f"Provide explicit stock policies for new rows: {sorted(missing - stock_policies.keys())}")
     for definition in sorted(missing):
@@ -80,14 +85,14 @@ def _prepare_rows(rows, stock_policies):
         daily = policy.get("bDailyRestock", False)
         if (not unlimited and policy.get("InitialStock", 0) <= 0) or (daily and (unlimited or policy.get("DailyRestockQuantity", 0) <= 0)):
             raise ValueError(f"Incomplete stock policy: {definition}")
-        rows.append(dict(Name=definition, EntryId=definition, DefinitionId=definition,
+        rows.append(dict(Name=str(definition), EntryId=str(definition), ItemId=definition,
                          PurchaseQuantity=1, bEnabled=True, bAlwaysStocked=True, **policy))
     for row in rows:
         quantity = int(row.get("PurchaseQuantity", 0))
         if quantity <= 0:
-            raise ValueError(f"Invalid purchase quantity: {row['DefinitionId']}")
-        row["UnitPrice"] = prices[row["DefinitionId"]] * quantity
-        if row["DefinitionId"] == ITEM_ID:
+            raise ValueError(f"Invalid purchase quantity: {row['ItemId']}")
+        row["UnitPrice"] = prices[row["ItemId"]] * quantity
+        if row["ItemId"] == ITEM_ID:
             row["DisplayNameOverride"] = "小鱼干"
     return rows
 
@@ -106,11 +111,11 @@ def audit():
     prices = _design_prices()
     for row in rows:
         unreal.log("Event=ShopOriginalPriceAudit Definition={} Price={} Quantity={} DesignEach={}".format(
-            row.get("DefinitionId"), row.get("UnitPrice"), row.get("PurchaseQuantity"),
-            prices.get(row.get("DefinitionId"), "UNRESOLVED")))
-    matches = [row for row in rows if row.get("DefinitionId") == ITEM_ID]
+            row.get("ItemId"), row.get("UnitPrice"), row.get("PurchaseQuantity"),
+            prices.get(row.get("ItemId"), "UNRESOLVED")))
+    matches = [row for row in rows if row.get("ItemId") == ITEM_ID]
     unreal.log(f"Event=ShopDriedFishCatalogAudit Rows={len(matches)}")
-    unreal.log(f"Event=ShopRequiredRowsAudit Missing={sorted(REQUIRED_ROWS - {row['DefinitionId'] for row in rows})}")
+    unreal.log(f"Event=ShopRequiredRowsAudit Missing={sorted(REQUIRED_ROWS - {row['ItemId'] for row in rows})}")
     return rows
 
 
@@ -123,9 +128,12 @@ def migrate(level_package, rack_cm, store_cm, driedfish_package, stock_policies,
     dried = unreal.EditorAssetLibrary.load_asset(driedfish_package)
     if not isinstance(dried, unreal.CatInventoryItemDefinition):
         raise RuntimeError("Item owner must provide the real buff_driedfish definition")
-    identity_field = "equipment_definition_id" if isinstance(dried, unreal.CatEquipmentDefinition) else "inventory_definition_id"
-    if str(dried.get_editor_property(identity_field)) != ITEM_ID:
-        raise RuntimeError("Item owner must provide the real buff_driedfish definition")
+    if ITEM_ID <= 0 or int(dried.get_editor_property("item_id")) != ITEM_ID:
+        raise RuntimeError("Provide the real dried-fish definition and configure its numeric SettlementDriedItemId first")
+    item_catalog = unreal.load_asset('/Game/Catfishing/Data/Items/DT_ItemCatalog')
+    item_rows = json.loads(unreal.DataTableFunctionLibrary.export_data_table_to_json_string(item_catalog))
+    if not any(row['ItemId'] == ITEM_ID and row['ItemDefinition'] == dried.get_path_name() for row in item_rows):
+        raise RuntimeError("Dried-fish definition must already be indexed by DT_ItemCatalog")
     table, rows = _catalog()
     rows = _prepare_rows(rows, stock_policies)
     price = _design_prices()[ITEM_ID]
@@ -153,17 +161,6 @@ def migrate(level_package, rack_cm, store_cm, driedfish_package, stock_policies,
             raise RuntimeError("Another equipment rack already exists; resolve its consumers first")
     if len(stores) > 1 or (stores and stores[0] == rack):
         raise RuntimeError("Ambiguous supply-store role")
-    config = ROOT / "Config/DefaultGame.ini"
-    text = config.read_text(encoding="utf-8-sig")
-    section = "[/Script/Catfishing.CatInventorySettings]"
-    if section not in text:
-        raise RuntimeError("Missing project inventory settings section")
-    binding = f'+Definitions=(DefinitionId={ITEM_ID},ItemDefinition="{dried.get_path_name()}")'
-    existing = [line for line in text.splitlines() if line.startswith("+Definitions=")
-                and re.search(rf'DefinitionId\s*=\s*"?{ITEM_ID}"?\s*[,)]', line)]
-    if existing and (len(existing) != 1 or not re.search(
-            rf'ItemDefinition\s*=\s*"?{re.escape(dried.get_path_name())}"?\s*[,)]', existing[0])):
-        raise RuntimeError("Conflicting inventory definition binding; resolve it explicitly")
     unreal.log(f"Event=ShopMigrationPrepared Level={level_package} DriedFish={driedfish_package} Price={price} Apply={apply}")
     if not apply:
         return
@@ -182,9 +179,6 @@ def migrate(level_package, rack_cm, store_cm, driedfish_package, stock_policies,
         raise RuntimeError("Catalog import rejected; do not save the level")
     if not unreal.EditorAssetLibrary.save_loaded_asset(table, False) or not levels.save_current_level():
         raise RuntimeError("Migration save failed; inspect the table and level before continuing")
-    # 仅修改项目默认目录的精确一行；不向本机 Saved/Config 写入第二套商品映射。
-    if not existing:
-        config.write_text(text.replace(section, section + "\n" + binding, 1), encoding="utf-8")
     unreal.log("Event=ShopMigrationSaved Next=RestartEditorThenSaveColdRoundTripAndTwoEndpointShopping")
 
 

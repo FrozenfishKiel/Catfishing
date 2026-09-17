@@ -40,7 +40,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Camera", meta=(ClampMin="0.01", Units="s"))
 	double FightCameraFollowResponseSeconds = 0.08;
 
-	const UCatRodSkinDefinition* FindRuntimeRodSkin(FName RodSkinDefinitionId, FName RodDefinitionId) const;
+	const UCatRodSkinDefinition* FindRuntimeRodSkin(FName RodSkinDefinitionId, int32  RodItemId) const;
 	/** 抛竿后生成的浮漂/鱼钩表现 Actor 类；它属于 Fishing 表现链，不代表某个库存物品实例。 */
 	UPROPERTY(Config, EditAnywhere) TSoftClassPtr<ACatFishingHookActor> HookActorClass;
 	/** 上钩鱼在世界中的表现 Actor 类；它由 Fishing Session 生成，不进入玩家库存。 */

@@ -511,7 +511,7 @@ UCatInventoryItemInstance* UCatInventoryComponent::AddEntry(
 		InOutCount -= RejectedByCarryLimit;
 		UE_LOG(LogCatInventory, Log,
 			TEXT("Event=inventory_carry_limit_clamped Owner=%s Definition=%s Requested=%d Allowance=%d"),
-			*GetNameSafe(GetOwner()), *ItemDefinition->GetInventoryDefinitionId().ToString(),
+			*GetNameSafe(GetOwner()), *FString::FromInt(ItemDefinition->GetItemId()),
 			InOutCount + RejectedByCarryLimit, CarryAllowance);
 	}
 
@@ -631,7 +631,7 @@ void UCatInventoryComponent::AddEntry(UCatInventoryItemInstance* ItemInstance, i
 		InOutCount -= RejectedByCarryLimit;
 		UE_LOG(LogCatInventory, Log,
 			TEXT("Event=inventory_carry_limit_clamped Owner=%s Definition=%s Requested=%d Allowance=%d"),
-			*GetNameSafe(GetOwner()), *TargetDefinition->GetInventoryDefinitionId().ToString(),
+			*GetNameSafe(GetOwner()), *FString::FromInt(TargetDefinition->GetItemId()),
 			InOutCount + RejectedByCarryLimit, CarryAllowance);
 	}
 
@@ -1137,20 +1137,20 @@ bool UCatInventoryComponent::TryAddInventoryBatchInternal(const FCatInventoryRec
 
 // 稳定 ID 发货预检入口流程：先从正式库存目录解析定义资产，再进入共用预检；目录缺失时让内部流程统一返回无效载荷。
 ECatDomainCommandError UCatInventoryComponent::ValidateInventoryDefinitionGrantFromAuthority(
-	const FGuid RequestId, const FName DefinitionId, const int32 Count) const
+	const FGuid RequestId, const int32  ItemId, const int32 Count) const
 {
 	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
 	UCatInventoryItemDefinition* ItemDefinition =
-		InventorySettings != nullptr ? InventorySettings->FindRuntimeDefinition(DefinitionId) : nullptr;
-	return ValidateInventoryDefinitionGrantFromAuthorityInternal(RequestId, DefinitionId, ItemDefinition, Count);
+		InventorySettings != nullptr ? InventorySettings->FindRuntimeDefinition(ItemId) : nullptr;
+	return ValidateInventoryDefinitionGrantFromAuthorityInternal(RequestId, ItemId, ItemDefinition, Count);
 }
 
 // 已解析定义发货预检流程：调用方已经完成业务目录解析时，库存仍按定义自己的稳定 ID 建立同一份载荷口径。
 ECatDomainCommandError UCatInventoryComponent::ValidateResolvedInventoryDefinitionGrantFromAuthority(
 	const FGuid RequestId, UCatInventoryItemDefinition* ItemDefinition, const int32 Count) const
 {
-	const FName DefinitionId = ItemDefinition != nullptr ? ItemDefinition->GetInventoryDefinitionId() : NAME_None;
-	return ValidateInventoryDefinitionGrantFromAuthorityInternal(RequestId, DefinitionId, ItemDefinition, Count);
+	const int32  ItemId = ItemDefinition != nullptr ? ItemDefinition->GetItemId() : 0;
+	return ValidateInventoryDefinitionGrantFromAuthorityInternal(RequestId, ItemId, ItemDefinition, Count);
 }
 
 // 稳定定义发货预检共用流程：
@@ -1158,11 +1158,11 @@ ECatDomainCommandError UCatInventoryComponent::ValidateResolvedInventoryDefiniti
 // 2. 首次预检必须确认 authority、稳定 ID、定义运行配置和数量都有效，避免来源系统传入半配置资产。
 // 3. 最后只用正式库存批次预演容量，调用方不能在自己系统里复制堆叠和格子规则。
 ECatDomainCommandError UCatInventoryComponent::ValidateInventoryDefinitionGrantFromAuthorityInternal(
-	const FGuid RequestId, const FName DefinitionId, UCatInventoryItemDefinition* ItemDefinition, const int32 Count) const
+	const FGuid RequestId, const int32  ItemId, UCatInventoryItemDefinition* ItemDefinition, const int32 Count) const
 {
 	const FString Key = MakeTerminalKey(TEXT("GrantInventoryDefinition"), RequestId);
 	const FString PayloadPrefix = FString::Printf(TEXT("Definition=%s|Count=%d|"),
-		*DefinitionId.ToString(), Count);
+		*FString::FromInt(ItemId), Count);
 	if (const FString* CachedPayload = TerminalPayloadByKey.Find(Key))
 	{
 		return CachedPayload->StartsWith(PayloadPrefix)
@@ -1172,9 +1172,9 @@ ECatDomainCommandError UCatInventoryComponent::ValidateInventoryDefinitionGrantF
 
 	const AActor* OwningActor = GetOwner();
 	if (!RequestId.IsValid() || OwningActor == nullptr || !OwningActor->HasAuthority()
-		|| DefinitionId.IsNone() || Count <= 0 || ItemDefinition == nullptr
+		|| (ItemId == 0) || Count <= 0 || ItemDefinition == nullptr
 		|| !ItemDefinition->IsInventoryRuntimeDefinitionReady()
-		|| ItemDefinition->GetInventoryDefinitionId() != DefinitionId)
+		|| ItemDefinition->GetItemId() != ItemId)
 	{
 		return ECatDomainCommandError::InvalidPayload;
 	}
@@ -1190,22 +1190,22 @@ ECatDomainCommandError UCatInventoryComponent::ValidateInventoryDefinitionGrantF
 
 // 稳定 ID 发货提交入口流程：先从正式库存目录解析定义资产，再进入共用发货事务；幂等和写入不在公开入口重复实现。
 FCatDomainCommandResult UCatInventoryComponent::GrantInventoryDefinitionFromAuthority(
-	const FGuid RequestId, const FName DefinitionId, const int32 Count)
+	const FGuid RequestId, const int32  ItemId, const int32 Count)
 {
 	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
 	UCatInventoryItemDefinition* ItemDefinition =
-		InventorySettings != nullptr ? InventorySettings->FindRuntimeDefinition(DefinitionId) : nullptr;
+		InventorySettings != nullptr ? InventorySettings->FindRuntimeDefinition(ItemId) : nullptr;
 	return GrantInventoryDefinitionFromAuthorityInternal(
-		RequestId, DefinitionId, ItemDefinition, Count);
+		RequestId, ItemId, ItemDefinition, Count);
 }
 
 // 已解析定义发货提交流程：调用方只把业务定义交给库存，实际幂等、容量和写入仍落在统一库存命令上。
 FCatDomainCommandResult UCatInventoryComponent::GrantResolvedInventoryDefinitionFromAuthority(
 	const FGuid RequestId, UCatInventoryItemDefinition* ItemDefinition, const int32 Count)
 {
-	const FName DefinitionId = ItemDefinition != nullptr ? ItemDefinition->GetInventoryDefinitionId() : NAME_None;
+	const int32  ItemId = ItemDefinition != nullptr ? ItemDefinition->GetItemId() : 0;
 	return GrantInventoryDefinitionFromAuthorityInternal(
-		RequestId, DefinitionId, ItemDefinition, Count);
+		RequestId, ItemId, ItemDefinition, Count);
 }
 
 // 稳定定义发货提交共用流程：
@@ -1214,14 +1214,14 @@ FCatDomainCommandResult UCatInventoryComponent::GrantResolvedInventoryDefinition
 // 3. 通过后只调用库存批次收货；堆叠、实例创建和变化广播都集中在本组件。
 // 4. 所有首次终态都会缓存并写入诊断日志，便于商店、奖励或 Equipment 入口跨端追查。
 FCatDomainCommandResult UCatInventoryComponent::GrantInventoryDefinitionFromAuthorityInternal(
-	const FGuid RequestId, const FName DefinitionId,
+	const FGuid RequestId, const int32  ItemId,
 	UCatInventoryItemDefinition* ItemDefinition, const int32 Count)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	const FString Key = MakeTerminalKey(TEXT("GrantInventoryDefinition"), RequestId);
 	const FString PayloadSignature = FString::Printf(TEXT("Definition=%s|Count=%d"),
-		*DefinitionId.ToString(), Count);
+		*FString::FromInt(ItemId), Count);
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
 		const FString* CachedPayload = TerminalPayloadByKey.Find(Key);
@@ -1238,9 +1238,9 @@ FCatDomainCommandResult UCatInventoryComponent::GrantInventoryDefinitionFromAuth
 
 	const AActor* OwningActor = GetOwner();
 	if (!RequestId.IsValid() || OwningActor == nullptr || !OwningActor->HasAuthority()
-		|| DefinitionId.IsNone() || Count <= 0 || ItemDefinition == nullptr
+		|| (ItemId == 0) || Count <= 0 || ItemDefinition == nullptr
 		|| !ItemDefinition->IsInventoryRuntimeDefinitionReady()
-		|| ItemDefinition->GetInventoryDefinitionId() != DefinitionId)
+		|| ItemDefinition->GetItemId() != ItemId)
 	{
 		Result.Error = ECatDomainCommandError::InvalidPayload;
 	}
@@ -1271,7 +1271,7 @@ FCatDomainCommandResult UCatInventoryComponent::GrantInventoryDefinitionFromAuth
 		TEXT("Event=inventory_definition_grant Owner=%s Request=%s Committed=%s Error=%s Definition=%s Count=%d"),
 		*GetNameSafe(OwningActor), *RequestId.ToString(EGuidFormats::DigitsWithHyphens),
 		Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error),
-		*DefinitionId.ToString(), Count);
+		*FString::FromInt(ItemId), Count);
 	return Result;
 }
 
@@ -2635,9 +2635,9 @@ int32 UCatInventoryComponent::FindInventorySlotIndexFromInstanceId(const FGuid I
 // 1. 空定义 ID 代表调用方缺配置，直接失败，避免把任意物品误当成可消费材料。
 // 2. 查询只信任已绑定实例和正堆叠数量，因为空格、坏复制或读模型都不能证明玩家拥有材料。
 // 3. 返回第一格保持“先找到先消费”的项目口径；真正扣量仍由 ConsumeItemAtSlot 重新校验。
-int32 UCatInventoryComponent::FindFirstInventorySlotIndexByDefinitionId(const FName DefinitionId) const
+int32 UCatInventoryComponent::FindFirstInventorySlotIndexByItemId(const int32  ItemId) const
 {
-	if (DefinitionId.IsNone())
+	if ((ItemId == 0))
 	{
 		return INDEX_NONE;
 	}
@@ -2647,7 +2647,7 @@ int32 UCatInventoryComponent::FindFirstInventorySlotIndexByDefinitionId(const FN
 		const FCatInventoryEntry& Entry = InventoryList.Entries[SlotIndex];
 		if (Entry.Instance != nullptr
 			&& Entry.StackCount > 0
-			&& Entry.Instance->GetItemDefinitionId() == DefinitionId)
+			&& Entry.Instance->GetItemId() == ItemId)
 		{
 			return SlotIndex;
 		}
@@ -2660,9 +2660,9 @@ int32 UCatInventoryComponent::FindFirstInventorySlotIndexByDefinitionId(const FN
 // 1. 空定义 ID 直接返回 0，避免调用方把缺配置当成“任意物品都有数量”。
 // 2. 只遍历 InventoryList 的正式可见槽位，要求实例有效、数量为正且定义 ID 精确匹配。
 // 3. held 活动区和 Fishing 会话冻结不从这里叠加，因为它们已经离开玩家当前可整理、可选择的背包格。
-int32 UCatInventoryComponent::CountVisibleInventoryQuantityByDefinitionId(const FName DefinitionId) const
+int32 UCatInventoryComponent::CountVisibleInventoryQuantityByItemId(const int32  ItemId) const
 {
-	if (DefinitionId.IsNone())
+	if ((ItemId == 0))
 	{
 		return 0;
 	}
@@ -2672,7 +2672,7 @@ int32 UCatInventoryComponent::CountVisibleInventoryQuantityByDefinitionId(const 
 	{
 		if (Entry.Instance != nullptr
 			&& Entry.StackCount > 0
-			&& Entry.Instance->GetItemDefinitionId() == DefinitionId)
+			&& Entry.Instance->GetItemId() == ItemId)
 		{
 			Quantity += Entry.StackCount;
 		}
@@ -2742,7 +2742,7 @@ FCatDomainCommandResult UCatInventoryComponent::UseItemAtSlotFromAuthority(
 	Result.RequestId = UseContext.RequestId;
 
 	const AActor* OwningActor = GetOwner();
-	FName DefinitionId = NAME_None;
+	int32  ItemId = 0;
 	FGuid ItemInstanceId;
 	int32 StackCount = 0;
 	if (OwningActor == nullptr || !OwningActor->HasAuthority())
@@ -2766,7 +2766,7 @@ FCatDomainCommandResult UCatInventoryComponent::UseItemAtSlotFromAuthority(
 		{
 			Result.Error = ECatDomainCommandError::NotFound;
 		}
-		else if (Definition == nullptr || Definition->GetInventoryDefinitionId().IsNone())
+		else if (Definition == nullptr || (Definition->GetItemId() == 0))
 		{
 			Result.Error = ECatDomainCommandError::InvalidPayload;
 		}
@@ -2774,14 +2774,14 @@ FCatDomainCommandResult UCatInventoryComponent::UseItemAtSlotFromAuthority(
 		{
 			// 咬钩成立到本竿结局落定之间禁止主动掏道具；抄网已在闸门内单独放行。
 			// 这是本条唯一的权威拒绝点：随身使用与「指定宿主库存使用」两条 RPC 都汇到这里。
-			DefinitionId = Definition->GetInventoryDefinitionId();
+			ItemId = Definition->GetItemId();
 			ItemInstanceId = Instance->GetItemInstanceId();
 			StackCount = Entry->StackCount;
 			Result.Error = ECatDomainCommandError::InvalidPhase;
 		}
 		else
 		{
-			DefinitionId = Definition->GetInventoryDefinitionId();
+			ItemId = Definition->GetItemId();
 			ItemInstanceId = Instance->GetItemInstanceId();
 			StackCount = Entry->StackCount;
 			Result = Instance->UseFromInventorySlotFromAuthority(*Entry, UseContext);
@@ -2797,7 +2797,7 @@ FCatDomainCommandResult UCatInventoryComponent::UseItemAtSlotFromAuthority(
 		*GetNameSafe(GetOwner()),
 		*UseContext.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
 		UseContext.InventorySlotIndex,
-		*DefinitionId.ToString(),
+		*FString::FromInt(ItemId),
 		*ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
 		StackCount,
 		Result.bCommitted ? TEXT("true") : TEXT("false"),

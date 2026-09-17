@@ -20,6 +20,7 @@
 #include "Inventory/CatInventoryItemDefinition.h"
 #include "Inventory/CatInventoryItemInstance.h"
 #include "Inventory/CatInventorySettings.h"
+#include "Inventory/Tests/CatItemCatalogTestFixture.h"
 #include "ShopEconomy/CatShopEconomyService.h"
 #include "ShopEconomy/CatShopEconomySettings.h"
 #include "ShopEconomy/CatShopInventoryComponent.h"
@@ -50,20 +51,20 @@ bool FCatShopCartAtomicTest::RunTest(const FString&)
 		auto* Shelf = Kiosk->GetShopInventory();
 		TStrongObjectPtr<UDataTable> Table(NewObject<UDataTable>());
 		Table->RowStruct = FCatShopCatalogTableRow::StaticStruct();
-		const auto Add = [&](const FName Id, const FName Definition, const int32 Price)
+		const auto Add = [&](const FName Id, const int32 Definition, const int32 Price)
 		{
 			FCatShopCatalogTableRow Row;
-			Row.DefinitionId = Definition;
+			Row.ItemId = Definition;
 			Row.UnitPrice = Price;
 			Row.InitialStock = 3;
 			Table->AddRow(Id, Row);
 		};
-		Add(TEXT("Rod"), TEXT("StarterRodT1"), 11);
-		Add(TEXT("Bait"), TEXT("BugBait"), 7);
+		Add(TEXT("Rod"), 37, 11);
+		Add(TEXT("Bait"), 4, 7);
 		const auto& Upgrades = GetDefault<UCatFishContainerSettings>()->SharedFishTankCapacityUpgrades;
 		if (!TestEqual(TEXT("formal two tank tiers"), Upgrades.Num(), 2)) return false;
-		Add(TEXT("Tier1"), Upgrades[0].UpgradeDefinitionId, 300);
-		Add(TEXT("Tier2"), Upgrades[1].UpgradeDefinitionId, 700);
+		Add(TEXT("Tier1"), Upgrades[0].UpgradeItemId, 300);
+		Add(TEXT("Tier2"), Upgrades[1].UpgradeItemId, 700);
 		Shelf->ShopCatalogTable = Table.Get();
 		if (!Shelf->RebuildInitialInventoryFromCatalog() || !Shop->RestoreWalletFromAuthority(2000)) return false;
 		int32 Broadcasts = 0, Observed = 0;
@@ -94,8 +95,8 @@ bool FCatShopCartAtomicTest::RunTest(const FString&)
 		const bool Success = FailureStep == 5;
 		TestEqual(TEXT("cart commits only after every stage"), Result.CartTransaction.Command.bCommitted, Success);
 		TestEqual(TEXT("wallet all or nothing"), Shop->GetWalletSnapshot().Balance, Success ? 982 : 2000);
-		TestEqual(TEXT("rod all or nothing"), Rack->GetInventoryComponent()->CountVisibleInventoryQuantityByDefinitionId(TEXT("StarterRodT1")), Success ? 1 : 0);
-		TestEqual(TEXT("bait all or nothing"), Store->GetInventoryComponent()->CountVisibleInventoryQuantityByDefinitionId(TEXT("BugBait")), Success ? 1 : 0);
+		TestEqual(TEXT("rod all or nothing"), Rack->GetInventoryComponent()->CountVisibleInventoryQuantityByItemId(37), Success ? 1 : 0);
+		TestEqual(TEXT("bait all or nothing"), Store->GetInventoryComponent()->CountVisibleInventoryQuantityByItemId(4), Success ? 1 : 0);
 		TestEqual(TEXT("both upgrade subitems commit together"), Tank->GetCapacityTier(), Success ? 2 : 0);
 		TestEqual(TEXT("actual fish capacity rolls back"), Tank->GetFishInventoryComponent()->GetInventorySlotCount(), Success ? 30 : 10);
 		TestEqual(TEXT("exactly one success broadcast"), Broadcasts, Success ? 1 : 0);
@@ -133,7 +134,7 @@ bool FCatShopCartAtomicTest::RunTest(const FString&)
 				{
 					auto& Line = Sale.Fish.AddDefaulted_GetRef();
 					Line.FishInstanceId = FGuid::NewGuid();
-					Line.FishDefinitionId = Fish->GetInventoryDefinitionId();
+					Line.ItemId = Fish->GetItemId();
 					Line.WeightKilograms = 20.0 + Index;
 				}
 				break;
@@ -146,19 +147,20 @@ bool FCatShopCartAtomicTest::RunTest(const FString&)
 			TestEqual(TEXT("one broadcast for a two-fish sale"), Broadcasts, 3);
 			// 小鱼干使用普通道具定义，也必须按已定消耗品归入公库。
 			auto* InventorySettings = GetMutableDefault<UCatInventorySettings>();
-			const auto OriginalDefinitions = InventorySettings->Definitions;
+			FCatItemCatalogTestFixture Catalog;
+			// 正式小鱼干尚缺定义；本用例自建有效数字身份验证交付，不依赖未配置的生产编号零。
+			TGuardValue<int32> DriedIdGuard(GetMutableDefault<UCatShopEconomySettings>()->SettlementDriedItemId, 900001);
 			TStrongObjectPtr<UCatInventoryItemDefinition> Dried(NewObject<UCatInventoryItemDefinition>());
-			Dried->InventoryDefinitionId = GetDefault<UCatShopEconomySettings>()->SettlementDriedFishDefinitionId;
-			InventorySettings->Definitions.RemoveAll([&](const auto& Entry) { return Entry.DefinitionId == Dried->InventoryDefinitionId; });
-			InventorySettings->Definitions.Add({Dried->InventoryDefinitionId, Dried.Get()});
-			Add(TEXT("Dried"), Dried->InventoryDefinitionId, 13);
+			Dried->ItemId = GetDefault<UCatShopEconomySettings>()->SettlementDriedItemId;
+			Catalog.Remove(Dried->ItemId);
+			Catalog.Add(Dried.Get());
+			Add(TEXT("Dried"), Dried->ItemId, 13);
 			TestTrue(TEXT("refresh fixture shelf with dried fish"), Shelf->RebuildInitialInventoryFromCatalog());
 			Command.Context.RequestId = FGuid::NewGuid();
 			Command.Lines[0].EntryId = TEXT("Dried");
 			TestTrue(TEXT("configured dried fish can be purchased"), Trading->RunCartOrder(Command, Shelf, Rack).Delivery.bCommitted);
-			TestEqual(TEXT("dried fish goes to supply store"), Store->GetInventoryComponent()->CountVisibleInventoryQuantityByDefinitionId(Dried->InventoryDefinitionId), 1);
-			TestEqual(TEXT("dried fish never goes to equipment rack"), Rack->GetInventoryComponent()->CountVisibleInventoryQuantityByDefinitionId(Dried->InventoryDefinitionId), 0);
-			InventorySettings->Definitions = OriginalDefinitions;
+			TestEqual(TEXT("dried fish goes to supply store"), Store->GetInventoryComponent()->CountVisibleInventoryQuantityByItemId(Dried->ItemId), 1);
+			TestEqual(TEXT("dried fish never goes to equipment rack"), Rack->GetInventoryComponent()->CountVisibleInventoryQuantityByItemId(Dried->ItemId), 0);
 			auto* Player = World->SpawnActor<APlayerController>();
 			Player->SetAsLocalPlayerController();
 			TestTrue(TEXT("open kiosk can interact"), Kiosk->CanInteract_Implementation(Player));
@@ -188,40 +190,39 @@ bool FCatShopSettlementTest::RunTest(const FString&)
 	auto* ShopSettings = GetMutableDefault<UCatShopEconomySettings>();
 	auto* InventorySettings = GetMutableDefault<UCatInventorySettings>();
 	const auto SavedCatalog = ShopSettings->DefaultShopCatalogTable;
-	const auto SavedDefinitions = InventorySettings->Definitions;
+	FCatItemCatalogTestFixture Catalog;
 	struct FRestoreSettings
 	{
 		UCatShopEconomySettings* Shop;
-		UCatInventorySettings* Inventory;
 		TSoftObjectPtr<UDataTable> Catalog;
-		TArray<FCatInventoryCatalogDefinition> Definitions;
-		~FRestoreSettings() { Shop->DefaultShopCatalogTable = Catalog; Inventory->Definitions = Definitions; }
-	} Restore{ShopSettings, InventorySettings, SavedCatalog, SavedDefinitions};
+		~FRestoreSettings() { Shop->DefaultShopCatalogTable = Catalog; }
+	} Restore{ShopSettings, SavedCatalog};
 	TStrongObjectPtr<UCatInventoryItemDefinition> Dried(NewObject<UCatInventoryItemDefinition>());
 	TStrongObjectPtr<UCatInventoryItemDefinition> Gear(NewObject<UCatInventoryItemDefinition>());
-	Dried->InventoryDefinitionId = TEXT("buff_driedfish");
+	Dried->ItemId = 1322042;
+	TGuardValue<int32> DriedId(ShopSettings->SettlementDriedItemId, Dried->ItemId);
 	Dried->InventoryMaxStackCount = 100;
-	Gear->InventoryDefinitionId = TEXT("SettlementTestGear");
+	Gear->ItemId = 1243500;
 	Gear->InventoryMaxStackCount = 10;
-	InventorySettings->Definitions.RemoveAll([&](const auto& Entry)
-	{ return Entry.DefinitionId == Dried->InventoryDefinitionId || Entry.DefinitionId == Gear->InventoryDefinitionId; });
-	InventorySettings->Definitions.Add({Dried->InventoryDefinitionId, Dried.Get()});
-	InventorySettings->Definitions.Add({Gear->InventoryDefinitionId, Gear.Get()});
+	Catalog.Remove(Dried->ItemId);
+	Catalog.Remove(Gear->ItemId);
+	Catalog.Add(Dried.Get());
+	Catalog.Add(Gear.Get());
 	TStrongObjectPtr<UDataTable> Table(NewObject<UDataTable>());
 	Table->RowStruct = FCatShopCatalogTableRow::StaticStruct();
-	for (auto Pair : {TPair<FName, int32>(Dried->InventoryDefinitionId, 13), TPair<FName, int32>(Gear->InventoryDefinitionId, 25)})
+	for (auto Pair : {TPair<int32, int32>(Dried->ItemId, 13), TPair<int32, int32>(Gear->ItemId, 25)})
 	{
 		FCatShopCatalogTableRow Row;
-		Row.DefinitionId = Pair.Key;
+		Row.ItemId = Pair.Key;
 		Row.UnitPrice = Pair.Value;
 		Row.bUnlimitedStock = true;
-		Table->AddRow(Pair.Key, Row);
+		Table->AddRow(FName(*FString::FromInt(Pair.Key)), Row);
 	}
 	FCatShopCatalogTableRow GuardRow;
-	GuardRow.DefinitionId = TEXT("FishGuard");
+	GuardRow.ItemId = 11;
 	GuardRow.UnitPrice = 5;
 	GuardRow.bUnlimitedStock = true;
-	Table->AddRow(TEXT("FishGuard"), GuardRow);
+	Table->AddRow(TEXT("11"), GuardRow);
 	ShopSettings->DefaultShopCatalogTable = Table.Get();
 	for (const bool Success : {true, false})
 	{
@@ -242,7 +243,7 @@ bool FCatShopSettlementTest::RunTest(const FString&)
 			|| !Guard->GetFishInventoryComponent()->AddItemInstance(Fish, 1)) return false;
 		Shop->CloseCommands();
 		TestEqual(TEXT("closing alone never converts wallet"), Shop->GetWalletSnapshot().Balance, 27);
-		TestEqual(TEXT("closing alone keeps equipment"), Inventory->CountVisibleInventoryQuantityByDefinitionId(Gear->InventoryDefinitionId), 2);
+		TestEqual(TEXT("closing alone keeps equipment"), Inventory->CountVisibleInventoryQuantityByItemId(Gear->ItemId), 2);
 		Mode->RunPublicState.EndReason = Success ? ECatRunEndReason::Success : ECatRunEndReason::WorldProgressDepleted;
 		if (Success)
 		{
@@ -258,8 +259,8 @@ bool FCatShopSettlementTest::RunTest(const FString&)
 			Shop->ClearFailedRunResourcesFromAuthority();
 		}
 		TestEqual(TEXT("terminal wallet including remainder is zero"), Shop->GetWalletSnapshot().Balance, 0);
-		TestEqual(TEXT("equipment converted or cleared"), Inventory->CountVisibleInventoryQuantityByDefinitionId(Gear->InventoryDefinitionId), 0);
-		TestEqual(TEXT("dried fish graduation only"), Inventory->CountVisibleInventoryQuantityByDefinitionId(Dried->InventoryDefinitionId), Success ? 6 : 0);
+		TestEqual(TEXT("equipment converted or cleared"), Inventory->CountVisibleInventoryQuantityByItemId(Gear->ItemId), 0);
+		TestEqual(TEXT("dried fish graduation only"), Inventory->CountVisibleInventoryQuantityByItemId(Dried->ItemId), Success ? 6 : 0);
 		TestTrue(TEXT("guard shell is converted or cleared"), Guard->IsActorBeingDestroyed());
 		int32 RemainingFish = 0;
 		for (TActorIterator<ACatFishPickupActor> It(World); It; ++It)

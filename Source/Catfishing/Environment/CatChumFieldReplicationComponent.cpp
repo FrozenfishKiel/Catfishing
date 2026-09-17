@@ -58,7 +58,7 @@ void UCatChumFieldReplicationComponent::ReconcileFieldFromAuthority(const FCatCh
 	// 逐字段从权威状态拷贝到公开精简结构；只暴露客户端表现需要的最小信息
 	Item->FieldId = Field.FieldId;
 	Item->WaterRegion = Field.WaterRegion;
-	Item->ChumDefinitionId = Field.ChumDefinitionId;
+	Item->ChumItemId = Field.ChumItemId;
 	Item->CenterWorldPoint = Field.CenterWorldPoint;
 	Item->RadiusCentimeters = Field.Influence.RadiusCentimeters;
 	Item->StartServerTime = Field.StartServerTime;

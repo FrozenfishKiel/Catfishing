@@ -274,7 +274,7 @@ private:
 	 * 本机玩家自己的图鉴首次记录到达时，在钓点附近弹一次鱼种特写（ui 表第 14 行、主界面.md:121-125）。
 	 * 浮层 Widget 资产不在本轮范围：类没配置时只记录一次诊断，不创建原生白盒替身。
 	 */
-	void HandleLocalFishSpeciesFirstRecorded(FName FishDefinitionId, double WeightKilograms);
+	void HandleLocalFishSpeciesFirstRecorded(int32  ItemId, double WeightKilograms);
 
 	/**
 	 * 同房其他玩家解锁了新鱼种时给一条不打断操作的提示（主界面.md「当玩家解锁新鱼，他人视角」）。

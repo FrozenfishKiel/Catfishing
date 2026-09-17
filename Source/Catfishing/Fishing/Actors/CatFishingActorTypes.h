@@ -57,7 +57,12 @@ struct FCatFishingRodPresentationState
 	UPROPERTY(BlueprintReadOnly) int64 RodActorRevision = 0;
 	/** 这根场景鱼竿对应的运行期物品实例 ID；收杆按它 UnUse，避免同定义鱼竿在背包和场上重复存在。 */
 	UPROPERTY(BlueprintReadOnly) FGuid ItemInstanceId;
-	UPROPERTY(BlueprintReadOnly) FName RodDefinitionId = NAME_None;
+	UPROPERTY(BlueprintReadOnly) int32  RodItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
+	FName RodDefinitionId = NAME_None;
+
 	UPROPERTY(BlueprintReadOnly) FName RodSkinDefinitionId = NAME_None;
 	/** 历史序列化字段：只标识部署来源以定位库存托管记录，不赋予 R、X 或钓鱼的独占权限。 */
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> OwnerPlayerState = nullptr;
@@ -107,7 +112,12 @@ struct FCatFishEncounterPresentationState
 	GENERATED_BODY()
 	UPROPERTY(BlueprintReadOnly) FGuid FishingSessionId;
 	UPROPERTY(BlueprintReadOnly) FGuid CastAttemptId;
-	UPROPERTY(BlueprintReadOnly) FName FishDefinitionId = NAME_None;
+	UPROPERTY(BlueprintReadOnly) int32  ItemId = 0;
+
+	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
+	UPROPERTY()
+	FName FishDefinitionId = NAME_None;
+
 	/** 服务器由本鱼冻结重量计算的一次性统一 Mesh 缩放；客户端只消费，不自行随机。 */
 	UPROPERTY(BlueprintReadOnly) double VisualScale = 1.0;
 	UPROPERTY(BlueprintReadOnly) ECatFishMotionIntent MotionIntent = ECatFishMotionIntent::None;

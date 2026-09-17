@@ -148,7 +148,7 @@ public:
 	/** 注册鱼竿表现状态复制；客户端只读 PresentationState，并通过 OnRep 驱动蓝图表现刷新。 */
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	/** 初始化这根场景鱼竿的权威身份；ActorId 负责场景对象，ItemInstanceId 负责回到库存里的同一件物品。 */
-	bool InitializeAuthoritativeIdentity(FGuid InRodActorId, FGuid InItemInstanceId, FName InRodDefinitionId,
+	bool InitializeAuthoritativeIdentity(FGuid InRodActorId, FGuid InItemInstanceId, int32  InRodItemId,
 		FName InRodSkinDefinitionId, APlayerState* InOwnerPlayerState, APlayerState* InOperatorPlayerState,
 		bool bInDeployed, bool bInBroken);
 	/** 写入这根竿的权威本地锚点；必须在身份初始化前完成，之后蓝图和钓鱼逻辑都从这些锚点取世界坐标。 */

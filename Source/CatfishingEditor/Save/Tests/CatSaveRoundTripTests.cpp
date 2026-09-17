@@ -85,11 +85,14 @@ namespace CatSaveRoundTrip
 					|| !Test->TestTrue(TEXT("new world ready"), Save->RestoreWorldAfterHostsReady(*GameMode))) return Cleanup();
 				UCatInventoryComponent* Inventory = Character->GetInventoryComponent();
 				const UCatInventorySettings* Settings = GetDefault<UCatInventorySettings>();
-				UCatInventoryItemDefinition* Bait = Settings->FindRuntimeDefinition(TEXT("BugBait"));
+				UCatInventoryItemDefinition* Bait = Settings->FindRuntimeDefinition(4);
 				UCatEquipmentDefinition* Rod = nullptr;
-				for (const FCatInventoryCatalogDefinition& Entry : Settings->Definitions)
+				TArray<UCatInventoryItemDefinition*> ItemDefinitions;
+				FString CatalogError;
+				if (!Test->TestTrue(TEXT("数字总表完整有效"), Settings->GetItemDefinitions(ItemDefinitions, CatalogError))) return Cleanup();
+				for (UCatInventoryItemDefinition* Entry : ItemDefinitions)
 				{
-					UCatEquipmentDefinition* Candidate = Cast<UCatEquipmentDefinition>(Entry.ItemDefinition.LoadSynchronous());
+					UCatEquipmentDefinition* Candidate = Cast<UCatEquipmentDefinition>(Entry);
 					if (Candidate && Candidate->CanServeFishingRod()) { Rod = Candidate; break; }
 				}
 				UCatFishDefinition* FishDefinition = nullptr;
@@ -243,7 +246,7 @@ namespace CatSaveRoundTrip
 			const UCatRunSaveGame* Migrated = Cast<UCatRunSaveGame>(ULocalPlayerSaveGame::LoadOrCreateSaveGameForLocalPlayer(
 				UCatRunSaveGame::StaticClass(), Controller->GetLocalPlayer(), FileName));
 			Test->TestTrue(TEXT("legacy v5 migrated in memory"), Migrated && Migrated->WasLoaded()
-				&& Migrated->FormatVersion == 6 && Migrated->GetSavedDataVersion() == 0);
+				&& Migrated->FormatVersion == 8 && Migrated->GetSavedDataVersion() == 8);
 			FFileHelper::LoadFileToArray(AfterMigration, *FilePath);
 			Test->TestTrue(TEXT("legacy migration leaves disk bytes unchanged"), BeforeMigration == AfterMigration && !BeforeMigration.IsEmpty());
 			Test->AddInfo(TEXT("Event=save_disk_roundtrip_verified Position=RestartPlayerAndNewWorld Inventory=StackEmptyRodFish CampFish=Restored DuplicateIdentity=Rejected BadHeader=Rejected WrongClass=Rejected LegacyV5=ReadOnlyMigration"));

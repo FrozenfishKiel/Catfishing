@@ -5,25 +5,21 @@
 #include "GameFramework/SaveGame.h"
 #include "CatProfileSaveGame.generated.h"
 
-/** 本地玩家永久档案；只保存图鉴、相册索引、解锁与 Grant Journal，不保存局内实物鱼或服务器身份。 */
+/** 本机玩家的相册、解锁、装备选择及对应授予账本；旧图鉴仅归档保留，当前账号图鉴由独立 Collection 文件读写。 */
 UCLASS()
 class CATFISHING_API UCatProfileSaveGame : public USaveGame
 {
 	GENERATED_BODY()
 
 public:
-	/**
-	 * 代码当前理解的唯一档案结构版本；任何不匹配档案都保持不可写，避免未知结构覆盖玩家数据。
-	 * v2：FCatFishCollectionRecord 加了三个字段级解锁位与知识层，v1 档的 State 无法反推这三位，按空档重建
-	 * （账本六问③「旧档版本不符按空档重建」，设计修改记录 2026-09-09）。重建是覆盖写同一槽位，不删文件。
-	 */
-	static constexpr int32 CurrentSchemaVersion = 2;
+	/** 当前数字物品身份档案版本；旧版只在完整转换后升级，未知版本保持不可写。 */
+	static constexpr int32 CurrentSchemaVersion = 3;
 
 	/** 当前档案结构版本；加载方只接受与代码一致的版本，未知版本保持不可写。 */
 	UPROPERTY(SaveGame)
 	int32 SchemaVersion = CurrentSchemaVersion;
 
-	/** Grant 先落 Pending、再合并、最后落 Complete 的 durable Journal；其中永远不接收 CapturePlanId。 */
+	/** 本机非图鉴授予的持久化账本；旧图鉴授予只保留、不重放到当前账号，其中不接收 CapturePlanId。 */
 	UPROPERTY(SaveGame)
 	TArray<FCatPendingGrantJournalEntry> GrantJournal;
 
@@ -31,7 +27,7 @@ public:
 	UPROPERTY(SaveGame)
 	TArray<FGuid> AppliedGrantIds;
 
-	/** 本地鱼图鉴事实；实物容器删除或一局结束不会回滚这些记录。 */
+	/** 旧本地鱼图鉴归档；无可靠账号归属，保留供人工迁移，不再作为运行图鉴读写。 */
 	UPROPERTY(SaveGame)
 	TArray<FCatFishCollectionRecord> FishCollection;
 
@@ -49,5 +45,9 @@ public:
 
 	/** 跨局保留的功能型装备槽位选择；服务器仍会用正式目录验证，不包含局内耐久或耗材数量。 */
 	UPROPERTY(SaveGame)
+	TMap<FName, int32> EquipmentItemBySlot;
+
+	/** v2 的英文物品选择；只供版本迁移读取，转换成功后清空。 */
+	UPROPERTY()
 	TMap<FName, FName> EquipmentSelectionBySlot;
 };

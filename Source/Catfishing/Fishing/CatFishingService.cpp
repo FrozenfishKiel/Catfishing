@@ -135,12 +135,12 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 				? RequestedRod->GetPresentationState() : FCatFishingRodPresentationState{};
 			int32 BaitQuantity = 0;
 			// 依赖拒绝日志里的数量只从正式库存读；旧 Equipment Snapshot 保留选择字段，但不再代表玩家实际还持有多少鱼饵。
-			if (Inventory && !Loadout.BaitDefinitionId.IsNone())
+			if (Inventory && !(Loadout.BaitItemId == 0))
 			{
 				for (const FCatInventoryEntry& Entry : Inventory->GetInventoryEntries())
 				{
 					const UCatInventoryItemInstance* Instance = Entry.Instance.Get();
-					if (Instance && Instance->GetItemDefinitionId() == Loadout.BaitDefinitionId && Entry.StackCount > 0)
+					if (Instance && Instance->GetItemId() == Loadout.BaitItemId && Entry.StackCount > 0)
 					{
 						BaitQuantity += Entry.StackCount;
 					}
@@ -150,9 +150,9 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 				TEXT("Event=begin_cast_dependency_rejected RequestId=%s Stage=%s EquipmentError=%s World=%s RodActorId=%s RodDefinition=%s RodItemInstanceId=%s BaitDefinition=%s BaitItemInstanceId=%s BaitQuantity=%d FloatDefinition=%s FloatItemInstanceId=%s EquipmentRevision=%lld CastEquipment=%s RodEquipment=%s %s"),
 				*Command.RequestId.ToString(EGuidFormats::DigitsWithHyphens), DependencyStage,
 				*UEnum::GetValueAsString(EquipmentError), *GetNameSafe(GetWorld()), *Command.RodActorId.ToString(),
-				*RequestedRodState.RodDefinitionId.ToString(), *RequestedRodState.ItemInstanceId.ToString(),
-				*Loadout.BaitDefinitionId.ToString(), *Loadout.BaitItemInstanceId.ToString(), BaitQuantity,
-				*Loadout.FloatDefinitionId.ToString(), *Loadout.FloatItemInstanceId.ToString(), Loadout.Revision,
+				*FString::FromInt(RequestedRodState.RodItemId), *RequestedRodState.ItemInstanceId.ToString(),
+				*FString::FromInt(Loadout.BaitItemId), *Loadout.BaitItemInstanceId.ToString(), BaitQuantity,
+				*FString::FromInt(Loadout.FloatItemId), *Loadout.FloatItemInstanceId.ToString(), Loadout.Revision,
 				*GetPathNameSafe(Equipment), *GetPathNameSafe(RodEquipment.Get()),
 				*CatLogContext::BuildControllerFields(FisherController));
 		}
@@ -242,9 +242,9 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 	DependencyStage = TEXT("EquipmentDefinitions");
 	const UCatInventorySettings* EquipmentSettings = GetDefault<UCatInventorySettings>();
 	// 两根部署竿可以与背包当前选择不同；射程、耐久和会话必须绑定实际操作的实例。
-	const UCatEquipmentDefinition* RodDefinition = EquipmentSettings->FindRuntimeDefinition<UCatEquipmentDefinition>(RodState.RodDefinitionId);
-	const UCatEquipmentDefinition* FloatDefinition = EquipmentSettings->FindRuntimeDefinition<UCatEquipmentDefinition>(Loadout.FloatDefinitionId);
-	const UCatEquipmentDefinition* BaitDefinition = EquipmentSettings->FindRuntimeDefinition<UCatEquipmentDefinition>(Loadout.BaitDefinitionId);
+	const UCatEquipmentDefinition* RodDefinition = EquipmentSettings->FindRuntimeDefinition<UCatEquipmentDefinition>(RodState.RodItemId);
+	const UCatEquipmentDefinition* FloatDefinition = EquipmentSettings->FindRuntimeDefinition<UCatEquipmentDefinition>(Loadout.FloatItemId);
+	const UCatEquipmentDefinition* BaitDefinition = EquipmentSettings->FindRuntimeDefinition<UCatEquipmentDefinition>(Loadout.BaitItemId);
 	if (!RodDefinition || !RodDefinition->CanServeFishingRod() || !FloatDefinition
 		|| !FloatDefinition->CanServeFishingFloat() || !BaitDefinition
 		|| !BaitDefinition->CanServeFishingBait())
@@ -277,7 +277,7 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 	{
 		UE_LOG(LogCatFishing, Warning, TEXT("Event=cast_range_rejected World=%s Request=%s DistanceCm=%.2f MaximumCm=%.2f Rod=%s Float=%s Landing=%s %s"),
 			*GetNameSafe(World), *Command.RequestId.ToString(EGuidFormats::DigitsWithHyphens), ToLandingFromCat.Length(), MaxRange,
-			*RodState.RodDefinitionId.ToString(), *Loadout.FloatDefinitionId.ToString(),
+			*FString::FromInt(RodState.RodItemId), *FString::FromInt(Loadout.FloatItemId),
 			*ClickedWater.WaterSurfaceWorldPoint.ToString(), *CatLogContext::BuildControllerFields(FisherController));
 		Result.Command.Error = ECatFishingCommandError::CastOutOfRange;
 		return Finish(Result);
@@ -319,7 +319,7 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 	{
 		UE_LOG(LogCatFishing, Log,
 			TEXT("Event=cast_scatter_landed_ashore RequestId=%s Float=%s ScatterRadiusCm=%.2f ClickedPoint=%s LandingPoint=%s WaterError=%s %s"),
-			*Command.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *Loadout.FloatDefinitionId.ToString(),
+			*Command.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *FString::FromInt(Loadout.FloatItemId),
 			ScatterRadiusCentimeters, *ClickedWater.WaterSurfaceWorldPoint.ToString(), *LandingCandidate.ToString(),
 			*UEnum::GetValueAsString(Water.Error), *CatLogContext::BuildControllerFields(FisherController));
 		Result.Command.Error = Water.Error == ECatWaterQueryError::AmbiguousRegion
@@ -338,8 +338,8 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 	DependencyStage = TEXT("EquipmentReservation");
 	const FCatFishingUseFreezeResult Reserved = Equipment->BeginFishingUse(SessionId,
 		RodState.ItemInstanceId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId,
-		RodState.RodDefinitionId, Loadout.BaitDefinitionId,
-		Loadout.FloatDefinitionId, Loadout.Revision, RodEquipment->ResolveOwnerInventoryComponent());
+		RodState.RodItemId, Loadout.BaitItemId,
+		Loadout.FloatItemId, Loadout.Revision, RodEquipment->ResolveOwnerInventoryComponent());
 	if (Reserved.Error != ECatDomainCommandError::None)
 	{
 		EquipmentError = Reserved.Error;
@@ -431,9 +431,9 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 	Attempt.FisherPlayerState = PlayerState;
 	Attempt.RodActor = Rod;
 	Attempt.RodItemInstanceId = RodState.ItemInstanceId;
-	Attempt.RodDefinitionId = RodState.RodDefinitionId;
-	Attempt.FloatDefinitionId = Loadout.FloatDefinitionId;
-	Attempt.BaitDefinitionId = Loadout.BaitDefinitionId;
+	Attempt.RodItemId = RodState.RodItemId;
+	Attempt.FloatItemId = Loadout.FloatItemId;
+	Attempt.BaitItemId = Loadout.BaitItemId;
 	Attempt.EquipmentReservationRevision = Reserved.EquipmentRevision;
 	Attempt.RodActorRevision = RodState.RodActorRevision;
 	Attempt.ServerCorrectedLandingWorldPoint = Water.WaterSurfaceWorldPoint;
@@ -593,7 +593,7 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 		Result.EquipmentRevision = Equipment->GetSnapshot().Revision;
 		UE_LOG(LogCatFishing, Warning,
 			TEXT("Event=fishing_rod_place_rejected RequestId=%s Definition=%s RodItemInstanceId=%s Durability=%.3f Broken=%s InventoryError=%s Error=%s EquipmentRevision=%lld World=%s %s"),
-			*Command.RequestId.ToString(), *InventoryRod.Instance->GetItemDefinitionId().ToString(), *InventoryRod.Instance->GetItemInstanceId().ToString(),
+			*Command.RequestId.ToString(), *FString::FromInt(InventoryRod.Instance->GetItemId()), *InventoryRod.Instance->GetItemInstanceId().ToString(),
 			(UsedRodInstance ? UsedRodInstance->GetRodDurability() : 0.0), (UsedRodInstance && UsedRodInstance->IsRodBroken()) ? TEXT("true") : TEXT("false"),
 			*UEnum::GetValueAsString(UseResult.Error), *UEnum::GetValueAsString(Result.Error),
 			Result.EquipmentRevision, *GetNameSafe(World),
@@ -601,9 +601,9 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 		return Result;
 	}
 	const UCatEquipmentDefinition* UsedRodDefinition =
-		GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(UseResult.Item.Instance->GetItemDefinitionId());
+		GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(UseResult.Item.Instance->GetItemId());
 	if (!UsedRodDefinition || !UsedRodDefinition->CanServeFishingRod()
-		|| UseResult.Item.Instance->GetItemDefinitionId() != InventoryRod.Instance->GetItemDefinitionId())
+		|| UseResult.Item.Instance->GetItemId() != InventoryRod.Instance->GetItemId())
 	{
 		Equipment->UnUse(FGuid::NewGuid(), UseResult.Item.Instance->GetItemInstanceId());
 		Result.Error = ECatFishingCommandError::DependencyUnavailable;
@@ -643,7 +643,7 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 	if (!Rod || !Rod->ConfigureCanonicalAnchorsFromAuthority(UsedRodDefinition->FindFragment<UCatEquipmentFragment_Rod>()->RodTipLocalTransform,
 		UsedRodDefinition->FindFragment<UCatEquipmentFragment_Rod>()->StandLocalTransform, UsedRodDefinition->FindFragment<UCatEquipmentFragment_Rod>()->GripLocalTransform)
 		|| !Rod->InitializeAuthoritativeIdentity(RodActorId, UseResult.Item.Instance->GetItemInstanceId(),
-			UseResult.Item.Instance->GetItemDefinitionId(), Loadout.RodSkinDefinitionId, PlayerState, PlayerState, true,
+			UseResult.Item.Instance->GetItemId(), Loadout.RodSkinDefinitionId, PlayerState, PlayerState, true,
 			(UsedRodInstance && UsedRodInstance->IsRodBroken()))
 		|| !FMath::IsFinite(PhysicalSettings->HeldRodMaximumAngularSpeedDegreesPerSecond)
 		|| PhysicalSettings->HeldRodMaximumAngularSpeedDegreesPerSecond <= 0.0
@@ -692,7 +692,7 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 		TEXT("Event=fishing_rod_placed RequestId=%s Rod=%s RodActorId=%s ItemInstance=%s Definition=%s Pose=Held Holder=%s OperatorCount=%d RodActorRevision=%lld EquipmentRevision=%lld DeployedRodCount=%d MaximumDeployedRods=%d World=%s NetMode=%d Authority=true LocalRole=%d %s"),
 		*Command.RequestId.ToString(), *GetNameSafe(Rod), *RodActorId.ToString(),
 		*UseResult.Item.Instance->GetItemInstanceId().ToString(EGuidFormats::DigitsWithHyphens),
-		*UseResult.Item.Instance->GetItemDefinitionId().ToString(), *GetNameSafe(Rod->GetPresentationState().HolderPlayerState),
+		*FString::FromInt(UseResult.Item.Instance->GetItemId()), *GetNameSafe(Rod->GetPresentationState().HolderPlayerState),
 		Rod->GetOperatorCount(), Rod->GetPresentationState().RodActorRevision, Equipment->GetSnapshot().Revision,
 		GetDeployedRodCount(PlayerState), GetDefault<UCatFishingSettings>()->GetMaximumDeployedRodsPerPlayer(),
 		*GetNameSafe(World), static_cast<int32>(World->GetNetMode()), static_cast<int32>(Controller->GetLocalRole()),

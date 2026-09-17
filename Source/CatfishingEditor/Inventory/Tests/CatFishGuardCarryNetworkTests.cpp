@@ -324,7 +324,7 @@ namespace CatFishGuardCarryNetwork
 					if (OccupiedViewGuard.IsValid()) OccupiedViewGuard->Destroy();
 				}
 				UCatInventoryComponent* Backpack = ClientCat->GetInventoryComponent();
-				const int32 Slot = Backpack->FindFirstInventorySlotIndexByDefinitionId(TEXT("FishGuard"));
+				const int32 Slot = Backpack->FindFirstInventorySlotIndexByItemId(11);
 				const FCatInventoryEntry* Entry = Backpack->GetInventoryEntryAtSlot(Slot);
 				const UCatFishGuardInventoryItemInstance* Item = Entry ? Cast<UCatFishGuardInventoryItemInstance>(Entry->Instance) : nullptr;
 				WaitingFor = TEXT("client backpack FishGuard instance, slot, quantity and runtime owner");
@@ -922,7 +922,7 @@ namespace CatFishGuardCarryNetwork
 					const UCatFishInventoryItemInstance* Fish = Cast<UCatFishInventoryItemInstance>(Entry.Instance);
 					if (!Fish || Entry.StackCount != 1) return false;
 					const int32 Index = FishIds.IndexOfByKey(Fish->GetItemInstanceId());
-					if (Index == INDEX_NONE || Seen.Contains(Fish->GetItemInstanceId()) || Fish->GetItemDefinitionId() != TEXT("RiverPatternFish")
+					if (Index == INDEX_NONE || Seen.Contains(Fish->GetItemInstanceId()) || Fish->GetItemId() != 30
 						|| Fish->GetFishWeightKilograms() != (Index == 0 ? 2.5 : 3.75)
 						|| (Peer == 0 && Fish != OriginalFish[Index].Get())) return false;
 					Seen.Add(Fish->GetItemInstanceId());
@@ -938,7 +938,7 @@ namespace CatFishGuardCarryNetwork
 				if (!Backpack || ACatFishPickupActor::FindCarriedFish(Character)
 					|| Character->GetMouthCarriedActor() != (bCarried ? static_cast<AActor*>(Guard) : nullptr)) return false;
 				// 初始背包必须没有其他鱼护，首次客户端按正式定义查槽位才唯一对应本用例生成的载体。
-				if (!GuardId.IsValid() && !bCarried && Backpack->CountVisibleInventoryQuantityByDefinitionId(TEXT("FishGuard")) != 0) return false;
+				if (!GuardId.IsValid() && !bCarried && Backpack->CountVisibleInventoryQuantityByItemId(11) != 0) return false;
 				if (bCarried)
 				{
 					if (ACatFishGuardActor::FindCarriedGuard(Character) != Guard || Guard->GetAttachParentActor() != Character

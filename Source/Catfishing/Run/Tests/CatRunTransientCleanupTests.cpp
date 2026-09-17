@@ -47,13 +47,13 @@ bool FCatRunTransientCleanupTest::RunTest(const FString& Parameters)
 		auto* Fishing = World->GetSubsystem<UCatFishingService>();
 		auto* Fields = World->GetSubsystem<UCatChumFieldSubsystem>();
 		auto* Replication = World->GetGameState<ACatfishingGameState>()->GetChumFieldReplicationFromAuthority();
-		const auto* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(TEXT("BugChum"));
+		const auto* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(5);
 		if (!Mode || !Fishing || !Fields || !Replication || !Definition) return false;
 		FCatPrepareChumFieldRequest Request;
 		Request.StableNetId = TEXT("Batch7A");
 		Request.Command.RequestId = FGuid::NewGuid();
 		Request.Command.ExpectedWaterRegionHandle = Built.Cache.Handle;
-		Request.Command.ChumDefinitionId = Definition->EquipmentDefinitionId;
+		Request.Command.ChumItemId = Definition->ItemId;
 		Request.Command.Quantity = 1;
 		Request.Influence = Definition->FindFragment<UCatEquipmentFragment_Chum>()->ChumInfluence;
 		Request.ServerTime = World->GetTimeSeconds();

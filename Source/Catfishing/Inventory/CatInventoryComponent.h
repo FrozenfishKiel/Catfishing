@@ -284,11 +284,11 @@ public:
 		const TFunction<bool()>& CommitTransaction = nullptr, bool bBroadcastChange = true);
 
 	/** 只读预检稳定物品 ID 能否进入当前正式库存；商店、奖励和初始化发货用它在提交前确认目录、authority 和容量。 */
-	ECatDomainCommandError ValidateInventoryDefinitionGrantFromAuthority(FGuid RequestId, FName DefinitionId,
+	ECatDomainCommandError ValidateInventoryDefinitionGrantFromAuthority(FGuid RequestId, int32  ItemId,
 		int32 Count) const;
 
 	/** authority 按稳定物品 ID 向当前正式库存发货；库存组件负责目录解析、幂等和整批写入，并返回提交状态与错误码。 */
-	FCatDomainCommandResult GrantInventoryDefinitionFromAuthority(FGuid RequestId, FName DefinitionId, int32 Count);
+	FCatDomainCommandResult GrantInventoryDefinitionFromAuthority(FGuid RequestId, int32  ItemId, int32 Count);
 
 	/** 只读预检已经解析出的物品定义能否进入当前正式库存；调用方用它把容量和堆叠裁决交回 Inventory。 */
 	ECatDomainCommandError ValidateResolvedInventoryDefinitionGrantFromAuthority(
@@ -399,10 +399,10 @@ public:
 	int32 FindInventorySlotIndexFromInstanceId(FGuid ItemInstanceId) const;
 
 	/** 按稳定定义 ID 查找第一格可消费库存；材料扣除和库存可用性判断用它回到正式库存事实。 */
-	int32 FindFirstInventorySlotIndexByDefinitionId(FName DefinitionId) const;
+	int32 FindFirstInventorySlotIndexByItemId(int32  ItemId) const;
 
 	/** 当前可见库存数量表示玩家背包格里仍可整理、可选择的同定义总数；库存可用性判断读取它，不包含 held 活动区、Fishing 会话冻结或其他已离开可见槽位的实例。 */
-	int32 CountVisibleInventoryQuantityByDefinitionId(FName DefinitionId) const;
+	int32 CountVisibleInventoryQuantityByItemId(int32  ItemId) const;
 
 	/** 读取当前库存槽位数量；用于 UI 创建格子和交换操作校验下标。 */
 	int32 GetInventorySlotCount() const;
@@ -529,11 +529,11 @@ protected:
 
 	/** 稳定物品发货预检的共用裁决；调用方可以来自目录 ID 或已解析定义，但最终都按同一份库存载荷签名回答。 */
 	ECatDomainCommandError ValidateInventoryDefinitionGrantFromAuthorityInternal(
-		FGuid RequestId, FName DefinitionId, UCatInventoryItemDefinition* ItemDefinition, int32 Count) const;
+		FGuid RequestId, int32  ItemId, UCatInventoryItemDefinition* ItemDefinition, int32 Count) const;
 
 	/** 稳定物品发货提交的共用写入口；它是正式库存写入的唯一实现，外层系统只负责把自己的业务意图解析成库存定义。 */
 	FCatDomainCommandResult GrantInventoryDefinitionFromAuthorityInternal(
-		FGuid RequestId, FName DefinitionId,
+		FGuid RequestId, int32  ItemId,
 		UCatInventoryItemDefinition* ItemDefinition, int32 Count);
 
 	/** 读取某个定义的有效堆叠上限；集中处理非法配置，确保预演和正式入库口径一致。 */

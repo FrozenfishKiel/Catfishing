@@ -47,6 +47,9 @@
 
 # Precompiled Assets
 SourceArt/**/*.png
+!SourceArt/UI/CampInventory/CampInventoryPaper.png
+!SourceArt/UI/CampInventory/CampMascot.png
+!SourceArt/UI/Collection/CollectionBook.png
 SourceArt/**/*.tga
 
 # Binary Files

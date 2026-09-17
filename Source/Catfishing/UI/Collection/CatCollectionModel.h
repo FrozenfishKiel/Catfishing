@@ -11,10 +11,7 @@ class ULocalPlayer;
 /** Collection Model 投影变化通知；View 收到后只重绘图鉴列表。 */
 DECLARE_MULTICAST_DELEGATE(FCatCollectionModelChanged);
 
-/**
- * 图鉴/相册 Model；它以正式鱼目录为骨架、用 LocalPlayer Profile 的 durable 快照覆盖解锁位，不访问实物鱼容器。
- * 唯一的写口是印记隐藏（印记册「本人可一键隐藏任意一张」），图鉴记录本身只读。
- */
+/** 将正式鱼目录、物品总表和账号捕获记录组合为唯一鱼卡投影；图鉴和追踪读取同一份数据。 */
 UCLASS()
 class CATFISHING_API UCatCollectionModel : public UObject
 {
@@ -33,11 +30,8 @@ public:
 	/** 提供最近发布的图鉴投影副本；View 用它重绘，不通过返回值拿 Profile 写权。 */
 	const FCatCollectionViewState& GetViewState() const;
 
-	/**
-	 * 本人一键隐藏／取消隐藏相册里的任意一张印记；转交 Profile 的唯一 durable 写口，成功后重发投影。
-	 * 它只改本地这份索引：不发服务器 RPC、不删图片、不影响其他参与者手里的同一张。
-	 */
-	bool SetImprintHidden(FGuid ImprintId, bool bHidden);
+	/** 保存或取消一个已捕获鱼种的追踪；零代表取消，成功由 Profile 广播刷新。 */
+	bool SetTrackedFish(int32 ItemId);
 
 	/** 图鉴投影变化通知。 */
 	FCatCollectionModelChanged OnViewStateChanged;
@@ -46,7 +40,7 @@ private:
 	/** Profile 图鉴变化入口；事件只表示需要重读，不携带写权限。 */
 	void HandleFishCollectionChanged();
 
-	/** 当前 LocalPlayer 的 durable Profile 读源。 */
+	/** 当前 LocalPlayer 的 Profile 协调器；Bind 写入、Refresh 读取其账号图鉴快照，不读取旧本机图鉴归档。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatProfileSubsystem> BoundProfile;
 

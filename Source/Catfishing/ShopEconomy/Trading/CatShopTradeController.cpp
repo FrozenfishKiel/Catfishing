@@ -76,10 +76,10 @@ namespace
 	};
 
 	/** 判定某个稳定 ID 是不是鱼缸容量升级这类设施商品；返回它对应的档位序号，不是升级商品时返回 INDEX_NONE。 */
-	int32 ResolveFishTankUpgradeTier(const FName DefinitionId)
+	int32 ResolveFishTankUpgradeTier(const int32  ItemId)
 	{
 		const UCatFishContainerSettings* ContainerSettings = GetDefault<UCatFishContainerSettings>();
-		return ContainerSettings ? ContainerSettings->FindSharedFishTankUpgradeTierByDefinitionId(DefinitionId)
+		return ContainerSettings ? ContainerSettings->FindSharedFishTankUpgradeTierByItemId(ItemId)
 			: INDEX_NONE;
 	}
 
@@ -142,7 +142,7 @@ namespace
 	{
 		const UCatEquipmentDefinition* Equipment = Cast<UCatEquipmentDefinition>(&Definition);
 		const bool bRunConsumable = (Equipment != nullptr && Equipment->bRunConsumable)
-			|| Definition.GetInventoryDefinitionId() == GetDefault<UCatShopEconomySettings>()->SettlementDriedFishDefinitionId;
+			|| Definition.GetItemId() == GetDefault<UCatShopEconomySettings>()->SettlementDriedItemId;
 		UCatInventoryComponent* Preferred = bRunConsumable ? Targets.SupplyStore : Targets.EquipmentRack;
 		if (Preferred != nullptr)
 		{
@@ -161,7 +161,7 @@ namespace
 
 	// 购物车交付批次构建流程：商店账本只保存稳定定义 ID 和数量，这里把它解析成正式库存定义批次并按去处分组；
 	// 容量、实例创建和幂等仍由各自的 InventoryComponent 负责。设施类商品（鱼缸升级）不进任何库存，单独归到 OutFacilityTiers。
-	bool AppendShopDeliveryEntry(const FName DefinitionId, const int32 Quantity,
+	bool AppendShopDeliveryEntry(const int32  ItemId, const int32 Quantity,
 		FCatShopDeliveryTargets& Targets,
 		TMap<UCatInventoryComponent*, FCatInventoryReceiveBatch>& OutBatchesByTarget,
 		TArray<int32>& OutFacilityTiers)
@@ -170,7 +170,7 @@ namespace
 		{
 			return false;
 		}
-		if (const int32 UpgradeTier = ResolveFishTankUpgradeTier(DefinitionId); UpgradeTier != INDEX_NONE)
+		if (const int32 UpgradeTier = ResolveFishTankUpgradeTier(ItemId); UpgradeTier != INDEX_NONE)
 		{
 			// 一件商品对应一个定价档位；不能用第一档的价格连升两档。
 			if (Quantity != 1) return false;
@@ -179,7 +179,7 @@ namespace
 		}
 		const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
 		UCatInventoryItemDefinition* Definition = InventorySettings
-			? InventorySettings->FindRuntimeDefinition(DefinitionId) : nullptr;
+			? InventorySettings->FindRuntimeDefinition(ItemId) : nullptr;
 		if (Definition == nullptr || !Definition->IsInventoryRuntimeDefinitionReady())
 		{
 			return false;
@@ -379,7 +379,7 @@ FCatShopOrderResult UCatShopTradeController::SubmitFishSaleFromPlayer(AControlle
 			Seen.Add(Id);
 			FCatShopFishSaleLine& Line = Command.Fish.AddDefaulted_GetRef();
 			Line.FishInstanceId = Id;
-			Line.FishDefinitionId = Fish->GetItemDefinitionId();
+			Line.ItemId = Fish->GetItemId();
 			Line.WeightKilograms = Fish->GetFishWeightKilograms();
 			if (ACatFishPickupActor* RetainedFishActor = Cast<ACatFishPickupActor>(Fish->GetWorldActor()))
 			{
@@ -396,7 +396,7 @@ FCatShopOrderResult UCatShopTradeController::SubmitFishSaleFromPlayer(AControlle
 		const FCatFishPickupPresentationState& Fish = MouthFish->GetPresentationState();
 		FCatShopFishSaleLine& Line = Command.Fish.AddDefaulted_GetRef();
 		Line.FishInstanceId = Fish.FishInstanceId;
-		Line.FishDefinitionId = Fish.FishDefinitionId;
+		Line.ItemId = Fish.ItemId;
 		Line.WeightKilograms = Fish.WeightKilograms;
 	}
 	ECatDomainCommandError Error = ECatDomainCommandError::None;
@@ -492,7 +492,7 @@ FCatShopOrderResult UCatShopTradeController::RunCartOrder(const FCatShopCartComm
 	TArray<int32> Tiers;
 	for (const auto& Line : Quote.Lines)
 	{
-		if (!AppendShopDeliveryEntry(Line.Entry.DefinitionId, Line.DeliveryQuantity, Targets, Batches, Tiers))
+		if (!AppendShopDeliveryEntry(Line.Entry.ItemId, Line.DeliveryQuantity, Targets, Batches, Tiers))
 		{
 			Result.CartTransaction.Command.Error = ECatDomainCommandError::DependencyUnavailable;
 			Result.CartTransaction.Command.FailureReason = TEXT("DeliveryUnavailable");

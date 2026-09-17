@@ -1,4 +1,4 @@
-﻿#include "UI/Inventory/CatInventoryPageController.h"
+#include "UI/Inventory/CatInventoryPageController.h"
 
 #include "Character/CatCharacter.h"
 #include "Framework/Game/CatfishingPlayerController.h"
@@ -11,6 +11,9 @@
 #include "Logging/CatLog.h"
 #include "UI/CatUISettings.h"
 #include "UI/Inventory/CatInventoryWidget.h"
+#include "UI/Inventory/CatCampInventoryWidget.h"
+#include "UI/Collection/CatCollectionModel.h"
+#include "UI/Collection/CatCollectionPageController.h"
 #include "UI/Inventory/CatInventoryModel.h"
 #include "UI/Inventory/CatInventoryContextMenuWidget.h"
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
@@ -114,7 +117,7 @@ bool UCatInventoryPageController::OpenInventory(UCatInventoryComponent* Inventor
 			*GetPathNameSafe(Controller->GetWorld()), *GetNameSafe(InventoryViewClass.Get()));
 		return false;
 	}
-	View->SetInventorySlotWidgetClass(SlotClass);
+	// 页面优先使用自己配置的格子样式；未配置时 NativeConstruct 仍从 UI Settings 取共享格。
 	View->SetInventoryContext(Inventory);
 	BoundView = View;
 	SetInventoryOpen(true);
@@ -394,9 +397,24 @@ void UCatInventoryPageController::SetInventoryOpen(const bool bOpen)
 		}
 		BoundView->AddToViewport(10);
 		bInventoryOpen = true;
+		if (BoundView->IsA<UCatCampInventoryWidget>())
+		{
+			// 只有团队库存订阅既有图鉴 Model；个人背包和其他容器不建立追踪卡，关闭分支从同一对象移除监听。
+			ULocalPlayer* LocalPlayer = Controller->GetLocalPlayer();
+			auto* UI = LocalPlayer ? LocalPlayer->GetSubsystem<UCatLocalPlayerUISubsystem>() : nullptr;
+			auto* Collection = UI ? UI->GetCollectionPageController() : nullptr;
+			TrackingModel = Collection ? Collection->GetCollectionModel() : nullptr;
+			if (TrackingModel.IsValid()) TrackingChangedHandle = TrackingModel->OnViewStateChanged.AddUObject(this, &ThisClass::RefreshTrackedFish);
+			RefreshTrackedFish();
+		}
 		CatUIModalInputMode::Open(Controller, BoundView, ModalInputModeState);
 		return;
 	}
+	// 先撤销追踪监听并清空页面内推荐区域，再释放库存页；关闭后图鉴变化不再刷新此页。
+	if (TrackingModel.IsValid()) TrackingModel->OnViewStateChanged.Remove(TrackingChangedHandle);
+	TrackingChangedHandle.Reset();
+	TrackingModel.Reset();
+	if (auto* Camp = Cast<UCatCampInventoryWidget>(BoundView)) Camp->RenderTracking(nullptr);
 	CancelInventoryContextMenu(false);
 	PendingInventoryActionRequestId.Invalidate();
 	if (ULocalPlayer* LocalPlayer = Controller ? Controller->GetLocalPlayer() : nullptr)
@@ -452,4 +470,19 @@ void UCatInventoryPageController::RemoveInventoryInput()
 	BoundInventoryInputComponent.Reset();
 	InventoryInputBindingHandle = 0;
 	AppliedInventoryToggleAction = nullptr;
+}
+
+// 团队库存读取已确认投影并更新页面内推荐区域；无有效追踪传空指针隐藏，关闭时由同一页面清理。
+void UCatInventoryPageController::RefreshTrackedFish()
+{
+	auto* Camp = Cast<UCatCampInventoryWidget>(BoundView);
+	if (!Camp) return;
+	const auto* Model = TrackingModel.Get();
+	const FCatCollectionEntryView* Entry = nullptr;
+	if (bInventoryOpen && Model && Model->GetViewState().bAvailable)
+	{
+		const auto& State = Model->GetViewState();
+		Entry = State.Entries.FindByPredicate([&State](const auto& Fish) { return Fish.ItemId == State.TrackedItemId && Fish.bRecordedUnlocked; });
+	}
+	Camp->RenderTracking(Entry);
 }

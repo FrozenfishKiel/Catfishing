@@ -59,7 +59,7 @@ bool FCatGrowthRuntimeConsumersTest::RunTest(const FString&)
 	Controller->Possess(Cat);
 	TestEqual(TEXT("重新占有保留本局成长背包格"), Inventory->GetInventorySlotCount(), InitialSlots + 1);
 	Pick(ECatGrowthOptionId::SupplyCapacity);
-	for (const FName Id : {FName(TEXT("BugBait")), FName(TEXT("BugChum"))})
+	for (const int32 Id : {4, 5})
 	{
 		auto* Item = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(Id);
 		if (!TestNotNull(TEXT("正式饵/窝料可加载"), Item)) return false;
@@ -139,8 +139,8 @@ bool FCatGrowthRuntimeConsumersTest::RunTest(const FString&)
 	Context.CatchWeightBonus = Session->GetFisherGrowthMagnitude(ECatGrowthOptionId::CatchWeight);
 	const auto GrowthRoll = Catalog->SelectRuntimeDefinition(Context);
 	TestTrue(TEXT("真实选鱼器接收成长后的上下文"), BaseRoll.bSelected && GrowthRoll.bSelected);
-	TestEqual(TEXT("不切 D-30 抽样次序"), GrowthRoll.FishDefinitionId, BaseRoll.FishDefinitionId);
-	const auto* SelectedFish = Catalog->FindRuntimeDefinition(GrowthRoll.FishDefinitionId);
+	TestEqual(TEXT("不切 D-30 抽样次序"), GrowthRoll.ItemId, BaseRoll.ItemId);
+	const auto* SelectedFish = Catalog->FindRuntimeDefinition(GrowthRoll.ItemId);
 	if (SelectedFish)
 		TestTrue(TEXT("实际冻结重量上浮且不超过鱼种上限"), FMath::IsNearlyEqual(GrowthRoll.WeightKilograms,
 			FMath::Min(SelectedFish->MaximumWeightKilograms, BaseRoll.WeightKilograms * 1.05), 0.0001));

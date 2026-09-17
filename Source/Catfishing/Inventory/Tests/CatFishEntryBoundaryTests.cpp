@@ -143,7 +143,7 @@ bool FCatFishGuardMouthOwnershipTest::RunTest(const FString& Parameters)
 	FishActor->Destroy();
 	if (!TestTrue(TEXT("空嘴可拾护"), F.Guard->PickUpFromAuthority(F.Controller, FGuid::NewGuid()))) return false;
 	TestTrue(TEXT("原护可见并附着唯一嘴部"), F.Cat->GetMouthCarriedActor() == F.Guard && !F.Guard->IsHidden() && F.Guard->GetAttachParentActor() == F.Cat);
-	TestEqual(TEXT("鱼护仍占一背包格"), F.Cat->GetInventoryComponent()->CountVisibleInventoryQuantityByDefinitionId(TEXT("FishGuard")), 1);
+	TestEqual(TEXT("鱼护仍占一背包格"), F.Cat->GetInventoryComponent()->CountVisibleInventoryQuantityByItemId(11), 1);
 	TestTrue(TEXT("护内原实例和重量保留"), F.Guard->GetFishInventoryComponent()->GetInventoryEntryAtSlot(0)->Instance == Inside && Inside->GetFishWeightKilograms() == 3.75);
 	auto* Other = F.Wrapper.GetTestWorld()->SpawnActor<ACatFishGuardActor>(FVector(100, -100, 100), FRotator::ZeroRotator);
 	auto* Next = NewObject<UCatFishInventoryItemInstance>(Other);

@@ -46,7 +46,7 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 	for (const auto& Reference : Catalog->Definitions)
 	{
 		const UCatFishDefinition* Definition = Reference.LoadSynchronous();
-		if (Definition && Catalog->FindRuntimeDefinition(Definition->FishDefinitionId) == Definition
+		if (Definition && Catalog->FindRuntimeDefinition(Definition->ItemId) == Definition
 			&& !Definition->RegionIds.IsEmpty())
 		{
 			CatalogWaterRegion = Definition->RegionIds[0];
@@ -153,16 +153,16 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 				&& GameMode->CanAcceptFishingCommand(Player.Controller))) return false;
 		}
 		if (!TestTrue(TEXT("owner obtains a formal T2 rod"), Owner.Equipment->GrantEquipmentFromAuthority(
-			FGuid::NewGuid(), Owner.Equipment->GetSnapshot().Revision, TEXT("ShopRodT2")).bCommitted)) return false;
+			FGuid::NewGuid(), Owner.Equipment->GetSnapshot().Revision, 34).bCommitted)) return false;
 		if (!TestTrue(TEXT("owner obtains a formal float"), Owner.Equipment->GrantEquipmentFromAuthority(
-			FGuid::NewGuid(), Owner.Equipment->GetSnapshot().Revision, TEXT("FeatherFloat")).bCommitted)) return false;
+			FGuid::NewGuid(), Owner.Equipment->GetSnapshot().Revision, 9).bCommitted)) return false;
 		if (!TestTrue(TEXT("owner obtains four actual bait portions"), Owner.Equipment->GrantInventoryQuantityFromAuthority(
-			FGuid::NewGuid(), Owner.Equipment->GetSnapshot().Revision, TEXT("BugBait"), 4).bCommitted)) return false;
-		const auto Quantity = [](const UCatEquipmentComponent* Equipment, FName DefinitionId)
+			FGuid::NewGuid(), Owner.Equipment->GetSnapshot().Revision, 4, 4).bCommitted)) return false;
+		const auto Quantity = [](const UCatEquipmentComponent* Equipment, int32  ItemId)
 		{
 			int32 Total = 0;
 			for (const FCatInventoryEntry& Slot : CatFishingTest::Entries(Equipment))
-				if (CatFishingTest::DefinitionId(Slot) == DefinitionId) Total += Slot.StackCount;
+				if (CatFishingTest::ItemId(Slot) == ItemId) Total += Slot.StackCount;
 			return Total;
 		};
 		const FCatEquipmentLoadoutSnapshot OwnerBeforeDeploy = Owner.Equipment->GetSnapshot();
@@ -174,7 +174,7 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("production PlaceRod deploys owner's physical rod"), Placed.bCommitted)) return false;
 		ACatFishingRodActor* Rod = Fishing->FindDeployedRodById(Placed.RodActorId);
 		if (!TestNotNull(TEXT("placed rod is registered"), Rod)) return false;
-		const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(TEXT("ShopRodT2"));
+		const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(34);
 		TestEqual(TEXT("rod is the formal configured Blueprint"), Rod->GetClass(), RodDefinition->UseActorClass.Get());
 		TestEqual(TEXT("physical ledger owner is frozen in deployment Instigator"), Rod->GetInstigator(), static_cast<APawn*>(Owner.Character));
 		const auto Context = [&]()
@@ -219,7 +219,7 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 			TestFalse(TEXT("publication-time exit aborts the pending cast"), Interrupted.Command.bCommitted);
 			TestEqual(TEXT("publication-time exit reports a dependency interruption"), Interrupted.Command.Error,
 				ECatFishingCommandError::DependencyUnavailable);
-			TestEqual(TEXT("publication-time exit refunds owner bait"), Quantity(Owner.Equipment, TEXT("BugBait")), 4);
+			TestEqual(TEXT("publication-time exit refunds owner bait"), Quantity(Owner.Equipment, 4), 4);
 			TestFalse(TEXT("publication-time exit releases owner reservation"), Owner.Equipment->HasActiveFishingUse());
 			TestFalse(TEXT("publication-time exit releases owner rod lock"), Owner.Equipment->HasActiveFishingUse());
 			FCatInventoryEntry ReturnedLock;
@@ -235,7 +235,7 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 				Interrupted.Command.EquipmentRevision);
 			TestEqual(TEXT("interrupted request replay never duplicates the refund"), Owner.Equipment->GetSnapshot().Revision, InterruptedRevision);
 			AddInfo(FString::Printf(TEXT("Event=owned_rod_service_publication_exit_verified Scenario=%d RequestId=%s CallerBait=%d Sessions=%d Hooks=%d"),
-				ExitScenario, *InterruptedCommand.RequestId.ToString(), Quantity(Owner.Equipment, TEXT("BugBait")),
+				ExitScenario, *InterruptedCommand.RequestId.ToString(), Quantity(Owner.Equipment, 4),
 				Fishing->GetTrackedSessionCountForDiagnostics(), HookCount));
 			continue;
 		}
@@ -249,7 +249,7 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 			const FCatBeginCastResult Failed = Fishing->BeginCast(Owner.Controller, FailedCommand);
 			TestFalse(TEXT("post-reservation missing hook does not commit"), Failed.Command.bCommitted);
 			TestEqual(TEXT("post-reservation failure retains dependency diagnosis"), Failed.Command.Error, ECatFishingCommandError::DependencyUnavailable);
-			TestEqual(TEXT("failed cast restores owner bait"), Quantity(Owner.Equipment, TEXT("BugBait")), 4);
+			TestEqual(TEXT("failed cast restores owner bait"), Quantity(Owner.Equipment, 4), 4);
 			TestFalse(TEXT("failed cast closes owner reservation"), Owner.Equipment->HasActiveFishingUse());
 			FCatInventoryEntry AvailableRod;
 			TestEqual(TEXT("failed cast releases original rod transfer lock"), CatFishingTest::ReadHeldRod(Owner.Equipment, OwnerRodId, AvailableRod), ECatDomainCommandError::None);
@@ -270,7 +270,7 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("hook is the formal configured Blueprint"), Hook->GetClass(), Presentation->HookActorClass.Get());
 		TestEqual(TEXT("hook montage Instigator belongs to the owner"), Hook->GetInstigator(), static_cast<APawn*>(Owner.Character));
 		TestEqual(TEXT("hook identity belongs to the new cast"), Hook->GetPresentationState().FishingSessionId, CastResult.Command.FishingSessionId);
-		TestEqual(TEXT("cast leaves all bait in original inventory"), Quantity(Owner.Equipment, TEXT("BugBait")), 4);
+		TestEqual(TEXT("cast leaves all bait in original inventory"), Quantity(Owner.Equipment, 4), 4);
 		TestEqual(TEXT("owner's T2 durability initializes the session"), Session->GetSnapshot().RodDurabilityRemaining, OwnerBeforeDeploy.RodDurability);
 		const int64 BoundRevision = Owner.Equipment->GetSnapshot().Revision;
 		const auto Replayed = Fishing->BeginCast(Owner.Controller, Begin);
@@ -305,7 +305,7 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("E retains exact active session"), Fishing->FindActiveSessionByRod(Rod), Session);
 			TestEqual(TEXT("takeover binds the guest to the same hook"), Session->GetSnapshot().HookActor.Get(), Hook);
 			TestEqual(TEXT("takeover changes the actual session input receiver"), Session->GetSnapshot().FisherPlayerState.Get(), static_cast<APlayerState*>(Helper.State));
-			TestEqual(TEXT("takeover cannot debit bait before true bite"), Quantity(Owner.Equipment, TEXT("BugBait")), 4);
+			TestEqual(TEXT("takeover cannot debit bait before true bite"), Quantity(Owner.Equipment, 4), 4);
 			Leave.Context = Context();
 			if (!Fishing->LeaveRod(Helper.Controller, Leave).bCommitted) return false;
 			Take.Context = Context();
@@ -394,7 +394,7 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 				[OwnerRodId](const FCatInventoryEntry& Slot) { return CatFishingTest::InstanceId(Slot) == OwnerRodId; }));
 			TestNotEqual(TEXT("departing selection cannot refer to the custody rod"), DepartureSnapshot.RodItemInstanceId, OwnerRodId);
 			int32 SavedBait = 0;
-			for (const auto& Slot : DepartureInventory) if (CatFishingTest::DefinitionId(Slot) == TEXT("BugBait")) SavedBait += Slot.StackCount;
+			for (const auto& Slot : DepartureInventory) if (CatFishingTest::ItemId(Slot) == 4) SavedBait += Slot.StackCount;
 			TestEqual(TEXT("departure saves every unconsumed bait portion"), SavedBait, 4);
 			TestTrue(TEXT("departing deployment retirement succeeds after custody"), bDepartureDeploymentRetired);
 			TestTrue(TEXT("persistence retirement preserves the active physical rod"), bRetirementPreservedRod);
@@ -415,7 +415,7 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("rebased coordinator owns the original bait reservation"), ReservationEquipment->IsFishingUseActive(CastResult.Command.FishingSessionId));
 			AddExpectedErrorPlain(TEXT("Event=fishing_bait_commit_rejected"), EAutomationExpectedErrorFlags::Contains, 1);
 			TestFalse(TEXT("destroyed bait source cannot consume from empty custody"), ReservationEquipment->CommitFishingBaitDeferred(CastResult.Command.FishingSessionId).bApplied);
-			TestEqual(TEXT("custody cannot create a consumed bait out of saved inventory"), Quantity(ReservationEquipment, TEXT("BugBait")), 0);
+			TestEqual(TEXT("custody cannot create a consumed bait out of saved inventory"), Quantity(ReservationEquipment, 4), 0);
 			TestFalse(TEXT("disposed coordinator no longer owns a live reservation"), Owner.Equipment->HasActiveFishingUse());
 		}
 
@@ -425,8 +425,8 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 		const int64 CancelRevision = ReservationEquipment->GetSnapshot().Revision;
 		TestTrue(TEXT("cancel retry replays the committed result"), Session->CancelFromAuthority(CancelRequest).bCommitted);
 		TestEqual(TEXT("cancel retry cannot duplicate bait or inventory writes"), ReservationEquipment->GetSnapshot().Revision, CancelRevision);
-		const int32 OriginalBait = Quantity(Owner.Equipment, TEXT("BugBait"));
-		const int32 CustodyBait = ReservationEquipment == Owner.Equipment ? 0 : Quantity(ReservationEquipment, TEXT("BugBait"));
+		const int32 OriginalBait = Quantity(Owner.Equipment, 4);
+		const int32 CustodyBait = ReservationEquipment == Owner.Equipment ? 0 : Quantity(ReservationEquipment, 4);
 		TestEqual(TEXT("all original and custody ledgers conserve bait; committed bait is spent once"),
 			OriginalBait + CustodyBait, 4);
 		if (ExitScenario == 1) TestEqual(TEXT("cancel never transfers ordinary bait into custody"), CustodyBait, 0);
@@ -445,8 +445,8 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 			FCatLeaveRodCommand Leave;
 			Leave.Context = Context();
 			if (!Fishing->LeaveRod(Owner.Controller, Leave).bCommitted) return false;
-			if (!Helper.Equipment->GrantEquipmentFromAuthority(FGuid::NewGuid(), Helper.Equipment->GetSnapshot().Revision, TEXT("FeatherFloat")).bCommitted
-				|| !Helper.Equipment->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(), Helper.Equipment->GetSnapshot().Revision, TEXT("BugBait"), 2).bCommitted) return false;
+			if (!Helper.Equipment->GrantEquipmentFromAuthority(FGuid::NewGuid(), Helper.Equipment->GetSnapshot().Revision, 9).bCommitted
+				|| !Helper.Equipment->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(), Helper.Equipment->GetSnapshot().Revision, 4, 2).bCommitted) return false;
 			for (const bool bAfterWarning : {false, true})
 			{
 				FCatOperateRodCommand Take;
@@ -458,8 +458,8 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 				if (!TestTrue(TEXT("guest casts a shared rod through the production transaction"), BorrowedCast.Command.bCommitted)) return false;
 				auto* BorrowedSession = Fishing->FindSession(BorrowedCast.Command.FishingSessionId);
 				if (!BorrowedSession) return false;
-				TestEqual(TEXT("shared cast preserves caster bait until true bite"), Quantity(Helper.Equipment, TEXT("BugBait")), 2);
-				TestEqual(TEXT("shared cast does not debit the deployer"), Quantity(Owner.Equipment, TEXT("BugBait")), 4);
+				TestEqual(TEXT("shared cast preserves caster bait until true bite"), Quantity(Helper.Equipment, 4), 2);
+				TestEqual(TEXT("shared cast does not debit the deployer"), Quantity(Owner.Equipment, 4), 4);
 				if (bAfterWarning)
 				{
 					for (int32 Frame = 0; Frame < 15000 && BorrowedSession->GetSnapshot().HookActor
@@ -477,8 +477,8 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 				Recall.ExpectedRevision = BorrowedSession->GetSnapshot().Revision;
 				AddExpectedErrorPlain(TEXT("Outcome=ECatFishingOutcome::Cancelled"), EAutomationExpectedErrorFlags::Contains, 1);
 				if (!TestTrue(TEXT("a nearby different player can X-recall the unattended line"), BorrowedSession->CutLineFromAuthority(Owner.Controller, Recall).bCommitted)) return false;
-				TestEqual(TEXT("recall before true bite preserves all caster bait, including warning"), Quantity(Helper.Equipment, TEXT("BugBait")), 2);
-				TestEqual(TEXT("recall never gives bait to the person pressing X"), Quantity(Owner.Equipment, TEXT("BugBait")), 4);
+				TestEqual(TEXT("recall before true bite preserves all caster bait, including warning"), Quantity(Helper.Equipment, 4), 2);
+				TestEqual(TEXT("recall never gives bait to the person pressing X"), Quantity(Owner.Equipment, 4), 4);
 			}
 		}
 		if (ExitScenario == 1 || ExitScenario == 3)

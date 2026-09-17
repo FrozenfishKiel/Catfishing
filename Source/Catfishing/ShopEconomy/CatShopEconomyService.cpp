@@ -42,7 +42,7 @@ namespace
 		TSet<FGuid> SeenFish;
 		for (const FCatShopFishSaleLine& Line : Command.Fish)
 		{
-			if (!Line.FishInstanceId.IsValid() || Line.FishDefinitionId.IsNone() || !FMath::IsFinite(Line.WeightKilograms)
+			if (!Line.FishInstanceId.IsValid() || (Line.ItemId == 0) || !FMath::IsFinite(Line.WeightKilograms)
 				|| Line.WeightKilograms <= 0.0 || SeenFish.Contains(Line.FishInstanceId))
 			{
 				return false;
@@ -416,14 +416,16 @@ FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const 
 		Record.TransactionId = FGuid::NewGuid();
 		Record.RequestId = Command.Context.RequestId;
 		Record.CartId = FGuid::NewDeterministicGuid(CacheKey);
-		Record.Items.Add({Line.Entry.DefinitionId, Line.DeliveryQuantity});
+		FCatShopPublicItem& PublicItem = Record.Items.AddDefaulted_GetRef();
+		PublicItem.ItemId = Line.Entry.ItemId;
+		PublicItem.Quantity = Line.DeliveryQuantity;
 		Record.StableNetId = Command.Context.StableNetId;
 		Record.bPurchase = true;
 		Record.CommittedAtUtc = CommittedAtUtc;
 		Record.ShopDayIndex = CurrentShopDayIndex;
 		Record.EntryId = Line.Entry.EntryId;
 		Record.ShopInventoryId = Command.ShopInventoryId;
-		Record.DefinitionId = Line.Entry.DefinitionId;
+		Record.ItemId = Line.Entry.ItemId;
 		Record.PurchaseQuantity = Line.DeliveryQuantity;
 		Record.WalletDelta = -Line.LineTotalPrice;
 		Record.WalletRevision = WalletRevision;
@@ -453,7 +455,7 @@ FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const 
 }
 
 // 估价流程：先要求经济运行与本地收购表可用，再把一条服务器确认的鱼交给交易 ExecCalc 的纯算式逐条计算。
-bool UCatShopEconomyService::TryAppraiseFishSale(const FName FishDefinitionId, const double WeightKilograms,
+bool UCatShopEconomyService::TryAppraiseFishSale(const int32  ItemId, const double WeightKilograms,
 	int32& OutSaleValue) const
 {
 	OutSaleValue = 0;
@@ -462,7 +464,7 @@ bool UCatShopEconomyService::TryAppraiseFishSale(const FName FishDefinitionId, c
 		return false;
 	}
 	FCatShopFishSaleLine Line;
-	Line.FishDefinitionId = FishDefinitionId;
+	Line.ItemId = ItemId;
 	Line.WeightKilograms = WeightKilograms;
 	TArray<FCatShopFishSaleLine> Fish;
 	Fish.Add(Line);
@@ -611,8 +613,10 @@ FCatShopTransactionResult UCatShopEconomyService::ApplyFishSale(const FCatShopFi
 	Record.CartId = FGuid::NewDeterministicGuid(CacheKey);
 	for (const auto& Fish : Command.Fish)
 	{
-		Record.Items.Add({Fish.FishDefinitionId, 1});
-		const auto* Definition = Cast<UCatFishDefinition>(GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(Fish.FishDefinitionId));
+		FCatShopPublicItem& PublicItem = Record.Items.AddDefaulted_GetRef();
+		PublicItem.ItemId = Fish.ItemId;
+		PublicItem.Quantity = 1;
+		const auto* Definition = Cast<UCatFishDefinition>(GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(Fish.ItemId));
 		Record.bContainsGiantFish |= Definition && Definition->BodyClass == ECatFishBodyClass::Giant;
 	}
 	Record.CommittedAtUtc = FDateTime::UtcNow();
@@ -747,7 +751,7 @@ void UCatShopEconomyService::CloseCommands()
 	OnShopInventoryRefreshed.Broadcast();
 }
 
-bool UCatShopEconomyService::TryGetOriginalItemPrice(const FName DefinitionId, int32& OutPrice) const
+bool UCatShopEconomyService::TryGetOriginalItemPrice(const int32  ItemId, int32& OutPrice) const
 {
 	OutPrice = INDEX_NONE;
 	const auto* Settings = GetDefault<UCatShopEconomySettings>();
@@ -757,7 +761,7 @@ bool UCatShopEconomyService::TryGetOriginalItemPrice(const FName DefinitionId, i
 	for (const auto& Pair : Table->GetRowMap())
 	{
 		const auto* Row = reinterpret_cast<const FCatShopCatalogTableRow*>(Pair.Value);
-		if (Row->DefinitionId != DefinitionId) continue;
+		if (Row->ItemId != ItemId) continue;
 		if (Row->UnitPrice < 0 || Row->PurchaseQuantity <= 0 || Row->UnitPrice % Row->PurchaseQuantity != 0) return false;
 		const int32 Price = Row->UnitPrice / Row->PurchaseQuantity;
 		if (OutPrice != INDEX_NONE && OutPrice != Price) return false;
@@ -788,7 +792,7 @@ int32 UCatShopEconomyService::FinalizeRunResourcesFromAuthority(const bool bGrad
 	CloseCommands();
 	TGuardValue<bool> TransactionGuard(bTransactionInProgress, true);
 	const auto* Settings = GetDefault<UCatShopEconomySettings>();
-	auto* DriedFish = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(Settings->SettlementDriedFishDefinitionId);
+	auto* DriedFish = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(Settings->SettlementDriedItemId);
 	int32 CoinCost = 0, Balance = 0;
 	const auto Reject = [&](const TCHAR* Failure)
 	{
@@ -808,12 +812,12 @@ int32 UCatShopEconomyService::FinalizeRunResourcesFromAuthority(const bool bGrad
 		if (!bGraduation) return;
 		if (Definition && Definition->IsA<UCatFishDefinition>()) return;
 		int32 Price = 0;
-		if (!Definition || Count <= 0 || !TryGetOriginalItemPrice(Definition->GetInventoryDefinitionId(), Price)
+		if (!Definition || Count <= 0 || !TryGetOriginalItemPrice(Definition->GetItemId(), Price)
 			|| EquipmentCoins > MAX_int64 - int64(Price) * Count)
 		{
 			SkippedEquipmentCount += FMath::Max(0, Count);
 			UE_LOG(LogCatfishing, Warning, TEXT("Event=shop_settlement_equipment_skipped World=%s NetMode=%d Authority=1 Definition=%s Count=%d Result=ExcludedFromExchangeValue"),
-				*GetNameSafe(World), World->GetNetMode(), Definition ? *Definition->GetInventoryDefinitionId().ToString() : TEXT("None"), Count);
+				*GetNameSafe(World), World->GetNetMode(), Definition ? *FString::FromInt(Definition->GetItemId()) : TEXT("None"), Count);
 			return;
 		}
 		const int64 AddedValue = int64(Price) * Count;
@@ -878,7 +882,7 @@ int32 UCatShopEconomyService::FinalizeRunResourcesFromAuthority(const bool bGrad
 		const auto& Rod = It->GetPresentationState();
 		if (Rod.ItemInstanceId.IsValid() && !PricedIds.Contains(Rod.ItemInstanceId))
 		{
-			PriceDefinition(GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(Rod.RodDefinitionId), 1);
+			PriceDefinition(GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(Rod.RodItemId), 1);
 			PricedIds.Add(Rod.ItemInstanceId);
 		}
 		RemoveActors.Add(*It);
@@ -900,10 +904,10 @@ int32 UCatShopEconomyService::FinalizeRunResourcesFromAuthority(const bool bGrad
 	const int64 TotalCoins = int64(Balance) + EquipmentCoins;
 	// 兑换缺配只跳过最后一项，不阻止清款、装备退役与世界资源清理。
 	const bool bCanExchange = bGraduation && DriedFish && DriedFish->IsInventoryRuntimeDefinitionReady()
-		&& TryGetOriginalItemPrice(Settings->SettlementDriedFishDefinitionId, CoinCost) && CoinCost > 0;
+		&& TryGetOriginalItemPrice(Settings->SettlementDriedItemId, CoinCost) && CoinCost > 0;
 	if (bGraduation && !bCanExchange)
 		UE_LOG(LogCatfishing, Warning, TEXT("Event=shop_settlement_exchange_skipped World=%s NetMode=%d Authority=1 Definition=%s Result=DriedFishDefinitionOrCatalogPriceMissing DriedFish=0"),
-			*GetNameSafe(World), World->GetNetMode(), *Settings->SettlementDriedFishDefinitionId.ToString());
+			*GetNameSafe(World), World->GetNetMode(), *FString::FromInt(Settings->SettlementDriedItemId));
 	const int64 Count64 = bCanExchange ? TotalCoins / CoinCost : 0;
 	if (Count64 > MAX_int32 || (Count64 > 0 && !Target)) return Reject(TEXT("DriedFishDeliveryUnavailable"));
 	const int32 Count = int32(Count64);
@@ -1197,7 +1201,7 @@ FCatShopPublicTransaction UCatShopEconomyService::MakePublicTransaction(const FC
 	Public.bFishSale = Record.bFishSale;
 	Public.EntryId = Record.EntryId;
 	Public.ShopInventoryId = Record.ShopInventoryId;
-	Public.DefinitionId = Record.DefinitionId;
+	Public.ItemId = Record.ItemId;
 	Public.PurchaseQuantity = Record.PurchaseQuantity;
 	Public.FishInstanceId = Record.FishInstanceId;
 	Public.WalletDelta = Record.WalletDelta;
@@ -1276,7 +1280,7 @@ FString UCatShopEconomyService::MakeFishSalePayloadSignature(const FCatShopFishS
 	for (const FCatShopFishSaleLine& Line : Command.Fish)
 	{
 		Lines.Add(FString::Printf(TEXT("%s:%s:%.17g"), *Line.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
-			*Line.FishDefinitionId.ToString(), Line.WeightKilograms));
+			*FString::FromInt(Line.ItemId), Line.WeightKilograms));
 	}
 	return FString::Printf(TEXT("InventoryCommit=%s|Fish=%s"),
 		*Command.InventoryCommitId.ToString(EGuidFormats::DigitsWithHyphens), *FString::Join(Lines, TEXT(",")));

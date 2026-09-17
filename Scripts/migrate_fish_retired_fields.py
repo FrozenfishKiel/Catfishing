@@ -52,8 +52,8 @@ def main():
         asset = unreal.load_asset(path)
         if not isinstance(asset, unreal.CatFishDefinition) or path in dirty:
             raise RuntimeError('Missing/wrong type/dirty fish: ' + path)
-        identity = str(asset.get_editor_property('fish_definition_id'))
-        if not identity or identity == 'None' or identity in identities:
+        identity = int(asset.get_editor_property('item_id'))
+        if identity <= 0 or identity in identities:
             raise RuntimeError('Missing or duplicate identity: ' + path)
         identities.add(identity)
         relative = Path('Content') / (path.removeprefix('/Game/') + '.uasset')

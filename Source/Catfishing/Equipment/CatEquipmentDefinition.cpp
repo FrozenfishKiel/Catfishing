@@ -1,4 +1,4 @@
-﻿#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentDefinition.h"
 
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Bait.h"
@@ -15,7 +15,7 @@ namespace
 	bool IsEquipmentIdentityReady(const UCatEquipmentDefinition& Definition)
 	{
 		return Definition.bEnableRuntimeDefinition
-			&& !Definition.EquipmentDefinitionId.IsNone()
+			&& !(Definition.ItemId == 0)
 			&& !Definition.FunctionalRouteId.IsNone();
 	}
 
@@ -26,12 +26,6 @@ namespace
 		return InventorySettings != nullptr ? InventorySettings->GetDefaultQuantityStackLimit() : MAX_int32;
 	}
 
-}
-
-// 库存 ID 读取流程：装备资产已经用 EquipmentDefinitionId 作为跨商店、背包和钓鱼的稳定钥匙，库存目录直接复用它。
-FName UCatEquipmentDefinition::GetInventoryDefinitionId() const
-{
-	return EquipmentDefinitionId;
 }
 
 // 库存展示名读取流程：装备资产自己的 DisplayName 是策划维护文本，空文本回退由背包和商店展示模型处理。

@@ -26,7 +26,7 @@ public:
 	ACatFishEncounterActor();
 	FVector GetFishingCollisionCenter() const;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
-	bool InitializeAuthoritativeIdentity(FGuid InFishingSessionId, FGuid InCastAttemptId, FName InFishDefinitionId,
+	bool InitializeAuthoritativeIdentity(FGuid InFishingSessionId, FGuid InCastAttemptId, int32  InItemId,
 		double InInitialLineLength, double InVisualScale);
 	void DeferInitialPresentationFromAuthority();
 	void PublishInitialPresentationFromAuthority();
@@ -107,7 +107,7 @@ private:
 	bool bApplyingVisualPose = false;
 	bool bLoggedAnimatedMouthFallback = false;
 	double NextBodyDiagnosticWorldSeconds = 0.0;
-	FName AppliedPresentationFishDefinitionId = NAME_None;
+	int32  AppliedPresentationItemId = 0;
 	double AppliedExhaustedVisualRollDegrees = 90.0;
 	TWeakObjectPtr<UCatFishingFightRunner> AuthorityFightRunner;
 	FTransform EncounterMeshBaseTransform = FTransform::Identity;
