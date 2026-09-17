@@ -1,47 +1,73 @@
-#include "Condition/CatConditionComponent.h"
+﻿#include "Condition/CatConditionComponent.h"
 
 #include "Character/CatCharacter.h"
 #include "Condition/CatConditionSettings.h"
 #include "Environment/CatWaterQuerySubsystem.h"
-#include "Fishing/CatFishingService.h"
 #include "GameFramework/Controller.h"
 #include "Logging/CatLog.h"
 #include "Logging/CatLogContext.h"
-#include "Net/UnrealNetwork.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Tags/CatStateTags.h"
 
-// 构造流程：开启默认复制并关闭 Tick；Snapshot 初始 Revision=0 表示尚未提交身体离散事实。
+// 构造流程：关闭独立状态复制和 Tick；状态通过 ASC 的活动效果复制。
 UCatConditionComponent::UCatConditionComponent()
 {
-	SetIsReplicatedByDefault(true);
+	SetIsReplicatedByDefault(false);
 	PrimaryComponentTick.bCanEverTick = false;
 }
 
-// 复制声明流程：保留父类字段并注册单一 Snapshot；缓存与原始调用者信息只留 authority。
-void UCatConditionComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+// 观察流程：绑定身体 ASC 的 Tag 变化并立即投影；状态可先于组件 BeginPlay 到达，首次读取也不会漏掉。
+void UCatConditionComponent::BeginPlay()
 {
-	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-	DOREPLIFETIME(ThisClass, Snapshot);
+	Super::BeginPlay();
+	ObservedASC = GetOwner()->FindComponentByClass<UCatAbilitySystemComponent>();
+	if (auto* ASC = ObservedASC.Get()) StateTagHandle = ASC->RegisterGenericGameplayTagEvent().AddUObject(this, &ThisClass::HandleStateTagChanged);
+	RefreshSnapshot();
 }
 
-// Snapshot 读取流程：返回本机服务器真相或客户端最近复制值，不把任何属性数值复制进第二个 DTO。
+// 退出流程：从原 ASC 移除监听；组件不拥有状态 GE，最终回收归 ASC。
+void UCatConditionComponent::EndPlay(const EEndPlayReason::Type Reason)
+{
+	if (auto* ASC = ObservedASC.Get()) ASC->RegisterGenericGameplayTagEvent().Remove(StateTagHandle);
+	Super::EndPlay(Reason);
+}
+
+// 查询流程：只读角色 ASC；缺少 ASC 时没有可声明的状态，不创建本地替代状态。
+bool UCatConditionComponent::HasState(FGameplayTag Tag) const
+{
+	const auto* ASC = GetOwner()->FindComponentByClass<UCatAbilitySystemComponent>();
+	return ASC && ASC->HasMatchingGameplayTag(Tag);
+}
+
+// 投影流程：从 GAS 同时读取倒地、湿毛和水域；旧水域枚举只为钓鱼消费者映射，不参与权威存储。
+void UCatConditionComponent::RefreshSnapshot() const
+{
+	Snapshot.bWet = HasState(CatStateTags::Wet);
+	Snapshot.bDowned = HasState(CatStateTags::Downed);
+	Snapshot.WaterExposure = HasState(CatStateTags::WaterDangerous) ? ECatWaterExposureState::Dangerous
+		: HasState(CatStateTags::WaterShallow) ? ECatWaterExposureState::Shallow : ECatWaterExposureState::Dry;
+}
+
+// 读取流程：按需刷新只读投影，保证无 BeginPlay 的领域测试和服务器早期查询也观察同一 ASC。
 const FCatConditionSnapshot& UCatConditionComponent::GetSnapshot() const
 {
+	RefreshSnapshot();
 	return Snapshot;
 }
 
-// Wet 写入流程：只接受落水、天气等 authority 反馈和真实变化；提交后增加 Revision/强制更新，明确不触碰成长、搏斗体力、移动能力或 BodyAction。
-void UCatConditionComponent::SetWetFromAuthority(const bool bNewWet)
+// 状态通知流程：只处理角色状态分支，刷新兼容投影并递增本机观察计数；消费者自己订阅 ASC，此处不再转发通知或回写效果。
+void UCatConditionComponent::HandleStateTagChanged(FGameplayTag Tag, int32 Count)
 {
-	AActor* Owner = GetOwner();
-	if (!Owner || !Owner->HasAuthority() || Snapshot.bWet == bNewWet)
-	{
-		return;
-	}
-	Snapshot.bWet = bNewWet;
+	if (!Tag.MatchesTag(CatStateTags::State)) return;
+	RefreshSnapshot();
 	++Snapshot.Revision;
-	PublishSnapshot();
-	UE_LOG(LogCatCharacter, Log, TEXT("Event=character_wet_changed Character=%s Wet=%s Revision=%lld"),
-		*Owner->GetName(), Snapshot.bWet ? TEXT("true") : TEXT("false"), Snapshot.Revision);
+}
+
+// 湿毛写入流程：只更新该环境来源的 GE；清除后其他独立来源仍可保持湿毛，属性不受影响。
+void UCatConditionComponent::SetWetFromAuthority(bool bNewWet)
+{
+	if (auto* ASC = GetOwner()->FindComponentByClass<UCatAbilitySystemComponent>())
+		ASC->SetStateTagsFromAuthority(TEXT("Condition.Wet"), bNewWet ? FGameplayTagContainer(CatStateTags::Wet) : FGameplayTagContainer());
 }
 
 // 水域暴露更新流程：
@@ -71,6 +97,7 @@ ECatWaterExposureUpdate UCatConditionComponent::UpdateWaterExposureFromAuthority
 	OutImmersionDepthCentimeters = Immersion.ImmersionDepthCentimeters;
 	const bool bWet = Immersion.Containment != ECatWaterContainment::Outside
 		&& OutImmersionDepthCentimeters >= Settings->WetWaterDepthCentimeters;
+	RefreshSnapshot();
 	ECatWaterExposureState NewExposure = bWet ? ECatWaterExposureState::Shallow : ECatWaterExposureState::Dry;
 	if (Snapshot.WaterExposure == ECatWaterExposureState::Dangerous
 		&& bWet && OutImmersionDepthCentimeters > Settings->DangerousWaterExitDepthCentimeters)
@@ -93,14 +120,17 @@ ECatWaterExposureUpdate UCatConditionComponent::UpdateWaterExposureFromAuthority
 	}
 	const bool bDangerousEntered = Snapshot.WaterExposure != ECatWaterExposureState::Dangerous
 		&& NewExposure == ECatWaterExposureState::Dangerous;
-	if (Snapshot.bWet == bWet && Snapshot.WaterExposure == NewExposure)
-	{
-		return ECatWaterExposureUpdate::Unchanged;
-	}
-	Snapshot.bWet = bWet;
-	Snapshot.WaterExposure = NewExposure;
-	++Snapshot.Revision;
-	PublishSnapshot();
+	const bool bObservationChanged = Snapshot.WaterExposure != NewExposure;
+	auto* ASC = Character->FindComponentByClass<UCatAbilitySystemComponent>();
+	if (!ASC) return ECatWaterExposureUpdate::Unavailable;
+	FGameplayTagContainer WaterTags;
+	if (bWet) WaterTags.AddTag(CatStateTags::Wet);
+	if (NewExposure == ECatWaterExposureState::Dangerous) WaterTags.AddTag(CatStateTags::WaterDangerous);
+	else if (NewExposure == ECatWaterExposureState::Shallow) WaterTags.AddTag(CatStateTags::WaterShallow);
+	if (!ASC->SetStateTagsFromAuthority(TEXT("Condition.Water"), WaterTags)) return ECatWaterExposureUpdate::Unavailable;
+	// 即使聚合状态相同也更新本来源；否则其他来源撤销后可能丢失仍在水中的湿毛。
+	RefreshSnapshot();
+	if (!bObservationChanged) return ECatWaterExposureUpdate::Unchanged;
 	const FString ControllerFields = CatLogContext::BuildControllerFields(Character->GetController());
 	if (bDangerousEntered)
 	{
@@ -122,24 +152,7 @@ ECatWaterExposureUpdate UCatConditionComponent::UpdateWaterExposureFromAuthority
 		: ECatWaterExposureUpdate::Changed;
 }
 
-// 疲惫档写入流程：服务器先检查状态系统开关与值变化，再更新表现档和版本并发布快照；无权限、未启用或同值时直接返回，不修改体力与倒地状态。
-void UCatConditionComponent::SetFatigueTierFromAuthority(const ECatFatigueTier NewTier)
-{
-	const AActor* Owner = GetOwner();
-	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
-	if (!Owner || !Owner->HasAuthority() || !Settings || !Settings->IsRuntimeReady()
-		|| Snapshot.FatigueTier == NewTier)
-	{
-		return;
-	}
-	Snapshot.FatigueTier = NewTier;
-	++Snapshot.Revision;
-	PublishSnapshot();
-	UE_LOG(LogCatCharacter, Log, TEXT("Event=character_fatigue_tier_changed Character=%s Tier=%s Revision=%lld"),
-		*Owner->GetName(), *UEnum::GetValueAsString(NewTier), Snapshot.Revision);
-}
-
-// 倒地写入流程：只供服务器开发验证入口提交离散身体事实；相同状态不产生复制噪声，首次倒地会终止该角色的进行中钓鱼会话。
+// 倒地写入流程：服务器将本来源的倒地意图交给 ASC，失败不改旧效果；成功后读取聚合状态，仅真实变化输出日志。角色和钓鱼退出由 Character 订阅 ASC 处理。
 bool UCatConditionComponent::SetDownedFromAuthority(const bool bNewDowned)
 {
 	AActor* Owner = GetOwner();
@@ -147,40 +160,16 @@ bool UCatConditionComponent::SetDownedFromAuthority(const bool bNewDowned)
 	{
 		return false;
 	}
-	if (Snapshot.bDowned == bNewDowned)
-	{
-		return true;
-	}
-	Snapshot.bDowned = bNewDowned;
-	++Snapshot.Revision;
-	PublishSnapshot();
+	const bool bWasDowned = HasState(CatStateTags::Downed);
+	auto* ASC = Owner->FindComponentByClass<UCatAbilitySystemComponent>();
+	if (!ASC || !ASC->SetStateTagsFromAuthority(TEXT("Condition.Downed"), bNewDowned ? FGameplayTagContainer(CatStateTags::Downed) : FGameplayTagContainer())) return false;
+	RefreshSnapshot();
+	if (bWasDowned == Snapshot.bDowned) return true;
 	UE_LOG(LogCatCharacter, Log,
 		TEXT("Event=character_downed_changed Character=%s Downed=%s Revision=%lld World=%s NetMode=%d Authority=true LocalRole=%d"),
-		*Owner->GetName(), bNewDowned ? TEXT("true") : TEXT("false"), Snapshot.Revision,
+		*Owner->GetName(), Snapshot.bDowned ? TEXT("true") : TEXT("false"), Snapshot.Revision,
 		*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE,
 		static_cast<int32>(Owner->GetLocalRole()));
-	if (bNewDowned)
-	{
-		if (UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
-		{
-			Fishing->ReleaseFishingOperatorForCharacter(Cast<ACatCharacter>(Owner));
-		}
-	}
+
 	return true;
-}
-
-// Snapshot 复制回调流程：客户端只消费完整离散事实；表现系统可查询它，但这里不触发新的身体命令。
-void UCatConditionComponent::OnRep_Snapshot()
-{
-	OnSnapshotChanged.Broadcast();
-}
-
-// Snapshot 发布流程：authority 先要求 Owner 立即复制，再向同机只读订阅者广播；无 Owner 时仍广播当前对象变化但不尝试网络写入。
-void UCatConditionComponent::PublishSnapshot()
-{
-	if (AActor* Owner = GetOwner(); Owner && Owner->HasAuthority())
-	{
-		Owner->ForceNetUpdate();
-	}
-	OnSnapshotChanged.Broadcast();
 }

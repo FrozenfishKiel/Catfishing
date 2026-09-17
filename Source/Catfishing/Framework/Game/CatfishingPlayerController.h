@@ -15,10 +15,8 @@
 #include "CatfishingPlayerController.generated.h"
 
 class UCatAbilityInputBindingComponent;
-class UCatCampBodyActionCommandComponent;
 class UCatFishingCommandComponent;
 class UCatInteractionTargetingComponent;
-class UCatSocialBodyActionCommandComponent;
 class UCharacterMovementComponent;
 class UEnhancedInputComponent;
 class UEnhancedInputLocalPlayerSubsystem;
@@ -376,14 +374,6 @@ private:
 	/** 当前 Controller 的 Ability 输入绑定子对象；它拥有 ASC 输入路由状态，Controller 只把 Pawn/输入生命周期转交给它。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Input", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatAbilityInputBindingComponent> AbilityInputBindingComponent;
-
-	/** 当前 Controller 的 Camp BodyAction 命令子对象；它只创建营地动作载荷，不接触库存或 Wet 反馈。 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|BodyAction", meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<UCatCampBodyActionCommandComponent> CampBodyActionCommandComponent;
-
-	/** 当前 Controller 的 Social BodyAction 命令子对象；它只创建求助、恶作剧和保护牌载荷，不接触营地、库存事务或 Wet 反馈。 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|BodyAction", meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<UCatSocialBodyActionCommandComponent> SocialBodyActionCommandComponent;
 
 	/** NativeInputActions 已绑定的输入组件；只防止交互这类非 Ability 标签在 SetupInputComponent 重入时重复注册。 */
 	UPROPERTY(Transient)

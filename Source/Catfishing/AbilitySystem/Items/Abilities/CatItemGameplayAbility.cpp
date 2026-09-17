@@ -1,3 +1,5 @@
+﻿#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Tags/CatStateTags.h"
 #include "AbilitySystem/Items/Abilities/CatItemGameplayAbility.h"
 #include "AbilitySystem/Items/CatItemAbilityComponent.h"
 #include "AbilitySystem/Costs/CatAbilityCost_Item.h"
@@ -25,7 +27,9 @@
 UCatItemGameplayAbility::UCatItemGameplayAbility()
 {
 	AdditionalCosts.Add(CreateDefaultSubobject<UCatAbilityCost_Item>(TEXT("SourceItemCost")));
-	SetAssetTags(FGameplayTagContainer(CatFishingAbilityTags::Ability_Body_Action));
+	FGameplayTagContainer BodyActionTags(CatFishingAbilityTags::Ability_Body_Action);
+	BodyActionTags.AddTag(CatStateTags::AbilityInterruptOnDowned);
+	SetAssetTags(BodyActionTags);
 	BlockAbilitiesWithTag.AddTag(CatFishingAbilityTags::Ability_Body_Action);
 }
 // 启动流程：清空上次激活状态，绑定目标监听并设置五秒接收期限；本地发送冻结意图，远端服务器读取已缓存数据。
@@ -104,7 +108,7 @@ bool UCatItemGameplayAbility::ValidateUse() const
 	const auto* Spec = GetCurrentAbilitySpec();
 	if (!Character || !UseTarget.RequestId.IsValid() || !Config || !Config->IsRuntimeReady()
 		|| Config->AbilityClass != GetClass() || !Spec || !Character->GetConditionComponent()
-		|| Character->GetConditionComponent()->GetSnapshot().bDowned) return false;
+		|| Character->GetCatAbilitySystemComponent()->HasMatchingGameplayTag(CatStateTags::Downed)) return false;
 	if (IsValid(UseTarget.WorldFish))
 	{
 		if (UseTarget.Inventory || Spec->SourceObject.IsValid() || ACatFishPickupActor::FindCarriedFish(Character) != UseTarget.WorldFish

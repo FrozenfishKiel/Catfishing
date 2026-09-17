@@ -1,3 +1,5 @@
+﻿#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Tags/CatStateTags.h"
 #include "Interaction/Carry/CatCarryableActor.h"
 
 #include "Components/SceneComponent.h"
@@ -50,7 +52,7 @@ bool ACatCarryableActor::DropFromAuthority(AController* Controller, FGuid Reques
 	if (!HasAuthority() || IsActorBeingDestroyed() || !Character || Character->GetWorld() != GetWorld()
 		|| Character->GetController() != Controller || Character->GetMouthCarriedActor() != this
 		|| GetAttachParentActor() != Character || !Character->GetConditionComponent()
-		|| Character->GetConditionComponent()->GetSnapshot().bDowned || !Body || !Body->IsRegistered()
+		|| Character->GetCatAbilitySystemComponent()->HasMatchingGameplayTag(CatStateTags::Downed) || !Body || !Body->IsRegistered()
 		|| Body->Mobility != EComponentMobility::Movable || !Body->GetBodySetup()
 		|| Body->GetBodySetup()->AggGeom.GetElementCount() == 0
 		|| Body->GetBodySetup()->CollisionTraceFlag == CTF_UseComplexAsSimple || !Settings

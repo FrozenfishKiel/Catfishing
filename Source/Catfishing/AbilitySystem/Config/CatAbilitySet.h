@@ -97,8 +97,6 @@ class CATFISHING_API UCatAbilitySet : public UPrimaryDataAsset
 public:
 	/** 检查本集合的能力与效果是否可授予；不要求装备包含角色默认能力，效果必须能按来源独立回收。 */
 	bool IsRuntimeReady() const;
-	/** 判断角色默认能力集是否只保留 BodyAction 长期入口；鱼竿操作能力由部署实例另行授予。 */
-	bool IsDefaultCharacterAbilitySetReady() const;
 
 	/** 在服务器 ASC 上整组授予能力与初始效果；任一授予失败会回滚本次已授予内容并返回 false。 */
 	bool GiveToAbilitySystem(UCatAbilitySystemComponent* AbilitySystem,

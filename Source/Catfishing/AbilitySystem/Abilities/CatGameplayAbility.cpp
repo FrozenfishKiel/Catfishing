@@ -1,9 +1,13 @@
+﻿#include "Framework/Game/CatfishingPlayerController.h"
+#include "GameFramework/Pawn.h"
 #include "AbilitySystem/Abilities/CatGameplayAbility.h"
 #include "AbilitySystem/Costs/CatAbilityCost.h"
+#include "AbilitySystem/Tags/CatStateTags.h"
 
-// 默认执行策略：每个授予 Spec 使用独立能力实例，客户端可预测启动；资源的最终写入由成本自己的权威分支负责。
+// 默认执行策略：倒地标签阻止新激活，每个授予 Spec 使用独立能力实例，客户端可预测启动；子类可改网络策略，资源写入由成本的权威分支负责。
 UCatGameplayAbility::UCatGameplayAbility()
 {
+	ActivationBlockedTags.AddTag(CatStateTags::Downed);
 	InstancingPolicy = EGameplayAbilityInstancingPolicy::InstancedPerActor;
 	NetExecutionPolicy = EGameplayAbilityNetExecutionPolicy::LocalPredicted;
 }
@@ -26,4 +30,13 @@ void UCatGameplayAbility::ApplyCost(FGameplayAbilitySpecHandle Handle, const FGa
 	if (ActorInfo && ActorInfo->IsNetAuthority())
 		for (const UCatAbilityCost* Cost : AdditionalCosts)
 			if (Cost) Cost->ApplyCost(this, ActorInfo);
+}
+
+// 控制器读取流程：优先读取 GAS 的当前 ActorInfo；无控制器缓存时只查询本次 Avatar 的 Pawn，不保存跨占有引用。
+ACatfishingPlayerController* UCatGameplayAbility::GetCatPlayerControllerFromActorInfo() const
+{
+	if (!CurrentActorInfo) return nullptr;
+	if (auto* Controller = Cast<ACatfishingPlayerController>(CurrentActorInfo->PlayerController.Get())) return Controller;
+	const auto* Pawn = Cast<APawn>(CurrentActorInfo->AvatarActor.Get());
+	return Pawn ? Cast<ACatfishingPlayerController>(Pawn->GetController()) : nullptr;
 }

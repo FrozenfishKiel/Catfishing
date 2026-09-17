@@ -1,5 +1,6 @@
-#include "AbilitySystem/Physics/CatPhysicalEffortComponent.h"
+﻿#include "AbilitySystem/Physics/CatPhysicalEffortComponent.h"
 
+#include "AbilitySystem/Tags/CatStateTags.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "AbilitySystem/Config/CatPhysicalEffortSettings.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
@@ -13,11 +14,13 @@
 #include "Fishing/CatFishingService.h"
 #include "Fishing/CatFishingSession.h"
 
+// 构造流程：设置组件复制资格；体力属性由 ASC 管理，本组件不另建复制余额。
 UCatPhysicalEffortComponent::UCatPhysicalEffortComponent()
 {
 	SetIsReplicatedByDefault(true);
 }
 
+// 推力读取流程：先要求属性和配置有效，再将力量对应的牛顿值换算为引擎力单位；无体力或非法力值均返回零。
 double UCatPhysicalEffortComponent::GetMaximumForceKgCmS2() const
 {
 	const auto* ASC = GetOwner()->FindComponentByClass<UCatAbilitySystemComponent>();
@@ -30,13 +33,16 @@ double UCatPhysicalEffortComponent::GetMaximumForceKgCmS2() const
 	return FMath::IsFinite(Stamina) && Stamina > 0 && FMath::IsFinite(Force) && Force > 0 ? Force : 0;
 }
 
+// 结算流程：清空上次诊断结果，拒绝非权威或非法步长；钓鱼主控仍由原 Runner 独占支付。
+// 其余角色校验 ASC 余额后，以实际位移计算未完成运动的消耗，并把用力或承重写为本组件的恢复阻挡来源。
+// 恢复资格读取所有来源聚合后的 Tag；随后合并消耗与恢复，经 GE 写入余额，失败仅记拒绝，成功更新结算读数及限频日志。
 void UCatPhysicalEffortComponent::SettleMovementFromAuthority(const FCatBodyDriveSample& Drive,
 	const FVector& IntendedDisplacement, const FVector& ActualDisplacement, double Seconds, bool bGrounded)
 {
 	LastPaid = 0;
 	LastResult = {};
 	if (!GetOwner()->HasAuthority() || !FMath::IsFinite(Seconds) || Seconds <= 0) return;
-	// The primary's runner is the sole writer of its movement + rod bill, including slack recovery.
+	// 主控 Runner 独占运动与鱼竿成本结算，也负责松竿恢复。
 	// 持竿/等待咬钩不等于搏斗；同时检查已发布竿状态和实际 Runner，覆盖注册和阶段交接窗口。
 	const auto* Pawn = Cast<APawn>(GetOwner());
 	auto* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
@@ -84,8 +90,10 @@ void UCatPhysicalEffortComponent::SettleMovementFromAuthority(const FCatBodyDriv
 		bRecoveryBlockedByLoad = Drive.bUnderLoad;
 		LogState(TEXT("physical_effort_recovery_gate"), Drive.bUnderLoad ? TEXT("Loaded") : TEXT("Unloaded"));
 	}
-	// 2026-09-13 裁决⑥：没有起手、姿势、等待或再入阈值；受力语义继续阻止恢复。
-	const bool bCanRest = !bExerting && !Drive.bUnderLoad;
+	// 没有起手、姿势、等待或再入阈值；撤销自身的用力来源后，其他来源持有的恢复阻挡仍然有效。
+	ASC->SetStateTagsFromAuthority(TEXT("PhysicalEffort.Recovery"), bExerting || Drive.bUnderLoad
+		? FGameplayTagContainer(CatStateTags::RecoveryBlocked) : FGameplayTagContainer());
+	const bool bCanRest = !ASC->HasMatchingGameplayTag(CatStateTags::RecoveryBlocked);
 	const double Recovery = bCanRest ? FMath::Min(Maximum - Before, Settings->RecoveryPerSecond * Seconds) : 0.0;
 
 	const double Requested = FMath::Min(Before, LastResult.StaminaDrain) - Recovery;
@@ -101,6 +109,7 @@ void UCatPhysicalEffortComponent::SettleMovementFromAuthority(const FCatBodyDriv
 	}
 }
 
+// 日志流程：读取当前身体、玩家和 ASC 余额，与最近运动读数组成同一条关联记录；拒绝事件使用 Warning，其余使用 Log。
 void UCatPhysicalEffortComponent::LogState(FName Event, FName Result) const
 {
 	const auto* Body = GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>();
@@ -119,11 +128,35 @@ void UCatPhysicalEffortComponent::LogState(FName Event, FName Result) const
 	else { UE_LOG(LogCatPhysicsGrab, Log, TEXT("%s"), *Record); }
 }
 
-void UCatPhysicalEffortComponent::ObserveStaminaFromReplication(double PreviousStamina)
+// 属性观察流程：仅客户端记录本次属性变化量；每秒至多保留一次通知，其间变化不会累计到 LastPaid，日志余额仍读取 ASC 当前值。
+void UCatPhysicalEffortComponent::HandleStaminaChanged(const FOnAttributeChangeData& Change)
 {
 	if (!GetOwner() || GetOwner()->HasAuthority() || !GetWorld() || GetWorld()->GetTimeSeconds() < NextLogSeconds) return;
 	NextLogSeconds = GetWorld()->GetTimeSeconds() + 1;
-	const auto* ASC = GetOwner()->FindComponentByClass<UCatAbilitySystemComponent>();
-	LastPaid = ASC ? PreviousStamina - ASC->GetTotalFightStamina() : 0;
+	LastPaid = double(Change.OldValue) - double(Change.NewValue);
 	LogState(TEXT("physical_effort_stamina_observed"), TEXT("ReplicatedPersonalBalance"));
+}
+
+// 订阅流程：在身体组件开始运行时分别监听绿、黄属性；同一回调不再依赖 AttributeSet 中的业务转发。
+void UCatPhysicalEffortComponent::BeginPlay()
+{
+	Super::BeginPlay();
+	ObservedASC = GetOwner()->FindComponentByClass<UCatAbilitySystemComponent>();
+	if (auto* ASC = ObservedASC.Get())
+	{
+		GreenChangedHandle = ASC->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetFightStaminaAttribute()).AddUObject(this, &ThisClass::HandleStaminaChanged);
+		YellowChangedHandle = ASC->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute()).AddUObject(this, &ThisClass::HandleStaminaChanged);
+	}
+}
+
+// 退出流程：从绑定时的 ASC 移除两个委托，再撤销本组件的限制来源；不删除其他效果持有的恢复限制。
+void UCatPhysicalEffortComponent::EndPlay(const EEndPlayReason::Type Reason)
+{
+	if (auto* ASC = ObservedASC.Get())
+	{
+		ASC->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetFightStaminaAttribute()).Remove(GreenChangedHandle);
+		ASC->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute()).Remove(YellowChangedHandle);
+		if (GetOwner()->HasAuthority()) ASC->SetStateTagsFromAuthority(TEXT("PhysicalEffort.Recovery"), FGameplayTagContainer());
+	}
+	Super::EndPlay(Reason);
 }

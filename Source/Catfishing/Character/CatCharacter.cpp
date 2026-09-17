@@ -1,3 +1,5 @@
+﻿#include "Fishing/CatFishingService.h"
+#include "AbilitySystem/Tags/CatStateTags.h"
 #include "Character/CatCharacter.h"
 #include "Interaction/Carry/CatCarryableActor.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
@@ -16,7 +18,6 @@
 
 #include "AbilitySystemComponent.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
-#include "AbilitySystem/BodyAction/CatBodyActionPresentationSettings.h"
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "AbilitySystem/Attributes/CatGrowthAttributeSet.h"
@@ -161,63 +162,6 @@ void ACatCharacter::Multicast_PlayCosmeticEvent_Implementation(const FGameplayTa
 	BP_PlayCosmeticEvent(EventTag);
 }
 
-// BodyAction 表现开始流程：服务器只广播，真正播放发生在每台客户端；没有配置 Montage 时仍触发蓝图事件，保证正式资源接入点稳定。
-void ACatCharacter::Multicast_PlayBodyActionPresentation_Implementation(
-	const FGameplayTag BodyActionEventTag, const FGameplayTag PresentationEventTag)
-{
-	if (GetNetMode() == NM_DedicatedServer || !BodyActionEventTag.IsValid()
-		|| !PresentationEventTag.IsValid())
-	{
-		return;
-	}
-	PlayBodyActionMontageFromPresentation(BodyActionEventTag);
-	BP_PlayBodyActionPresentation(BodyActionEventTag, PresentationEventTag);
-}
-
-// BodyAction 表现停止流程：取消或拒绝提交时停止同一动作的可选 Montage，再通知蓝图清理非 Montage 表现。
-void ACatCharacter::Multicast_StopBodyActionPresentation_Implementation(
-	const FGameplayTag BodyActionEventTag, const FGameplayTag PresentationEventTag)
-{
-	if (GetNetMode() == NM_DedicatedServer || !BodyActionEventTag.IsValid()
-		|| !PresentationEventTag.IsValid())
-	{
-		return;
-	}
-	StopBodyActionMontageFromPresentation(BodyActionEventTag);
-	BP_StopBodyActionPresentation(BodyActionEventTag, PresentationEventTag);
-}
-
-bool ACatCharacter::PlayBodyActionMontageFromPresentation(const FGameplayTag BodyActionEventTag)
-{
-	// Montage 播放流程：专服和空动作标签直接拒绝；客户端读取共享表现设置并同步加载可选 Montage，返回值只表示本机是否实际播放成功。
-	// 没配置正式 Montage 时返回 false，但上层 multicast 仍会继续触发 BP_PlayBodyActionPresentation，给蓝图音效、特效或后续正式资产保留入口。
-	if (GetNetMode() == NM_DedicatedServer || !BodyActionEventTag.IsValid())
-	{
-		return false;
-	}
-	const UCatBodyActionPresentationSettings* Presentation = GetDefault<UCatBodyActionPresentationSettings>();
-	UAnimMontage* Montage = Presentation ? Presentation->LoadMontage(BodyActionEventTag) : nullptr;
-	return Montage && PlayAnimMontage(Montage) > 0.0f;
-}
-
-bool ACatCharacter::StopBodyActionMontageFromPresentation(const FGameplayTag BodyActionEventTag)
-{
-	// Montage 停止流程：专服和空动作标签直接拒绝；客户端按同一表现设置找到本动作 Montage，缺配置时不做动画副作用并返回 false。
-	// 返回 false 不代表停止表现广播失败，上层仍会调用 BP_StopBodyActionPresentation，正式蓝图可用它清理非 Montage 表现或执行兜底恢复。
-	if (GetNetMode() == NM_DedicatedServer || !BodyActionEventTag.IsValid())
-	{
-		return false;
-	}
-	const UCatBodyActionPresentationSettings* Presentation = GetDefault<UCatBodyActionPresentationSettings>();
-	UAnimMontage* Montage = Presentation ? Presentation->LoadMontage(BodyActionEventTag) : nullptr;
-	if (!Montage)
-	{
-		return false;
-	}
-	StopAnimMontage(Montage);
-	return true;
-}
-
 bool ACatCharacter::PlayFishingCastMontageFromPresentation()
 {
 	if (GetNetMode() == NM_DedicatedServer)
@@ -349,7 +293,7 @@ void ACatCharacter::BeginPlay()
 		PhysicalVisual->InitializeVisual(PhysicalBody,LeftPhysicsHand,RightPhysicsHand,GetMesh());
 		ModelContacts->Initialize(PhysicalVisual->GetVisualMesh());
 	}
-	ConditionComponent->OnSnapshotChanged.AddUObject(this,&ACatCharacter::RefreshPhysicalCondition);
+	AbilitySystemComponent->RegisterGameplayTagEvent(CatStateTags::Downed, EGameplayTagEventType::NewOrRemoved).AddUObject(this, &ACatCharacter::RefreshPhysicalCondition);
 	RefreshPhysicalCondition();
 
 	InitializeAbilityActorInfo();
@@ -429,7 +373,7 @@ void ACatCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	// 销毁路径复用同一 expected-actor 释放，覆盖直接 Destroy 而没有先走 UnPossessed 的服务器清理。
 	if (ACatCarryableActor* Item = Cast<ACatCarryableActor>(MouthCarriedActor)) Item->ReleaseMouthCarryFromAuthority(GetActorLocation());
-	ConditionComponent->OnSnapshotChanged.RemoveAll(this);
+	AbilitySystemComponent->RegisterGameplayTagEvent(CatStateTags::Downed, EGameplayTagEventType::NewOrRemoved).RemoveAll(this);
 	PhysicalBodyComponent->ReleaseConnectionsFromAuthority(TEXT("EndPlay"));
 	ACatfishingGameModeBase::HandleCharacterUnavailable(this);
 	if (AbilitySystemComponent)
@@ -480,14 +424,16 @@ void ACatCharacter::ConfigureCharacterMovementAuthority()
 // 墓碑（2026-09-12）：这里原本是 SetLocomotionEnabledFromAuthority(!bDowned)——倒地即关掉移动意图与地面支撑，
 // 身体只剩被推被拖，和设计写的「可缓慢爬行」正好相反，单人玩家因此没有任何自救位移。
 // 现在移动始终开着，倒地只把速度压到爬行倍率并禁止跳跃。
-void ACatCharacter::RefreshPhysicalCondition()
+void ACatCharacter::RefreshPhysicalCondition(FGameplayTag Tag, int32 Count)
 {
 	if (HasAuthority())
 	{
 		PhysicalBodyComponent->SetLocomotionEnabledFromAuthority(true, TEXT("ConditionChanged"));
 		RefreshLocomotionSpeedScale();
-		if (ConditionComponent->GetSnapshot().bDowned)
+		if (AbilitySystemComponent->HasMatchingGameplayTag(CatStateTags::Downed))
 		{
+			// 保留钓鱼负责人现有退出入口：任何来源的倒地 Tag 都释放操作者，不另存倒地副本。
+			if (auto* Fishing = GetWorld()->GetSubsystem<UCatFishingService>()) Fishing->ReleaseFishingOperatorForCharacter(this);
 			if (ACatCarryableActor* Item = Cast<ACatCarryableActor>(MouthCarriedActor)) Item->ReleaseMouthCarryFromAuthority(GetActorLocation());
 		}
 	}
@@ -501,7 +447,7 @@ void ACatCharacter::RefreshLocomotionSpeedScale()
 	{
 		return;
 	}
-	const bool bDowned = ConditionComponent->GetSnapshot().bDowned;
+	const bool bDowned = AbilitySystemComponent->HasMatchingGameplayTag(CatStateTags::Downed);
 	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
 	const double CrawlScale = bDowned && Settings && FMath::IsFinite(Settings->DownedCrawlSpeedScale)
 		? FMath::Max(0.0, Settings->DownedCrawlSpeedScale) : 1.0;

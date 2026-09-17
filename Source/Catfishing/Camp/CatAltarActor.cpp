@@ -1,3 +1,5 @@
+﻿#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Tags/CatStateTags.h"
 #include "Camp/CatAltarActor.h"
 #include "FishContainers/CatFishGuardActor.h"
 #include "Inventory/CatFishOnlyInventoryComponent.h"
@@ -70,8 +72,8 @@ bool ACatAltarActor::CanInteract_Implementation(AController* Controller) const
 {
 	const ACatfishingGameState* GameState = GetWorld()->GetGameState<ACatfishingGameState>();
 	const APawn* Pawn = Controller ? Controller->GetPawn() : nullptr;
-	const UCatConditionComponent* Condition = Pawn ? Pawn->FindComponentByClass<UCatConditionComponent>() : nullptr;
-	if (!GameState || !Pawn || !Condition || Condition->GetSnapshot().bDowned
+	const UCatAbilitySystemComponent* Condition = Pawn ? Pawn->FindComponentByClass<UCatAbilitySystemComponent>() : nullptr;
+	if (!GameState || !Pawn || !Condition || Condition->HasMatchingGameplayTag(CatStateTags::Downed)
 		|| GameState->GetRunPublicState().Phase.Phase != ECatRunPhase::NormalNight
 		|| !GameState->GetRunPublicState().Phase.bOfferingOpen || GameState->GetRunPublicState().DayTransition.bActive
 		|| GameState->GetRunPublicState().AltarConfirmation.State == ECatAltarConfirmationState::Waiting

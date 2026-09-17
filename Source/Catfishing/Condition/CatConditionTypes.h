@@ -1,9 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Framework/Core/CatDomainCommandTypes.h"
 #include "CatConditionTypes.generated.h"
 
+/** 钓鱼旧接口的水域读值，由 ASC 水域 Tag 投影；保留至钓鱼负责人迁移读取，不独立保存权威状态。 */
 UENUM(BlueprintType)
 enum class ECatWaterExposureState : uint8
 {
@@ -12,6 +13,7 @@ enum class ECatWaterExposureState : uint8
 	Dangerous
 };
 
+/** 单次环境采样的结果；调用方据此区分不可采样、无变化、变化和首次进入危险水域，不代表角色持续状态。 */
 enum class ECatWaterExposureUpdate : uint8
 {
 	Unavailable,
@@ -20,30 +22,13 @@ enum class ECatWaterExposureUpdate : uint8
 	DangerousEntered
 };
 
-/**
- * 疲惫表现的离散档位，由服务器显式写入并复制给表现消费者。
- * 不参与体力、移动或倒地裁决；枚举自身不包含恢复计时或回营重置行为。
- */
-UENUM(BlueprintType)
-enum class ECatFatigueTier : uint8
-{
-	None,
-	Light,
-	Moderate,
-	Heavy
-};
-
-/** Character 局内身体离散状态的复制读模型；保存表现和交互资格需要的客观状态。 */
+/** ASC 状态的兼容读模型；供尚未迁移的钓鱼接口和 UI 读取，不独立复制或接受写入。 */
 USTRUCT(BlueprintType)
 struct FCatConditionSnapshot
 {
 	GENERATED_BODY()
 
-	/** 当前疲惫表现档，由服务器写入，动画读取；不参与玩法数值。 */
-	UPROPERTY(BlueprintReadOnly)
-	ECatFatigueTier FatigueTier = ECatFatigueTier::None;
-
-	/** 身体离散状态快照的版本，0 表示尚未提交变化；Condition 在疲惫档、Wet、Downed 或水域暴露状态改变后递增，复制读模型的消费者读取它识别状态版本。 */
+	/** 本机观察到的状态变化次数；Condition 收到 ASC Tag 通知时递增，不能用来比较服务器与客户端版本。 */
 	UPROPERTY(BlueprintReadOnly)
 	int64 Revision = 0;
 
@@ -51,11 +36,11 @@ struct FCatConditionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	bool bWet = false;
 
-	/** 水深阈值的唯一离散结果；危险只在服务器持续确认后进入。 */
+	/** 由 ASC 水域标签投影的旧接口值；危险水域由服务器采样并确认，枚举不持有权威状态。 */
 	UPROPERTY(BlueprintReadOnly)
 	ECatWaterExposureState WaterExposure = ECatWaterExposureState::Dry;
 
-	/** 猫当前是否处于倒地状态；Condition 写入，交互和身体表现读取。 */
+	/** ASC 当前是否拥有倒地标签；旧接口消费者只读，写入归对应来源 GE。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bDowned = false;
 };

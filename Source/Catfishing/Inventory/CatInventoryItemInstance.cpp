@@ -1,3 +1,5 @@
+﻿#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Tags/CatStateTags.h"
 #include "Inventory/CatInventoryItemInstance.h"
 #include "Inventory/Fragments/CatItemUseFragment.h"
 #include "Character/CatCharacter.h"
@@ -20,7 +22,7 @@ bool UCatInventoryItemInstance::CanExecuteInventoryAction(const FGameplayTag& Ac
 		OutReason = NSLOCTEXT("CatInventory", "ActionUnsupported", "此物品不支持这项操作");
 		return false;
 	}
-	if (!Character || !Character->GetConditionComponent() || Character->GetConditionComponent()->GetSnapshot().bDowned)
+	if (!Character || !Character->GetConditionComponent() || Character->GetCatAbilitySystemComponent()->HasMatchingGameplayTag(CatStateTags::Downed))
 	{
 		OutReason = NSLOCTEXT("CatInventory", "ActionDowned", "当前身体状态无法操作");
 		return false;

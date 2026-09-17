@@ -1,32 +1,20 @@
 ﻿#include "AbilitySystem/Config/CatAbilitySet.h"
-#include "AbilitySystem/Items/Abilities/CatGA_ConsumeFish.h"
 
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
-#include "AbilitySystem/BodyAction/Camp/CatCampBodyActionAbilities.h"
-#include "AbilitySystem/BodyAction/CatCancelBodyActionAbility.h"
-#include "AbilitySystem/BodyAction/Social/CatSocialBodyActionAbilities.h"
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "GameplayEffect.h"
 
 bool UCatAbilitySet::IsRuntimeReady() const
 {
-	// 通用门禁流程：装备操作集只要求条目自身可授予，角色默认集合的内容由专用校验另行约束。
+	// 通用门禁流程：只检查配置能否授予；角色和装备共用同一规则，不限制具体能力类或集合数量。
 	if (GrantedAbilities.IsEmpty() && GrantedEffects.IsEmpty())
 	{
 		return false;
 	}
-	// 这些临时集合只检查本配置内的能力类和输入标签是否重复，不要求装备集合包含角色默认身体动作。
-	TSet<TSubclassOf<UGameplayAbility>> SeenAbilities;
-	TSet<FGameplayTag> SeenInputTags;
+	// 集合配置只校验能否授予，不规定能力数量、具体类或输入标签的唯一性；组合准入由 GA 的 Tag 条件决定。
 	for (const FCatAbilitySetAbility& Entry : GrantedAbilities)
 	{
-		if (!Entry.Ability || Entry.Level < 1 || SeenAbilities.Contains(Entry.Ability)
-			|| (Entry.InputTag.IsValid() && SeenInputTags.Contains(Entry.InputTag)))
-		{
-			return false;
-		}
-		SeenAbilities.Add(Entry.Ability);
-		if (Entry.InputTag.IsValid()) SeenInputTags.Add(Entry.InputTag);
+		if (!Entry.Ability || Entry.Level < 1) return false;
 	}
 	for (const FCatAbilitySetGameplayEffect& Entry : GrantedEffects)
 	{
@@ -34,21 +22,6 @@ bool UCatAbilitySet::IsRuntimeReady() const
 		const UGameplayEffect* Effect = Entry.GameplayEffect ? Entry.GameplayEffect->GetDefaultObject<UGameplayEffect>() : nullptr;
 		if (!Effect || Entry.Level < 1 || Effect->DurationPolicy == EGameplayEffectDurationType::Instant
 			|| Effect->StackingType != EGameplayEffectStackingType::None) return false;
-	}
-	return true;
-}
-
-bool UCatAbilitySet::IsDefaultCharacterAbilitySetReady() const
-{
-	// 默认集合校验流程：角色保留四项 BodyAction、无竿也可用的 X 取消及共享来源进食；钓竿操作能力必须移出此集合。
-	if (!IsRuntimeReady() || GrantedAbilities.Num() != 6) return false;
-	TSet<TSubclassOf<UGameplayAbility>> Expected = { UCatGA_BodyActionCampfirePlayback::StaticClass(),
-		UCatGA_BodyActionRequestManualHelp::StaticClass(), UCatGA_BodyActionRequestMischief::StaticClass(), UCatGA_BodyActionPlaceProtectionSign::StaticClass(), UCatGA_CancelBodyAction::StaticClass(), UCatGA_ConsumeFish::StaticClass() };
-	for (const FCatAbilitySetAbility& Entry : GrantedAbilities)
-	{
-		const bool bCancel = Entry.Ability == UCatGA_CancelBodyAction::StaticClass();
-		if (!Expected.Contains(Entry.Ability) || Entry.ActivationPolicy != ECatAbilityActivationPolicy::OnInputTriggered
-			|| (bCancel ? Entry.InputTag != CatFishingAbilityTags::Input_Fishing_Cancel : Entry.InputTag.IsValid())) return false;
 	}
 	return true;
 }
@@ -93,7 +66,6 @@ bool UCatAbilitySet::GiveToAbilitySystem(UCatAbilitySystemComponent* AbilitySyst
 			return false;
 		}
 		OutGrantedHandles.AbilitySpecHandles.Add(Handle);
-		AbilitySystem->RegisterAbilityInput(Handle, Entry.InputTag, Entry.ActivationPolicy);
 		bGrantedAny = true;
 
 
@@ -128,7 +100,7 @@ void FCatGrantedAbilitySetHandles::Append(FCatGrantedAbilitySetHandles&& Other)
 
 void FCatGrantedAbilitySetHandles::TakeFromAbilitySystem(UCatAbilitySystemComponent* AbilitySystem)
 {
-	// 撤销流程：只在权威 ASC 上处理来源句柄；先转移所有权，再反注册输入、清除能力和效果。
+	// 撤销流程：只在权威 ASC 上处理来源句柄；先转移所有权，再清除能力和效果；输入边沿由 ASC 的 OnRemoveAbility 回收。
 	// ClearAbility 会同步结束能力并可能重入物品清理；回调此时看到空集合，不会修改本次遍历或重复撤销。
 	if (!AbilitySystem || !AbilitySystem->IsOwnerActorAuthoritative())
 	{
@@ -138,7 +110,6 @@ void FCatGrantedAbilitySetHandles::TakeFromAbilitySystem(UCatAbilitySystemCompon
 	const TArray<FActiveGameplayEffectHandle> EffectsToRemove = MoveTemp(GameplayEffectHandles);
 	for (const FGameplayAbilitySpecHandle Handle : AbilitiesToRemove)
 	{
-		AbilitySystem->UnregisterAbilityInput(Handle);
 		AbilitySystem->ClearAbility(Handle);
 	}
 	for (const FActiveGameplayEffectHandle Handle : EffectsToRemove)

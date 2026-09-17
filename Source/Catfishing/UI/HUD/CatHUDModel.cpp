@@ -1,3 +1,5 @@
+﻿#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Tags/CatStateTags.h"
 #include "UI/HUD/CatHUDModel.h"
 
 #include "FishContainers/CatFishContainerSettings.h"
@@ -103,10 +105,7 @@ bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InContro
 		UCatSurvivalAttributeSet::GetFightStaminaAttribute()).AddUObject(this, &ThisClass::HandleAttributeChanged);
 	MaxFightStaminaChangedHandle = AbilitySystem->GetGameplayAttributeValueChangeDelegate(
 		UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute()).AddUObject(this, &ThisClass::HandleAttributeChanged);
-	if (UCatConditionComponent* Condition = BoundCondition.Get())
-	{
-		ConditionChangedHandle = Condition->OnSnapshotChanged.AddUObject(this, &ThisClass::HandleConditionChanged);
-	}
+	ConditionChangedHandle = AbilitySystem->RegisterGenericGameplayTagEvent().AddUObject(this, &ThisClass::HandleConditionChanged);
 	if (UCatGrowthComponent* Growth = BoundGrowth.Get())
 	{
 		GrowthChangedHandle = Growth->OnSnapshotChanged.AddUObject(this, &ThisClass::HandleGrowthChanged);
@@ -142,9 +141,9 @@ void UCatHUDModel::Unbind()
 		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetFightStaminaAttribute()).Remove(FightStaminaChangedHandle);
 		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute()).Remove(MaxFightStaminaChangedHandle);
 	}
-	if (UCatConditionComponent* Condition = BoundCondition.Get())
+	if (UAbilitySystemComponent* AbilitySystem = BoundAbilitySystem.Get())
 	{
-		Condition->OnSnapshotChanged.Remove(ConditionChangedHandle);
+		AbilitySystem->RegisterGenericGameplayTagEvent().Remove(ConditionChangedHandle);
 	}
 	if (UCatGrowthComponent* Growth = BoundGrowth.Get())
 	{
@@ -605,9 +604,9 @@ void UCatHUDModel::RefreshTeammateProjection(FCatHUDViewState& NewState)
 				Teammate.bNearDeath = Teammate.NormalizedStamina <= CatHUDFightStaminaLimits::NearDeathStaminaFraction;
 			}
 		}
-		if (const UCatConditionComponent* TeammateCondition = TeammateCharacter->GetConditionComponent())
+		if (const UCatAbilitySystemComponent* TeammateCondition = TeammateCharacter->GetCatAbilitySystemComponent())
 		{
-			Teammate.bDowned = TeammateCondition->GetSnapshot().bDowned;
+			Teammate.bDowned = TeammateCondition->HasMatchingGameplayTag(CatStateTags::Downed);
 		}
 		Teammate.MovementStatusText = Teammate.bDowned ? FText::FromString(TEXT("倒地"))
 			: Teammate.bExhausted ? FText::FromString(TEXT("体力耗尽"))
@@ -659,10 +658,10 @@ void UCatHUDModel::HandleAttributeChanged(const FOnAttributeChangeData& ChangeDa
 	Refresh();
 }
 
-// Condition 变化流程：重读完整 HUD 事实，避免增量顺序形成 UI 私有状态。
-void UCatHUDModel::HandleConditionChanged()
+// 状态变化流程：仅在 ASC 的角色状态分支变化时重读完整 HUD 事实，不用单个 Tag 通知拼接 UI 私有状态。
+void UCatHUDModel::HandleConditionChanged(FGameplayTag Tag, int32 Count)
 {
-	Refresh();
+	if (Tag.MatchesTag(CatStateTags::State)) Refresh();
 }
 
 // Growth 变化流程：重读完整 HUD 事实，让经验槽、待选次数和身体状态保持同帧投影。

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "AbilitySystemInterface.h"
@@ -127,44 +127,6 @@ public:
 	void BP_PlayCosmeticEvent(FGameplayTag EventTag);
 
 	/**
-	 * 服务器 BodyAction Ability 广播的长动作表现开始事件。
-	 * BodyAction 没有客户端预测实例，所以本地玩家和旁观玩家都必须收到；蓝图按动作标签与表现标签播 Montage、音效或特效。
-	 * 该事件是 Unreliable，因为它只表达可丢弃的外观提示；正式状态仍来自服务端命令结果和复制快照，蓝图不得依赖它保存不可恢复状态。
-	 */
-	UFUNCTION(NetMulticast, Unreliable)
-	void Multicast_PlayBodyActionPresentation(FGameplayTag BodyActionEventTag, FGameplayTag PresentationEventTag);
-
-	/**
-	 * 服务器 BodyAction Ability 广播的长动作表现停止事件。
-	 * 只有提交窗口内取消、领域入口拒绝或 Ability 异常取消时触发，用来让蓝图停掉循环 Montage 或清掉正在播的前摇特效。
-	 * 该事件是 Reliable，因为收到开始表现的客户端必须收到停止信号；正式循环表现仍应保留 Montage 自身或 AnimBP 超时兜底。
-	 */
-	UFUNCTION(NetMulticast, Reliable)
-	void Multicast_StopBodyActionPresentation(FGameplayTag BodyActionEventTag, FGameplayTag PresentationEventTag);
-
-	/** BodyAction 表现开始的蓝图落点；动作标签标识本次生命周期，表现标签标识美术分派键。 */
-	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category = "Catfishing|Presentation")
-	void BP_PlayBodyActionPresentation(FGameplayTag BodyActionEventTag, FGameplayTag PresentationEventTag);
-
-	/** BodyAction 表现停止的蓝图落点；蓝图以同一对标签停止循环、淡出特效或重置动作层。 */
-	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category = "Catfishing|Presentation")
-	void BP_StopBodyActionPresentation(FGameplayTag BodyActionEventTag, FGameplayTag PresentationEventTag);
-
-	/**
-	 * 从 BodyAction 表现配置读取并播放可选 Montage。
-	 * 返回值只说明本机是否播到了动画；没有正式 Montage 时仍会触发 BP_PlayBodyActionPresentation。
-	 */
-	UFUNCTION(BlueprintCallable, BlueprintCosmetic, Category = "Catfishing|Presentation")
-	bool PlayBodyActionMontageFromPresentation(FGameplayTag BodyActionEventTag);
-
-	/**
-	 * 从 BodyAction 表现配置读取并停止可选 Montage。
-	 * 返回值只说明本机是否找到了需要停止的配置；蓝图停止事件仍会被广播，用于处理非 Montage 表现。
-	 */
-	UFUNCTION(BlueprintCallable, BlueprintCosmetic, Category = "Catfishing|Presentation")
-	bool StopBodyActionMontageFromPresentation(FGameplayTag BodyActionEventTag);
-
-	/**
 	 * 由已复制的 Hook CastFlight 表现状态调用，在本机这份角色 Mesh 上播放配置的抛竿 Montage。
 	 * 只负责动画，不提交命令、不改会话，也不发送 RPC；每台客户端各播一次。
 	 */
@@ -206,8 +168,8 @@ private:
 	void HandleMouthCarriedActorDestroyed(AActor* DestroyedActor);
 
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatConditionPresentationComponent> ConditionPresentation;
-	/** 条件快照变化时在服务器同步身体移动状态；倒地会按当前 expected-actor 释放嘴叼鱼或鱼护，避免失能角色继续占有世界物。 */
-	void RefreshPhysicalCondition();
+	/** ASC 倒地标签变化时在服务器同步身体移动状态；倒地会按当前 expected-actor 释放嘴叼鱼或鱼护，避免失能角色继续占有世界物。 */
+	void RefreshPhysicalCondition(FGameplayTag Tag = FGameplayTag(), int32 Count = 0);
 	void ConfigureCharacterMovementAuthority();
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatPhysicalBodyComponent> PhysicalBodyComponent;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UBoxComponent> PhysicalBody;

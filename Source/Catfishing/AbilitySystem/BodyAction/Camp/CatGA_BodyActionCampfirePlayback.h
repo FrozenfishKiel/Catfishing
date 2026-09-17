@@ -1,15 +1,16 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
-#include "Abilities/GameplayAbility.h"
+#include "AbilitySystem/Abilities/CatGameplayAbility.h"
 #include "GameplayTagContainer.h"
-#include "CatCampBodyActionAbilities.generated.h"
+#include "Abilities/GameplayAbilityTargetTypes.h"
+#include "CatGA_BodyActionCampfirePlayback.generated.h"
 
 class ACatCampHubActor;
 
 /** 篝火回看请求载荷；它只把目标营地和请求键带过 GAS 前摇，CapturePlan 与表现仍归 Camp。 */
-UCLASS()
-class CATFISHING_API UCatBodyActionRequestCampfirePlayback : public UObject
+USTRUCT()
+struct CATFISHING_API FCatBodyActionRequestCampfirePlaybackTargetData : public FGameplayAbilityTargetData
 {
 	GENERATED_BODY()
 
@@ -21,11 +22,20 @@ public:
 	/** 本次回看命令的幂等键；Camp 结果和 owning-client 回执都使用同一个键。 */
 	UPROPERTY(Transient)
 	FGuid RequestId;
+	/** 事件接收方据此确认本动作的目标数据类型。 */
+	virtual UScriptStruct* GetScriptStruct() const override { return StaticStruct(); }
+	/** 传输服务器已接受的请求参数，让拥有者客户端启动同一表现任务。 */
+	bool NetSerialize(FArchive& Ar, UPackageMap* Map, bool& bOutSuccess);
+};
+
+template<> struct TStructOpsTypeTraits<FCatBodyActionRequestCampfirePlaybackTargetData> : TStructOpsTypeTraitsBase2<FCatBodyActionRequestCampfirePlaybackTargetData>
+{
+	enum { WithNetSerializer = true, WithCopy = true };
 };
 
 /** 篝火回看身体动作 Ability；它自己拥有事件校验、前摇窗口、提交和取消收尾，不把流程交给共享父类。 */
 UCLASS()
-class CATFISHING_API UCatGA_BodyActionCampfirePlayback : public UGameplayAbility
+class CATFISHING_API UCatGA_BodyActionCampfirePlayback : public UCatGameplayAbility
 {
 	GENERATED_BODY()
 
@@ -47,11 +57,11 @@ private:
 	UFUNCTION()
 	void CommitCampfirePlaybackAfterWindow();
 
-	/** 当前回看动作冻结的请求对象；由激活阶段写入，提交或取消收尾时清空。 */
+	/** 当前回看动作冻结的请求参数；由激活阶段写入，提交或取消收尾时重置。 */
 	UPROPERTY(Transient)
-	TObjectPtr<UCatBodyActionRequestCampfirePlayback> ActiveRequest;
+	FCatBodyActionRequestCampfirePlaybackTargetData ActiveRequest;
 
-	/** 当前回看动作冻结的表现事件标签；开始和取消停止表现都读取同一标签，避免配置变化造成错停。 */
-	UPROPERTY(Transient)
-	FGameplayTag ActivePresentationEventTag;
+	/** 动画中断时取消能力，提交前取消不会进入领域写口。 */
+	UFUNCTION()
+	void CancelAction();
 };
