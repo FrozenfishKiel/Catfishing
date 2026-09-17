@@ -18,6 +18,7 @@
 #include "ShopEconomy/CatShopKioskActor.h"
 #include "Character/CatCharacter.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
+#include "Interaction/Grab/CatPhysicsGrabComponent.h"
 #include "AbilitySystem/Config/CatAbilityInputConfig.h"
 #include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
@@ -176,7 +177,7 @@ void ACatfishingPlayerController::SetDayTransitionLocked(const bool bLocked)
 	if (bLocked)
 	{
 		// 翻天锁只阻止后续 Enhanced Input 回调不足以取消先前的物理按住意图；统一入口同时撤销本地和服务器的对应输入路由。
-		ClearPhysicalControlInput(TEXT("DayTransitionLocked"));
+		ClearPhysicalControlInput(TEXT("DayTransitionLocked"), true);
 		if (ControlledCharacter)
 		{
 			ControlledCharacter->StopJumping();
@@ -275,7 +276,7 @@ void ACatfishingPlayerController::SetPawn(APawn* InPawn)
 	if (GetPawn() != InPawn)
 	{
 		ClearSelectedItemUseInput(true);
-		ClearPhysicalControlInput(TEXT("PawnChanged"));
+		ClearPhysicalControlInput(TEXT("PawnChanged"), true);
 		// 物品栏焦点属于本地玩家当前身体；在新 UI 绑定前重置，背包自身不保存选择。
 		SelectedQuickbarSlotIndex = 0;
 		AuthorityQuickbarSlotIndex = 0;
@@ -426,7 +427,7 @@ void ACatfishingPlayerController::PostProcessInput(const float DeltaTime, const 
 // Pawn 断开流程：先经统一入口撤销物理持续输入，再重置 ASC 路由和钓鱼临时状态、恢复普通疾跑速度并清本地疾跑意图；最后交还父类断开占有。
 void ACatfishingPlayerController::OnUnPossess()
 {
-	ClearPhysicalControlInput(TEXT("UnPossessed"));
+	ClearPhysicalControlInput(TEXT("UnPossessed"), true);
 	if (AbilityInputBindingComponent)
 	{
 		AbilityInputBindingComponent->ResetAbilityInput();
@@ -446,7 +447,7 @@ void ACatfishingPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReas
 	// 父类结束流程可能再次写 Pawn；禁止该回调重新订阅即将销毁的 World。
 	DayTransitionTravelWorld = GetWorld();
 	ClearDayTransition();
-	ClearPhysicalControlInput(TEXT("ControllerEndPlay"));
+	ClearPhysicalControlInput(TEXT("ControllerEndPlay"), true);
 	if (AbilityInputBindingComponent)
 	{
 		AbilityInputBindingComponent->ResetAbilityInput();
@@ -537,14 +538,14 @@ void ACatfishingPlayerController::StopMove()
 }
 
 // 物理输入清理流程：先清钓鱼保持态与 Ability 路由，再清身体移动/抓握意图，最后关闭疾跑；各子系统仍保留自己的权限与复制收口。
-void ACatfishingPlayerController::ClearPhysicalControlInput(const FName Reason)
+void ACatfishingPlayerController::ClearPhysicalControlInput(const FName Reason, const bool bReleaseExplicitHolds)
 {
 	ClearSelectedItemUseInput(true);
 	if (FishingCommandComponent && GetPawn()) FishingCommandComponent->ClearHeldInputForLifecycle(Reason);
 	if (AbilityInputBindingComponent) AbilityInputBindingComponent->ReleaseAllInputRoutes(Reason);
 	if (const ACatCharacter* Cat = Cast<ACatCharacter>(GetPawn()))
 	{
-		if (UCatPhysicalBodyComponent* Body = Cat->GetPhysicalBodyComponent()) Body->ClearControlIntent(Reason);
+		if (UCatPhysicalBodyComponent* Body = Cat->GetPhysicalBodyComponent()) Body->ClearControlIntent(Reason, bReleaseExplicitHolds);
 	}
 	SetSprintRequested(false, true);
 }
@@ -552,8 +553,12 @@ void ACatfishingPlayerController::ClearPhysicalControlInput(const FName Reason)
 // 按键刷新流程：视口失焦或输入层切换时先撤销持续物理输入，再让父类丢弃引擎记录的按键状态，避免恢复焦点后重放旧意图。
 void ACatfishingPlayerController::FlushPressedKeys()
 {
-	ClearSelectedItemUseInput(true);
-	ClearPhysicalControlInput(TEXT("KeysFlushed"));
+	// UE LostFocus visits every controller in a listen-server world. Only this machine's
+	// local player owns the viewport; remote held inputs remain owned by their clients.
+	if (IsLocalController()) ClearPhysicalControlInput(TEXT("KeysFlushed"));
+	else if (GetPawn())
+		UE_LOG(LogCatPhysicsGrab, Log, TEXT("Event=physical_input_flush_ignored World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s Actor=%s Result=NonLocalViewport"),
+			*GetNameSafe(GetWorld()), int32(GetNetMode()), HasAuthority(), int32(GetLocalRole()), *GetNameSafe(this), *GetNameSafe(GetPawn()));
 	Super::FlushPressedKeys();
 }
 

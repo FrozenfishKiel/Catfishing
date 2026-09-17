@@ -24,6 +24,7 @@
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/Integration/CatFishingAimLibrary.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
+#include "Fishing/CatFishingSettings.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "Equipment/CatEquipmentDefinition.h"
@@ -207,6 +208,8 @@ bool FCatPhysicalInputRouteTest::RunTest(const FString& Parameters)
 	const int64 EquipmentBeforeCancel=Equipment->GetSnapshot().Revision;
 	const int64 SequenceBeforeCancel=HeldSequence;
 	Controller->ClearPhysicalControlInput(TEXT("MenuOpened"));
+	TestTrue(TEXT("菜单取消输入保留同一显式持竿及主控"), Grab->IsGripping(false)
+		&& Grab->GetGripState(false).GripId == RodGripId && Rod->IsPrimaryOperator(Helper));
 	TestFalse(TEXT("菜单取消真实活跃 Ability，不能等待迟到 Release 抛竿"),IsSourcePrimaryActive());
 	TestTrue(TEXT("菜单清服务器按住状态且序号前进"),Commands->TryGetHeldFightInputStateFromAuthority(bPrimaryHeld,bSlackHeld,HeldSequence)&&!bPrimaryHeld&&!bSlackHeld&&HeldSequence>SequenceBeforeCancel);
 	Input->HandleAbilityInputTagReleased(CatFishingAbilityTags::Input_Fishing_Primary);
@@ -219,7 +222,7 @@ bool FCatPhysicalInputRouteTest::RunTest(const FString& Parameters)
 	Rod->SetPrimaryOperatorFromAuthority(nullptr,Rod->GetPresentationState().RodActorRevision);
 
 	// Parked rods reject mouse grabs; R retakes the same rod, and releasing the old mouse route must preserve its explicit hold.
-	Controller->ClearPhysicalControlInput(TEXT("PrepareSameHandRetake"));
+	Controller->ClearPhysicalControlInput(TEXT("PrepareSameHandRetake"), true);
 	Other->GetPhysicalBodyComponent()->TeleportBodyFromAuthority(
 		FTransform(FRotator::ZeroRotator,FVector(-200,300,20)),TEXT("RetakeOtherOutOfReach"));
 	Body->TeleportBodyFromAuthority(FTransform(FRotator::ZeroRotator,FVector(0,0,Body->GetStandRootHeightCm())),TEXT("RetakeFixture"));
@@ -283,7 +286,9 @@ bool FCatPhysicalInputRouteTest::RunTest(const FString& Parameters)
 	const FVector WaitBodyStart=Body->GetBody()->GetComponentLocation();
 	double MinimumWaitingBodyZ=WaitBodyStart.Z;
 	bool bWaitingGripSurvived=true;
-	for (int32 Frame=0; Frame<3600 && !CastSession->IsTerminal() && bWaitingGripSurvived
+	// Follow the configured empty-water interval, plus flight and probe time; never skip the real timers.
+	const int32 WaitFrames = FMath::CeilToInt((GetDefault<UCatFishingSettings>()->UnchummedBiteIntervalSeconds + 30.0) * 60.0);
+	for (int32 Frame=0; Frame<WaitFrames && !CastSession->IsTerminal() && bWaitingGripSurvived
 		&& CastSession->GetSnapshot().Phase!=ECatFishingPhase::TrueBiteWindow; ++Frame)
 	{
 		TickInputFrame();
@@ -333,7 +338,14 @@ bool FCatPhysicalInputRouteTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("E resumes fighting on the same world rod"), Rod->Interact_Implementation(Controller, FGuid::NewGuid()));
 	TestEqual(TEXT("retake resumes the same session"), Service->FindActiveSessionByRod(Rod), CastSession);
 	TestTrue(TEXT("retake restores in-use lock"), Controller->IsQuickbarSelectionLocked());
-	Controller->ClearPhysicalControlInput(TEXT("RetakeRegressionFinished"));
+	const FGuid FightingGripBeforeFlush = Grab->GetGripState(true).GripId;
+	Cat->GetCharacterMovement()->StopMovementImmediately();
+	TestTrue(TEXT("CMC 停速不改变固定持竿关系"), Grab->IsGripping(true) && Grab->GetGripState(true).GripId == FightingGripBeforeFlush);
+	Controller->FlushPressedKeys();
+	TestTrue(TEXT("失焦保留搏鱼中的持竿主控与原会话"), Grab->IsGripping(true)
+		&& Grab->GetGripState(true).GripId == FightingGripBeforeFlush && Rod->IsPrimaryOperator(Helper)
+		&& Service->FindActiveSessionByRod(Rod) == CastSession && CastSession->IsFightRunnerRunning());
+	Controller->ClearPhysicalControlInput(TEXT("RetakeRegressionFinished"), true);
 	TestFalse(TEXT("生命周期强清理仍拆显式来源的真实约束"),Grab->IsGripping(true));
 	TestFalse(TEXT("强清理不遗留显式来源"),Grab->GetGripState(true).bExplicitHold);
 	if (!CastSession->IsTerminal())

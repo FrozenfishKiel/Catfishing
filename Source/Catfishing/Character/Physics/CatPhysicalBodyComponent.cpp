@@ -711,7 +711,7 @@ void UCatPhysicalBodyComponent::ServerRequestJump_Implementation(uint32 Epoch)
 	if (OwnerPawn && OwnerPawn->GetController() && Epoch == ControlEpoch) RequestJump();
 	else LogState(TEXT("physics_body_jump_rejected"), TEXT("StaleOrUnpossessed"));
 }
-void UCatPhysicalBodyComponent::ClearControlIntent(FName Reason)
+void UCatPhysicalBodyComponent::ClearControlIntent(FName Reason, bool bReleaseExplicitHolds)
 {
 	JumpTractionUntilSeconds = 0;
 	if (HasAuthority() && !MoveInput.IsNearlyZero()) bPublishMovementAfterPhysics = true;
@@ -719,18 +719,23 @@ void UCatPhysicalBodyComponent::ClearControlIntent(FName Reason)
 	if (CharacterMovement) CastChecked<ACharacter>(GetOwner())->StopJumping();
 	if (Grab)
 	{
-		if (HasAuthority()) Grab->ReleaseAllFromAuthority(Reason);
+		if (HasAuthority() && bReleaseExplicitHolds) Grab->ReleaseAllFromAuthority(Reason);
 		else { Grab->SetGrabInput(true, false); Grab->SetGrabInput(false, false); }
 	}
-	if (!HasAuthority() && IsLocallyControlled()) ServerClearControlIntent(ControlEpoch, ++LocalInputSequence);
+	if (!HasAuthority() && IsLocallyControlled()) ServerClearControlIntent(ControlEpoch, ++LocalInputSequence, bReleaseExplicitHolds);
+	UE_LOG(LogCatPhysicsGrab, Log, TEXT("Event=physical_control_cleared World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s BodyId=%s ControlEpoch=%u Scope=%s Reason=%s Result=%s"),
+		*GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), HasAuthority(), int32(GetOwner()->GetLocalRole()), *GetNameSafe(GetOwner()),
+		*BodyId.ToString(), ControlEpoch, bReleaseExplicitHolds ? TEXT("AllHolds") : TEXT("InputOnly"), *Reason.ToString(),
+		HasAuthority() ? TEXT("Applied") : TEXT("Requested"));
 }
-void UCatPhysicalBodyComponent::ServerClearControlIntent_Implementation(uint32 Epoch, uint32 Sequence)
+void UCatPhysicalBodyComponent::ServerClearControlIntent_Implementation(uint32 Epoch, uint32 Sequence, bool bReleaseExplicitHolds)
 {
 	if (Epoch == ControlEpoch && Sequence != 0 && static_cast<int32>(Sequence-AcceptedInputSequence)>0)
 	{
 		AcceptedInputSequence=Sequence;
-		ClearControlIntent(TEXT("InputCleared"));
+		ClearControlIntent(TEXT("InputCleared"), bReleaseExplicitHolds);
 	}
+	else LogState(TEXT("physical_control_clear_rejected"), TEXT("StaleEpochOrSequence"));
 }
 void UCatPhysicalBodyComponent::BeginControlEpochFromAuthority()
 {

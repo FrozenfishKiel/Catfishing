@@ -227,7 +227,8 @@ void UCatCharacterMovementComponent::StopMovementImmediately()
 {
 	Super::StopMovementImmediately();
 	ClearQueuedExternalImpulse();
-	if (auto* Cat = Cast<ACatCharacter>(CharacterOwner)) Cat->GetPhysicalBodyComponent()->ClearControlIntent(TEXT("MovementStopped"));
+	// Movement can stop during native correction or support changes. Grip lifetime belongs
+	// to explicit input/control cleanup, not to an engine velocity reset.
 }
 
 void UCatCharacterMovementComponent::UpdatePeerPushContacts()

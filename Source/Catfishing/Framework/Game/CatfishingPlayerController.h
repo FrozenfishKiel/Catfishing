@@ -103,7 +103,8 @@ public:
 	/** 每帧旋转收尾先保留父类视角处理，再将鱼竿瞄准或普通视角写成物理身体的 view intent；不直接接管身体朝向。 */
 	virtual void UpdateRotation(float DeltaTime) override;
 	/** 菜单、失焦和 Pawn 切换只停止自主输入，外部拉力与已有物理速度继续生效。 */
-	void ClearPhysicalControlInput(FName Reason);
+	/** Temporary input cancellation preserves equipped holds; lifecycle exits explicitly release them. */
+	void ClearPhysicalControlInput(FName Reason, bool bReleaseExplicitHolds = false);
 	/** 视口失焦或输入层移除时先撤销持续物理输入，再交给父类清空按键记录，避免旧按住意图恢复。 */
 	virtual void FlushPressedKeys() override;
 	virtual bool ShouldFlushKeysWhenViewportFocusChanges() const override { return true; }

@@ -140,7 +140,8 @@ public:
 	void ConfigureMovementDefaults(double JumpSpeed, double InGravityScale, double WalkSpeed);
 	void SetMovementSpeed(double SpeedCmS);
 	void RequestJump();
-	void ClearControlIntent(FName Reason);
+	/** Full cleanup remains the lifecycle default; temporary UI cancellation preserves explicit holds. */
+	void ClearControlIntent(FName Reason, bool bReleaseExplicitHolds = true);
 	void BeginControlEpochFromAuthority();
 	void ReleaseConnectionsFromAuthority(FName Reason);
 	void SetLocomotionEnabledFromAuthority(bool bEnabled, FName Reason);
@@ -170,7 +171,7 @@ private:
 	bool bPublishJumpAfterPhysics = false;
 	UFUNCTION(Server, Unreliable) void ServerSetInput(FVector Move, FRotator View, uint32 Epoch, uint32 Sequence);
 	UFUNCTION(Server, Reliable) void ServerRequestJump(uint32 Epoch);
-	UFUNCTION(Server, Reliable) void ServerClearControlIntent(uint32 Epoch, uint32 Sequence);
+	UFUNCTION(Server, Reliable) void ServerClearControlIntent(uint32 Epoch, uint32 Sequence, bool bReleaseExplicitHolds);
 	UFUNCTION() void OnRep_PhysicsSnapshot();
 	void ConfigureArm(bool bLeft);
 	void UpdatePhysicalMovement(float DeltaSeconds);
