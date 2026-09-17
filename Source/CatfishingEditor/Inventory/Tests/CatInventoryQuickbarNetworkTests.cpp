@@ -26,6 +26,11 @@
 #include "Blueprint/WidgetTree.h"
 #include "Components/Widget.h"
 #include "UObject/UObjectIterator.h"
+#include "Components/WrapBox.h"
+#include "Components/Image.h"
+#include "Components/TextBlock.h"
+#include "Equipment/CatEquipmentItemDefinition.h"
+#include "Inventory/CatInventoryItemInstance.h"
 
 namespace CatInventoryQuickbarNetwork
 {
@@ -66,7 +71,7 @@ namespace CatInventoryQuickbarNetwork
 	public:
 		/** 保存 Automation 断言接收者；等待计时从 PIE 可见后的首次轮询开始。 */
 		explicit FVerifyQuickbar(FAutomationTestBase* InTest) : Test(InTest) {}
-		/** 按阶段收集双端、核对正式资产与4格模型，再连续发出本地快捷栏选择，并打开背包页验证页面点击不改 Controller 焦点。 */
+		/** 核对双端正式格子与本地选择，再打开背包确认点击不改焦点；最后选格取竿，验证正常库存复制同时清除远端客户端两个界面的图片和角标。 */
 		bool Update() override
 		{
 			if (StartedAt <= 0.0) StartedAt = FPlatformTime::Seconds();
@@ -139,10 +144,53 @@ namespace CatInventoryQuickbarNetwork
 				BackpackPage->RequestSelectSlot(3);
 				if (!Test->TestEqual(TEXT("formal backpack page direct selection guard does not change controller quickbar selection"), ClientController->GetSelectedQuickbarSlotIndex(), 2)) return true;
 				if (!Test->TestNotNull(TEXT("quickbar remains attached beside the open backpack page"), Quickbar)) return true;
-				return Test->TestTrue(TEXT("backpack page route leaves the quickbar outer ring on the wheel-selected slot"), Quickbar->IsDisplayedSlotSelected(2)
-					&& !Quickbar->IsDisplayedSlotSelected(0) && !Quickbar->IsDisplayedSlotSelected(1) && !Quickbar->IsDisplayedSlotSelected(3));
+				if (!Test->TestTrue(TEXT("backpack page route leaves the quickbar outer ring on the wheel-selected slot"), Quickbar->IsDisplayedSlotSelected(2)
+                    && !Quickbar->IsDisplayedSlotSelected(0) && !Quickbar->IsDisplayedSlotSelected(1) && !Quickbar->IsDisplayedSlotSelected(3))) return true;
+                // 两个正式界面保持打开；服务器走选格取竿链，客户端只能通过正常库存复制刷新。
+                for (const auto& Context : GEngine->GetWorldContexts())
+                {
+                    UWorld* World = Context.World();
+                    if (!World || World->GetNetMode() != NM_ListenServer) continue;
+                    for (auto It = World->GetPlayerControllerIterator(); It; ++It)
+                    {
+                        auto* ServerController = Cast<ACatfishingPlayerController>(It->Get());
+                        if (!ServerController || ServerController->IsLocalController()) continue;
+                        auto* Cat = Cast<ACatCharacter>(ServerController->GetPawn());
+                        auto* Backpack = Cat ? Cast<UCatBackPackComponent>(Cat->GetInventoryComponent()) : nullptr;
+                        auto* Rod = LoadObject<UCatEquipmentItemDefinition>(nullptr, TEXT("/Game/Catfishing/Data/Equipment/Equip_Rod_StarterT1.Equip_Rod_StarterT1"));
+                        if (!Test->TestTrue(TEXT("服务器鱼竿夹具就绪"), Backpack && Rod)) return true;
+                        Backpack->ReplaceInventoryEntriesFromAuthority({}, 4);
+                        if (!Test->TestTrue(TEXT("正式鱼竿入库"), Backpack->AddItemDefinition(Rod, 1))) return true;
+                        // 沿同一客户端可靠通道排在前面的切格请求之后，避免测试越过网络队列直接改服务器。
+                        ClientController->ServerSelectQuickbarSlot(FGuid::NewGuid(), 0, Backpack->GetInventoryEntryAtSlot(0)->Instance->GetItemInstanceId());
+                        Stage = 4; return false;
+                    }
+                }
+                Test->AddError(TEXT("缺少远端玩家对应的服务器控制器")); return true;
 			}
-			Test->AddError(TEXT("Quickbar network test reached an unknown stage.")); return true;
+            if (Stage == 4)
+            {
+                if (!ClientBackpack->GetQuickbarHeldSlot().ItemInstanceId.IsValid()
+                    || ClientModel->GetInventoryList()[0].Instance) return false;
+                auto* UI = ClientController->GetLocalPlayer()->GetSubsystem<UCatLocalPlayerUISubsystem>();
+                auto* Page = FindClientBackpackPage();
+                auto* Quickbar = UI ? UI->GetInventoryQuickbarWidget() : nullptr;
+                // 条目副本为空时仍可能残留手持图标；因此断言正式控件的图片和角标可见性。
+                for (auto* View : {static_cast<UUserWidget*>(Page), static_cast<UUserWidget*>(Quickbar)})
+                {
+                    if (!Test->TestNotNull(TEXT("两个正式界面仍打开"), View)) return true;
+                    auto* Panel = Cast<UWrapBox>(View->GetWidgetFromName(View == Page ? TEXT("InventorySlotWrapBox") : TEXT("QuickbarSlotWrapBox")));
+                    auto* Slot = Panel ? Cast<UCatInventorySlotWidget>(Panel->GetChildAt(0)) : nullptr;
+                    if (!Test->TestNotNull(TEXT("正式第一格"), Slot)) return true;
+                    auto* Image = Cast<UImage>(Slot->GetWidgetFromName(TEXT("ThumbnailImage")));
+                    auto* Quantity = Cast<UTextBlock>(Slot->GetWidgetFromName(TEXT("QuantityTextBlock")));
+                    if (!Test->TestTrue(TEXT("正式格子显示控件齐全"), Image && Quantity)) return true;
+                    Test->TestEqual(FString::Printf(TEXT("%s 鱼竿离库后图片消失"), *View->GetClass()->GetName()), Image->GetVisibility(), ESlateVisibility::Collapsed);
+                    Test->TestEqual(TEXT("空格不补回手持状态角标"), Quantity->GetVisibility(), ESlateVisibility::Collapsed);
+                }
+                return true;
+            }
+            Test->AddError(TEXT("Quickbar network test reached an unknown stage.")); return true;
 		}
 	private:
 		/** 查找 owning-client 当前入视口的正式背包页；只接受显示同一随身背包的页面，避免命中编辑器预览对象或外部容器窗口。 */

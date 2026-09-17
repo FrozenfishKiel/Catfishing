@@ -1,6 +1,4 @@
 #include "UI/Inventory/CatInventoryQuickbarWidget.h"
-#include "Inventory/CatInventorySettings.h"
-#include "Equipment/CatEquipmentItemDefinition.h"
 
 #include "Components/WrapBox.h"
 #include "Inventory/CatBackPackComponent.h"
@@ -77,7 +75,7 @@ void UCatInventoryQuickbarWidget::NativeDestruct()
 
 // 列表刷新流程：
 // 1. 先撤销旧格子，避免旧物品悬停和新列表并存。
-// 2. 按同一 Model 的完整列表原序创建格子，包含空格，因此格数永远等于背包真实容量。
+// 2. 与库存窗口共用 Model 列表和刷新通知，空格保持空白；手持预留不覆盖库存已移出的物品图标。
 // 3. 读取本地 Controller 的物品栏焦点设置外圈；Widget 不维护第二份选中索引。
 void UCatInventoryQuickbarWidget::RefreshSlots()
 {
@@ -105,9 +103,6 @@ void UCatInventoryQuickbarWidget::RefreshSlots()
 			continue;
 		}
 		SlotWidget->SetSlotContext(Index, CurrentBackPack, Entries[Index]);
-		const auto& Held = CurrentBackPack->GetQuickbarHeldSlot();
-		if (Held.ItemInstanceId.IsValid() && Held.SlotIndex == Index)
-			SlotWidget->SetHeldItemPresentation(GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentItemDefinition>(Held.ItemId), Held.bInUse);
 		SlotWidget->SetAcceptsSlotInput(false);
 		SlotWidget->SetSelectedFromModel(Index == SelectedSlotIndex);
 		QuickbarSlotWrapBox->AddChildToWrapBox(SlotWidget);
