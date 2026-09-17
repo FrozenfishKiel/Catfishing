@@ -29,6 +29,7 @@
 #include "AbilitySystem/Input/CatAbilityInputBindingComponent.h"
 #include "Logging/CatLog.h"
 #include "Online/CatOnlineSubsystem.h"
+#include "Online/Voice/CatVoiceTransmitSubsystem.h"
 #include "Social/CatRoomOwnerService.h"
 #include "Condition/CatConditionComponent.h"
 #include "Growth/CatGrowthComponent.h"
@@ -240,6 +241,10 @@ void ACatfishingPlayerController::ClearDayTransition()
 // 旅行流程：先记住将离开的 World，清理翻天订阅和锁，再交给父类广播旅行；后续旧世界帧不能重新创建遮罩。
 void ACatfishingPlayerController::PreClientTravel(const FString& PendingURL, const ETravelType TravelType, const bool bIsSeamlessTravel)
 {
+	if (ULocalPlayer* Local = GetLocalPlayer())
+	{
+		if (auto* Voice = Local->GetSubsystem<UCatVoiceTransmitSubsystem>()) { Voice->Suspend(TEXT("Travel")); }
+	}
 	DayTransitionTravelWorld = GetWorld();
 	ClearSelectedItemUseInput(true);
 	ClearDayTransition();
@@ -333,6 +338,13 @@ void ACatfishingPlayerController::RefreshPhysicalViewIntent()
 void ACatfishingPlayerController::SetupInputComponent()
 {
 	Super::SetupInputComponent();
+	if (InputComponent && VoiceBoundInputComponent.Get() != InputComponent)
+	{
+		VoiceBoundInputComponent = InputComponent;
+		InputComponent->BindKey(EKeys::V, IE_Pressed, this, &ThisClass::HandleVoicePressed).bConsumeInput = false;
+		InputComponent->BindKey(EKeys::V, IE_Released, this, &ThisClass::HandleVoiceReleased).bConsumeInput = false;
+	}
+
 	ApplyInputMappingContext();
 
 	UEnhancedInputComponent* EnhancedInput = Cast<UEnhancedInputComponent>(InputComponent);
@@ -446,6 +458,10 @@ void ACatfishingPlayerController::OnUnPossess()
 // 输入清理流程：先解绑翻天并归还专属锁，再撤销物理持续输入、Ability 路由和钓鱼临时状态，撤销自己的 Mapping Context，最后交还父类销毁。
 void ACatfishingPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (ULocalPlayer* Local = GetLocalPlayer())
+	{
+		if (auto* Voice = Local->GetSubsystem<UCatVoiceTransmitSubsystem>()) { Voice->Suspend(TEXT("ControllerEndPlay")); }
+	}
 	// 父类结束流程可能再次写 Pawn；禁止该回调重新订阅即将销毁的 World。
 	DayTransitionTravelWorld = GetWorld();
 	ClearDayTransition();
@@ -542,6 +558,10 @@ void ACatfishingPlayerController::StopMove()
 // 物理输入清理流程：先清钓鱼保持态与 Ability 路由，再清身体移动/抓握意图，最后关闭疾跑；各子系统仍保留自己的权限与复制收口。
 void ACatfishingPlayerController::ClearPhysicalControlInput(const FName Reason, const bool bReleaseExplicitHolds)
 {
+	if (ULocalPlayer* Local = GetLocalPlayer())
+	{
+		if (auto* Voice = Local->GetSubsystem<UCatVoiceTransmitSubsystem>()) { Voice->CancelHeldInput(Reason); }
+	}
 	ClearSelectedItemUseInput(true);
 	if (FishingCommandComponent && GetPawn()) FishingCommandComponent->ClearHeldInputForLifecycle(Reason);
 	if (AbilityInputBindingComponent) AbilityInputBindingComponent->ReleaseAllInputRoutes(Reason);
@@ -1746,5 +1766,22 @@ void ACatfishingPlayerController::ServerPublishPublicFishCollection_Implementati
 	if (ACatfishingPlayerState* CatPlayerState = GetPlayerState<ACatfishingPlayerState>())
 	{
 		CatPlayerState->SetPublicFishCollectionFromAuthority(Records);
+	}
+}
+
+// 本地语音输入无需 RPC；远端 Controller 没有 LocalPlayer，不会控制本机麦克风。
+void ACatfishingPlayerController::HandleVoicePressed()
+{
+	if (ULocalPlayer* Local = GetLocalPlayer())
+	{
+		if (auto* Voice = Local->GetSubsystem<UCatVoiceTransmitSubsystem>()) { Voice->SetPushToTalkHeld(true); }
+	}
+}
+
+void ACatfishingPlayerController::HandleVoiceReleased()
+{
+	if (ULocalPlayer* Local = GetLocalPlayer())
+	{
+		if (auto* Voice = Local->GetSubsystem<UCatVoiceTransmitSubsystem>()) { Voice->SetPushToTalkHeld(false); }
 	}
 }

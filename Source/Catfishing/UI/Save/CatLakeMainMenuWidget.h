@@ -319,7 +319,7 @@ private:
 	/** 震动勾选输入处理；只有 SettingsModel 确认本地 Controller 可用时才写草稿。 */
 	UFUNCTION() void HandleVibrationChanged(bool bIsChecked);
 	/** 网络语音勾选输入处理；只有正式 OSS Voice 来源可用时才写草稿。 */
-	UFUNCTION() void HandleVoiceChatChanged(bool bIsChecked);
+	UFUNCTION() void HandleVoiceInputModeChanged(FString SelectedItem, ESelectInfo::Type SelectionType);
 	/** 后台静音勾选输入处理；只写失焦音量草稿，应用前不改变当前音频。 */
 	UFUNCTION() void HandleMuteAudioWhenUnfocusedChanged(bool bIsChecked);
 	/** 麦克风选择写入设备草稿；展开时重新枚举，不在选择阶段录音或保存。 */
@@ -480,10 +480,6 @@ private:
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UCheckBox> VibrationCheckBox;
 
-	/** 网络语音复选框；只有正式 OSS Voice 来源可用时才可操作。 */
-	UPROPERTY(Transient, meta = (BindWidgetOptional))
-	TObjectPtr<UCheckBox> VoiceChatCheckBox;
-
 	/** 失焦静音复选框；应用后映射到引擎失焦音量倍率。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UCheckBox> MuteAudioWhenUnfocusedCheckBox;
@@ -492,7 +488,7 @@ private:
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> VoiceInputModeUnavailableText;
 
-	/** 语音输入模式下拉框；当前仅作为禁用占位，不写任何草稿。 */
+	/** 语音输入模式下拉框；选择常开、按住 V 或禁用，点击应用后生效。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UComboBoxString> VoiceInputModeComboBox;
 

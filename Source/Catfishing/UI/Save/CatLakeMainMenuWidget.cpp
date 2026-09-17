@@ -397,6 +397,7 @@ void UCatLakeMainMenuWidget::UnbindSettingsModelChanges()
 // 命令按钮只广播菜单 Action，草稿输入只写入 Controller 注入的 SettingsModel，避免局内设置页复制主界面业务状态。
 void UCatLakeMainMenuWidget::BindSettingsControls()
 {
+	if (VoiceInputModeComboBox) { VoiceInputModeComboBox->OnSelectionChanged.AddUniqueDynamic(this, &ThisClass::HandleVoiceInputModeChanged); }
 	if (GameSettingsCategoryButton) { GameSettingsCategoryButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestSelectGameSettings); GameSettingsCategoryButton->OnClicked.AddDynamic(this, &ThisClass::RequestSelectGameSettings); }
 	if (GraphicsSettingsCategoryButton) { GraphicsSettingsCategoryButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestSelectGraphicsSettings); GraphicsSettingsCategoryButton->OnClicked.AddDynamic(this, &ThisClass::RequestSelectGraphicsSettings); }
 	if (AudioSettingsCategoryButton) { AudioSettingsCategoryButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestSelectAudioSettings); AudioSettingsCategoryButton->OnClicked.AddDynamic(this, &ThisClass::RequestSelectAudioSettings); }
@@ -413,7 +414,6 @@ void UCatLakeMainMenuWidget::BindSettingsControls()
 	if (UIScaleSlider) { UIScaleSlider->OnValueChanged.RemoveDynamic(this, &ThisClass::HandleUIScaleChanged); UIScaleSlider->OnValueChanged.AddDynamic(this, &ThisClass::HandleUIScaleChanged); }
 	if (BrightnessSlider) { BrightnessSlider->OnValueChanged.RemoveDynamic(this, &ThisClass::HandleBrightnessChanged); BrightnessSlider->OnValueChanged.AddDynamic(this, &ThisClass::HandleBrightnessChanged); }
 	if (VibrationCheckBox) { VibrationCheckBox->OnCheckStateChanged.RemoveDynamic(this, &ThisClass::HandleVibrationChanged); VibrationCheckBox->OnCheckStateChanged.AddDynamic(this, &ThisClass::HandleVibrationChanged); }
-	if (VoiceChatCheckBox) { VoiceChatCheckBox->OnCheckStateChanged.RemoveDynamic(this, &ThisClass::HandleVoiceChatChanged); VoiceChatCheckBox->OnCheckStateChanged.AddDynamic(this, &ThisClass::HandleVoiceChatChanged); }
 	if (MuteAudioWhenUnfocusedCheckBox) { MuteAudioWhenUnfocusedCheckBox->OnCheckStateChanged.RemoveDynamic(this, &ThisClass::HandleMuteAudioWhenUnfocusedChanged); MuteAudioWhenUnfocusedCheckBox->OnCheckStateChanged.AddDynamic(this, &ThisClass::HandleMuteAudioWhenUnfocusedChanged); }
 	if (AudioOutputDeviceComboBox) { AudioOutputDeviceComboBox->OnSelectionChanged.RemoveDynamic(this, &ThisClass::HandleAudioOutputDeviceSelectionChanged); AudioOutputDeviceComboBox->OnSelectionChanged.AddDynamic(this, &ThisClass::HandleAudioOutputDeviceSelectionChanged); }
 	if (MicrophoneComboBox) { MicrophoneComboBox->OnSelectionChanged.RemoveDynamic(this, &ThisClass::HandleMicrophoneSelectionChanged); MicrophoneComboBox->OnSelectionChanged.AddDynamic(this, &ThisClass::HandleMicrophoneSelectionChanged); }
@@ -428,6 +428,7 @@ void UCatLakeMainMenuWidget::BindSettingsControls()
 // 这里处理 NativeDestruct 和资产重建时的委托成对清理；只移除本 View 添加的动态委托，保留蓝图事件图中纯表现绑定。
 void UCatLakeMainMenuWidget::UnbindSettingsControls()
 {
+	if (VoiceInputModeComboBox) { VoiceInputModeComboBox->OnSelectionChanged.RemoveDynamic(this, &ThisClass::HandleVoiceInputModeChanged); }
 	if (GameSettingsCategoryButton) { GameSettingsCategoryButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestSelectGameSettings); }
 	if (GraphicsSettingsCategoryButton) { GraphicsSettingsCategoryButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestSelectGraphicsSettings); }
 	if (AudioSettingsCategoryButton) { AudioSettingsCategoryButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestSelectAudioSettings); }
@@ -444,7 +445,6 @@ void UCatLakeMainMenuWidget::UnbindSettingsControls()
 	if (UIScaleSlider) { UIScaleSlider->OnValueChanged.RemoveDynamic(this, &ThisClass::HandleUIScaleChanged); }
 	if (BrightnessSlider) { BrightnessSlider->OnValueChanged.RemoveDynamic(this, &ThisClass::HandleBrightnessChanged); }
 	if (VibrationCheckBox) { VibrationCheckBox->OnCheckStateChanged.RemoveDynamic(this, &ThisClass::HandleVibrationChanged); }
-	if (VoiceChatCheckBox) { VoiceChatCheckBox->OnCheckStateChanged.RemoveDynamic(this, &ThisClass::HandleVoiceChatChanged); }
 	if (MuteAudioWhenUnfocusedCheckBox) { MuteAudioWhenUnfocusedCheckBox->OnCheckStateChanged.RemoveDynamic(this, &ThisClass::HandleMuteAudioWhenUnfocusedChanged); }
 	if (AudioOutputDeviceComboBox) { AudioOutputDeviceComboBox->OnSelectionChanged.RemoveDynamic(this, &ThisClass::HandleAudioOutputDeviceSelectionChanged); }
 	if (MicrophoneComboBox) { MicrophoneComboBox->OnSelectionChanged.RemoveDynamic(this, &ThisClass::HandleMicrophoneSelectionChanged); }
@@ -551,25 +551,20 @@ void UCatLakeMainMenuWidget::HandleSettingsModelChanged()
 		VibrationCheckBox->SetIsChecked(Model->GetDraftVibrationEnabled());
 		VibrationCheckBox->SetIsEnabled(Model->IsVibrationSettingAvailable());
 	}
-	if (VoiceChatCheckBox)
-	{
-		VoiceChatCheckBox->SetIsChecked(Model->GetDraftVoiceChatEnabled());
-		VoiceChatCheckBox->SetIsEnabled(Model->IsVoiceChatSettingAvailable());
-	}
 	if (MuteAudioWhenUnfocusedCheckBox) { MuteAudioWhenUnfocusedCheckBox->SetIsChecked(Model->GetDraftMuteAudioWhenUnfocused()); }
 	if (VoiceInputModeUnavailableText)
 	{
 		VoiceInputModeUnavailableText->SetText(FText::FromString(Model->IsInputModeSettingAvailable()
-			? TEXT("当前语音输入方式由平台管理。") : TEXT("当前语音服务不支持切换输入模式。")));
+			? TEXT("按住 V 说话：松开即停。禁用只关闭自己的麦克风。") : TEXT("语音服务未就绪，请通过 Steam 启动并进入联机会话。")));
 		VoiceInputModeUnavailableText->SetVisibility(ESlateVisibility::Visible);
 		VoiceInputModeUnavailableText->SetIsEnabled(false);
 	}
 	if (VoiceInputModeComboBox)
 	{
 		VoiceInputModeComboBox->ClearOptions();
-		VoiceInputModeComboBox->AddOption(TEXT("当前平台不支持此设置"));
-		VoiceInputModeComboBox->SetSelectedOption(TEXT("当前平台不支持此设置"));
-		VoiceInputModeComboBox->SetIsEnabled(false);
+		for (const FString& Option : UCatFrontendSettingsModel::VoiceInputModeOptions()) { VoiceInputModeComboBox->AddOption(Option); }
+		VoiceInputModeComboBox->SetSelectedIndex(int32(Model->GetDraftVoiceInputMode()));
+		VoiceInputModeComboBox->SetIsEnabled(Model->IsInputModeSettingAvailable());
 	}
 	if (MicrophoneUnavailableText)
 	{
@@ -767,12 +762,12 @@ void UCatLakeMainMenuWidget::HandleVibrationChanged(bool bIsChecked)
 }
 
 // 网络语音输入流程：只有 OSS Voice 可用时才写草稿，平台不可用时控件保持禁用。
-void UCatLakeMainMenuWidget::HandleVoiceChatChanged(bool bIsChecked)
+void UCatLakeMainMenuWidget::HandleVoiceInputModeChanged(FString SelectedItem, ESelectInfo::Type SelectionType)
 {
-	if (!bRefreshingSettingsControls)
-	{
-		if (UCatFrontendSettingsModel* Model = SettingsModel.Get(); Model && Model->IsVoiceChatSettingAvailable()) { Model->SetDraftVoiceChatEnabled(bIsChecked); }
-	}
+	UCatFrontendSettingsModel* Model = SettingsModel.Get();
+	if (bRefreshingSettingsControls || !Model || !Model->IsInputModeSettingAvailable()) { return; }
+	const int32 Index = UCatFrontendSettingsModel::VoiceInputModeOptions().IndexOfByKey(SelectedItem);
+	if (Index != INDEX_NONE) { Model->SetDraftVoiceInputMode(ECatVoiceInputMode(Index)); }
 }
 
 // 失焦静音输入流程：只写草稿，当前窗口的实际失焦音量在应用后才更新。

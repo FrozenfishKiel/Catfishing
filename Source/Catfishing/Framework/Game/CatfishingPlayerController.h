@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "Collection/CatImprintTypes.h"
@@ -252,6 +252,9 @@ protected:
 	virtual void BeginPlay() override;
 	/** 绑定物理移动输入、项目 NativeInput 标签和 AbilityInputConfig；同一 InputComponent 只安装一次 Native/Ability 回调，避免 SetupInputComponent 重入重复绑定。 */
 	virtual void SetupInputComponent() override;
+	void HandleVoicePressed();
+	void HandleVoiceReleased();
+	TWeakObjectPtr<UInputComponent> VoiceBoundInputComponent;
 	/** Super 完成每帧输入后恰好一次把 Ability 输入组件积累的边沿交给当前 Pawn ASC。 */
 	virtual void PostProcessInput(const float DeltaTime, const bool bGamePaused) override;
 	/** Pawn 断开前先清理当前 ASC 的 Ability 输入状态、钓鱼本地命令和疾跑意图，再交还父类结束占有，避免状态泄漏到下一次占有。 */

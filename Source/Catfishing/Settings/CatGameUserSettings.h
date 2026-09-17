@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/World.h"
+#include "Online/Voice/CatVoiceTransmitSubsystem.h"
 #include "GameFramework/GameUserSettings.h"
 #include "CatGameUserSettings.generated.h"
 
@@ -60,8 +61,8 @@ struct CATFISHING_API FCatGameUserSettingsDefaultSnapshot
 	/** 默认震动开关；恢复默认应用时写回本地 PlayerController 的反馈 gate。 */
 	bool bVibrationEnabled = true;
 
-	/** 默认网络语音开关；恢复默认保持新配置不主动发送语音，已有会话仍由应用阶段显式提交。 */
-	bool bVoiceChatEnabled = false;
+	/** 默认语音输入模式为禁用；恢复默认先改草稿，应用后才停发。 */
+	ECatVoiceInputMode VoiceInputMode = ECatVoiceInputMode::Disabled;
 
 	/** 默认后台静音偏好；恢复默认时重新交给 FApp 的失焦音量倍率。 */
 	bool bMuteAudioWhenUnfocused = true;
@@ -156,11 +157,8 @@ public:
 	/** 查询当前 World 的 OSS 是否提供可用 IOnlineVoice；Steam 支持该接口，空 OSS 或无 Voice 接口时返回 false。 */
 	bool HasVoiceChatSupport(const UWorld* World) const;
 
-	/** 启停当前 World 本地用户的 OSS 语音；开启须注册成功，关闭同时清包，接口命令提交后更新偏好，但不保证物理采集或远端接收。 */
-	bool ApplyVoiceChat(UWorld* World, uint8 LocalUserNum, bool bEnableVoiceChat);
-
-	/** 同一事务应用输入设备和发送开关；失败保留旧设备，恢复失败时停发。恢复调用不改保存偏好。 */
-	bool ApplyVoicePreferences(UWorld* World, uint8 LocalUserNum, const FString& DeviceId, bool bEnable, bool bRestoreOnly = false);
+	/** 应用输入设备和发送模式；设备失败保留原偏好并停发。自动恢复不改保存偏好。 */
+	bool ApplyVoicePreferences(UWorld* World, uint8 LocalUserNum, const FString& DeviceId, ECatVoiceInputMode Mode, bool bRestoreOnly = false);
 	const FString& GetAudioInputDeviceId() const { return AudioInputDeviceId; }
 
 	/** 页面恢复默认仍需真实切换麦克风；先保留旧语音偏好直到设备事务完成。 */
@@ -225,8 +223,8 @@ public:
 	/** 返回最近一次成功写入本地 PlayerController 的震动开关；它不代表某台设备一定具备物理触觉马达。 */
 	bool IsVibrationEnabled() const;
 
-	/** 返回最近一次成功交给 OSS Voice 的网络语音开关；它不代表麦克风设备选择能力或远端成员已入房。 */
-	bool IsVoiceChatEnabled() const;
+	/** 返回保存的发送模式；瞬时按键、焦点和实际发送状态由本地语音子系统管理。 */
+	ECatVoiceInputMode GetVoiceInputMode() const;
 
 	/** 返回已持久化的后台静音偏好；页面以它建立草稿，而不是从可能被临时系统流程改写的 FApp 运行值反推用户选择。 */
 	bool IsMuteAudioWhenUnfocused() const;
@@ -278,6 +276,8 @@ public:
 	bool IsInvertYAxisEnabled() const;
 
 private:
+	friend class FCatVoiceInputPreferencesTest;
+	void MigrateVoiceInputMode(const FString& Filename);
 	/**
 	 * 登记正式设置的世界生命周期观察；LoadSettings 只为真实单例注册一次，并补扫已存在 World，使前端销毁后仍能在旅行目标恢复偏好。
 	 */
@@ -399,9 +399,9 @@ private:
 	UPROPERTY(Config)
 	bool bVibrationEnabled = true;
 
-	/** 用户保存的网络语音发送选择；新配置默认关闭，已有 Config 值仍由引擎加载，ApplyVoiceChat 成功后更新，注册与旅行只恢复此选择。 */
+	/** 唯一持久化发送模式；默认禁用，旧 bVoiceChatEnabled 仅在加载迁移时读取。 */
 	UPROPERTY(Config)
-	bool bVoiceChatEnabled = false;
+	ECatVoiceInputMode VoiceInputMode = ECatVoiceInputMode::Disabled;
 
 	/** 已成功交给 FApp 的后台静音偏好；ApplyMuteAudioWhenUnfocused 写入，LoadSettings 在每次进程启动时恢复其真实失焦倍率。 */
 	UPROPERTY(Config)

@@ -2,6 +2,7 @@
 
 #include "AudioMixerBlueprintLibrary.h"
 #include "Online/Voice/CatVoiceInputDevice.h"
+#include "Online/Voice/CatVoiceTransmitSubsystem.h"
 #include "CoreMinimal.h"
 #include "GenericPlatform/GenericWindow.h"
 #include "UObject/Object.h"
@@ -138,14 +139,15 @@ public:
 	/** 返回当前 World 的 OSS 是否提供网络语音接口；Steam Voice 可用时为 true，未初始化平台或不支持时 View 必须禁用开关。 */
 	bool IsVoiceChatSettingAvailable() const;
 
-	/** 返回待应用的网络语音开关；只有当前 OSS Voice 接口接受 Apply 时才会持久化并开始或停止本地语音处理。 */
-	bool GetDraftVoiceChatEnabled() const;
+	/** 返回待应用的语音输入模式；只有应用成功后才持久化并驱动本地发送。 */
+	ECatVoiceInputMode GetDraftVoiceInputMode() const;
 
-	/** 更新待应用的网络语音开关；只记录页面草稿，实际 Start/StopNetworkedVoice 延后到 Apply。 */
-	void SetDraftVoiceChatEnabled(bool bNewVoiceChatEnabled);
+	/** 更新模式草稿；选择和取消不会提前启停麦克风。 */
+	void SetDraftVoiceInputMode(ECatVoiceInputMode Mode);
 
-	/** 返回语音输入模式是否有正式运行时来源；当前 Steam IOnlineVoice 只提供 push-to-talk 风格的开始/停止调用，没有可持久化的模式选择，故为 false。 */
+	/** 返回语音输入模式是否有正式运行时来源；OSS Voice 可用时由本地发送控制器执行三种模式。 */
 	bool IsInputModeSettingAvailable() const;
+	static const TArray<FString>& VoiceInputModeOptions();
 
 	/** 仅 UE 5.8 Win64 Steam 且实际枚举到可寻址设备时开放选择。 */
 	bool IsMicrophoneSettingAvailable() const;
@@ -372,8 +374,8 @@ private:
 	/** 待应用的震动总开关；页面输入写入、Apply 成功后写入本地 PlayerController 的 ForceFeedback gate。 */
 	bool bDraftVibrationEnabled = true;
 
-	/** 待应用的网络语音开关；页面输入写入、Apply 成功后由当前 World 的 OSS Voice 接口开始或停止本地语音。 */
-	bool bDraftVoiceChatEnabled = false;
+	/** 待应用的模式；Apply 成功后由本地发送子系统执行，默认禁用。 */
+	ECatVoiceInputMode DraftVoiceInputMode = ECatVoiceInputMode::Disabled;
 
 	/** 待应用的主音量比例；页面输入写入、只在完整 SoundMix/SoundClass 路由实际成功时持久化。 */
 	float DraftMasterVolume = 1.0f;

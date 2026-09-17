@@ -128,7 +128,7 @@ Root 会在五个子 WBP 的 WidgetTree 内按名称解析以下关键控件：�
 
 创建房间与开始游戏是两个阶段：Online 创建成功后应停留在 Frontend 房间页，只有房主显式点击“开始游戏”才提交异步预载和旅行。设置页固定为游戏、画面、声音、控制四类；控制分类当前只保留正式入口，不虚构控制字段。“加入队伍”通过 `RequestJoinParty` 打开正式 `JoinPage`，展示好友房间并提交邀请链接；不生成虚假的房间或成员。
 
-2026-09-17 麦克风选择按用户新决定接入：`MicrophoneComboBox` 的 `OnSelectionChanged` 写入 `UCatFrontendSettingsModel::SetDraftAudioInputDeviceId`，`OnOpening` 刷新列表；原 `RefreshAudioOutputDevicesButton` 现在刷新输入/输出设备，文字为“刷新音频设备”。`MicrophoneUnavailableText` 显示应用方式或真实不可用原因。原控件名和布局保留，平台默认与缺失设备使用不同显示项；未知/缺失设备不能作为新选择提交。`VoiceInputModeComboBox` 继续禁用，不保存占位值。
+2026-09-17 麦克风选择按用户新决定接入：`MicrophoneComboBox` 的 `OnSelectionChanged` 写入 `UCatFrontendSettingsModel::SetDraftAudioInputDeviceId`，`OnOpening` 刷新列表；原 `RefreshAudioOutputDevicesButton` 现在刷新输入/输出设备，文字为“刷新音频设备”。`MicrophoneUnavailableText` 显示应用方式或真实不可用原因。原控件名和布局保留，平台默认与缺失设备使用不同显示项；未知/缺失设备不能作为新选择提交。`VoiceInputModeComboBox` 随后接入禁用、常开、按住 V 说话，OnSelectionChanged 写入同一 Model 的模式草稿；应用才生效。旧 VoiceChatCheckBox 行已删除。
 
 ### 当前实施边界
 
@@ -210,10 +210,9 @@ Root 会在五个子 WBP 的 WidgetTree 内按名称解析以下关键控件：�
 | `UIScaleSlider` | `Slider` | UI 比例草稿；0..1 的视图值会换算成项目正式范围。 |
 | `BrightnessSlider` | `Slider` | 亮度 / Gamma 草稿；0..1 的视图值会换算成项目正式范围。 |
 | `VibrationCheckBox` | `CheckBox` | 手柄震动草稿；只有当前本地 Controller 支持时才可用。 |
-| `VoiceChatCheckBox` | `CheckBox` | 网络语音开关草稿；只有正式 OSS Voice 来源可用时才可用。 |
 | `MuteAudioWhenUnfocusedCheckBox` | `CheckBox` | 失焦静音草稿，应用后映射到引擎失焦音量倍率。 |
-| `VoiceInputModeComboBox` | `ComboBoxString` | 语音输入模式占位控件；当前禁用，不写草稿。 |
-| `VoiceInputModeUnavailableText` | `TextBlock` | 语音输入模式不可用说明。 |
+| `VoiceInputModeComboBox` | `ComboBoxString` | 禁用、常开、按住 V 说话；写模式草稿，应用后生效。OSS Voice 未就绪时禁用。 |
+| `VoiceInputModeUnavailableText` | `TextBlock` | 显示模式使用提示或真实语音服务不可用原因；沿用现有绑定名。 |
 | `MicrophoneComboBox` | `ComboBoxString` | 麦克风设备选择；仅写草稿，Apply 后才切换并保存。无受支持设备时禁用。 |
 | `MicrophoneUnavailableText` | `TextBlock` | 麦克风选择提示或真实不可用原因；保留现有名称。 |
 | `AudioOutputDeviceComboBox` | `ComboBoxString` | 音频输出设备选择；显示项映射到 AudioMixer 稳定设备 ID。 |

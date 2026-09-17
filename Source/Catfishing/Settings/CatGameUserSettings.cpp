@@ -17,6 +17,7 @@
 #include "Interfaces/VoiceInterface.h"
 #include "Logging/CatLog.h"
 #include "Misc/App.h"
+#include "Misc/ConfigCacheIni.h"
 #include "OnlineSubsystem.h"
 #include "OnlineSubsystemUtils.h"
 #include "Scalability.h"
@@ -139,71 +140,50 @@ bool UCatGameUserSettings::HasVoiceChatSupport(const UWorld* World) const
 	return OnlineSubsystem && OnlineSubsystem->GetVoiceInterface().IsValid();
 }
 
-// 语音应用流程：
-// 1. 检查 World 对应 OSS 的 Voice 接口和本地用户范围；接口缺失或非法用户均记录失败，不改偏好。
-// 2. 开启时要求正式 talker 注册成功后再启动发送；注册失败立即停止并清包，避免 RegisterLocalTalker 自带的启动副作用残留。
-// 3. 关闭时停止发送并清除排队包；接口命令成功提交后更新偏好。Start/Stop 为 void，日志不把提交等同于麦克风采集或远端收听证明。
-bool UCatGameUserSettings::ApplyVoiceChat(UWorld* World, const uint8 LocalUserNum, const bool bEnableVoiceChat)
-{
-	return ApplyVoicePreferences(World, LocalUserNum, AudioInputDeviceId, bEnableVoiceChat, true);
-}
-
+// 设备事务与发送模式分离：先撤销旧发送，成功配置设备后才把模式交给唯一的本地发送控制器。
 bool UCatGameUserSettings::ApplyVoicePreferences(UWorld* World, const uint8 LocalUserNum,
-	const FString& DeviceId, const bool bEnableVoiceChat, const bool bRestoreOnly)
+	const FString& DeviceId, const ECatVoiceInputMode Mode, const bool bRestoreOnly)
 {
-	if (CatVoiceInput::IsSupported(World))
-	{
-		const FCatVoiceInputResult Result = CatVoiceInput::Apply(World, LocalUserNum, DeviceId,
-			bEnableVoiceChat, !bRestoreOnly && bVoiceChatEnabled);
-		if (Result.bApplied)
-		{
-			AudioInputDeviceId = DeviceId;
-			bVoiceChatEnabled = bEnableVoiceChat;
-		}
-		else if (!bRestoreOnly) { bVoiceChatEnabled = Result.bSending; }
-		return Result.bApplied;
-	}
+	ULocalPlayer* Player = World && World->GetGameInstance()
+		? World->GetGameInstance()->FindLocalPlayerFromControllerId(LocalUserNum) : nullptr;
+	UCatVoiceTransmitSubsystem* Transmit = Player ? Player->GetSubsystem<UCatVoiceTransmitSubsystem>() : nullptr;
 	IOnlineSubsystem* OnlineSubsystem = World ? Online::GetSubsystem(World) : nullptr;
-	const IOnlineVoicePtr VoiceInterface = OnlineSubsystem ? OnlineSubsystem->GetVoiceInterface() : nullptr;
-	if (!VoiceInterface.IsValid() || LocalUserNum >= VoiceInterface->GetNumLocalTalkers())
+	IOnlineVoicePtr Voice = OnlineSubsystem ? OnlineSubsystem->GetVoiceInterface() : nullptr;
+	if (!Transmit || !Voice.IsValid() || LocalUserNum >= Voice->GetNumLocalTalkers()
+		|| uint8(Mode) > uint8(ECatVoiceInputMode::PushToTalk))
 	{
-		UE_LOG(LogCatUI, Warning, TEXT("Event=settings_voice_apply_rejected World=%s LocalUser=%u Enabled=%s Reason=VoiceOrLocalUserUnavailable"),
-			*GetNameSafe(World), LocalUserNum, bEnableVoiceChat ? TEXT("true") : TEXT("false"));
+		UE_LOG(LogCatUI, Warning, TEXT("Event=settings_voice_apply_rejected World=%s LocalUser=%u Reason=VoiceOrLocalPlayerUnavailable"),
+			*GetNameSafe(World), LocalUserNum);
 		return false;
 	}
-
-	if (!DeviceId.IsEmpty())
+	Transmit->Suspend(TEXT("DeviceTransaction"));
+	Voice->StopNetworkedVoice(LocalUserNum);
+	Voice->ClearVoicePackets();
+	bool bApplied = false;
+	if (Mode == ECatVoiceInputMode::Disabled && DeviceId == AudioInputDeviceId)
 	{
-		VoiceInterface->StopNetworkedVoice(LocalUserNum);
-		VoiceInterface->ClearVoicePackets();
-		if (!bRestoreOnly) { bVoiceChatEnabled = false; }
-		UE_LOG(LogCatUI, Warning, TEXT("Event=settings_voice_apply_rejected World=%s NetMode=%d LocalUser=%u Reason=InputDeviceUnsupported"),
+		bApplied = true; // 已移除的麦克风也不能阻止玩家禁用发送。
+	}
+	else if (CatVoiceInput::IsSupported(World))
+	{
+		bApplied = CatVoiceInput::Prepare(World, LocalUserNum, DeviceId, Mode != ECatVoiceInputMode::Disabled).bApplied;
+	}
+	else if (DeviceId.IsEmpty())
+	{
+		bApplied = Mode == ECatVoiceInputMode::Disabled || Voice->RegisterLocalTalker(LocalUserNum);
+		Voice->StopNetworkedVoice(LocalUserNum);
+		Voice->ClearVoicePackets();
+	}
+	if (!bApplied)
+	{
+		UE_LOG(LogCatUI, Warning, TEXT("Event=settings_voice_apply_rejected World=%s NetMode=%d LocalUser=%u Reason=DeviceTransactionFailed Sending=false"),
 			*GetNameSafe(World), int32(World->GetNetMode()), LocalUserNum);
 		return false;
 	}
-
-	if (bEnableVoiceChat)
-	{
-		if (!VoiceInterface->RegisterLocalTalker(LocalUserNum))
-		{
-			VoiceInterface->StopNetworkedVoice(LocalUserNum);
-			VoiceInterface->ClearVoicePackets();
-			UE_LOG(LogCatUI, Warning, TEXT("Event=settings_voice_apply_rejected World=%s NetMode=%d LocalUser=%u Reason=TalkerRegistrationFailed"),
-				*GetNameSafe(World), static_cast<int32>(World->GetNetMode()), LocalUserNum);
-			return false;
-		}
-		VoiceInterface->StartNetworkedVoice(LocalUserNum);
-	}
-	else
-	{
-		VoiceInterface->StopNetworkedVoice(LocalUserNum);
-		VoiceInterface->ClearVoicePackets();
-	}
-
-	bVoiceChatEnabled = bEnableVoiceChat;
-	AudioInputDeviceId = DeviceId;
-	UE_LOG(LogCatUI, Log, TEXT("Event=settings_voice_preference_dispatched World=%s NetMode=%d LocalUser=%u Enabled=%s CaptureConfirmed=false"),
-		*GetNameSafe(World), static_cast<int32>(World->GetNetMode()), LocalUserNum, bEnableVoiceChat ? TEXT("true") : TEXT("false"));
+	if (!bRestoreOnly) { AudioInputDeviceId = DeviceId; VoiceInputMode = Mode; }
+	Transmit->Configure(World, Mode);
+	UE_LOG(LogCatUI, Log, TEXT("Event=settings_voice_mode_applied World=%s NetMode=%d LocalUser=%u Mode=%d Restore=%d"),
+		*GetNameSafe(World), int32(World->GetNetMode()), LocalUserNum, int32(Mode), bRestoreOnly);
 	return true;
 }
 
@@ -220,7 +200,7 @@ void UCatGameUserSettings::RestoreVoiceChatForLocalPlayers(UWorld* World)
 		const int32 LocalUser = LocalPlayer ? LocalPlayer->GetControllerId() : INDEX_NONE;
 		if (LocalUser >= 0 && LocalUser <= MAX_uint8)
 		{
-			ApplyVoiceChat(World, static_cast<uint8>(LocalUser), bVoiceChatEnabled);
+			ApplyVoicePreferences(World, static_cast<uint8>(LocalUser), AudioInputDeviceId, VoiceInputMode, true);
 		}
 	}
 }
@@ -242,6 +222,7 @@ void UCatGameUserSettings::CancelAudioOutputRestore()
 void UCatGameUserSettings::LoadSettings(const bool bForceReload)
 {
 	Super::LoadSettings(bForceReload);
+	MigrateVoiceInputMode(GGameUserSettingsIni);
 
 	if (!FrontendLanguage.IsEmpty())
 	{
@@ -261,6 +242,29 @@ void UCatGameUserSettings::LoadSettings(const bool bForceReload)
 	RegisterWorldLifecycle();
 }
 
+// 只在新键缺失时迁移旧开关；新模式优先。移除旧键后不会出现双重持久化来源。
+void UCatGameUserSettings::MigrateVoiceInputMode(const FString& Filename)
+{
+	if (!GConfig || Filename.IsEmpty()) { return; }
+	const FString Section = GetClass()->GetPathName();
+	FString SavedMode;
+	bool bLegacyEnabled = false;
+	const bool bHasMode = GConfig->GetString(*Section, TEXT("VoiceInputMode"), SavedMode, Filename);
+	const bool bHasLegacy = GConfig->GetBool(*Section, TEXT("bVoiceChatEnabled"), bLegacyEnabled, Filename);
+	if (!bHasMode && bHasLegacy)
+	{
+		VoiceInputMode = bLegacyEnabled ? ECatVoiceInputMode::AlwaysOn : ECatVoiceInputMode::Disabled;
+		GConfig->SetString(*Section, TEXT("VoiceInputMode"), bLegacyEnabled ? TEXT("AlwaysOn") : TEXT("Disabled"), Filename);
+	}
+	if (uint8(VoiceInputMode) > uint8(ECatVoiceInputMode::PushToTalk)) { VoiceInputMode = ECatVoiceInputMode::Disabled; }
+	if (bHasLegacy)
+	{
+		GConfig->RemoveKey(*Section, TEXT("bVoiceChatEnabled"), Filename);
+		GConfig->Flush(false, Filename);
+		UE_LOG(LogCatUI, Log, TEXT("Event=settings_voice_mode_migrated Mode=%d NewKeyPreferred=%d"), int32(VoiceInputMode), bHasMode);
+	}
+}
+
 // 默认恢复写入流程：
 // 1. 先执行 UE 基类默认逻辑，恢复窗口、分辨率、画质、HDR 等引擎内建字段。
 // 2. 再用项目干净默认快照覆盖本类额外偏好和基类未主动重置的 VSync，确保恢复默认不读取用户 ini。
@@ -268,10 +272,10 @@ void UCatGameUserSettings::LoadSettings(const bool bForceReload)
 void UCatGameUserSettings::SetNonVoiceSettingsToDefaults()
 {
 	const FString SavedInput = AudioInputDeviceId;
-	const bool bSavedVoice = bVoiceChatEnabled;
+	const ECatVoiceInputMode SavedVoiceMode = VoiceInputMode;
 	SetToDefaults();
 	AudioInputDeviceId = SavedInput;
-	bVoiceChatEnabled = bSavedVoice;
+	VoiceInputMode = SavedVoiceMode;
 }
 
 void UCatGameUserSettings::SetToDefaults()
@@ -284,7 +288,7 @@ void UCatGameUserSettings::SetToDefaults()
 	UIScale = Defaults.UIScale;
 	DisplayGamma = Defaults.DisplayGamma;
 	bVibrationEnabled = Defaults.bVibrationEnabled;
-	bVoiceChatEnabled = Defaults.bVoiceChatEnabled;
+	VoiceInputMode = Defaults.VoiceInputMode;
 	bMuteAudioWhenUnfocused = Defaults.bMuteAudioWhenUnfocused;
 	MasterVolume = Defaults.MasterVolume;
 	MusicVolume = Defaults.MusicVolume;
@@ -521,9 +525,9 @@ bool UCatGameUserSettings::IsVibrationEnabled() const
 }
 
 // 语音读取流程：返回最近一次成功提交给 OSS Voice 的持久化开关，不把它当作麦克风设备选择或远端连通证明。
-bool UCatGameUserSettings::IsVoiceChatEnabled() const
+ECatVoiceInputMode UCatGameUserSettings::GetVoiceInputMode() const
 {
-	return bVoiceChatEnabled;
+	return VoiceInputMode;
 }
 
 // 后台静音读取流程：返回正式用户设置的布尔偏好；页面读取不查询或覆盖 FApp 的临时运行倍率。
@@ -766,7 +770,7 @@ void UCatGameUserSettings::RestoreRuntimePreferencesForController(APlayerControl
 		const int32 LocalUser = LocalPlayer->GetControllerId();
 		if (LocalUser >= 0 && LocalUser <= MAX_uint8)
 		{
-			bVoiceChatApplied = ApplyVoiceChat(World, static_cast<uint8>(LocalUser), bVoiceChatEnabled);
+			bVoiceChatApplied = ApplyVoicePreferences(World, static_cast<uint8>(LocalUser), AudioInputDeviceId, VoiceInputMode, true);
 		}
 	}
 

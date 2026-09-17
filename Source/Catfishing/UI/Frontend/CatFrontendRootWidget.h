@@ -573,7 +573,7 @@ private:
 	/** 控制：反转 Y 轴。 */
 	UFUNCTION() void HandleInvertYAxisChanged(bool bIsChecked);
 	/** 网络语音勾选输入处理；只在 OSS Voice 正式可用时写入 Start/Stop 草稿。 */
-	UFUNCTION() void HandleVoiceChatChanged(bool bIsChecked);
+	UFUNCTION() void HandleVoiceInputModeChanged(FString SelectedItem, ESelectInfo::Type SelectionType);
 	/** 后台静音勾选输入处理；只写失焦音量草稿，Apply 前不改变当前窗口音频。 */
 	UFUNCTION() void HandleMuteAudioWhenUnfocusedChanged(bool bIsChecked);
 	/** 麦克风选择写入设备草稿；展开时重新枚举，不在选择阶段录音或保存。 */

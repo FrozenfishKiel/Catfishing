@@ -1,4 +1,4 @@
-﻿#include "CatFrontendWidgetAuthoringLibrary.h"
+#include "CatFrontendWidgetAuthoringLibrary.h"
 #include "UI/Save/CatLakeMainMenuController.h"
 #include "GameFramework/PlayerController.h"
 
@@ -622,12 +622,11 @@ namespace CatFrontendWidgetAuthoring
 		const TCHAR* const FullscreenModes[] = { TEXT("全屏"), TEXT("无边框窗口"), TEXT("窗口") };
 		const TCHAR* const Resolutions[] = { TEXT("1920 x 1080"), TEXT("1600 x 900"), TEXT("1280 x 720") };
 		const TCHAR* const QualityLevels[] = { TEXT("低"), TEXT("中"), TEXT("高"), TEXT("史诗") };
-		const TCHAR* const UnavailableVoiceOptions[] = { TEXT("当前平台不支持此设置") };
+		const TCHAR* const VoiceModeOptions[] = { TEXT("禁用"), TEXT("常开"), TEXT("按住 V 说话") };
 		AddComboBox(Tree, AddSettingRow(Tree, GamePanel, TEXT("Language"), TEXT("语言")), TEXT("LanguageComboBox"), Languages);
-		AddCheckBox(Tree, AddSettingRow(Tree, GamePanel, TEXT("VoiceChat"), TEXT("语音聊天")), TEXT("VoiceChatCheckBox"), TEXT(""));
-		UComboBoxString* VoiceInputMode = AddComboBox(Tree, AddSettingRow(Tree, GamePanel, TEXT("VoiceInputMode"), TEXT("语音输入模式")), TEXT("VoiceInputModeComboBox"), UnavailableVoiceOptions);
+		UComboBoxString* VoiceInputMode = AddComboBox(Tree, AddSettingRow(Tree, GamePanel, TEXT("VoiceInputMode"), TEXT("语音输入模式")), TEXT("VoiceInputModeComboBox"), VoiceModeOptions);
 		UTextBlock* VoiceInputModeUnavailable = AddText(Tree, GamePanel, TEXT("VoiceInputModeUnavailableText"),
-			TEXT("当前语音服务不支持切换输入模式。"), 14);
+			TEXT("按住 V 说话：松开即停。禁用只关闭自己的麦克风。"), 14);
 		UComboBoxString* Microphone = AddComboBox(Tree, AddSettingRow(Tree, GamePanel, TEXT("Microphone"), TEXT("麦克风设备")), TEXT("MicrophoneComboBox"), { TEXT("设备列表待加载") });
 		UTextBlock* MicrophoneUnavailable = AddText(Tree, GamePanel, TEXT("MicrophoneUnavailableText"),
 			TEXT("设备列表将在打开设置后加载；选择麦克风后点击应用。"), 14);
@@ -990,12 +989,11 @@ namespace CatFrontendWidgetAuthoring
 		const TCHAR* const FullscreenModes[] = { TEXT("全屏"), TEXT("无边框窗口"), TEXT("窗口") };
 		const TCHAR* const Resolutions[] = { TEXT("1920 x 1080"), TEXT("1600 x 900"), TEXT("1280 x 720") };
 		const TCHAR* const QualityLevels[] = { TEXT("低"), TEXT("中"), TEXT("高"), TEXT("史诗") };
-		const TCHAR* const UnavailableVoiceOptions[] = { TEXT("当前平台不支持此设置") };
+		const TCHAR* const VoiceModeOptions[] = { TEXT("禁用"), TEXT("常开"), TEXT("按住 V 说话") };
 		AddComboBox(Tree, AddSettingRow(Tree, GamePanel, TEXT("Language"), TEXT("语言")), TEXT("LanguageComboBox"), Languages);
-		AddCheckBox(Tree, AddSettingRow(Tree, GamePanel, TEXT("VoiceChat"), TEXT("语音聊天")), TEXT("VoiceChatCheckBox"), TEXT(""));
-		UComboBoxString* VoiceInputMode = AddComboBox(Tree, AddSettingRow(Tree, GamePanel, TEXT("VoiceInputMode"), TEXT("语音输入模式")), TEXT("VoiceInputModeComboBox"), UnavailableVoiceOptions);
+		UComboBoxString* VoiceInputMode = AddComboBox(Tree, AddSettingRow(Tree, GamePanel, TEXT("VoiceInputMode"), TEXT("语音输入模式")), TEXT("VoiceInputModeComboBox"), VoiceModeOptions);
 		UTextBlock* VoiceInputModeUnavailable = AddText(Tree, GamePanel, TEXT("VoiceInputModeUnavailableText"),
-			TEXT("当前语音服务不支持切换输入模式。"), 14);
+			TEXT("按住 V 说话：松开即停。禁用只关闭自己的麦克风。"), 14);
 		UComboBoxString* Microphone = AddComboBox(Tree, AddSettingRow(Tree, GamePanel, TEXT("Microphone"), TEXT("麦克风设备")), TEXT("MicrophoneComboBox"), { TEXT("设备列表待加载") });
 		UTextBlock* MicrophoneUnavailable = AddText(Tree, GamePanel, TEXT("MicrophoneUnavailableText"),
 			TEXT("设备列表将在打开设置后加载；选择麦克风后点击应用。"), 14);
@@ -1677,7 +1675,6 @@ namespace CatFrontendWidgetAuthoring
 			{ TEXT("VSyncCheckBox"), UCheckBox::StaticClass() },
 			{ TEXT("BrightnessSlider"), USlider::StaticClass() },
 			{ TEXT("VibrationCheckBox"), UCheckBox::StaticClass() },
-			{ TEXT("VoiceChatCheckBox"), UCheckBox::StaticClass() },
 			{ TEXT("MuteAudioWhenUnfocusedCheckBox"), UCheckBox::StaticClass() },
 			{ TEXT("AudioOutputDeviceComboBox"), UComboBoxString::StaticClass() },
 			{ TEXT("RefreshAudioOutputDevicesButton"), UButton::StaticClass() },
@@ -1778,7 +1775,6 @@ namespace CatFrontendWidgetAuthoring
 			{ TEXT("VSyncCheckBox"), UCheckBox::StaticClass() },
 			{ TEXT("BrightnessSlider"), USlider::StaticClass() },
 			{ TEXT("VibrationCheckBox"), UCheckBox::StaticClass() },
-			{ TEXT("VoiceChatCheckBox"), UCheckBox::StaticClass() },
 			{ TEXT("MuteAudioWhenUnfocusedCheckBox"), UCheckBox::StaticClass() },
 			{ TEXT("AudioOutputDeviceComboBox"), UComboBoxString::StaticClass() },
 			{ TEXT("RefreshAudioOutputDevicesButton"), UButton::StaticClass() },

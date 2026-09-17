@@ -37,10 +37,7 @@ namespace
 	struct FAppliedDevice
 	{
 		TWeakPtr<IVoiceCapture> Capture;
-		FString Id;
 		FString Name;
-		bool bConfirmed = false;
-		uint8 LocalUserNum = MAX_uint8;
 	};
 	TArray<FAppliedDevice> AppliedDevices;
 
@@ -105,131 +102,74 @@ CatVoiceInput::ESwitchResult CatVoiceInput::ChangeCaptureDevice(IVoiceCapture& C
 	return ESwitchResult::Stopped;
 }
 
-FCatVoiceInputResult CatVoiceInput::Apply(UWorld* World, const uint8 LocalUserNum, const FString& DeviceId,
-	const bool bEnable, const bool bPreviouslyEnabled)
+FCatVoiceInputResult CatVoiceInput::Prepare(UWorld* World, const uint8 LocalUserNum, const FString& DeviceId,
+	const bool bRequireCapture)
 {
 	check(IsInGameThread());
-	UE_LOG(LogCatVoiceInput, Log, TEXT("Event=voice_input_request World=%s NetMode=%d LocalUser=%u Device=%s Enable=%d"),
-		*GetNameSafe(World), World ? int32(World->GetNetMode()) : -1, LocalUserNum, *DeviceId, bEnable);
+	UE_LOG(LogCatVoiceInput, Log, TEXT("Event=voice_input_request World=%s NetMode=%d LocalUser=%u Device=%s RequireCapture=%d"),
+		*GetNameSafe(World), World ? int32(World->GetNetMode()) : -1, LocalUserNum, *DeviceId, bRequireCapture);
 	FCatVoiceInputResult Result;
 	if (!IsSupported(World)) { Result.Error = TEXT("UnsupportedProvider"); }
 	else
 	{
 		TArray<FCatVoiceInputDevice> Devices;
 		Enumerate(Devices);
-		Result = Detail::ApplyToVoice(static_cast<FOnlineVoiceImpl&>(*Online::GetSubsystem(World)->GetVoiceInterface()),
-			LocalUserNum, DeviceId, Devices, bEnable, bPreviouslyEnabled);
+		Result = Detail::PrepareVoice(static_cast<FOnlineVoiceImpl&>(*Online::GetSubsystem(World)->GetVoiceInterface()),
+			LocalUserNum, DeviceId, Devices, bRequireCapture);
 	}
 	if (Result.bApplied)
 	{
-		UE_LOG(LogCatVoiceInput, Log, TEXT("Event=voice_input_applied World=%s NetMode=%d LocalUser=%u Device=%s Sending=%d"),
-			*GetNameSafe(World), World ? int32(World->GetNetMode()) : -1, LocalUserNum, *DeviceId, Result.bSending);
+		UE_LOG(LogCatVoiceInput, Log, TEXT("Event=voice_input_applied World=%s NetMode=%d LocalUser=%u Device=%s Sending=false"),
+			*GetNameSafe(World), World ? int32(World->GetNetMode()) : -1, LocalUserNum, *DeviceId);
 	}
 	else
 	{
-		UE_LOG(LogCatVoiceInput, Warning, TEXT("Event=voice_input_failed World=%s NetMode=%d LocalUser=%u Device=%s Reason=%s Sending=%d"),
-			*GetNameSafe(World), World ? int32(World->GetNetMode()) : -1, LocalUserNum, *DeviceId, *Result.Error.ToString(), Result.bSending);
+		UE_LOG(LogCatVoiceInput, Warning, TEXT("Event=voice_input_failed World=%s NetMode=%d LocalUser=%u Device=%s Reason=%s Sending=false"),
+			*GetNameSafe(World), World ? int32(World->GetNetMode()) : -1, LocalUserNum, *DeviceId, *Result.Error.ToString());
 	}
 	return Result;
 }
 
-FCatVoiceInputResult CatVoiceInput::Detail::ApplyToVoice(FOnlineVoiceImpl& Voice, const uint8 LocalUserNum,
-	const FString& DeviceId, const TArray<FCatVoiceInputDevice>& Devices, const bool bEnable, const bool bPreviouslyEnabled)
+FCatVoiceInputResult CatVoiceInput::Detail::PrepareVoice(FOnlineVoiceImpl& Voice, const uint8 LocalUserNum,
+	const FString& DeviceId, const TArray<FCatVoiceInputDevice>& Devices, const bool bRequireCapture)
 {
 	check(IsInGameThread());
 	FCatVoiceInputResult Result;
 	if (LocalUserNum >= Voice.GetNumLocalTalkers()) { Result.Error = TEXT("InvalidLocalUser"); return Result; }
 	Voice.StopNetworkedVoice(LocalUserNum);
 	Voice.ClearVoicePackets();
-	FOnlineVoiceImpl& VoiceImpl = Voice;
-	const IVoiceEnginePtr Engine = VoiceImpl.*FVoiceInterfaceAccess::Engine();
+	const IVoiceEnginePtr Engine = Voice.*FVoiceInterfaceAccess::Engine();
 	if (!Engine.IsValid()) { Result.Error = TEXT("EngineUnavailable"); return Result; }
 	FVoiceEngineImpl& EngineImpl = static_cast<FVoiceEngineImpl&>(*Engine);
 	TSharedPtr<IVoiceCapture>& Capture = (EngineImpl.*FVoiceEngineAccess::Capture())();
+	// 仅禁用模式允许无采集器；常开/PTT 不能把默认设备缺失误报为准备成功。
+	if (!bRequireCapture && DeviceId.IsEmpty() && !Capture) { Result.bApplied = true; return Result; }
+	if (!Capture) { Result.Error = TEXT("CaptureUnavailable"); return Result; }
 	const FCatVoiceInputDevice* Requested = Devices.FindByPredicate([&DeviceId](const FCatVoiceInputDevice& D) { return D.Id == DeviceId; });
+	if (!Requested) { Result.Error = TEXT("DeviceMissingOrAmbiguous"); return Result; }
+	const bool bRegistered = Voice.RegisterLocalTalker(LocalUserNum);
+	// RegisterLocalTalker 自带启用副作用；成功、失败都立即撤销，同一调用栈内没有网络 Tick。
+	Voice.StopNetworkedVoice(LocalUserNum);
+	Voice.ClearVoicePackets();
+	if (!bRegistered) { Result.Error = TEXT("RegistrationFailed"); return Result; }
 	AppliedDevices.RemoveAll([](const FAppliedDevice& State) { return !State.Capture.IsValid(); });
-	FAppliedDevice* State = Capture ? AppliedDevices.FindByPredicate([&Capture](const FAppliedDevice& D) { return D.Capture.Pin() == Capture; }) : nullptr;
-	const FString PreviousName = State ? State->Name : FString();
-	const bool bHadConfirmedCapture = Capture && State && State->bConfirmed && State->LocalUserNum == LocalUserNum
-		&& Devices.ContainsByPredicate([State](const FCatVoiceInputDevice& D) { return D.Id == State->Id; });
-	// 禁用语音且保持默认时不必打开麦克风；没有设备的机器也必须能关闭语音。
-	if (!bEnable && DeviceId.IsEmpty() && !Capture)
+	FAppliedDevice* State = AppliedDevices.FindByPredicate([&Capture](const FAppliedDevice& D) { return D.Capture.Pin() == Capture; });
+	if (!State) { State = &AppliedDevices.AddDefaulted_GetRef(); State->Capture = Capture; }
+	const FString RequestedName = DeviceId.IsEmpty() ? FString() : Requested->Name;
+	const ESwitchResult Switched = ChangeCaptureDevice(*Capture, RequestedName, State->Name);
+	// 保留采样计数，清空旧设备 PCM 编码余数，再让引擎结束 Stop 的尾部采集。
+	FLocalVoiceData* LocalData = (EngineImpl.*FVoiceEngineAccess::LocalData())();
+	LocalData[LocalUserNum].VoiceRemainderSize = 0;
+	LocalData[LocalUserNum].VoiceRemainder.Reset();
+	Engine->GetVoiceDataReadyFlags();
+	if (Switched == ESwitchResult::Applied)
 	{
+		State->Name = RequestedName;
 		Result.bApplied = true;
-		return Result;
-	}
-	if (!Requested)
-	{
-		Result.Error = TEXT("DeviceMissingOrAmbiguous");
-	}
-	else if (!Voice.RegisterLocalTalker(LocalUserNum))
-	{
-		Result.Error = TEXT("RegistrationFailed");
 	}
 	else
 	{
-		// RegisterLocalTalker 自带启用副作用，立即撤销；同一游戏线程调用栈内没有网络 Tick。
-		Voice.StopNetworkedVoice(LocalUserNum);
-		Voice.ClearVoicePackets();
-		if (!Capture) { Result.Error = TEXT("CaptureUnavailable"); }
-		else
-		{
-			if (!State)
-			{
-				State = &AppliedDevices.AddDefaulted_GetRef();
-				State->Capture = Capture;
-			}
-			const FString RequestedName = DeviceId.IsEmpty() ? FString() : Requested->Name;
-			const ESwitchResult Switched = ChangeCaptureDevice(*Capture, RequestedName, PreviousName);
-			// ChangeDevice 保留采样计数，清空旧设备编码余数；驱动状态让引擎结束 Stop 的尾部采集。
-			FLocalVoiceData* LocalData = (EngineImpl.*FVoiceEngineAccess::LocalData())();
-			LocalData[LocalUserNum].VoiceRemainderSize = 0;
-			LocalData[LocalUserNum].VoiceRemainder.Reset();
-			Engine->GetVoiceDataReadyFlags();
-			if (Switched == ESwitchResult::Applied)
-			{
-				if (bEnable) { Voice.StartNetworkedVoice(LocalUserNum); }
-				if (!bEnable || Capture->IsCapturing())
-				{
-					State->LocalUserNum = LocalUserNum;
-					State->Id = DeviceId;
-					State->Name = RequestedName;
-					State->bConfirmed = true;
-					Result.bApplied = true;
-					Result.bSending = bEnable;
-				}
-				else
-				{
-					Voice.StopNetworkedVoice(LocalUserNum);
-					State->bConfirmed = Capture->ChangeDevice(PreviousName, UVOIPStatics::GetVoiceSampleRate(), UVOIPStatics::GetVoiceNumChannels());
-					Engine->GetVoiceDataReadyFlags();
-					Result.Error = TEXT("CaptureStartFailed");
-				}
-			}
-			else
-			{
-				State->bConfirmed = Switched == ESwitchResult::Restored;
-				Result.Error = State->bConfirmed ? TEXT("SwitchFailedRestored") : TEXT("SwitchAndRestoreFailed");
-			}
-		}
-	}
-	if (!Result.bApplied)
-	{
-		Voice.StopNetworkedVoice(LocalUserNum);
-		Voice.ClearVoicePackets();
-		// 自动恢复时未确认旧采集器与保存选择一致，不能误发默认设备；显式切换失败才恢复原发送。
-		if (bEnable && bPreviouslyEnabled && bHadConfirmedCapture && (!State || State->bConfirmed))
-		{
-			uint32 Bytes = 0;
-			if (Capture->GetCaptureState(Bytes) != EVoiceCaptureState::NotCapturing)
-			{
-				State->bConfirmed = Capture->ChangeDevice(PreviousName, UVOIPStatics::GetVoiceSampleRate(), UVOIPStatics::GetVoiceNumChannels());
-			}
-			Engine->GetVoiceDataReadyFlags();
-			if (State->bConfirmed) { Voice.StartNetworkedVoice(LocalUserNum); }
-			Result.bSending = State->bConfirmed && Capture->IsCapturing();
-			if (!Result.bSending) { Voice.StopNetworkedVoice(LocalUserNum); }
-		}
+		Result.Error = Switched == ESwitchResult::Restored ? TEXT("SwitchFailedRestored") : TEXT("SwitchAndRestoreFailed");
 	}
 	return Result;
 }

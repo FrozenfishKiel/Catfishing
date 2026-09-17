@@ -553,7 +553,6 @@ void UCatFrontendRootWidget::ResolvePageControls()
 	FindPageControl<UTextBlock>(FrontendSettingsPage, TEXT("SettingsDescriptionTextBlock"), TEXT("FrontendSettingsPage"));
 	FindPageControl<USlider>(FrontendSettingsPage, TEXT("BrightnessSlider"), TEXT("FrontendSettingsPage"));
 	FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("VibrationCheckBox"), TEXT("FrontendSettingsPage"));
-	FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("VoiceChatCheckBox"), TEXT("FrontendSettingsPage"));
 	FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("MuteAudioWhenUnfocusedCheckBox"), TEXT("FrontendSettingsPage"));
 	FindPageControl<UComboBoxString>(FrontendSettingsPage, TEXT("AudioOutputDeviceComboBox"), TEXT("FrontendSettingsPage"));
 	FindPageControl<UButton>(FrontendSettingsPage, TEXT("RefreshAudioOutputDevicesButton"), TEXT("FrontendSettingsPage"));
@@ -618,9 +617,9 @@ void UCatFrontendRootWidget::BindPageControls()
 	if (USlider* Control = FindPageControl<USlider>(FrontendSettingsPage, TEXT("CameraSensitivitySlider"), TEXT("FrontendSettingsPage"))) { Control->OnValueChanged.AddUniqueDynamic(this, &ThisClass::HandleCameraSensitivityChanged); }
 	if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("InvertYAxisCheckBox"), TEXT("FrontendSettingsPage"))) { Control->OnCheckStateChanged.AddUniqueDynamic(this, &ThisClass::HandleInvertYAxisChanged); }
 	if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("VibrationCheckBox"), TEXT("FrontendSettingsPage"))) { Control->OnCheckStateChanged.AddUniqueDynamic(this, &ThisClass::HandleVibrationChanged); }
-	if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("VoiceChatCheckBox"), TEXT("FrontendSettingsPage"))) { Control->OnCheckStateChanged.AddUniqueDynamic(this, &ThisClass::HandleVoiceChatChanged); }
 	if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("MuteAudioWhenUnfocusedCheckBox"), TEXT("FrontendSettingsPage"))) { Control->OnCheckStateChanged.AddUniqueDynamic(this, &ThisClass::HandleMuteAudioWhenUnfocusedChanged); }
 	if (UComboBoxString* Control = FindPageControl<UComboBoxString>(FrontendSettingsPage, TEXT("AudioOutputDeviceComboBox"), TEXT("FrontendSettingsPage"))) { Control->OnSelectionChanged.AddUniqueDynamic(this, &ThisClass::HandleAudioOutputDeviceSelectionChanged); }
+	if (UComboBoxString* Control = FindPageControl<UComboBoxString>(FrontendSettingsPage, TEXT("VoiceInputModeComboBox"), TEXT("FrontendSettingsPage"))) { Control->OnSelectionChanged.AddUniqueDynamic(this, &ThisClass::HandleVoiceInputModeChanged); }
 	if (UComboBoxString* Control = FindPageControl<UComboBoxString>(FrontendSettingsPage, TEXT("MicrophoneComboBox"), TEXT("FrontendSettingsPage"))) { Control->OnSelectionChanged.AddUniqueDynamic(this, &ThisClass::HandleMicrophoneSelectionChanged); }
 	if (UComboBoxString* Control = FindPageControl<UComboBoxString>(FrontendSettingsPage, TEXT("MicrophoneComboBox"), TEXT("FrontendSettingsPage"))) { Control->OnOpening.AddUniqueDynamic(this, &ThisClass::HandleMicrophoneOpening); }
 	if (UButton* Control = FindPageControl<UButton>(FrontendSettingsPage, TEXT("RefreshAudioOutputDevicesButton"), TEXT("FrontendSettingsPage"))) { Control->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestRefreshAudioOutputDevices); }
@@ -687,9 +686,9 @@ void UCatFrontendRootWidget::UnbindPageControls()
 	if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("InvertYAxisCheckBox"), TEXT("FrontendSettingsPage"))) { Control->OnCheckStateChanged.RemoveDynamic(this, &ThisClass::HandleInvertYAxisChanged); }
 	if (USlider* Control = FindPageControl<USlider>(FrontendSettingsPage, TEXT("BrightnessSlider"), TEXT("FrontendSettingsPage"))) { Control->OnValueChanged.RemoveDynamic(this, &ThisClass::HandleBrightnessChanged); }
 	if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("VibrationCheckBox"), TEXT("FrontendSettingsPage"))) { Control->OnCheckStateChanged.RemoveDynamic(this, &ThisClass::HandleVibrationChanged); }
-	if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("VoiceChatCheckBox"), TEXT("FrontendSettingsPage"))) { Control->OnCheckStateChanged.RemoveDynamic(this, &ThisClass::HandleVoiceChatChanged); }
 	if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("MuteAudioWhenUnfocusedCheckBox"), TEXT("FrontendSettingsPage"))) { Control->OnCheckStateChanged.RemoveDynamic(this, &ThisClass::HandleMuteAudioWhenUnfocusedChanged); }
 	if (UComboBoxString* Control = FindPageControl<UComboBoxString>(FrontendSettingsPage, TEXT("AudioOutputDeviceComboBox"), TEXT("FrontendSettingsPage"))) { Control->OnSelectionChanged.RemoveDynamic(this, &ThisClass::HandleAudioOutputDeviceSelectionChanged); }
+	if (UComboBoxString* Control = FindPageControl<UComboBoxString>(FrontendSettingsPage, TEXT("VoiceInputModeComboBox"), TEXT("FrontendSettingsPage"))) { Control->OnSelectionChanged.RemoveDynamic(this, &ThisClass::HandleVoiceInputModeChanged); }
 	if (UComboBoxString* Control = FindPageControl<UComboBoxString>(FrontendSettingsPage, TEXT("MicrophoneComboBox"), TEXT("FrontendSettingsPage"))) { Control->OnSelectionChanged.RemoveDynamic(this, &ThisClass::HandleMicrophoneSelectionChanged); }
 	if (UComboBoxString* Control = FindPageControl<UComboBoxString>(FrontendSettingsPage, TEXT("MicrophoneComboBox"), TEXT("FrontendSettingsPage"))) { Control->OnOpening.RemoveDynamic(this, &ThisClass::HandleMicrophoneOpening); }
 	if (UButton* Control = FindPageControl<UButton>(FrontendSettingsPage, TEXT("RefreshAudioOutputDevicesButton"), TEXT("FrontendSettingsPage"))) { Control->OnClicked.RemoveDynamic(this, &ThisClass::RequestRefreshAudioOutputDevices); }
@@ -849,21 +848,20 @@ void UCatFrontendRootWidget::HandleSettingsModelChanged()
 		if (USlider* Control = FindPageControl<USlider>(FrontendSettingsPage, TEXT("UIScaleSlider"), TEXT("FrontendSettingsPage"))) { Control->SetValue((SettingsModel->GetDraftUIScale() - 0.75f) / 1.25f); }
 		if (USlider* Control = FindPageControl<USlider>(FrontendSettingsPage, TEXT("BrightnessSlider"), TEXT("FrontendSettingsPage"))) { Control->SetValue((SettingsModel->GetDraftDisplayGamma() - 0.5f) / 4.5f); Control->SetIsEnabled(SettingsModel->IsBrightnessSettingAvailable()); }
 		if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("VibrationCheckBox"), TEXT("FrontendSettingsPage"))) { Control->SetIsChecked(SettingsModel->GetDraftVibrationEnabled()); Control->SetIsEnabled(SettingsModel->IsVibrationSettingAvailable()); }
-		if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("VoiceChatCheckBox"), TEXT("FrontendSettingsPage"))) { Control->SetIsChecked(SettingsModel->GetDraftVoiceChatEnabled()); Control->SetIsEnabled(SettingsModel->IsVoiceChatSettingAvailable()); }
 		if (UCheckBox* Control = FindPageControl<UCheckBox>(FrontendSettingsPage, TEXT("MuteAudioWhenUnfocusedCheckBox"), TEXT("FrontendSettingsPage"))) { Control->SetIsChecked(SettingsModel->GetDraftMuteAudioWhenUnfocused()); }
 		if (UTextBlock* Control = FindPageControl<UTextBlock>(FrontendSettingsPage, TEXT("VoiceInputModeUnavailableText"), TEXT("FrontendSettingsPage")))
 		{
 			Control->SetText(FText::FromString(SettingsModel->IsInputModeSettingAvailable()
-				? TEXT("当前语音输入方式由平台管理。") : TEXT("当前语音服务不支持切换输入模式。")));
+				? TEXT("按住 V 说话：松开即停。禁用只关闭自己的麦克风。") : TEXT("语音服务未就绪，请通过 Steam 启动并进入联机会话。")));
 			Control->SetVisibility(ESlateVisibility::Visible);
 			Control->SetIsEnabled(false);
 		}
 		if (UComboBoxString* Control = FindPageControl<UComboBoxString>(FrontendSettingsPage, TEXT("VoiceInputModeComboBox"), TEXT("FrontendSettingsPage")))
 		{
 			Control->ClearOptions();
-			Control->AddOption(TEXT("当前平台不支持此设置"));
-			Control->SetSelectedOption(TEXT("当前平台不支持此设置"));
-			Control->SetIsEnabled(false);
+			for (const FString& Option : UCatFrontendSettingsModel::VoiceInputModeOptions()) { Control->AddOption(Option); }
+			Control->SetSelectedIndex(int32(SettingsModel->GetDraftVoiceInputMode()));
+			Control->SetIsEnabled(SettingsModel->IsInputModeSettingAvailable());
 		}
 		if (UTextBlock* Control = FindPageControl<UTextBlock>(FrontendSettingsPage, TEXT("MicrophoneUnavailableText"), TEXT("FrontendSettingsPage")))
 		{
@@ -1197,7 +1195,12 @@ void UCatFrontendRootWidget::HandleInvertYAxisChanged(bool bIsChecked) { if (!bR
 void UCatFrontendRootWidget::HandleVibrationChanged(bool bIsChecked) { if (!bRefreshingSettingsControls && SettingsModel && SettingsModel->IsVibrationSettingAvailable()) { SettingsModel->SetDraftVibrationEnabled(bIsChecked); } }
 
 // 网络语音输入流程：只有当前 OSS Voice 接口可用时才写 Start/Stop 草稿；平台拒绝保持禁用而不产生本地替代。
-void UCatFrontendRootWidget::HandleVoiceChatChanged(bool bIsChecked) { if (!bRefreshingSettingsControls && SettingsModel && SettingsModel->IsVoiceChatSettingAvailable()) { SettingsModel->SetDraftVoiceChatEnabled(bIsChecked); } }
+void UCatFrontendRootWidget::HandleVoiceInputModeChanged(FString SelectedItem, ESelectInfo::Type SelectionType)
+{
+	if (bRefreshingSettingsControls || !SettingsModel || !SettingsModel->IsInputModeSettingAvailable()) { return; }
+	const int32 Index = UCatFrontendSettingsModel::VoiceInputModeOptions().IndexOfByKey(SelectedItem);
+	if (Index != INDEX_NONE) { SettingsModel->SetDraftVoiceInputMode(ECatVoiceInputMode(Index)); }
+}
 
 // 失焦静音输入流程：回填保护外写入正式失焦音量草稿；当前 AudioDevice 不会在点击时被立即改变。
 void UCatFrontendRootWidget::HandleMuteAudioWhenUnfocusedChanged(bool bIsChecked) { if (!bRefreshingSettingsControls && SettingsModel) { SettingsModel->SetDraftMuteAudioWhenUnfocused(bIsChecked); } }

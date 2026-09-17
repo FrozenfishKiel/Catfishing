@@ -67,7 +67,7 @@ void UCatFrontendSettingsModel::Shutdown()
 	DraftUIScale = 1.0f;
 	DraftDisplayGamma = 2.2f;
 	bDraftVibrationEnabled = true;
-	bDraftVoiceChatEnabled = false;
+	DraftVoiceInputMode = ECatVoiceInputMode::Disabled;
 	DraftMasterVolume = 1.0f;
 	DraftMusicVolume = 1.0f;
 	DraftSFXVolume = 1.0f;
@@ -310,29 +310,27 @@ bool UCatFrontendSettingsModel::IsVoiceChatSettingAvailable() const
 	return UserSettings && UserSettings->HasVoiceChatSupport(GetLocalPlayerWorld());
 }
 
-// 语音聊天草稿读取流程：返回页面本地开关，不提前开始或停止 OSS 的网络语音处理。
-bool UCatFrontendSettingsModel::GetDraftVoiceChatEnabled() const
+ECatVoiceInputMode UCatFrontendSettingsModel::GetDraftVoiceInputMode() const
 {
-	return bDraftVoiceChatEnabled;
+	return DraftVoiceInputMode;
 }
 
-// 语音聊天草稿写入流程：只在值变化时更新页面草稿并通知 View；实际 OSS 调用由 Apply 在有效 World 中完成。
-void UCatFrontendSettingsModel::SetDraftVoiceChatEnabled(const bool bNewVoiceChatEnabled)
+void UCatFrontendSettingsModel::SetDraftVoiceInputMode(const ECatVoiceInputMode Mode)
 {
-	if (bDraftVoiceChatEnabled == bNewVoiceChatEnabled)
-	{
-		return;
-	}
-
-	bDraftVoiceChatEnabled = bNewVoiceChatEnabled;
-	PublishChanged(LOCTEXT("VoiceChatDraftChanged", "语音聊天等待应用。"));
+	if (uint8(Mode) > uint8(ECatVoiceInputMode::PushToTalk) || DraftVoiceInputMode == Mode) { return; }
+	DraftVoiceInputMode = Mode;
+	PublishChanged(LOCTEXT("VoiceInputModeDraftChanged", "语音输入模式等待应用。"));
 }
 
-// 语音输入模式可用性读取流程：当前 Steam IOnlineVoice 的正式接口只暴露 Start/StopNetworkedVoice，源码把它定义为 push-to-talk 风格，既没有连续发言/按键发言的模式字段，也没有对应的持久化状态。
-// VoiceChat 的 EVoiceChatTransmitMode 只表示发送频道范围而非输入模式，不能替代本项；项目没有现成输入动作生命周期接线，因此不向 View 公开一个不能实际应用的选项。
+const TArray<FString>& UCatFrontendSettingsModel::VoiceInputModeOptions()
+{
+	static const TArray<FString> Options = { TEXT("禁用"), TEXT("常开"), TEXT("按住 V 说话") };
+	return Options;
+}
+
 bool UCatFrontendSettingsModel::IsInputModeSettingAvailable() const
 {
-	return false;
+	return IsVoiceChatSettingAvailable();
 }
 
 // 麦克风可用性读取流程：列表只由支持的平台实际枚举；空列表不开放选择。
@@ -728,7 +726,7 @@ bool UCatFrontendSettingsModel::Apply()
 	const bool bDefaultsWereRequested = bDraftDefaultsRequested;
 	const FString SavedAudioOutputDeviceIdBeforeApply = UserSettings->GetAudioOutputDeviceId();
 	const bool bVibrationWasRequested = bDraftVibrationEnabled != UserSettings->IsVibrationEnabled();
-	const bool bVoiceChatWasRequested = bDraftVoiceChatEnabled != UserSettings->IsVoiceChatEnabled()
+	const bool bVoiceChatWasRequested = DraftVoiceInputMode != UserSettings->GetVoiceInputMode()
 		|| DraftAudioInputDeviceId != UserSettings->GetAudioInputDeviceId();
 	const bool bAudioWasRequested = !FMath::IsNearlyEqual(DraftMasterVolume, UserSettings->GetMasterVolume())
 		|| !FMath::IsNearlyEqual(DraftMusicVolume, UserSettings->GetMusicVolume())
@@ -755,7 +753,7 @@ bool UCatFrontendSettingsModel::Apply()
 		|| UserSettings->ApplyVibration(GetLocalPlayerController(), bDraftVibrationEnabled);
 	const bool bVoiceChatApplied = !bVoiceChatWasRequested || (BoundLocalPlayer.IsValid() && IsVoiceChatSettingAvailable()
 		&& UserSettings->ApplyVoicePreferences(GetLocalPlayerWorld(), static_cast<uint8>(BoundLocalPlayer->GetControllerId()),
-			DraftAudioInputDeviceId, bDraftVoiceChatEnabled));
+			DraftAudioInputDeviceId, DraftVoiceInputMode));
 	const bool bBackgroundMuteApplied = UserSettings->ApplyMuteAudioWhenUnfocused(bDraftMuteAudioWhenUnfocused);
 	// 辅助功能五项与控制三项都是纯偏好：没有引擎 API 可以「应用」，保存本身就是生效。
 	// 所以它们不参与上面那一串 bXxxApplied 的成败判定——它们不会失败，也不该拖累别的项的结果文案。
@@ -808,7 +806,7 @@ bool UCatFrontendSettingsModel::Apply()
 
 	if (!bVoiceChatApplied)
 	{
-		PublishChanged(LOCTEXT("MicrophoneApplyFailed", "语音设置未能全部应用，麦克风仍保留上次选择；若无法恢复则已停止发送。请检查设备，或重启游戏后再试。"));
+		PublishChanged(LOCTEXT("MicrophoneApplyFailed", "语音设置未能应用，原偏好已保留，当前已停止发送。请检查设备后重新选择并应用，或重启游戏后再试。"));
 		return false;
 	}
 
@@ -856,7 +854,7 @@ void UCatFrontendSettingsModel::RestoreDefaults()
 	DraftUIScale = Defaults.UIScale;
 	DraftDisplayGamma = Defaults.DisplayGamma;
 	bDraftVibrationEnabled = Defaults.bVibrationEnabled;
-	bDraftVoiceChatEnabled = Defaults.bVoiceChatEnabled;
+	DraftVoiceInputMode = Defaults.VoiceInputMode;
 	DraftAudioInputDeviceId = Defaults.AudioInputDeviceId;
 	bDraftMuteAudioWhenUnfocused = Defaults.bMuteAudioWhenUnfocused;
 	DraftMasterVolume = Defaults.MasterVolume;
@@ -899,7 +897,7 @@ bool UCatFrontendSettingsModel::HasPendingChanges() const
 		|| !FMath::IsNearlyEqual(DraftUIScale, UserSettings->GetUIScale())
 		|| !FMath::IsNearlyEqual(DraftDisplayGamma, UserSettings->GetDisplayGamma())
 		|| (IsVibrationSettingAvailable() && bDraftVibrationEnabled != UserSettings->IsVibrationEnabled())
-		|| (IsVoiceChatSettingAvailable() && bDraftVoiceChatEnabled != UserSettings->IsVoiceChatEnabled())
+		|| (IsVoiceChatSettingAvailable() && DraftVoiceInputMode != UserSettings->GetVoiceInputMode())
 		|| DraftAudioInputDeviceId != UserSettings->GetAudioInputDeviceId()
 		|| bDraftMuteAudioWhenUnfocused != UserSettings->IsMuteAudioWhenUnfocused()
 		|| !FMath::IsNearlyEqual(DraftTextSizeScale, UserSettings->GetTextSizeScale())
@@ -949,7 +947,7 @@ void UCatFrontendSettingsModel::ReloadDraftFromSettings()
 	DraftUIScale = UserSettings->GetUIScale();
 	DraftDisplayGamma = UserSettings->GetDisplayGamma();
 	bDraftVibrationEnabled = UserSettings->IsVibrationEnabled();
-	bDraftVoiceChatEnabled = UserSettings->IsVoiceChatEnabled();
+	DraftVoiceInputMode = UserSettings->GetVoiceInputMode();
 	DraftAudioInputDeviceId = UserSettings->GetAudioInputDeviceId();
 	DraftMasterVolume = UserSettings->GetMasterVolume();
 	DraftMusicVolume = UserSettings->GetMusicVolume();
