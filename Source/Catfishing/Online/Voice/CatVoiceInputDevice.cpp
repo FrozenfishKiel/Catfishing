@@ -67,6 +67,15 @@ bool CatVoiceInput::IsSupported(const UWorld* World)
 #endif
 }
 
+float CatVoiceInput::GetAmplitude(const UWorld* World, const uint8 LocalUserNum)
+{
+	if (!IsSupported(World)) { return -1.0f; }
+	const IOnlineVoicePtr Voice = Online::GetSubsystem(World)->GetVoiceInterface();
+	if (!Voice || LocalUserNum >= Voice->GetNumLocalTalkers() || !Voice->IsLocalPlayerTalking(LocalUserNum)) { return 0.0f; }
+	const IVoiceEnginePtr Engine = static_cast<FOnlineVoiceImpl&>(*Voice).*FVoiceInterfaceAccess::Engine();
+	return Engine ? Engine->GetMicrophoneAmplitude(LocalUserNum) : -1.0f;
+}
+
 bool CatVoiceInput::Enumerate(TArray<FCatVoiceInputDevice>& OutDevices)
 {
 	check(IsInGameThread());

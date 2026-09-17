@@ -18,6 +18,16 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Proximity", meta = (ClampMin = "1", Units = "cm"))
 	float SilentDistanceCm = 2000.0f;
 
+	/** UI 检测下限，归一化音频包络；只影响提示，不改变收发和音量。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Activity", meta = (ClampMin = "0.001", ClampMax = "1"))
+	float ActivityThreshold = 0.02f;
+	/** 持续达到阈值多久才出现提示，单位秒，过滤瞬间噪声。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Activity", meta = (ClampMin = "0", ClampMax = "1", Units = "s"))
+	float ActivityAttackSeconds = 0.06f;
+	/** 句间停顿保留提示的时间，单位秒；禁用、离场、超出范围不延迟。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Activity", meta = (ClampMin = "0", ClampMax = "2", Units = "s"))
+	float ActivityReleaseSeconds = 0.25f;
+
 	bool IsRangeValid() const;
 	/** 角色间世界距离到 [0,1] 增益；无效配置或非有限距离一律静音。 */
 	float GetGainForDistance(double DistanceCm) const;

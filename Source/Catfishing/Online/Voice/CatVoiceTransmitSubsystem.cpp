@@ -1,5 +1,6 @@
 #include "Online/Voice/CatVoiceTransmitSubsystem.h"
 
+#include "Online/Voice/CatVoiceInputDevice.h"
 #include "Engine/GameViewportClient.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
@@ -12,6 +13,12 @@
 #include "UnrealClient.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogCatVoiceTransmit, Log, All);
+
+float UCatVoiceTransmitSubsystem::GetOutgoingVoiceLevel() const
+{
+	return IsSending() && IsContextAllowed() && ConfiguredLocalUser >= 0 && ConfiguredLocalUser <= MAX_uint8
+		? FMath::Max(0.0f, CatVoiceInput::GetAmplitude(ConfiguredWorld.Get(), uint8(ConfiguredLocalUser))) : 0.0f;
+}
 
 void UCatVoiceTransmitSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {

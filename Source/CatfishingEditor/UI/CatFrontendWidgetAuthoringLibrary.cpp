@@ -569,7 +569,7 @@ namespace CatFrontendWidgetAuthoring
 	bool BuildLakeSettingsContent(UWidgetBlueprint* WidgetBlueprint, UVerticalBox* Column)
 	{
 		// 局内设置内容流程：先生成分类栏和左右详情布局，再按主界面同名合同添加游戏、画面、声音和控制面板。
-		// 语音输入与麦克风只放正式禁用占位，声音页保留输出设备刷新入口，底部提供应用、恢复默认和取消动作；任一关键容器缺失都返回失败阻止保存半成品。
+		// 语音输入与麦克风由运行时可用性启用，声音页保留输出设备刷新入口，底部提供应用、恢复默认和取消动作；任一关键容器缺失都返回失败阻止保存半成品。
 		if (!WidgetBlueprint || !WidgetBlueprint->WidgetTree || !Column)
 		{
 			return false;
@@ -1698,7 +1698,7 @@ namespace CatFrontendWidgetAuthoring
 	/** 核验九个正式 WBP 的 Root、全局 Loading 与子树接线点；它证明对象树可供原生代码解析，但不替代 Editor 中的运行期交互验收。 */
 	bool ValidateFrontendWidgetContracts()
 	{
-		// 整体合同核验流程：逐页检查具名控件的类型和变量标记，再检查 Root、全局 Loading 与三类行的原生父类；设置包含真实输入、设备刷新、语音禁用下拉框及原因文本，全部满足才报告成功。
+		// 整体合同核验流程：逐页检查具名控件的类型和变量标记，再检查 Root、全局 Loading 与三类行的原生父类；设置包含真实输入、设备刷新、三种语音模式下拉框及可用性文本，全部满足才报告成功。
 		const FRequiredWidgetControl JoinControls[] = {
 			{TEXT("JoinFriendsScrollBox"), UScrollBox::StaticClass()},
 			{TEXT("JoinLinkTextBox"), UEditableTextBox::StaticClass()},

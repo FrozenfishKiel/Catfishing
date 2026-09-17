@@ -318,7 +318,7 @@ private:
 	UFUNCTION() void HandleBrightnessChanged(float NormalizedValue);
 	/** 震动勾选输入处理；只有 SettingsModel 确认本地 Controller 可用时才写草稿。 */
 	UFUNCTION() void HandleVibrationChanged(bool bIsChecked);
-	/** 网络语音勾选输入处理；只有正式 OSS Voice 来源可用时才写草稿。 */
+	/** 语音输入模式选择处理；只有正式 OSS Voice 来源可用时才写三种模式草稿。 */
 	UFUNCTION() void HandleVoiceInputModeChanged(FString SelectedItem, ESelectInfo::Type SelectionType);
 	/** 后台静音勾选输入处理；只写失焦音量草稿，应用前不改变当前音频。 */
 	UFUNCTION() void HandleMuteAudioWhenUnfocusedChanged(bool bIsChecked);

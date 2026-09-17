@@ -714,3 +714,10 @@ Frontend 唯一 Root 路径是 `/Game/UI/Frontend/WBP_CatFrontendRoot`；资产�
 
 
 
+
+
+## 2026-09-17 语音状态与说话提示补充
+
+房间 `/Game/UI/Frontend/WBP_CatFrontendRoom` 保留 `RoomVoiceLabel/Value` 和 `RoomMicrophoneLabel/Value` 绑定名，由 `UCatFrontendRootWidget::RefreshRoomVoicePresentation` 刷新“语音状态 / 我的输入模式”。值来自 `CatVoicePresentation::ReadLocalStatus`，不是静态占位，不读取设置草稿、不表示全房间开关；无 Pawn 的大厅显示进入游戏后生效。作者器 `Scripts/style_frontend_room_dialogs.py` 和定点迁移 `Scripts/update_voice_room_widgets.py` 必须保留这一契约。
+
+说话提示由 `UCatLocalPlayerUISubsystem` 随局内 HUD 创建 `UCatVoiceActivityWidget`，离开时移除。原生 Widget 不需要新增 WBP BindWidget、动画资源或图标贴图；使用既有正式中文字体和 Slate 喇叭/波纹绘制，HitTestInvisible，ZOrder 5。玩家名、声音检测与距离过滤见《主界面子技术文档》同日末节；正式设置页/局内设置页仍只维护三模式草稿，不再新增麦克风总开关。

@@ -458,7 +458,7 @@ void UCatLakeMainMenuWidget::UnbindSettingsControls()
 
 // 这里把主界面设置模型投影成局内设置页：无模型时只显示明确降级文本，不尝试写配置或关闭菜单。
 // 有模型时先打开回填保护，再按当前分类切换四个面板，随后重建语言、窗口、分辨率、质量和音频输出下拉项。
-// 输入与输出设备显示项映射到稳定 ID；未接通的语音输入模式保持禁用，结果文本和蓝图扩展点最后刷新。
+// 输入与输出设备显示项映射到稳定 ID；语音服务不可用时禁用模式选择，结果文本和蓝图扩展点最后刷新。
 void UCatLakeMainMenuWidget::HandleSettingsModelChanged()
 {
 	UCatFrontendSettingsModel* Model = SettingsModel.Get();

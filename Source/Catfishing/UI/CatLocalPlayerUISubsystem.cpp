@@ -34,6 +34,7 @@
 #include "UI/Frontend/CatFrontendSettingsModel.h"
 #include "UI/HUD/CatHUDModel.h"
 #include "UI/HUD/CatHUDWidget.h"
+#include "UI/Voice/CatVoiceActivityWidget.h"
 #include "UI/Interaction/CatInteractionPageController.h"
 #include "UI/Interaction/CatInteractionPromptWidget.h"
 #include "UI/Inventory/CatInventoryPageController.h"
@@ -1775,6 +1776,8 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	HUDModelViewChangedHandle = HUDModel->OnViewStateChanged.AddUObject(
 		this, &ThisClass::HandleHUDModelViewStateChanged);
 	HUDWidget->AddToViewport(1);
+	VoiceActivityWidget = CreateWidget<UCatVoiceActivityWidget>(Controller);
+	if (VoiceActivityWidget) { VoiceActivityWidget->AddToViewport(5); }
 	InventoryQuickbarWidget->AddToViewport(2);
 	// 库存提示独立于页面但隶属于本玩家；类缺失只关闭提示并落盘，不影响既有库存操作。
 	if (const TSubclassOf<UCatItemTooltipWidget> TooltipClass = Settings->LoadItemTooltipWidgetClass())
@@ -1940,6 +1943,7 @@ void UCatLocalPlayerUISubsystem::DetachPlayerLakeUI()
 		HUDModel = nullptr;
 	}
 	HUDModelViewChangedHandle.Reset();
+	if (VoiceActivityWidget) { VoiceActivityWidget->RemoveFromParent(); VoiceActivityWidget = nullptr; }
 	if (HUDWidget)
 	{
 		if (HUDActionHandle.IsValid())

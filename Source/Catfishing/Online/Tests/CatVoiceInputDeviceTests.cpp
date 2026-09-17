@@ -27,6 +27,13 @@
 #include "UI/Frontend/CatFrontendSettingsModel.h"
 #include "UI/Frontend/CatFrontendRootWidget.h"
 #include "UI/Save/CatLakeMainMenuWidget.h"
+#include "UI/Voice/CatVoicePresentation.h"
+#if WITH_EDITOR
+#include "Slate/WidgetRenderer.h"
+#include "ImageUtils.h"
+#include "Serialization/BufferArchive.h"
+#include "Misc/FileHelper.h"
+#endif
 
 namespace
 {
@@ -314,6 +321,35 @@ bool FCatMicrophoneSettingsInteractionTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("Missing saved microphone is not disguised as default"), Combo->GetSelectedOption(), FString(TEXT("已保存的麦克风当前不可用")));
 		}
 	}
+	Root->RenderRoomSnapshot(FCatOnlineSnapshot());
+	UUserWidget* RoomPage = Cast<UUserWidget>(Root->GetWidgetFromName(TEXT("RoomPage")));
+	FText AppliedMode, RuntimeStatus;
+	CatVoicePresentation::ReadLocalStatus(Local, AppliedMode, RuntimeStatus);
+	for (const auto& Pair : TMap<FName,FText>{{TEXT("RoomVoiceValue"), RuntimeStatus}, {TEXT("RoomMicrophoneValue"), AppliedMode}})
+	{
+		auto* Label = RoomPage ? Cast<UTextBlock>(RoomPage->GetWidgetFromName(Pair.Key)) : nullptr;
+		if (TestNotNull(TEXT("Formal room voice value exists"), Label)) { TestEqual(TEXT("Formal room consumes live status, not placeholders"), Label->GetText().ToString(), Pair.Value.ToString()); }
+	}
+#if WITH_EDITOR
+	if (FApp::CanEverRender())
+	{
+		const auto RootSlate = Root->TakeWidget();
+		Root->ShowRoom();
+		Root->RequestOpenRoomSettings();
+		TestTrue(TEXT("Production room settings dialog opens"), Root->IsRoomDialogOpen());
+		FWidgetRenderer Renderer(true);
+		Renderer.DrawWidget(RootSlate, FVector2D(1280,720));
+		auto* Target = Renderer.DrawWidget(RootSlate, FVector2D(1280,720));
+		FBufferArchive PNG;
+		if (TestNotNull(TEXT("Formal room render target"), Target) && TestTrue(TEXT("Render formal room settings"), FImageUtils::ExportRenderTarget2DAsPNG(Target, PNG)))
+		{
+			const FString Directory = FPaths::ProjectSavedDir() / TEXT("Automation/VoiceUI");
+			IFileManager::Get().MakeDirectory(*Directory, true);
+			TestTrue(TEXT("Save formal room screenshot"), FFileHelper::SaveArrayToFile(PNG, *(Directory / TEXT("RoomSettings.png"))));
+		}
+		Root->RequestCloseRoomDialog();
+	}
+#endif
 	Root->ResetFrontend();
 	Lake->ResetLakeMenuSettings();
 	Model->Shutdown();

@@ -13,6 +13,9 @@ public:
 	UCatProximityVoiceComponent(const FObjectInitializer& ObjectInitializer);
 	/** PlayerState 身份就绪/更换时调用；先注册接收器，即使 Pawn 晚到也能静音而非全图播放。 */
 	void RefreshPlayerBinding();
+	/** 当前解码声音经距离衰减后的包络，范围 [0,1]；无流、无 Pawn、出范围立即归零。 */
+	float GetAudibleVoiceLevel();
+	bool HasAudibleStream() const { return bStreamActive && bWasAudible && Playback.IsValid() && !bEndingPlay; }
 	virtual void OnTalkingBegin(UAudioComponent* AudioComponent) override;
 	virtual void OnTalkingEnd() override;
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;

@@ -24,6 +24,8 @@ namespace CatVoiceInput
 {
 	bool IsSupported(const UWorld* World);
 	bool Enumerate(TArray<FCatVoiceInputDevice>& OutDevices);
+	/** 只读既有采集器的归一化包络；不支持或采集无效返回 -1，不开启录音。 */
+	float GetAmplitude(const UWorld* World, uint8 LocalUserNum);
 	FCatVoiceInputResult Prepare(UWorld* World, uint8 LocalUserNum, const FString& DeviceId,
 		bool bRequireCapture);
 

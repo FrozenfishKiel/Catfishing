@@ -84,12 +84,16 @@ bool FCatProximityVoiceLifecycleTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Actual audio attaches to stable voice source"), Audio->GetAttachParent() == Voice->VoiceSource);
 	TestEqual(TEXT("Pawn event positions voice source"), Voice->VoiceSource->GetComponentLocation(), Speaker->GetActorLocation());
 	TestEqual(TEXT("Pawn arrival unmutes active stream"), Audio->VolumeMultiplier, 1.0f);
+	TestEqual(TEXT("New stream has no stale activity"), Voice->GetAudibleVoiceLevel(), 0.0f);
+	Voice->OnAudioComponentEnvelopeValue(Audio, 0.4f);
+	TestEqual(TEXT("Actual talker envelope feeds activity"), Voice->GetAudibleVoiceLevel(), 0.4f);
 	TestFalse(TEXT("Camera-distance attenuation disabled"), Audio->AttenuationOverrides.bAttenuate);
 	TestTrue(TEXT("Voice remains spatialized"), Audio->AttenuationOverrides.bSpatialize);
 	const UCatVoiceSettings* Settings = GetDefault<UCatVoiceSettings>();
 	Speaker->SetActorLocation(FVector((Settings->FullVolumeDistanceCm + Settings->SilentDistanceCm) * 0.5f, 0, 0));
 	TestWorld.TickTestWorld();
 	TestEqual(TEXT("Moving mid-sentence applies linear half gain"), Audio->VolumeMultiplier, 0.5f);
+	TestEqual(TEXT("Activity uses audible level after attenuation"), Voice->GetAudibleVoiceLevel(), 0.2f);
 	AActor* Camera = World->SpawnActor<AActor>();
 	Controller->SetViewTarget(Camera);
 	TestWorld.TickTestWorld();
@@ -97,6 +101,8 @@ bool FCatProximityVoiceLifecycleTest::RunTest(const FString& Parameters)
 	Speaker->SetActorLocation(FVector(Settings->SilentDistanceCm + 1000, 0, 0));
 	TestWorld.TickTestWorld();
 	TestEqual(TEXT("Out of range is silent"), Audio->VolumeMultiplier, 0.0f);
+	TestFalse(TEXT("Out of range cannot retain speaker row"), Voice->HasAudibleStream());
+	TestEqual(TEXT("Out of range envelope is silent"), Voice->GetAudibleVoiceLevel(), 0.0f);
 	Speaker->SetActorLocation(FVector(100, 0, 0));
 	TestWorld.TickTestWorld();
 	TestEqual(TEXT("Same stream resumes without another talking callback"), Audio->VolumeMultiplier, 1.0f);
@@ -113,6 +119,7 @@ bool FCatProximityVoiceLifecycleTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Replacement Pawn restores same stream"), Audio->VolumeMultiplier, 1.0f);
 	Voice->OnTalkingEnd();
 	TestEqual(TEXT("Idle stream is muted"), Audio->VolumeMultiplier, 0.0f);
+	TestEqual(TEXT("Stream end cannot reuse cached loudness"), Voice->GetAudibleVoiceLevel(), 0.0f);
 	TestWorld.TickTestWorld();
 	TestEqual(TEXT("Ticks do not unmute idle streams"), Audio->VolumeMultiplier, 0.0f);
 	TestTrue(TEXT("Idle stream keeps reusable audio attached"), Audio->GetAttachParent() == Voice->VoiceSource);

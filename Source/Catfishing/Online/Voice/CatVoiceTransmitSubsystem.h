@@ -24,6 +24,11 @@ public:
 	void Suspend(FName Reason);
 	void SetPushToTalkHeld(bool bHeld);
 	void CancelHeldInput(FName Reason);
+	/** 只读发送门控；true 不代表已经检测到声音。 */
+	bool IsSending() const { return bReady && bSending && ConfiguredWorld.Get() == GetWorld(); }
+	bool IsReady() const { return bReady && ActiveVoice.IsValid() && ConfiguredWorld.Get() == GetWorld(); }
+	bool IsInputContextAllowed() const { return IsContextAllowed(); }
+	float GetOutgoingVoiceLevel() const;
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 	virtual void Tick(float DeltaTime) override;

@@ -78,6 +78,13 @@ void UCatProximityVoiceComponent::HandlePawnSet(APlayerState* Player, APawn* New
 	UpdatePlayback();
 }
 
+float UCatProximityVoiceComponent::GetAudibleVoiceLevel()
+{
+	const float Level = GetVoiceLevel();
+	return HasAudibleStream() && FMath::IsFinite(Level)
+		? FMath::Clamp(Level * Playback->VolumeMultiplier, 0.0f, 1.0f) : 0.0f;
+}
+
 void UCatProximityVoiceComponent::OnTalkingBegin(UAudioComponent* AudioComponent)
 {
 	if (bEndingPlay)
@@ -86,6 +93,7 @@ void UCatProximityVoiceComponent::OnTalkingBegin(UAudioComponent* AudioComponent
 		return;
 	}
 	if (Playback.Get() != AudioComponent) MuteAndReleasePlayback();
+	OnAudioComponentEnvelopeValue(AudioComponent, 0.0f);
 	Playback = AudioComponent;
 	bStreamActive = true;
 	if (AudioComponent)

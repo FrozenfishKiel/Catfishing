@@ -531,6 +531,8 @@ private:
 
 	/** 更新当前房间的邀请码、访问方式和页面级按钮可用性；缺少真实 Lobby URI 时保持明确不可用状态。 */
 	void RefreshRoomPresentation();
+	void RefreshRoomVoicePresentation();
+	float VoiceStatusRefreshSeconds = 0;
 
 	/** 读取新建存档输入框并转交 Controller；缺少输入控件时保留明确合同错误，不补默认名称。 */
 	UFUNCTION()
@@ -572,7 +574,7 @@ private:
 	UFUNCTION() void HandleCameraSensitivityChanged(float NormalizedValue);
 	/** 控制：反转 Y 轴。 */
 	UFUNCTION() void HandleInvertYAxisChanged(bool bIsChecked);
-	/** 网络语音勾选输入处理；只在 OSS Voice 正式可用时写入 Start/Stop 草稿。 */
+	/** 语音输入模式选择处理；只在 OSS Voice 正式可用时写入三种模式草稿。 */
 	UFUNCTION() void HandleVoiceInputModeChanged(FString SelectedItem, ESelectInfo::Type SelectionType);
 	/** 后台静音勾选输入处理；只写失焦音量草稿，Apply 前不改变当前窗口音频。 */
 	UFUNCTION() void HandleMuteAudioWhenUnfocusedChanged(bool bIsChecked);

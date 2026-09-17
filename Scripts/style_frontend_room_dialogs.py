@@ -159,10 +159,12 @@ def style(page,friend,row,texture):
             control.set_hint_text('输入房间名称' if name=='RoomNameInput' else '留空不修改密码')
             if name=='RoomPasswordInput': control.set_is_password(True)
     clear=ensure(page,'RoomClearPasswordCheckBox',unreal.CheckBox);attach(clear,text(page,'RoomClearPasswordLabel','移除现有密码',13));attach(settings,clear)
-    for name,label,value in [('RoomVoice','语音聊天','暂未开放'),('RoomMicrophone','麦克风模式','暂未开放'),('RoomInvitePermission','邀请权限','仅房主')]:
+    for name,label,value in [('RoomVoice','语音状态','等待语音状态'),('RoomMicrophone','我的输入模式','读取已应用设置'),('RoomInvitePermission','邀请权限','仅房主')]:
         line=ensure(page,name+'Row',unreal.HorizontalBox);line.clear_children();attach(settings,line).set_padding(unreal.Margin(0,8,0,0))
         fill(attach(line,text(page,name+'Label',label,13)))
-        attach(line,text(page,name+'Value',value,13,color(.38,.53,.47)))
+        value_text=text(page,name+'Value',value,13,color(.38,.53,.47))
+        value_text.set_auto_wrap_text(True)
+        attach(line,value_text)
     rules=text(page,'RoomPasswordRulesText','房主主动邀请和 6 位邀请码免密码；列表和房间 ID 按设置校验密码。',12);rules.set_auto_wrap_text(True);attach(settings,rules).set_padding(unreal.Margin(0,10,0,0))
     space(page,settings,'RoomSettingsSpace')
     feedback=text(page,'RoomSettingsFeedbackText','',13,color(.62,.80,.72));feedback.set_auto_wrap_text(True);attach(settings,feedback).set_padding(unreal.Margin(0,10,0,12))

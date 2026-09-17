@@ -1,4 +1,5 @@
 #include "UI/Frontend/CatFrontendRootWidget.h"
+#include "UI/Voice/CatVoicePresentation.h"
 
 #include "Components/Button.h"
 #include "Components/CheckBox.h"
@@ -133,8 +134,19 @@ void UCatFrontendRootWidget::RequestSaveRoomSettings()
 		Secret, Clear->IsChecked());
 }
 
+void UCatFrontendRootWidget::RefreshRoomVoicePresentation()
+{
+	FText Mode, Status;
+	CatVoicePresentation::ReadLocalStatus(GetOwningLocalPlayer(), Mode, Status);
+	CatRoomDialogs::Text(RoomPage, TEXT("RoomVoiceLabel"), TEXT("语音状态"));
+	CatRoomDialogs::Text(RoomPage, TEXT("RoomMicrophoneLabel"), TEXT("我的输入模式"));
+	CatRoomDialogs::Text(RoomPage, TEXT("RoomVoiceValue"), Status.ToString());
+	CatRoomDialogs::Text(RoomPage, TEXT("RoomMicrophoneValue"), Mode.ToString());
+}
+
 void UCatFrontendRootWidget::RefreshRoomDialogPresentation(const FCatOnlineSnapshot& Snapshot)
 {
+	RefreshRoomVoicePresentation();
 	CatRoomDialogs::Text(RoomPage, TEXT("RoomNameText"), Snapshot.RoomName.IsEmpty() ? TEXT("房间") : Snapshot.RoomName);
 	CatRoomDialogs::Text(RoomPage, TEXT("RoomMemberCountText"), FString::Printf(TEXT("%d / %d 位伙伴"), Snapshot.CurrentPlayers, Snapshot.MaxPlayers));
 	CatRoomDialogs::Text(RoomPage, TEXT("RoomModalIdText"), Snapshot.LobbyId.IsEmpty() ? TEXT("等待房间 ID") : Snapshot.LobbyId);
@@ -300,6 +312,12 @@ void UCatFrontendRootWidget::RefreshRoomScene(const FCatOnlineSnapshot& Snapshot
 void UCatFrontendRootWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
+	VoiceStatusRefreshSeconds += InDeltaTime;
+	if (IsShowingRoom() && VoiceStatusRefreshSeconds >= 0.2f)
+	{
+		VoiceStatusRefreshSeconds = 0;
+		RefreshRoomVoicePresentation();
+	}
 	if (RoomJoinNoticeUntil <= 0 || !GetWorld()) { return; }
 	if (auto* Toast = CatRoomDialogs::Find<UWidget>(RoomPage, TEXT("RoomJoinedToast")))
 	{

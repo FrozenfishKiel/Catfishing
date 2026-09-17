@@ -14,6 +14,7 @@ class UCatCollectionWidget;
 class UCatFishRevealWidget;
 class UCatHUDModel;
 class UCatHUDWidget;
+class UCatVoiceActivityWidget;
 class UCatItemTooltipController;
 class UCatItemTooltipWidget;
 class UCatFrontendPageController;
@@ -341,6 +342,10 @@ private:
 	/** 当前 LocalPlayer 的主 HUD WBP；常驻天数、背包和设置入口，调试文字只有显式开启时才露出。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatHUDWidget> HUDWidget;
+
+	/** 本地只读说话提示，随局内 UI 装配和清理。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatVoiceActivityWidget> VoiceActivityWidget;
 
 	/** 当前 LocalPlayer 的主 HUD Model；它聚合天数、入口显隐和可选调试事实，不保存玩法真相。 */
 	UPROPERTY(Transient)
