@@ -45,4 +45,3 @@ void UCatEquipmentItemAbility::CompleteEquipmentUse(const FCatDomainCommandResul
 	bUseCommitted = Result.bCommitted;
 	EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, !Result.bCommitted);
 }
-

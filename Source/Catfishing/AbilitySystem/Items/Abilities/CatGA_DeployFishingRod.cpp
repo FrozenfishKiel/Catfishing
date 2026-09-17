@@ -24,4 +24,3 @@ FCatDomainCommandResult UCatGA_DeployFishingRod::ExecuteEquipmentUse(const FCatI
 		BackPack->ClearQuickbarHeldSlotFromAuthority();
 	return Result;
 }
-

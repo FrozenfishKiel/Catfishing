@@ -29,4 +29,3 @@ void UCatGA_UseScoopNet::EndAbility(FGameplayAbilitySpecHandle Handle, const FGa
 			if (auto* Commands = Controller->GetFishingCommandComponent()) Commands->CancelScoopUseFromAuthority(UseTarget.RequestId);
 	Super::EndAbility(Handle, ActorInfo, ActivationInfo, bReplicateEndAbility, bWasCancelled);
 }
-
