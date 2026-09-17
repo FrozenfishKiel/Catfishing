@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "AbilitySystem/Abilities/CatGameplayAbility.h"
@@ -25,7 +25,7 @@ public:
 	ECatHelpSignalKind HelpKind = ECatHelpSignalKind::Unknown;
 	/** 事件接收方据此确认本动作的目标数据类型。 */
 	virtual UScriptStruct* GetScriptStruct() const override { return StaticStruct(); }
-	/** 传输服务器已接受的请求参数，让拥有者客户端启动同一表现任务。 */
+	/** 随 GAS 预测激活传输本地请求参数；此处仅序列化，服务器能力与领域服务继续验证请求。 */
 	bool NetSerialize(FArchive& Ar, UPackageMap* Map, bool& bOutSuccess);
 };
 
@@ -54,7 +54,7 @@ protected:
 		const bool bWasCancelled) override;
 
 private:
-	/** 前摇结束后提交手动求助请求；它只调用 Social 求助入口，并根据领域结果决定正常结束还是取消。 */
+	/** 前摇结束后提交手动求助请求；服务器先提交 GAS 成本与冷却，再调用 Social 求助入口，按领域结果正常结束或取消。 */
 	UFUNCTION()
 	void CommitManualHelpAfterWindow();
 

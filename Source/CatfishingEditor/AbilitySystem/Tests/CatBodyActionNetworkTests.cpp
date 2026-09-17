@@ -1,4 +1,4 @@
-﻿#if WITH_DEV_AUTOMATION_TESTS
+#if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationEditorCommon.h"
 #include "Editor.h"
@@ -50,13 +50,13 @@ private:
 	TArray<FCatBodyActionPresentationConfig> Presentation;
 };
 
-/** 正式地图双端回归：远端请求启动 GA、拥有者播放正式 Montage，并验证多来源倒地复制与取消。 */
+/** 正式地图双端回归：远端本地预测启动 GA、拥有者播放正式 Montage，并验证多来源倒地复制与取消。 */
 class FVerify final : public IAutomationLatentCommand
 {
 public:
 	/** 保存断言接收者；超时从第一次更新开始。 */
 	explicit FVerify(FAutomationTestBase* InTest) : Test(InTest) {}
-	/** 按准备、激活、取消、独立撤销顺序观察真实复制，不手工调用 OnRep 或客户端表现。 */
+	/** 先验证同帧本地预测早于服务器激活，再观察倒地取消、独立来源撤销、迟到状态拒绝和客户端主动取消；只走生产请求，不手工调用 OnRep 或播放表现。 */
 	bool Update() override
 	{
 		if (!Started) Started = FPlatformTime::Seconds();
@@ -82,14 +82,19 @@ public:
 			FPacketSimulationSettings Packets; Packets.PktLag = 100; Packets.PktLoss = 5;
 			Server->GetWorld()->GetNetDriver()->SetPacketSimulationSettings(Packets);
 			Client->GetWorld()->GetNetDriver()->SetPacketSimulationSettings(Packets);
-			Client->ServerPlaceProtectionSign(FGuid::NewGuid(), ClientCat->GetActorLocation());
-			Stage = 1; return false;
+			Client->RequestPlaceProtectionSign(FGuid::NewGuid(), ClientCat->GetActorLocation());
+			// 同一个调用栈内断言：网络尚未派发，拥有者已经启动正式动画。
+            Test->TestTrue(TEXT("请求当帧本地 GA 已激活"), ClientASC->FindAbilitySpecFromClass(UCatGA_BodyActionPlaceProtectionSign::StaticClass())->IsActive());
+            Test->TestNotNull(TEXT("服务器批准前已有本地蒙太奇"), ClientASC->GetCurrentMontage());
+            Test->TestFalse(TEXT("本地开始时服务器尚未激活"), ServerASC->FindAbilitySpecFromClass(UCatGA_BodyActionPlaceProtectionSign::StaticClass())->IsActive());
+            Stage = 1; return false;
 		}
 		if (Stage == 1)
 		{
 			const auto* Spec = ClientASC->FindAbilitySpecFromClass(UCatGA_BodyActionPlaceProtectionSign::StaticClass());
-			if (!Spec || !Spec->IsActive() || !ClientASC->GetCurrentMontage()) return false;
-			Test->TestNotNull(TEXT("拥有者通过能力任务播放正式动画"), ClientASC->GetCurrentMontage());
+			if (!Spec || !Spec->IsActive()
+                || !ServerASC->FindAbilitySpecFromClass(UCatGA_BodyActionPlaceProtectionSign::StaticClass())->IsActive()) return false;
+			// 动画已在请求当帧验证；短 Montage 可以早于网络确认结束，取消窗口由 GA 前摇而非动画长度决定。
 			ServerASC->SetStateTagsFromAuthority(TEXT("Test.SourceA"), FGameplayTagContainer(CatStateTags::Downed));
 			ServerASC->SetStateTagsFromAuthority(TEXT("Test.SourceB"), FGameplayTagContainer(CatStateTags::Downed));
 			Stage = 2; return false;
@@ -109,20 +114,46 @@ public:
 			ServerASC->SetStateTagsFromAuthority(TEXT("Test.SourceB"), FGameplayTagContainer());
 			Stage = 4; return false;
 		}
-		if (ClientASC->HasMatchingGameplayTag(CatStateTags::Downed)) return false;
-		Test->AddInfo(TEXT("Event=body_action_network_verified RemoteMontage=1 Cancelled=1 IndependentSources=1 LagMs=100 LossPct=5"));
-		return true;
+        if (Stage == 4)
+        {
+            if (ClientASC->HasMatchingGameplayTag(CatStateTags::Downed)) return false;
+            // 状态尚未复制时本地可以预测，服务器随后拒绝；拒绝必须收掉本地动作。
+            ServerASC->SetStateTagsFromAuthority(TEXT("Test.Reject"), FGameplayTagContainer(CatStateTags::Downed));
+            Client->RequestPlaceProtectionSign(FGuid::NewGuid(), Client->GetPawn()->GetActorLocation());
+            Test->TestTrue(TEXT("迟到状态不阻塞本地预测启动"), ClientASC->FindAbilitySpecFromClass(UCatGA_BodyActionPlaceProtectionSign::StaticClass())->IsActive());
+            Stage = 5; return false;
+        }
+        if (Stage == 5)
+        {
+            if (!ClientASC->HasMatchingGameplayTag(CatStateTags::Downed)
+                || ClientASC->FindAbilitySpecFromClass(UCatGA_BodyActionPlaceProtectionSign::StaticClass())->IsActive()) return false;
+            ServerASC->SetStateTagsFromAuthority(TEXT("Test.Reject"), FGameplayTagContainer());
+            Stage = 6; return false;
+        }
+        if (Stage == 6)
+        {
+            if (ClientASC->HasMatchingGameplayTag(CatStateTags::Downed)) return false;
+            Client->RequestPlaceProtectionSign(FGuid::NewGuid(), Client->GetPawn()->GetActorLocation());
+            const auto* Spec = ClientASC->FindAbilitySpecFromClass(UCatGA_BodyActionPlaceProtectionSign::StaticClass());
+            ClientASC->CancelAbilityHandle(Spec->Handle);
+            Test->TestFalse(TEXT("本地取消不等待服务器"), Spec->IsActive());
+            ChangedAt = FPlatformTime::Seconds(); Stage = 7; return false;
+        }
+        if (FPlatformTime::Seconds() - ChangedAt < 2) return false;
+        Test->TestFalse(TEXT("预测取消到达服务器且未等待提交窗口"), ServerASC->FindAbilitySpecFromClass(UCatGA_BodyActionPlaceProtectionSign::StaticClass())->IsActive());
+        Test->AddInfo(TEXT("Event=body_action_network_verified LocalPredictedBeforeServer=1 RemoteMontage=1 Cancelled=1 RejectedPrediction=1 ClientCancel=1 IndependentSources=1 LagMs=100 LossPct=5"));
+        return true;
 	}
 private:
 	/** Automation 断言接收者，测试框架拥有它。 */
 	FAutomationTestBase* Test;
 	/** 单调时钟起点，只用于测试超时。 */
 	double Started = 0;
-	/** 首个来源撤销时刻，用来等待复制收敛。 */
+	/** 当前等待步骤的起点；来源撤销和客户端取消后分别重置，用来给复制预留观察时间。 */
 	double ChangedAt = 0;
 	/** 已完成的观察步骤，不参与玩法裁决。 */
 	int32 Stage = 0;
-	/** 远端拥有者控制器，只从此端发起正式 RPC。 */
+	/** 远端拥有者控制器，只从此端发起本地 GameplayEvent。 */
 	TWeakObjectPtr<ACatfishingPlayerController> Client;
 	/** 对应服务器控制器，仅施加测试状态。 */
 	TWeakObjectPtr<ACatfishingPlayerController> Server;

@@ -1,4 +1,4 @@
-﻿#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "AbilitySystem/Tags/CatStateTags.h"
 #include "AbilitySystem/Effects/CatGE_PersistentState.h"
 #include "Data/CatFishDefinition.h"
@@ -55,8 +55,7 @@ void UCatAbilitySystemComponent::AbilityInputTagReleased(const FGameplayTag Inpu
 	}
 }
 
-// 输入帧流程：暂停或现有抄网操作锁期间保留边沿；先收集按住策略，再转发按下或激活，最后转发释放并清空本帧边沿。
-// 输入消费流程：暂停或抄网操作锁期间保留边沿；先收集持续按住和首次按下的待激活 Spec。
+// 输入消费流程：暂停或抄网操作锁期间保留边沿；从能力资产 Tag 判断是否按住重激活，再收集首次按下的待激活 Spec；AbilitySet 不保存另一份策略。
 // 活动实例直接收到同一激活键下的按下事件；激活请求统一执行后再转发释放事件，最后清除本帧边沿而保留按住集合。
 void UCatAbilitySystemComponent::ProcessAbilityInput(const float DeltaTime, const bool bGamePaused)
 {
@@ -70,7 +69,7 @@ void UCatAbilitySystemComponent::ProcessAbilityInput(const float DeltaTime, cons
 	for (const FGameplayAbilitySpecHandle Handle : InputHeldSpecHandles)
 	{
 		const FGameplayAbilitySpec* Spec = FindAbilitySpecFromHandle(Handle);
-		if (Spec && Spec->GetDynamicSpecSourceTags().HasTagExact(CatFishingAbilityTags::Ability_ActivationPolicy_WhileInputActive) && !Spec->IsActive())
+		if (Spec && Spec->Ability && Spec->Ability->GetAssetTags().HasTagExact(CatFishingAbilityTags::Ability_ActivationPolicy_WhileInputActive) && !Spec->IsActive())
 		{
 			AbilitiesToActivate.AddUnique(Handle);
 		}
@@ -83,12 +82,12 @@ void UCatAbilitySystemComponent::ProcessAbilityInput(const float DeltaTime, cons
 			{
 				// Task 订阅当前能力实例的激活键；Spec 上的旧键不能用于实例化能力的输入事件。
 				const UGameplayAbility* Instance = Spec->GetPrimaryInstance();
-				const FPredictionKey ActivationKey = Instance ? Instance->GetCurrentActivationInfo().GetActivationPredictionKey() : Spec->ActivationInfo.GetActivationPredictionKey();
+				const FPredictionKey ActivationKey = Instance ? Instance->GetCurrentActivationInfo().GetActivationPredictionKey() : FPredictionKey();
 				AbilitySpecInputPressed(*Spec);
 				InvokeReplicatedEvent(EAbilityGenericReplicatedEvent::InputPressed, Handle,
 					ActivationKey);
 			}
-			else if (!Spec->GetDynamicSpecSourceTags().HasTagExact(CatFishingAbilityTags::Ability_ActivationPolicy_OnGranted))
+			else
 			{
 				AbilitiesToActivate.AddUnique(Handle);
 			}
@@ -104,7 +103,7 @@ void UCatAbilitySystemComponent::ProcessAbilityInput(const float DeltaTime, cons
 		{
 			// 与 WaitInputRelease 使用同一实例激活键，避免松开事件留在无人监听的旧 Spec 键下。
 			const UGameplayAbility* Instance = Spec->GetPrimaryInstance();
-			const FPredictionKey ActivationKey = Instance ? Instance->GetCurrentActivationInfo().GetActivationPredictionKey() : Spec->ActivationInfo.GetActivationPredictionKey();
+			const FPredictionKey ActivationKey = Instance ? Instance->GetCurrentActivationInfo().GetActivationPredictionKey() : FPredictionKey();
 			AbilitySpecInputReleased(*Spec);
 			InvokeReplicatedEvent(EAbilityGenericReplicatedEvent::InputReleased, Handle,
 				ActivationKey);

@@ -1,4 +1,4 @@
-﻿#include "AbilitySystem/BodyAction/Social/CatGA_BodyActionRequestMischief.h"
+#include "AbilitySystem/BodyAction/Social/CatGA_BodyActionRequestMischief.h"
 #include "AbilitySystem/Tags/CatStateTags.h"
 #include "Logging/CatLog.h"
 
@@ -18,8 +18,8 @@
 
 UCatGA_BodyActionRequestMischief::UCatGA_BodyActionRequestMischief()
 {
-	// 构造流程：恶作剧动作由服务器启动、拥有者客户端同步表现，按 Actor 保存自己的前摇状态，并暴露共同资产标签供 Fishing Cancel 命中。
-	NetExecutionPolicy = EGameplayAbilityNetExecutionPolicy::ServerInitiated;
+	// 构造流程：恶作剧动作由拥有者本地预测启动、服务器接收 GAS 事件并验证，按 Actor 保存自己的前摇状态，并暴露共同资产标签供 Fishing Cancel 命中。
+	NetExecutionPolicy = EGameplayAbilityNetExecutionPolicy::LocalPredicted;
 	InstancingPolicy = EGameplayAbilityInstancingPolicy::InstancedPerActor;
 	FGameplayTagContainer BodyActionTags(CatFishingAbilityTags::Ability_Body_Action);
 	BodyActionTags.AddTag(CatStateTags::AbilityInterruptOnDowned);
@@ -36,7 +36,7 @@ void UCatGA_BodyActionRequestMischief::ActivateAbility(const FGameplayAbilitySpe
 {
 	// 激活流程：
 	// 1. 先校验恶作剧事件、精确载荷类型和 owning Controller，错配直接取消，不进入 Social 写口。
-	// 2. 按值冻结请求，用能力任务播放可选蒙太奇；拥有者客户端到此只做表现，服务器继续授予可选 Cue 并等待前摇。
+	// 2. 按值冻结请求，拥有者立即预测蒙太奇与可选 Cue；服务器验证激活后执行对应表现，只有服务器创建提交前摇任务。
 	// 3. 零秒前摇也走本类 CommitMischiefAfterWindow，保证恶作剧没有第二条即时提交路径。
 	const FGameplayTag BodyActionEventTag = CatFishingAbilityTags::AbilityEvent_Body_RequestMischief.GetTag();
 	// 参数随 GameplayEvent 的 TargetData 进入能力；精确验证结构后按值冻结，前摇期间不会被后续请求改写。
@@ -64,10 +64,10 @@ void UCatGA_BodyActionRequestMischief::ActivateAbility(const FGameplayAbilitySpe
 		Task->ReadyForActivation();
 		if (!IsActive()) return;
 	}
-	// 拥有者客户端只播放任务，领域提交和 Cue 授予由服务器执行；旁观者使用 ASC 蒙太奇复制。
-	if (!ActorInfo->IsNetAuthority()) return;
+	// 本地事件立即播放任务，无需等待服务器批准；GAS 使用激活预测键传输同一事件。领域结果仍只在服务器产生。
 	if (const auto* Config = Presentation->FindPresentationConfig(BodyActionEventTag); Config && Config->GameplayCue.IsValid())
 		K2_AddGameplayCue(Config->GameplayCue, MakeEffectContext(Handle, ActorInfo), true);
+	if (!ActorInfo->IsNetAuthority()) return;
 	const float LeadInSeconds = Presentation->GetLeadInSeconds(BodyActionEventTag);
 	if (LeadInSeconds <= 0.0f)
 	{
@@ -105,7 +105,7 @@ void UCatGA_BodyActionRequestMischief::EndAbility(const FGameplayAbilitySpecHand
 
 void UCatGA_BodyActionRequestMischief::CommitMischiefAfterWindow()
 {
-	// 提交流程：前摇结束后重读 World 和目标 Controller，先过统一玩法 gate，再把权限、冷却和保护牌裁决交给 Social。
+	// 提交流程：前摇结束后复核激活、Controller、命令窗口与服务依赖，再提交 GAS 成本和冷却，最后由领域服务裁决共享结果。
 	const FGameplayAbilityActorInfo* ActorInfo = GetCurrentActorInfo();
 	ACatfishingPlayerController* Controller = GetCatPlayerControllerFromActorInfo();
 	if (!IsActive() || !ActorInfo || !ActorInfo->IsNetAuthority() || !ActiveRequest.RequestId.IsValid() || !Controller)
@@ -138,6 +138,12 @@ void UCatGA_BodyActionRequestMischief::CommitMischiefAfterWindow()
 		}
 		if (UCatSocialService* Social = World->GetSubsystem<UCatSocialService>())
 		{
+			// 前摇结束后再次检查并提交 GAS 成本和冷却；失败取消本次能力，不进入领域写口。
+			if (!CommitAbility(CurrentSpecHandle, ActorInfo, GetCurrentActivationInfo()))
+			{
+				CancelAbility(CurrentSpecHandle, ActorInfo, GetCurrentActivationInfo(), true);
+				return;
+			}
 			Result = Social->RequestMischief(Controller, TargetController, ActiveRequest.RequestId,
 				ActiveRequest.InteractionLocation);
 		}
@@ -163,7 +169,7 @@ void UCatGA_BodyActionRequestMischief::CancelAction()
 	if (IsActive()) CancelAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true);
 }
 
-// 目标数据传输流程：序列化请求身份与本动作参数；加载时还原字段，流错误标记失败，客户端据此启动表现但不获得领域提交权。
+// 目标数据传输流程：序列化请求身份与本动作参数；加载时还原字段，流错误标记失败，服务器据此校验请求，客户端预测不获得领域提交权。
 bool FCatBodyActionRequestMischiefTargetData::NetSerialize(FArchive& Ar, UPackageMap* Map, bool& bOutSuccess)
 {
 	Ar << RequestId;

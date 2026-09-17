@@ -781,8 +781,8 @@ void ACatfishingPlayerController::ServerReportImprintCaptureResult_Implementatio
 	}
 }
 
-// 篝火回看 RPC 路由流程：只把营地回看意图投给 BodyAction Ability；没有正式 Ability 接管时回送依赖错误。
-void ACatfishingPlayerController::ServerRequestCampfirePlayback_Implementation(ACatCampHubActor* Camp,
+// 篝火回看本地事件流程：将目标和请求键放入 TargetData，交给本地拥有者 ASC 预测激活；非本地控制器、缺少 ASC 或无人接管时只更新本机错误读模型。
+void ACatfishingPlayerController::RequestCampfirePlayback(ACatCampHubActor* Camp,
 	const FGuid RequestId)
 {
 	auto* Payload = new FCatBodyActionRequestCampfirePlaybackTargetData;
@@ -794,12 +794,12 @@ void ACatfishingPlayerController::ServerRequestCampfirePlayback_Implementation(A
 	Event.Target = GetPawn();
 	Event.TargetData.Add(Payload);
 	auto* ASC = UCatAbilitySystemComponent::FindCatAbilitySystemFromActor(GetPawn());
-	if (!ASC || !ASC->IsOwnerActorAuthoritative() || ASC->HandleGameplayEvent(Event.EventTag, &Event) == 0)
+	if (!IsLocalController() || !ASC || ASC->HandleGameplayEvent(Event.EventTag, &Event) == 0)
 	{
 		FCatDomainCommandResult Result;
 		Result.RequestId = RequestId;
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-		DeliverCampCommandResultToOwningClient(Result);
+		ClientReceiveCampCommandResult_Implementation(Result);
 	}
 }
 
@@ -1491,8 +1491,8 @@ void ACatfishingPlayerController::DeliverCampCommandResultToOwningClient(const F
 	ClientReceiveCampCommandResult(Result);
 }
 
-// 手动求助 RPC 路由流程：只把 RequestId 和求助类型投给 Social BodyAction；Ability 未接管时回送依赖错误，不发布信号。
-void ACatfishingPlayerController::ServerRequestManualHelp_Implementation(const FGuid RequestId,
+// 求助本地事件流程：将请求键与求助类型交给本地拥有者 ASC，立即预测身体动作；没有能力接管时更新本机错误读模型，信号由服务器前摇后裁决。
+void ACatfishingPlayerController::RequestManualHelp(const FGuid RequestId,
 	const ECatHelpSignalKind Kind)
 {
 	auto* Payload = new FCatBodyActionRequestManualHelpTargetData;
@@ -1504,17 +1504,17 @@ void ACatfishingPlayerController::ServerRequestManualHelp_Implementation(const F
 	Event.Target = GetPawn();
 	Event.TargetData.Add(Payload);
 	auto* ASC = UCatAbilitySystemComponent::FindCatAbilitySystemFromActor(GetPawn());
-	if (!ASC || !ASC->IsOwnerActorAuthoritative() || ASC->HandleGameplayEvent(Event.EventTag, &Event) == 0)
+	if (!IsLocalController() || !ASC || ASC->HandleGameplayEvent(Event.EventTag, &Event) == 0)
 	{
 		FCatDomainCommandResult Result;
 		Result.RequestId = RequestId;
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-		DeliverCampCommandResultToOwningClient(Result);
+		ClientReceiveCampCommandResult_Implementation(Result);
 	}
 }
 
-// 恶作剧 RPC 路由流程：只把目标 PlayerState、RequestId 和交互位置投给 Social BodyAction；Ability 未接管时回送依赖错误，不进入 Social。
-void ACatfishingPlayerController::ServerRequestMischief_Implementation(APlayerState* TargetPlayerState,
+// 恶作剧本地事件流程：将目标、请求键与候选位置交给本地拥有者 ASC 预测激活；未接管时只更新本机错误读模型，Social 的权威写入归服务器能力。
+void ACatfishingPlayerController::RequestMischief(APlayerState* TargetPlayerState,
 	const FGuid RequestId, const FVector InteractionLocation)
 {
 	auto* Payload = new FCatBodyActionRequestMischiefTargetData;
@@ -1527,17 +1527,17 @@ void ACatfishingPlayerController::ServerRequestMischief_Implementation(APlayerSt
 	Event.Target = GetPawn();
 	Event.TargetData.Add(Payload);
 	auto* ASC = UCatAbilitySystemComponent::FindCatAbilitySystemFromActor(GetPawn());
-	if (!ASC || !ASC->IsOwnerActorAuthoritative() || ASC->HandleGameplayEvent(Event.EventTag, &Event) == 0)
+	if (!IsLocalController() || !ASC || ASC->HandleGameplayEvent(Event.EventTag, &Event) == 0)
 	{
 		FCatDomainCommandResult Result;
 		Result.RequestId = RequestId;
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-		DeliverCampCommandResultToOwningClient(Result);
+		ClientReceiveCampCommandResult_Implementation(Result);
 	}
 }
 
-// 放牌 RPC 路由流程：只把 RequestId 和期望位置投给 Social BodyAction；Ability 未接管时回送依赖错误，不生成保护牌。
-void ACatfishingPlayerController::ServerPlaceProtectionSign_Implementation(const FGuid RequestId,
+// 放牌本地事件流程：将请求键与候选位置交给本地拥有者 ASC 预测激活；未接管时更新本机错误读模型，本地表现不会生成权威保护牌。
+void ACatfishingPlayerController::RequestPlaceProtectionSign(const FGuid RequestId,
 	const FVector SignLocation)
 {
 	auto* Payload = new FCatBodyActionRequestPlaceProtectionSignTargetData;
@@ -1549,12 +1549,12 @@ void ACatfishingPlayerController::ServerPlaceProtectionSign_Implementation(const
 	Event.Target = GetPawn();
 	Event.TargetData.Add(Payload);
 	auto* ASC = UCatAbilitySystemComponent::FindCatAbilitySystemFromActor(GetPawn());
-	if (!ASC || !ASC->IsOwnerActorAuthoritative() || ASC->HandleGameplayEvent(Event.EventTag, &Event) == 0)
+	if (!IsLocalController() || !ASC || ASC->HandleGameplayEvent(Event.EventTag, &Event) == 0)
 	{
 		FCatDomainCommandResult Result;
 		Result.RequestId = RequestId;
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-		DeliverCampCommandResultToOwningClient(Result);
+		ClientReceiveCampCommandResult_Implementation(Result);
 	}
 }
 

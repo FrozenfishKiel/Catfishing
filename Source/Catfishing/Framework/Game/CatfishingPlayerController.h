@@ -146,9 +146,9 @@ public:
 	/** 把 F8/F9 或已获键盘焦点页面转交的按键转换为当前公开请求的一次确认意图；找到可提交请求时返回 true 供 UI 消费该键。 */
 	bool TrySetAltarConfirmationFromKey(const FKey& Key);
 
-	/** 由 owning client 发起固定营地篝火回看请求；Camp 在结算夜全员在场且 CapturePlan 建立成功后触发表现 multicast，并通过 ClientReceiveCampCommandResult 回送领域结果。 */
-	UFUNCTION(Server, Reliable)
-	void ServerRequestCampfirePlayback(ACatCampHubActor* Camp, FGuid RequestId);
+	/** 本地发送篝火 GameplayEvent 并立即预测动作；GAS 传输目标与激活键，Camp 只负责服务器确认后的共享回看。 */
+	UFUNCTION(BlueprintCallable, Category="Catfishing|Abilities")
+	void RequestCampfirePlayback(ACatCampHubActor* Camp, FGuid RequestId);
 
 	/** 服务器把公共领域命令结果可靠发给 owning client；所有路径都保留原 RequestId，客户端不重算 Revision 或领域错误。 */
 	UFUNCTION(Client, Reliable)
@@ -203,17 +203,17 @@ public:
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Growth")
 	void ServerChooseGrowthOption(FGuid RequestId, ECatGrowthOptionId OptionId, int32 OfferSerial);
 
-	/** 手动发布普通钓鱼或倒地求助；普通信号不会升级为全局任务。 */
-	UFUNCTION(Server, Reliable)
-	void ServerRequestManualHelp(FGuid RequestId, ECatHelpSignalKind Kind);
+	/** 本地请求普通钓鱼或倒地求助并立即预测动作；信号由服务器能力提交，普通信号不会升级为全局任务。 */
+	UFUNCTION(BlueprintCallable, Category="Catfishing|Abilities")
+	void RequestManualHelp(FGuid RequestId, ECatHelpSignalKind Kind);
 
-	/** 请求一次普通恶作剧许可；Social 重新验证目标 Controller、冷却与 ProtectionSign。 */
-	UFUNCTION(Server, Reliable)
-	void ServerRequestMischief(APlayerState* TargetPlayerState, FGuid RequestId, FVector InteractionLocation);
+	/** 本地预测一次恶作剧动作；服务器 Social 重新验证目标、领域冷却与保护牌，预测开始不代表许可已通过。 */
+	UFUNCTION(BlueprintCallable, Category="Catfishing|Abilities")
+	void RequestMischief(APlayerState* TargetPlayerState, FGuid RequestId, FVector InteractionLocation);
 
-	/** 在本人附近放置或移动唯一防骚扰牌子；Social 用显式范围配置保护普通恶作剧。 */
-	UFUNCTION(Server, Reliable)
-	void ServerPlaceProtectionSign(FGuid RequestId, FVector SignLocation);
+	/** 本地预测放牌动作并提交候选位置；服务器 Social 验证范围后放置或移动本人唯一保护牌。 */
+	UFUNCTION(BlueprintCallable, Category="Catfishing|Abilities")
+	void RequestPlaceProtectionSign(FGuid RequestId, FVector SignLocation);
 
 	/**
 	 * 房主把某人踢出本局（联机社交 §3.1.1、§4 软性：一切社交僵局的兜底，被踢者跟人走的资产无损）。

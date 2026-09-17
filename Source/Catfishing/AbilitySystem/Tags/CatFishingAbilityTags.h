@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "NativeGameplayTags.h"
 
@@ -26,9 +26,8 @@ namespace CatFishingAbilityTags
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Fishing_Slack);
 	/** 所有专用身体动作 Ability 共享的资产标签；Fishing Cancel 用它取消任一活跃的前摇窗口。 */
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Body_Action);
-	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_ActivationPolicy_OnInputTriggered);
+	/** 能力资产声明按住期间允许重新激活；沿用既有 Tag 名，ASC 直接读取能力而非授予配置。 */
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_ActivationPolicy_WhileInputActive);
-	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_ActivationPolicy_OnGranted);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Fishing_Aiming);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Fishing_Reeling);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Fishing_Scooping);

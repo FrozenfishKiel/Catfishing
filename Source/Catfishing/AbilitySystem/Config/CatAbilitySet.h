@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "Abilities/GameplayAbility.h"
@@ -9,21 +9,7 @@
 class UCatAbilitySystemComponent;
 class UGameplayEffect;
 
-/** Ability 输入激活策略；AbilitySet 用它决定授予后是等待离散输入、按住期间持续激活，还是授予时立即激活。 */
-UENUM(BlueprintType)
-enum class ECatAbilityActivationPolicy : uint8
-{
-	/** 离散输入策略；按下边沿触发一次 Ability，适合交互、取消、抢抄等单次意图。 */
-	OnInputTriggered,
-
-	/** 按住型输入策略；按下建立 held 状态、松开结束，适合拖拽、放线和打窝蓄力。 */
-	WhileInputActive,
-
-	/** 授予即激活策略；用于不依赖玩家输入的被动或初始化 Ability。 */
-	OnGranted
-};
-
-/** AbilitySet 中的一条能力授予配置；定义类型、等级和输入策略，属性效果由独立 GrantedEffects 配置。 */
+/** AbilitySet 中的一条能力授予配置；定义类型、等级和输入绑定，属性效果由独立 GrantedEffects 配置。 */
 USTRUCT(BlueprintType)
 struct FCatAbilitySetAbility
 {
@@ -41,9 +27,6 @@ struct FCatAbilitySetAbility
 	UPROPERTY(EditAnywhere, Category="Ability", meta=(ClampMin="1"))
 	int32 Level = 1;
 
-	/** 该 Ability 对输入或授予时机的响应方式；AbilitySet 用它写入策略 Tag，并校验正式 Fishing 输入的按住/离散边界。 */
-	UPROPERTY(EditAnywhere, Category="Ability")
-	ECatAbilityActivationPolicy ActivationPolicy = ECatAbilityActivationPolicy::OnInputTriggered;
 
 
 };

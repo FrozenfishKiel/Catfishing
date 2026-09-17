@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "AbilitySystem/Abilities/CatGameplayAbility.h"
@@ -24,12 +24,12 @@ public:
 	UPROPERTY(Transient)
 	FGuid RequestId;
 
-	/** 发起交互的服务器世界位置候选；Social 会结合当前角色位置和保护牌策略复核。 */
+	/** 发起者提供的世界坐标位置候选；Social 会结合当前角色位置和保护牌策略复核。 */
 	UPROPERTY(Transient)
 	FVector InteractionLocation = FVector::ZeroVector;
 	/** 事件接收方据此确认本动作的目标数据类型。 */
 	virtual UScriptStruct* GetScriptStruct() const override { return StaticStruct(); }
-	/** 传输服务器已接受的请求参数，让拥有者客户端启动同一表现任务。 */
+	/** 随 GAS 预测激活传输本地请求参数；此处仅序列化，服务器能力与领域服务继续验证请求。 */
 	bool NetSerialize(FArchive& Ar, UPackageMap* Map, bool& bOutSuccess);
 };
 
@@ -58,7 +58,7 @@ protected:
 		const bool bWasCancelled) override;
 
 private:
-	/** 前摇结束后提交恶作剧请求；它只解析目标 Controller 并调用 Social，冷却和保护牌仍由 Social 裁决。 */
+	/** 前摇结束后提交恶作剧请求；服务器解析目标和服务后提交 GAS 成本与冷却，再调用 Social；恶作剧领域冷却与保护牌资格仍由 Social 裁决。 */
 	UFUNCTION()
 	void CommitMischiefAfterWindow();
 

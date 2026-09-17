@@ -17,9 +17,7 @@ namespace CatFishingAbilityTags
 	UE_DEFINE_GAMEPLAY_TAG(Ability_Fishing_Chum, "Cat.Ability.Fishing.Chum");
 	UE_DEFINE_GAMEPLAY_TAG(Ability_Fishing_Slack, "Cat.Ability.Fishing.Slack");
 	UE_DEFINE_GAMEPLAY_TAG(Ability_Body_Action, "Cat.Ability.Body.Action");
-	UE_DEFINE_GAMEPLAY_TAG(Ability_ActivationPolicy_OnInputTriggered, "Cat.Ability.ActivationPolicy.OnInputTriggered");
 	UE_DEFINE_GAMEPLAY_TAG(Ability_ActivationPolicy_WhileInputActive, "Cat.Ability.ActivationPolicy.WhileInputActive");
-	UE_DEFINE_GAMEPLAY_TAG(Ability_ActivationPolicy_OnGranted, "Cat.Ability.ActivationPolicy.OnGranted");
 	UE_DEFINE_GAMEPLAY_TAG(State_Fishing_Aiming, "Cat.State.Fishing.Aiming");
 	UE_DEFINE_GAMEPLAY_TAG(State_Fishing_Reeling, "Cat.State.Fishing.Reeling");
 	UE_DEFINE_GAMEPLAY_TAG(State_Fishing_Scooping, "Cat.State.Fishing.Scooping");

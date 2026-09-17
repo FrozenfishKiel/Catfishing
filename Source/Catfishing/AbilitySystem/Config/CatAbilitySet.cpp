@@ -1,7 +1,6 @@
-﻿#include "AbilitySystem/Config/CatAbilitySet.h"
+#include "AbilitySystem/Config/CatAbilitySet.h"
 
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
-#include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "GameplayEffect.h"
 
 bool UCatAbilitySet::IsRuntimeReady() const
@@ -38,7 +37,6 @@ bool UCatAbilitySet::GiveToAbilitySystem(UCatAbilitySystemComponent* AbilitySyst
 	}
 
 	bool bGrantedAny = false;
-	TArray<FGameplayAbilitySpecHandle> OnGrantedHandles;
 	for (const FCatAbilitySetAbility& Entry : GrantedAbilities)
 	{
 		FGameplayAbilitySpec Spec(Entry.Ability, Entry.Level);
@@ -46,18 +44,6 @@ bool UCatAbilitySet::GiveToAbilitySystem(UCatAbilitySystemComponent* AbilitySyst
 		if (Entry.InputTag.IsValid())
 		{
 			Spec.GetDynamicSpecSourceTags().AddTag(Entry.InputTag);
-		}
-		switch (Entry.ActivationPolicy)
-		{
-		case ECatAbilityActivationPolicy::WhileInputActive:
-			Spec.GetDynamicSpecSourceTags().AddTag(CatFishingAbilityTags::Ability_ActivationPolicy_WhileInputActive);
-			break;
-		case ECatAbilityActivationPolicy::OnGranted:
-			Spec.GetDynamicSpecSourceTags().AddTag(CatFishingAbilityTags::Ability_ActivationPolicy_OnGranted);
-			break;
-		default:
-			Spec.GetDynamicSpecSourceTags().AddTag(CatFishingAbilityTags::Ability_ActivationPolicy_OnInputTriggered);
-			break;
 		}
 		const FGameplayAbilitySpecHandle Handle = AbilitySystem->GiveAbility(Spec);
 		if (!Handle.IsValid())
@@ -68,8 +54,6 @@ bool UCatAbilitySet::GiveToAbilitySystem(UCatAbilitySystemComponent* AbilitySyst
 		OutGrantedHandles.AbilitySpecHandles.Add(Handle);
 		bGrantedAny = true;
 
-
-		if (Entry.ActivationPolicy == ECatAbilityActivationPolicy::OnGranted) OnGrantedHandles.Add(Handle);
 	}
 	for (const FCatAbilitySetGameplayEffect& Entry : GrantedEffects)
 	{
@@ -82,11 +66,6 @@ bool UCatAbilitySet::GiveToAbilitySystem(UCatAbilitySystemComponent* AbilitySyst
 		if (!Handle.IsValid()) { OutGrantedHandles.TakeFromAbilitySystem(AbilitySystem); return false; }
 		OutGrantedHandles.GameplayEffectHandles.Add(Handle);
 		bGrantedAny = true;
-	}
-	// 所有可回收写入成功后才启动被动 Ability；后项失败时不会留下已经执行外部副作用的半套集合。
-	for (const FGameplayAbilitySpecHandle Handle : OnGrantedHandles)
-	{
-		if (!AbilitySystem->TryActivateAbility(Handle)) { OutGrantedHandles.TakeFromAbilitySystem(AbilitySystem); return false; }
 	}
 	return bGrantedAny;
 }
