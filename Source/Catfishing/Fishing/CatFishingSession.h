@@ -177,6 +177,7 @@ private:
 	friend class FCatFishingSlackAimCommandRoutingTest;
 	friend class FCatRodSessionDurabilityTest;
 	friend class FCatFishingBiteTimingWorldTest;
+	friend class FCatFishingRodEscapeTest;
 	friend class FCatFishGatheringWorldTest;
 	friend class FCatFishingBaitTerminalConsumptionTest;
 	friend class FCatFishingProbeDurationOverrideTest;

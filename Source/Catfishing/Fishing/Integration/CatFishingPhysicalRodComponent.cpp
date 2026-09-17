@@ -1,5 +1,7 @@
 #include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
+#include "Fishing/Actors/CatFishingHookActor.h"
+#include "Environment/CatWaterQuerySubsystem.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/Simulation/CatFishingFightSimulator.h"
@@ -249,6 +251,7 @@ double UCatFishingPhysicalRodComponent::GetQueuedLineSecondsForDiagnostics() con
 void UCatFishingPhysicalRodComponent::FinishPhysicsFrame()
 {
 	if (!GetOwner()->HasAuthority()) return;
+	if (RequiresTargetedPickup() && !ControlledBody.IsValid()) ObserveEscapeAfterPhysics();
 	AppliedLineImpulse += PendingPhysicsImpulse;
 	PendingPhysicsImpulse = FVector::ZeroVector;
 	PendingPhysicsSeconds = 0;
@@ -377,6 +380,15 @@ void UCatFishingPhysicalRodComponent::RefreshControlledCarrier()
 	if (Grab && Physical->IsLocomotionEnabled())
 		for (const bool bLeft : {true, false})
 			if (Grab->GetGripTargetComponent(bLeft) == Body && Grab->GetGripState(bLeft).bControlledHold) Next = Physical->GetBody();
+	// A lost rod stays in its actual fall/drag pose until an explicit pickup commits.
+	if (RequiresTargetedPickup() && !Next)
+	{
+		if (ControlledBody.IsValid())
+			if (auto* Previous = ControlledBody->GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>(); Previous && Previous->UsesCharacterMovement())
+				GetOwner()->PrimaryActorTick.RemovePrerequisite(Previous, Previous->GetPostMovementTick());
+		ControlledBody.Reset();
+		return;
+	}
 	auto* Light = UCatLightPropComponent::FindFor(Body);
 	if (Next == ControlledBody.Get() && !Body->IsSimulatingPhysics()
 		&& (!Light || (Light->GetState().Mode == ECatLightPropMode::Parked) == (Next == nullptr))) return;
@@ -463,6 +475,242 @@ void UCatFishingPhysicalRodComponent::ParkOnGroundFromAuthority(UPrimitiveCompon
 	UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_rod_ground_park_rejected RodActorId=%s PlayerId=%d SessionId=%s World=%s NetMode=%d Authority=1 LocalRole=%d PositionCm=%s Reason=NoNearbyGround Result=PreviousFixedPosePreserved"),
 		*Rod->PresentationState.RodActorId.ToString(), PlayerId, *LoadSessionId.ToString(), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()),
 		int32(Rod->GetLocalRole()), *HeldPose.GetLocation().ToCompactString());
+}
+
+bool UCatFishingPhysicalRodComponent::RequiresTargetedPickup() const
+{
+	const auto* Rod = Cast<ACatFishingRodActor>(GetOwner());
+	return Rod && Rod->GetPresentationState().EscapePhase != ECatFishingRodEscapePhase::None;
+}
+
+bool UCatFishingPhysicalRodComponent::OwnsEscapeHook(const ACatFishingHookActor* Hook) const
+{
+	return Hook && EscapeHook.Get() == Hook;
+}
+
+void UCatFishingPhysicalRodComponent::SetEscapePhase(const ECatFishingRodEscapePhase Phase)
+{
+	auto* Rod = CastChecked<ACatFishingRodActor>(GetOwner());
+	if (Rod->PresentationState.EscapePhase == Phase) return;
+	auto Next = Rod->PresentationState;
+	Next.EscapePhase = Phase;
+	if (Phase == ECatFishingRodEscapePhase::None) Next.EscapeSessionId.Invalidate();
+	Rod->CommitAuthoritativeMutation(Next, Rod->PresentationState.RodActorRevision);
+}
+
+bool UCatFishingPhysicalRodComponent::FindEscapeGround(const FVector& Position, FHitResult& Hit) const
+{
+	FCollisionQueryParams Query(SCENE_QUERY_STAT(RodEscapeGround), false, GetOwner());
+	for (TActorIterator<APawn> It(GetWorld()); It; ++It) Query.AddIgnoredActor(*It);
+	for (TActorIterator<ACatFishingRodActor> It(GetWorld()); It; ++It) Query.AddIgnoredActor(*It);
+	return GetWorld()->LineTraceSingleByChannel(Hit, Position + FVector(0, 0, 10), Position - FVector(0, 0, 250), ECC_Visibility, Query)
+		&& !Hit.bStartPenetrating && Hit.ImpactNormal.Z >= 0.7;
+}
+
+bool UCatFishingPhysicalRodComponent::BeginBiteTimeoutEscape(const FGuid SessionId, const FVector& WaterTarget, ACatFishingHookActor* Hook)
+{
+	auto* Rod = CastChecked<ACatFishingRodActor>(GetOwner());
+	if (!bReady || !Rod->HasAuthority() || !SessionId.IsValid() || RequiresTargetedPickup()
+		|| !Rod->PresentationState.bDeployed || Rod->PresentationState.bBroken || WaterTarget.ContainsNaN()) return false;
+	const auto* Settings = GetDefault<UCatFishingSettings>();
+	for (const double Value : {Settings->RodEscapeThrowSpeed, Settings->RodEscapeThrowUpSpeed,
+		Settings->RodEscapeDragSpeed, Settings->RodEscapeDragAcceleration, Settings->RodEscapeDragSeconds, Settings->RodEscapeMaximumTravel})
+		if (!FMath::IsFinite(Value) || Value <= 0)
+		{
+			UE_LOG(LogCatFishing, Error, TEXT("Event=fishing_rod_escape_rejected SessionId=%s RodActorId=%s World=%s NetMode=%d Authority=1 LocalRole=%d Reason=InvalidEscapeSettings"),
+				*SessionId.ToString(), *Rod->PresentationState.RodActorId.ToString(), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), int32(Rod->GetLocalRole()));
+			return false;
+		}
+	const bool bWasHeld = Rod->PresentationState.HolderPlayerState != nullptr;
+	const FTransform InitialPose = Body->GetComponentTransform();
+	EscapeDirection = (WaterTarget - Rod->GetGripWorldTransform().GetLocation()).GetSafeNormal2D();
+	if (EscapeDirection.IsNearlyZero()) EscapeDirection = Body->GetForwardVector().GetSafeNormal2D();
+	if (EscapeDirection.IsNearlyZero()) EscapeDirection = FVector::ForwardVector;
+	EscapeSafePose = InitialPose;
+	EscapePreviousPosition = InitialPose.GetLocation();
+	EscapeTravel = 0;
+	EscapeDragSpeedCommand = 0;
+	EscapeStartedAt = GetWorld()->GetTimeSeconds();
+	EscapeDragStartedAt = 0;
+	EscapeHook = Hook;
+	// Keep a reachable fallback at the bank even when the held grip initially overhangs water.
+	const auto* Water = GetWorld()->GetSubsystem<UCatWaterQuerySubsystem>();
+	const FVector InitialGrip = Rod->GetGripWorldTransform().GetLocation();
+	for (const double Backoff : {0.0, 25.0, 50.0, 100.0, 150.0})
+	{
+		const FVector Candidate = InitialGrip - EscapeDirection * Backoff;
+		FHitResult Ground;
+		if (!FindEscapeGround(Candidate, Ground) || (Water && Water->DoesWorldDropSweepTouchWater(Candidate, Candidate, 2.0))) continue;
+		if (Backoff > 0)
+		{
+			const FQuat Flat = FRotationMatrix::MakeFromXZ(EscapeDirection, Ground.ImpactNormal).ToQuat();
+			EscapeSafePose = FTransform(Flat, Ground.ImpactPoint + EscapeDirection * Body->GetScaledBoxExtent().X
+				+ Ground.ImpactNormal * (Body->GetScaledBoxExtent().Z + 2), InitialPose.GetScale3D());
+		}
+		break;
+	}
+	// Publish the escape guard before releasing any grip: callbacks must never auto-park this rod.
+	auto Next = Rod->PresentationState;
+	Next.EscapePhase = ECatFishingRodEscapePhase::Falling;
+	Next.EscapeSessionId = SessionId;
+	Rod->CommitAuthoritativeMutation(Next, Rod->PresentationState.RodActorRevision);
+	ReleaseAllConnections(TEXT("TrueBiteTimeout"));
+	RefreshPrimaryControl();
+	if (auto* Light = UCatLightPropComponent::FindFor(Body))
+	{
+		Light->SetGripCarrierFromAuthority(nullptr);
+		Light->SetParkedFromAuthority(false);
+		Light->SetExternalLoadFromAuthority(true);
+	}
+	Body->SetWorldTransform(InitialPose, false, nullptr, ETeleportType::TeleportPhysics);
+	Body->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+	Body->SetSimulatePhysics(true);
+	Body->SetEnableGravity(false); // LightProp supplies 1/4 gravity; TickEscape supplies the remainder.
+	Body->SetPhysicsLinearVelocity(bWasHeld ? EscapeDirection * Settings->RodEscapeThrowSpeed + FVector(0, 0, Settings->RodEscapeThrowUpSpeed) : FVector::ZeroVector);
+	Body->SetPhysicsAngularVelocityInRadians(FVector::CrossProduct(FVector::UpVector, EscapeDirection) * (bWasHeld ? 1.5 : 0.8));
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_rod_escape_started SessionId=%s RodActorId=%s ItemInstanceId=%s Held=%d PositionCm=%s VelocityCmS=%s MaxDragSpeedCmS=%.2f MaxTravelCm=%.2f World=%s NetMode=%d Authority=1 LocalRole=%d Result=PickupRequired"),
+		*SessionId.ToString(), *Rod->PresentationState.RodActorId.ToString(), *Rod->PresentationState.ItemInstanceId.ToString(), bWasHeld,
+		*InitialPose.GetLocation().ToCompactString(), *Body->GetPhysicsLinearVelocity().ToCompactString(), Settings->RodEscapeDragSpeed,
+		Settings->RodEscapeMaximumTravel, *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), int32(Rod->GetLocalRole()));
+	return true;
+}
+
+void UCatFishingPhysicalRodComponent::StopEscape(const FName Reason)
+{
+	if (EscapeHook.IsValid()) EscapeHook->Destroy();
+	EscapeHook.Reset();
+	if (!RequiresTargetedPickup()) return;
+	auto* Rod = CastChecked<ACatFishingRodActor>(GetOwner());
+	if (!ControlledBody.IsValid() && Rod->PresentationState.EscapePhase == ECatFishingRodEscapePhase::Falling)
+	{
+		const FVector SafeGrip = (BodyLocal.Inverse() * EscapeSafePose).TransformPosition(GripLocalTransform.GetLocation());
+		FHitResult Ground;
+		if (FindEscapeGround(SafeGrip, Ground))
+		{
+			const FQuat Flat = FRotationMatrix::MakeFromXZ(EscapeDirection, Ground.ImpactNormal).ToQuat();
+			Body->SetWorldLocationAndRotation(Ground.ImpactPoint + EscapeDirection * Body->GetScaledBoxExtent().X
+				+ Ground.ImpactNormal * (Body->GetScaledBoxExtent().Z + 2), Flat, false, nullptr, ETeleportType::TeleportPhysics);
+		}
+	}
+	if (Body->IsSimulatingPhysics())
+	{
+		Body->SetPhysicsLinearVelocity(FVector::ZeroVector);
+		Body->SetPhysicsAngularVelocityInRadians(FVector::ZeroVector);
+		Body->SetSimulatePhysics(false);
+	}
+	if (auto* Light = UCatLightPropComponent::FindFor(Body))
+	{
+		Light->SetExternalLoadFromAuthority(false);
+		Light->SetParkedFromAuthority(!ControlledBody.IsValid());
+	}
+	SetEscapePhase(ECatFishingRodEscapePhase::Stopped);
+	RefreshObservedPose();
+	Rod->ForceNetUpdate();
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_rod_escape_stopped SessionId=%s RodActorId=%s TravelCm=%.3f PositionCm=%s Reason=%s World=%s NetMode=%d Authority=1 LocalRole=%d Result=%s"),
+		*Rod->PresentationState.EscapeSessionId.ToString(), *Rod->PresentationState.RodActorId.ToString(), EscapeTravel,
+		*Body->GetComponentLocation().ToCompactString(), *Reason.ToString(), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), int32(Rod->GetLocalRole()),
+		ControlledBody.IsValid() ? TEXT("PickedUp") : TEXT("PickupRequired"));
+}
+
+void UCatFishingPhysicalRodComponent::CompleteEscapePickup()
+{
+	if (!GetOwner()->HasAuthority() || !RequiresTargetedPickup() || !ControlledBody.IsValid()) return;
+	StopEscape(TEXT("TargetedPickup"));
+	Body->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
+	SetEscapePhase(ECatFishingRodEscapePhase::None);
+}
+
+void UCatFishingPhysicalRodComponent::ObserveEscapeAfterPhysics()
+{
+	auto* Rod = CastChecked<ACatFishingRodActor>(GetOwner());
+	if (Rod->PresentationState.EscapePhase == ECatFishingRodEscapePhase::Stopped) return;
+	// Contact impulses can turn the last bit of falling rotation into horizontal speed.
+	// Enforce the same drag ceiling after Chaos, including frames where the rod briefly bounces.
+	if (Rod->PresentationState.EscapePhase == ECatFishingRodEscapePhase::Dragging)
+	{
+		const FVector Velocity = Body->GetPhysicsLinearVelocity();
+		const FVector Horizontal = FVector(Velocity.X, Velocity.Y, 0).GetClampedToMaxSize(GetDefault<UCatFishingSettings>()->RodEscapeDragSpeed);
+		Body->SetPhysicsLinearVelocity(FVector(Horizontal.X, Horizontal.Y, Velocity.Z));
+	}
+	const FVector Position = Body->GetComponentLocation();
+	const FTransform ActorPose = GetObservedActorTransform();
+	const FVector Grip = ActorPose.TransformPosition(GripLocalTransform.GetLocation());
+	const FVector SafeGrip = (BodyLocal.Inverse() * EscapeSafePose).TransformPosition(GripLocalTransform.GetLocation());
+	const auto* Water = GetWorld()->GetSubsystem<UCatWaterQuerySubsystem>();
+	FHitResult Ground;
+	const bool bHasGround = FindEscapeGround(Grip, Ground);
+	const bool bWater = Water && Water->DoesWorldDropSweepTouchWater(SafeGrip, Grip, 2.0);
+	const double Travel = FVector::Dist2D(EscapePreviousPosition, Position);
+	if (!bHasGround || bWater || EscapeTravel + Travel > GetDefault<UCatFishingSettings>()->RodEscapeMaximumTravel)
+	{
+		Body->SetWorldTransform(EscapeSafePose, false, nullptr, ETeleportType::TeleportPhysics);
+		// Finish on the last reachable support, including a rod initially held over the bank.
+		FHitResult SafeGround;
+		if (FindEscapeGround(SafeGrip, SafeGround))
+		{
+			const FQuat Flat = FRotationMatrix::MakeFromXZ(Body->GetForwardVector().GetSafeNormal2D(), SafeGround.ImpactNormal).ToQuat();
+			const FVector Half = Body->GetScaledBoxExtent();
+			Body->SetWorldLocationAndRotation(SafeGround.ImpactPoint + Flat.GetForwardVector() * Half.X + SafeGround.ImpactNormal * (Half.Z + 2), Flat, false, nullptr, ETeleportType::TeleportPhysics);
+		}
+		StopEscape(bWater ? TEXT("WaterBoundary") : !bHasGround ? TEXT("NoGroundAhead") : TEXT("TravelLimit"));
+		return;
+	}
+	EscapeTravel += Travel;
+	EscapePreviousPosition = Position;
+	EscapeSafePose = Body->GetComponentTransform();
+}
+
+void UCatFishingPhysicalRodComponent::TickEscape(const float DeltaTime)
+{
+	auto* Rod = CastChecked<ACatFishingRodActor>(GetOwner());
+	if (Rod->PresentationState.EscapePhase == ECatFishingRodEscapePhase::Stopped) return;
+	const auto* Settings = GetDefault<UCatFishingSettings>();
+	const double Now = GetWorld()->GetTimeSeconds();
+	if (auto* Light = UCatLightPropComponent::FindFor(Body))
+	{
+		Light->SetParkedFromAuthority(false);
+		Light->SetExternalLoadFromAuthority(true);
+	}
+	Body->SetSimulatePhysics(true);
+	Body->SetEnableGravity(false);
+	Body->AddForce(FVector(0, 0, GetWorld()->GetGravityZ() * (1.0 - UCatLightPropComponent::ReleasedGravityScale) * Body->GetMass()));
+	FHitResult Ground;
+	const FVector Position = Body->GetComponentLocation();
+	const bool bTouchingGround = FindEscapeGround(Position, Ground)
+		&& Position.Z - Ground.ImpactPoint.Z <= Body->Bounds.BoxExtent.Z + 4.0
+		&& FMath::Abs(Body->GetForwardVector().Z) < 0.3;
+	if (Rod->PresentationState.EscapePhase == ECatFishingRodEscapePhase::Falling && bTouchingGround)
+	{
+		EscapeDragStartedAt = Now;
+		SetEscapePhase(ECatFishingRodEscapePhase::Dragging);
+		UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_rod_escape_grounded SessionId=%s RodActorId=%s World=%s NetMode=%d Authority=1 LocalRole=%d Result=Dragging"),
+			*Rod->PresentationState.EscapeSessionId.ToString(), *Rod->PresentationState.RodActorId.ToString(), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), int32(Rod->GetLocalRole()));
+	}
+	if (Now - EscapeStartedAt > 5.0 + Settings->RodEscapeDragSeconds
+		|| (EscapeDragStartedAt > 0 && Now - EscapeDragStartedAt >= Settings->RodEscapeDragSeconds))
+	{
+		StopEscape(TEXT("TimeLimit"));
+		return;
+	}
+	FVector Velocity = Body->GetPhysicsLinearVelocity();
+	FVector Horizontal(Velocity.X, Velocity.Y, 0);
+	if (Rod->PresentationState.EscapePhase == ECatFishingRodEscapePhase::Dragging && bTouchingGround)
+	{
+		// Ramp the drive command, not last frame's friction-reduced velocity; otherwise static friction
+		// can erase each tiny increment and the rod never visibly drags. Contacts still block actual travel.
+		EscapeDragSpeedCommand = FMath::Min(Settings->RodEscapeDragSpeed,
+			EscapeDragSpeedCommand + Settings->RodEscapeDragAcceleration * FMath::Max(0.0f, DeltaTime));
+		Horizontal = EscapeDirection * EscapeDragSpeedCommand;
+	}
+	else Horizontal = Horizontal.GetClampedToMaxSize(Rod->PresentationState.EscapePhase == ECatFishingRodEscapePhase::Dragging
+		? Settings->RodEscapeDragSpeed : Settings->RodEscapeThrowSpeed);
+	Body->SetPhysicsLinearVelocity(FVector(Horizontal.X, Horizontal.Y, FMath::Min(Velocity.Z, Settings->RodEscapeThrowUpSpeed)));
+	Body->SetPhysicsAngularVelocityInRadians(Body->GetPhysicsAngularVelocityInRadians().GetClampedToMaxSize(3.0));
+	if (EscapeHook.IsValid())
+	{
+		const double Distance = FVector::Distance(Rod->GetRodTipWorldTransform().GetLocation(), EscapeHook->GetActorLocation());
+		EscapeHook->SetFishingLinePresentationFromAuthority(Distance, Distance, 0, 0, true);
+	}
 }
 
 void UCatFishingPhysicalRodComponent::PositionControlledRod()
@@ -566,7 +814,13 @@ void UCatFishingPhysicalRodComponent::TickComponent(const float DeltaTime, const
 	RefreshPrimaryControl();
 	UpdatePrimaryMotorBudget();
 	ACatFishingRodActor* Rod = CastChecked<ACatFishingRodActor>(GetOwner());
-	if (!Rod->PresentationState.bDeployed || Rod->PresentationState.bBroken) { ReleaseAllConnections(TEXT("RodUnavailable")); return; }
+	if (!Rod->PresentationState.bDeployed || Rod->PresentationState.bBroken)
+	{
+		if (RequiresTargetedPickup() && Rod->PresentationState.EscapePhase != ECatFishingRodEscapePhase::Stopped) StopEscape(TEXT("RodUnavailable"));
+		ReleaseAllConnections(TEXT("RodUnavailable"));
+		return;
+	}
+	if (RequiresTargetedPickup() && !ControlledBody.IsValid()) { TickEscape(DeltaTime); return; }
 	const UPhysicsSettings* Physics = UPhysicsSettings::Get();
 	const double NetworkScale = GetWorld()->GetPhysicsScene() ? GetWorld()->GetPhysicsScene()->GetNetworkDeltaTimeScale() : 1.0;
 	const double RequestedPhysicsSeconds = FMath::Max(0.0, double(DeltaTime) * NetworkScale);
@@ -616,6 +870,8 @@ void UCatFishingPhysicalRodComponent::TickComponent(const float DeltaTime, const
 void UCatFishingPhysicalRodComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	bEndingPlay = true;
+	if (EscapeHook.IsValid()) EscapeHook->Destroy();
+	EscapeHook.Reset();
 	PhysicsReceiverUnavailable.Broadcast();
 	PhysicsReceiverUnavailable.Clear();
 	BeforePhysicsForces.Clear();

@@ -2,6 +2,7 @@
 #include "Growth/CatGrowthComponent.h"
 #include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
+#include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
 #include "Fishing/Integration/CatFishingResolutionSubsystem.h"
 #include "Condition/CatConditionComponent.h"
 #include "Collection/CatRunFishCollectionComponent.h"
@@ -2890,6 +2891,10 @@ void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, cons
 	const FString HookValue = GetNameSafe(Snapshot.HookActor);
 	Snapshot.Phase = FinalPhase;
 	Snapshot.Outcome = FinalOutcome;
+	// Commit the terminal fact first, then release the rod. Grip callbacks cannot restart this cast.
+	if (FinalOutcome == ECatFishingOutcome::HookWindowExpired && IsValid(Snapshot.RodActor))
+		Snapshot.RodActor->GetPhysicalRodComponent()->BeginBiteTimeoutEscape(Snapshot.FishingSessionId,
+			AttemptSnapshot.ServerCorrectedLandingWorldPoint, Snapshot.HookActor);
 	// 本竿结束，挂着的换人请求随之失效（多人钓鱼附篇 §2.4：本竿结束自然失效，没有超时出口）。
 	// 这里直接清字段而不调 ClearHandoffRequestFromAuthority：终态下面统一发布一次快照。
 	Snapshot.HandoffRequestedByPlayerState = nullptr;
@@ -2911,7 +2916,8 @@ void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, cons
 	Snapshot.bSlacking = false;
 	if (Snapshot.HookActor)
 	{
-		Snapshot.HookActor->SetBobberPresentationModeFromAuthority(ECatFishingBobberPresentationMode::None);
+		Snapshot.HookActor->SetBobberPresentationModeFromAuthority(FinalOutcome == ECatFishingOutcome::HookWindowExpired
+			? ECatFishingBobberPresentationMode::Sunk : ECatFishingBobberPresentationMode::None);
 	}
 	PublishSnapshot(ECatFishingSnapshotMutation::PhaseChange); // 终态属于阶段变化，必须递增 PhaseEpoch。
 	// 终局已经成为服务器事实后才通知猫播放一次性表现；Finalize 的终态幂等门禁保证不会因重放重复播 Montage。
@@ -3210,10 +3216,11 @@ void ACatFishingSession::ScheduleTerminalDestroy()
 	const float TerminalLifeSpan = Settings && Settings->TryGetTerminalReplicationWindow(WindowSeconds)
 		? static_cast<float>(WindowSeconds) : KINDA_SMALL_NUMBER;
 	SetLifeSpan(TerminalLifeSpan);
-	// 钩子立即销毁（收竿手感优先，延迟消失体感差）；Encounter 是否可见按具体终局裁决。
+	// 普通终局立即销毁钩；超时掉竿暂由鱼竿接管拉线，停止/拾取/竿销毁时配对清理。
 	if (ACatFishingHookActor* Hook = Snapshot.HookActor)
 	{
-		Hook->Destroy();
+		// The dropped rod owns this short visual tail, independently of the already settled session.
+		if (!Snapshot.RodActor || !Snapshot.RodActor->GetPhysicalRodComponent()->OwnsEscapeHook(Hook)) Hook->Destroy();
 	}
 	if (ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor)
 	{

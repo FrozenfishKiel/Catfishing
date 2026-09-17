@@ -731,7 +731,8 @@ FCatFishingCommandResult UCatFishingService::AcquireRodIntoQuickbar(AController*
 			*Result.RequestId.ToString(), *Result.RodActorId.ToString(), *ItemId.ToString(), *CatLogContext::BuildControllerFields(Controller));
 		return Result;
 	}
-	Result = OperateRod(Controller, Command);
+	const FTransform PickupPose = Rod->GetPhysicalRodComponent()->GetBody()->GetComponentTransform();
+	Result = OperateRod(Controller, Command, true);
 	if (!Result.bCommitted) return Result;
 	const bool bTransfer = SourceEquipment != TargetEquipment;
 	const bool bMoved = !bTransfer || SourceEquipment->MoveFishingResourcesToCustodian(TargetEquipment, {}, {ItemId});
@@ -745,6 +746,11 @@ FCatFishingCommandResult UCatFishingService::AcquireRodIntoQuickbar(AController*
 		Leave.Context.RequestId = FGuid::NewGuid(); Leave.Context.RodActorId = Result.RodActorId;
 		Leave.Context.ExpectedRodActorRevision = Rod->GetPresentationState().RodActorRevision;
 		LeaveRod(Controller, Leave);
+		if (Rod->GetPhysicalRodComponent()->RequiresTargetedPickup())
+		{
+			Rod->GetPhysicalRodComponent()->GetBody()->SetWorldTransform(PickupPose, false, nullptr, ETeleportType::TeleportPhysics);
+			Rod->GetPhysicalRodComponent()->RefreshObservedPose();
+		}
 		Result.bCommitted = false;
 		Result.Error = ECatFishingCommandError::DependencyUnavailable;
 		UE_LOG(LogCatFishing, Warning, TEXT("Event=quickbar_rod_acquire_rejected RequestId=%s RodActorId=%s ItemId=%s Reason=InventoryCommitRejected RolledBack=%d %s"),
@@ -756,6 +762,8 @@ FCatFishingCommandResult UCatFishingService::AcquireRodIntoQuickbar(AController*
 	const auto* Session = FindActiveSessionByRod(Rod);
 	TargetInventory->SetQuickbarHeldSlotInUseFromAuthority(Session != nullptr);
 	if (bTransfer) { SourceEquipment->PublishSnapshot(); TargetEquipment->PublishSnapshot(); }
+	Rod->GetPhysicalRodComponent()->CompleteEscapePickup();
+	Result.RodActorRevision = Rod->GetPresentationState().RodActorRevision;
 	PC->SelectAcquiredRodSlotFromAuthority(Result.RequestId);
 	UE_LOG(LogCatFishing, Log, TEXT("Event=quickbar_rod_acquired RequestId=%s RodActorId=%s ItemId=%s SessionId=%s Slot=%d Transferred=%d %s"),
 		*Result.RequestId.ToString(), *Result.RodActorId.ToString(), *ItemId.ToString(),
@@ -763,7 +771,7 @@ FCatFishingCommandResult UCatFishingService::AcquireRodIntoQuickbar(AController*
 	return Result;
 }
 
-FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller, const FCatOperateRodCommand& Command)
+FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller, const FCatOperateRodCommand& Command, const bool bTargetedInteraction)
 {
 	FCatFishingCommandResult Result;
 	Result.CommandType = ECatFishingCommandType::OperateRod;
@@ -783,6 +791,14 @@ FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller,
 	if (!Rod || !Character)
 	{
 		Result.Error = ECatFishingCommandError::NoRod;
+		return Result;
+	}
+	if (Rod->GetPhysicalRodComponent()->RequiresTargetedPickup() && !bTargetedInteraction)
+	{
+		Result.Error = ECatFishingCommandError::InvalidPhase;
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_rod_escape_pickup_rejected SessionId=%s RodActorId=%s RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Reason=TargetedInteractionRequired %s"),
+			*Rod->GetPresentationState().EscapeSessionId.ToString(), *Command.Context.RodActorId.ToString(), *Result.RequestId.ToString(),
+			*GetNameSafe(World), int32(World->GetNetMode()), Rod->HasAuthority(), int32(Rod->GetLocalRole()), *CatLogContext::BuildControllerFields(Controller));
 		return Result;
 	}
 	if (Rod->IsUsingPhysicalRod())
@@ -972,6 +988,14 @@ FCatFishingCommandResult UCatFishingService::PackRod(AController* Controller, co
 		return Result;
 	}
 	const FCatFishingRodPresentationState RodState = Rod->GetPresentationState();
+	if (Rod->GetPhysicalRodComponent()->RequiresTargetedPickup())
+	{
+		Result.Error = ECatFishingCommandError::InvalidPhase;
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_rod_escape_pack_rejected SessionId=%s RodActorId=%s RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Reason=PickupRequired %s"),
+			*RodState.EscapeSessionId.ToString(), *RodState.RodActorId.ToString(), *Result.RequestId.ToString(),
+			*GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), Rod->HasAuthority(), int32(Rod->GetLocalRole()), *CatLogContext::BuildControllerFields(Controller));
+		return Result;
+	}
 	UCatEquipmentComponent* SourceEquipment = ResolveRodEquipmentFromAuthority(Rod);
 	UCatInventoryComponent* SourceInventory = SourceEquipment
 		? SourceEquipment->GetOwner()->FindComponentByClass<UCatInventoryComponent>() : nullptr;

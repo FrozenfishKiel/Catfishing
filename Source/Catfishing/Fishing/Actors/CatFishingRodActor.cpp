@@ -94,7 +94,10 @@ bool ACatFishingRodActor::CanInteract_Implementation(AController* RequestingCont
 // 鱼竿提示流程：只有当前 Actor 可以被 E 交互时显示统一操作文案，避免对收起或断裂对象留下误导提示。
 FText ACatFishingRodActor::GetInteractionPrompt_Implementation() const
 {
-	return PresentationState.bDeployed && !PresentationState.bBroken ? NSLOCTEXT("Catfishing", "RodInteractionPrompt", "操作鱼竿") : FText::GetEmpty();
+	if (!PresentationState.bDeployed || PresentationState.bBroken) return FText::GetEmpty();
+	return PresentationState.EscapePhase != ECatFishingRodEscapePhase::None
+		? NSLOCTEXT("Catfishing", "DroppedRodInteractionPrompt", "拿起鱼竿")
+		: NSLOCTEXT("Catfishing", "RodInteractionPrompt", "操作鱼竿");
 }
 
 // 鱼竿交互半径流程：保持现有 R 近距操作的 250cm 语义，返回固定值让准星扫描和服务器资格检查一致。
@@ -374,7 +377,8 @@ void ACatFishingRodActor::PrepareOperatorMemberships(FCatFishingRodPresentationS
 {
 	Next.OperatorPlayerState = Next.OperatorPlayerStates.IsEmpty() ? nullptr : Next.OperatorPlayerStates[0];
 	Next.HolderPlayerState = Next.OperatorPlayerState;
-	Next.PoseMode = Next.HolderPlayerState ? ECatFishingRodPoseMode::Held : ECatFishingRodPoseMode::Grounded;
+	Next.PoseMode = Next.HolderPlayerState ? ECatFishingRodPoseMode::Held
+		: Next.EscapePhase != ECatFishingRodEscapePhase::None ? ECatFishingRodPoseMode::Dropped : ECatFishingRodPoseMode::Grounded;
 	const bool bRosterChanged = Next.OperatorPlayerStates != PresentationState.OperatorPlayerStates;
 	Next.RosterVersion = PresentationState.RosterVersion;
 	if (bRosterChanged)
@@ -836,6 +840,10 @@ void ACatFishingRodActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 // 复制回调流程：客户端收到 PresentationState 后只把前后状态交给表现分发层；它不修改权威身份、库存实例或操作位数组。
 void ACatFishingRodActor::OnRep_PresentationState(const FCatFishingRodPresentationState& Previous)
 {
+	if (Previous.EscapePhase != PresentationState.EscapePhase || Previous.EscapeSessionId != PresentationState.EscapeSessionId)
+		UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_rod_escape_received SessionId=%s RodActorId=%s Phase=%d Revision=%lld World=%s NetMode=%d Authority=%d LocalRole=%d"),
+			*PresentationState.EscapeSessionId.ToString(), *PresentationState.RodActorId.ToString(), int32(PresentationState.EscapePhase),
+			PresentationState.RodActorRevision, *GetNameSafe(GetWorld()), int32(GetNetMode()), HasAuthority(), int32(GetLocalRole()));
 	// Previous 由引擎在应用新值前自动传入旧值，蓝图可以据此区分皮肤、部署或操作位变化。
 	if (Previous.PoseMode != PresentationState.PoseMode
 		|| Previous.HolderPlayerState != PresentationState.HolderPlayerState

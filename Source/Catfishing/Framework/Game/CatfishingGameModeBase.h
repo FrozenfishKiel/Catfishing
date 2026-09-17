@@ -83,6 +83,7 @@ class CATFISHING_API ACatfishingGameModeBase : public AGameModeBase
 	friend class FCatFishBehaviorStateTreeRuntimeTest;
 	friend class FCatFishingParticipantStrengthTest;
 	friend class FCatFishingFirstRodHeldTest;
+	friend class FCatFishingRodEscapeTest;
 	friend class FCatFishingPhysicalGripGraphTest;
 	friend class FCatFishingOwnedRodLifecycleTest;
 	friend class FCatFishingGroupNetworkTest;

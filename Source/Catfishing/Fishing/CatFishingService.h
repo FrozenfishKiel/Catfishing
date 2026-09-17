@@ -36,7 +36,7 @@ public:
 	/** 从当前 Run/Environment、水域和统一参战能力快照抽取鱼种与重量，并为该身份建立唯一 StateTree 会话；巨鱼成功后才附带广播可选 Social 提示。 */
 	FCatBeginCastResult BeginCast(AController* FisherController, const FCatBeginCastCommand& Command);
 	FCatFishingCommandResult PlaceRod(AController* Controller, const FCatPlaceRodCommand& Command);
-	FCatFishingCommandResult OperateRod(AController* Controller, const FCatOperateRodCommand& Command);
+	FCatFishingCommandResult OperateRod(AController* Controller, const FCatOperateRodCommand& Command, bool bTargetedInteraction = false);
 	/** E 接回原世界竿到物品栏并选中；复用操作权事务，保留同一会话和实例。 */
 	FCatFishingCommandResult AcquireRodIntoQuickbar(AController* Controller, const FCatOperateRodCommand& Command);
 	FCatFishingCommandResult LeaveRod(AController* Controller, const FCatLeaveRodCommand& Command);

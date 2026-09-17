@@ -19,6 +19,20 @@ class CATFISHING_API UCatFishingSettings : public UDeveloperSettings
 	GENERATED_BODY()
 
 public:
+	/** 超时脱手的水平/向上初速度，cm/s；架设竿两项均不使用。 */
+	UPROPERTY(Config, EditAnywhere, Category="Tuning|RodEscape", meta=(ClampMin="0.01", Units="cm/s"))
+	double RodEscapeThrowSpeed = 120.0;
+	UPROPERTY(Config, EditAnywhere, Category="Tuning|RodEscape", meta=(ClampMin="0.01", Units="cm/s"))
+	double RodEscapeThrowUpSpeed = 100.0;
+	UPROPERTY(Config, EditAnywhere, Category="Tuning|RodEscape", meta=(ClampMin="1", Units="cm/s"))
+	double RodEscapeDragSpeed = 33.0;
+	UPROPERTY(Config, EditAnywhere, Category="Tuning|RodEscape", meta=(ClampMin="1"))
+	double RodEscapeDragAcceleration = 66.0; // cm/s²，独立于鱼力和竿质量。
+	UPROPERTY(Config, EditAnywhere, Category="Tuning|RodEscape", meta=(ClampMin="0.1", Units="s"))
+	double RodEscapeDragSeconds = 2.5;
+	/** 从触发位置累计水平路径，包含短抛；停止后不再持续拖行。 */
+	UPROPERTY(Config, EditAnywhere, Category="Tuning|RodEscape", meta=(ClampMin="1", Units="cm"))
+	double RodEscapeMaximumTravel = 220.0;
 
 	/** 翻肚到苏醒逃跑的秒数；拖动期间继续计时，已上岸不苏醒。 */
 	UPROPERTY(Config, EditAnywhere, Category="Tuning|Terminal", meta=(ClampMin="0.01", Units="s"))

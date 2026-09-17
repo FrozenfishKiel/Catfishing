@@ -13,8 +13,13 @@ UENUM(BlueprintType)
 enum class ECatFishingRodPoseMode : uint8
 {
 	Grounded,
-	Held
+	Held,
+	/** 真咬超时后失去支撑；停下后仍须对准交互拿回。 */
+	Dropped
 };
+
+UENUM(BlueprintType)
+enum class ECatFishingRodEscapePhase : uint8 { None, Falling, Dragging, Stopped };
 
 UENUM(BlueprintType)
 enum class ECatFishingHookPresentationPhase : uint8
@@ -77,10 +82,13 @@ struct FCatFishingRodPresentationState
 	UPROPERTY() uint32 ControlEpoch = 0;
 	/** 当前真正握住鱼竿的玩家；始终镜像 OperatorPlayerStates[0]，地面姿态为空。 */
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> HolderPlayerState = nullptr;
-	/** 只描述同一根 Rod Actor 在手里还是地上，不参与 FishingSession 阶段推进。 */
+	/** 同一根竿的持握、固定架设或失控掉落姿态，不参与 FishingSession 阶段推进。 */
 	UPROPERTY(BlueprintReadOnly) ECatFishingRodPoseMode PoseMode = ECatFishingRodPoseMode::Grounded;
 	UPROPERTY(BlueprintReadOnly) bool bDeployed = false;
 	UPROPERTY(BlueprintReadOnly) bool bBroken = false;
+	UPROPERTY(BlueprintReadOnly) ECatFishingRodEscapePhase EscapePhase = ECatFishingRodEscapePhase::None;
+	/** 同一次超时的关联 ID，停止后保留，拾取成功清除。 */
+	UPROPERTY(BlueprintReadOnly) FGuid EscapeSessionId;
 };
 
 USTRUCT(BlueprintType)

@@ -53,8 +53,26 @@
 - 响应窗按鱼种 8~15s
 - 完美提竿：咬钩后 1s 内（服务器时间戳）→ 普通鱼 力量×0.80/体力×0.85；稀有鱼 ×0.85/×0.90
 - 普通提竿：1s 后至窗口结束前 → 正常遛鱼
-- 超时：鱼吐钩，扣饵，结束
+- 超时：真咬响应窗到期仍未提竿，结束本次钓鱼并触发掉竿；手持竿短抛落地，架设竿不抛起、直接倾倒，随后朝鱼的方向沿地面限速拖动。停止后保持实际倒地姿态，必须重新对准按 E 拿起；拖动中也可拿回，鱼不会因此重新进入搏斗。等待/试探期提前提竿、入夜自动收回不触发此惩罚。
 - 饵：进入咬钩后无论结局（上鱼/超时/放弃/切线/断竿/落水）扣 1 份，上鱼也扣
+
+超时掉竿由 `ACatFishingSession::FinalizeSession(HookWindowExpired)` 单次裁决，`UCatFishingPhysicalRodComponent` 接管短暂的物理运动和 Hook 鱼线表现；Session 的扣饵、终局和销毁时点不延长。原鱼竿质量保持 0.35 kg；速度驱动按 cm/s 和 cm/s² 控制，避免轻竿因鱼力加速失控。`Config/DefaultGame.ini` 的 `CatFishingSettings` 节配置手持初速度水平 120、向上 100，地面拖速上限 33、加速度 66、拖动时间 2.5 秒、累计水平路径上限 220 cm。停止或 E 成功拾取销毁临时 Hook；水域边界、前方缺少地面时回退到最近可达支撑。拾取仍复用原实例入栏事务，失败保持掉落状态；普通 Operate/快捷栏回退及收包不能绕过目标 E。
+
+诊断过滤词：`fishing_rod_escape_started`、`fishing_rod_escape_grounded`、`fishing_rod_escape_stopped`、`fishing_rod_escape_received`、`fishing_rod_escape_pickup_rejected`、`fishing_rod_interaction_*`，日志分类 `LogCatFishing`，以 `SessionId` 和 `RodActorId` 串联。正式 Development 包日志位置仍为 `<打包根目录>/Catfishing/Saved/Logs`，不要求 `-log` 窗口。
+
+2026-09-17 超时掉竿变更核对（源码位置相对工程根）：
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 超时裁决 | `Source/Catfishing/Fishing/CatFishingSession.cpp` 的响应 Timer/迟到提竿 → `HandleTrueBiteWindowExpired` → `FinalizeSession` | 原来仅终局；新增掉竿。提前提竿/入夜契约不变 | 仅 `HookWindowExpired` 接物理组件 | 先写终态，再释放主控，防止回调重入重抛 | 超时幂等、Waiting/Probe 提竿不触发 | RodEscape 与 BiteTiming 回归通过 |
+| 姿态、运动、镜头 | `Source/Catfishing/Fishing/Integration/CatFishingPhysicalRodComponent.cpp` 的 `RefreshControlledCarrier`；`Source/Catfishing/Fishing/Actors/CatFishingRodActor.cpp` 的姿态复制；`Source/Catfishing/Fishing/Presentation/CatFishingCameraComponent.cpp` 只接受 Held | 原离手固定架设；现在超时进入 Falling/Dragging/Stopped，停止仍为 Dropped | 正常架竿保留，新状态阻止自动扶正；质量不变，速度/路径独立限幅 | 发布掉落标记 → 清握持与线力 → 物理运动 → PostPhysics 限速与观察复制 | 手持/架设、0.035/0.35 kg、碰撞反弹、镜头退出 | 四种组合通过；碰撞后拖速不超过 33 cm/s，无新增镜头写入口 |
+| E、快捷栏、资源 | `Source/Catfishing/Fishing/Actors/CatFishingRodActor.cpp::Interact` → `Source/Catfishing/Fishing/CatFishingService.cpp::AcquireRodIntoQuickbar/OperateRod` | 原实例、库存事务、250 cm 半径保持；掉竿禁止普通 Operate/Pack 绕过 E | 目标拾取成功才清惩罚；库存提交失败恢复原姿态 | 取得控制 → 原实例入栏 → 停拖/清线 | 动态拾取、重放、旧快捷栏、失败回滚 | RodEscape 及 FirstRodInteract 回归通过；新的掉竿库存提交失败分支仅静态审查，尚无专门故障注入证据 |
+| 结算、鱼线与清理 | `Source/Catfishing/Fishing/CatFishingSession.cpp::FinalizeSession/ScheduleTerminalDestroy`；`Source/Catfishing/Fishing/Actors/CatFishingHookActor.cpp` 原曲线 | 真咬扣饵/终局销毁不变；Hook 短时由掉落竿接管 | 复用 Hook 曲线，停止/拾取/竿 EndPlay 清理 | Session 先终局；掉落表现不重新建立会话 | 不重复扣饵、鱼线残留、掉落中拿回 | BiteTiming 资源测试、RodEscape 与双端 Hook 清理通过；持久化格式不涉及 |
+| 防丢 | `Source/Catfishing/Inventory/CatWorldDropProtectionComponent.cpp` 仅识别物理根；竿体是分离组件 | 通用组件不能直接接鱼竿 | PhysicalRod 复用 `CatWaterQuerySubsystem::DoesWorldDropSweepTouchWater`，记录可达支撑，遇水/无地面/距离上限停下 | 物理后检查实际路径，再发布 Actor 姿态 | 水边不丢竿、不悬空；复杂岸坡尚需实机 | 水域几何测试通过，握点保持干地且竿身躺下；复杂岸坡未验 |
+| 资产、UI、配置、Cook | `/Game/Blueprint/Actors/BP_CatFishingRodActor`、`BP_CatFishingHookActor`；基础/StarterT1 Equipped 的 ActorClass；`Config/DefaultGame.ini` 的 CatFishingSettings 节 | 沿用原正式资产，原生提示新增“拿起鱼竿”；新增 6 个带单位参数 | 两份 Equipped 只读核对均绑定原 Rod BP；原 BP 图未发现启用的姿态重写；无资产生成/迁移脚本改动 | C++ 默认与 ini 一致，旧枚举数值保留 | 正式类加载、客户端状态/落点；画面与打包另验 | 正式 BP 双端测试通过；无新增 Cook 资源；未重新 Cook/打包，正式 WBP/动画观感未验 |
+| 验证、日志与旧口径 | `Source/Catfishing/Fishing/Tests/CatFishingRodEscapeTests.cpp`、`Source/CatfishingEditor/Fishing/Tests/CatRodEscapeNetworkTests.cpp`；本文响应窗规则 | 增加定向测试和跨端事件；修正“超时只吐钩”的当前流程描述 | 现有普通架竿/主动丢弃仍有消费者，不删除；不接第二套扣费或搏斗求解 | 先编译，再定向回归，最终审查 diff | contract/runtime_behavior 与 presentation_delivery 分开 | Editor/Game 构建成功，最终 10 项通过；正式交付缺口保留于唯一进度入口 |
+
+验证证据：`Saved/RodEscape-EditorBuild-ContactCap.log`、`Saved/RodEscape-GameBuild-ContactCap.log` 为成功构建；`Saved/RodEscape/Report-ContactCap/index.json` 为 5 Success、5 SuccessWithWarnings、0 Failed、0 NotRun。`Saved/RodEscape/Automation-ContactCap.log` 包含监听房主与客户端事件；架设/手持两种质量组合最高拖速分别为 27.249/33.000 cm/s，测试平地总路径约 76/119 cm。之前 80 cm/s 参数及 33 cm/s 首轮碰撞超限报告保留用于追溯，不能替代最终报告。以上属于 contract/runtime_behavior；尚未进行真人湖岸观感、新 Cook/打包、Steam 双端和无 `-log` 的打包默认落盘验收，不能关闭 Fishing/Delivery 整体模块。
 
 ## 5. 遛鱼
 
