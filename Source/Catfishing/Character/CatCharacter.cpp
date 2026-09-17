@@ -90,6 +90,20 @@ void ACatCharacter::CalcCamera(const float DeltaTime, FMinimalViewInfo& OutResul
 	if (!FishingCameraComponent || !FishingCameraComponent->TryGetCameraView(DeltaTime, OutResult))
 	{
 		Super::CalcCamera(DeltaTime, OutResult);
+		if (IsLocallyControlled() && !HasAuthority())
+			if (const auto* Movement = Cast<UCatCharacterMovementComponent>(GetCharacterMovement()))
+			{
+				const FVector Offset = Movement->GetOwnerCorrectionVisualOffset();
+				if (!Offset.IsNearlyZero())
+				{
+					FHitResult Hit;
+					FCollisionQueryParams Params(SCENE_QUERY_STAT(CatOwnerCorrectionCamera), false, this);
+					const FVector Target = OutResult.Location+Offset;
+					const bool bBlocked = GetWorld()->SweepSingleByChannel(Hit, OutResult.Location, Target,
+						FQuat::Identity, ECC_Camera, FCollisionShape::MakeSphere(10), Params);
+					OutResult.Location = bBlocked ? Hit.Location : Target;
+				}
+			}
 	}
 }
 

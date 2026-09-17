@@ -1,5 +1,25 @@
 ﻿# 钓鱼核心架构（技术文档）
 
+## 2026-09-17：投料触发聚鱼时刻
+
+用户确认三类浓度分别达标后，每次合格投料概率触发，并选择“本次投料落点采样、沿用本次场圆心和半径”。独立场不并窝、不改配方或寿命。试玩配置为腥／香／酵 6／3／1.2，概率 0.08、持续 45 秒、速度 2.5；门槛不是旧 30 条换名，按现行六份同点新料贡献暂定，实际衰减会提高所需份数。四份正式 `Equip_Chum_*` 只读加载核实均为 (1,0.5,0.2)、180 秒、基础半径 300 cm。
+
+工作区起始已有 `Source/Catfishing/Fishing/Simulation/CatFishingFightSimulator.cpp` 与根目录裁决同步文档的并行改动，未纳入本次提交。修改前相关二进制基线 8/8 通过，见 `Saved/FishGathering/BaselineRetry.log`；首次受限启动因 DDC 无可写节点而未进入测试，不能计为测试失败。下表为变更审查材料，业务模块状态只记需求对齐差距清单。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 投料与资源事务 | `Source/Catfishing/Environment/CatChumPlacementService.cpp` 提交后调用 `CatChumFieldSubsystem.cpp::PublishActivatedField` | 原有库存扣量、终态去重；无聚鱼 | 在首次成功发布玩家场后判定；沿用 RequestId/FieldId | 先扣量与存终态，再发布场，再判事件；无存档写入、无第二次资源扣费 | 未存终态、重放、自然投料不触发 | `WorldPublicationTimersAndCleanup` 通过；重入清场不复活公开窝点 |
+| 三类门槛与概率 | `CatChumFieldSettings.*`、`CatChumFieldTypes.*`、`DefaultGame.ini` 的 `CatChumFieldSettings` | 原浓度公式保留；增加三轴门槛和独立一次概率 | 有效浓度逐轴比较，概率固定；0/1边界明确 | 先新增配置和状态，再接发布入口 | 缺单轴、高总量、非法数值、概率0/1 | `ThreeAxesAndSpatialBoundary`、World 测试通过；非必触发、非总浓度门槛 |
+| 生命周期与复制 | `Environment/CatFishGatheringActor.*` 由 Subsystem 唯一创建 | 新增固定范围固定时长事件；独立于窝料存活 | Actor复制 EventId/RequestId/水域/圆心/半径/起止/倍率；相交活动区域阻止重复 | 创建后写权威表，事件结束移除并通知 | 监听服务器／客户端初始复制与销毁、源场到期、远处事件、无冷却 | `ListenClientReplication` 及 World 测试通过；原普通场 FastArray 不改 |
+| 等待消费者 | `Fishing/CatFishingSession.cpp::RefreshWaitingBiteClock` 读取 `SampleChumAtPoint` | 原浓度进度可复用；新增间隔除以聚鱼速度 | 订阅 `OnGatheringChanged`，不修改抽鱼权重、试探或真咬窗口 | 事件状态先写，再刷新计时；退出时解绑 | 半程等待开始／结束保留进度、正式 StateTree 回归 | World测试检验实际Probe计时器，既有7项BiteTiming全部通过 |
+| 表现与资产 | 新事件 Actor 的 Ring/FishShadows；普通场 `Environment/Presentation/CatChumFieldPresentationActor` 保留 | 原无聚鱼视觉；新增亮环和36条游动鱼影占位，无数字倒计时 | 原生引擎基础网格构造引用随常规Cook；不写二进制资产 | 复制事实驱动客户端建表现，视觉无权威写口 | 原生双端组件及位置验证；正式美术未知消费者不删除 | PIE复制测试通过；正式美术、WBP及真人视觉未验；无聚鱼资产生成脚本迁移 |
+| 翻天／终局／World退出 | GameMode既有调用 `ClearFieldsForRunTransition`；Subsystem Deinitialize；Actor EndPlay | 原清窝，无聚鱼状态 | 同时销毁事件、清计时并广播失效 | 清理保留终态去重；不复用昨日窗口 | 翻天、源窝提前到期、事件通知中重入清局 | World测试通过；GameMode仅新增测试friend，不改生产入口 |
+| 日志、文档与旧口径 | `LogCatEnvironment/LogCatFishing`；规则§2.5、系统总览、道具册、参数页、CoreFlow和本页 | 旧条数门槛、库存消耗和未实现口径不再适用 | 默认Log记录判定/观察/结束/Session倍率变化；Warning记录配置、采样或生成失败 | 生产链验证后同步各入口；历史审查快照保留其历史性质 | EventId/RequestId与Session/Cast关联；没有每帧日志 | `Final.log`含双端相同事件ID；当前口径已更新，渔网／死水仍未实现 |
+
+验证分层：`contract` 为 Editor/Game Win64 Development 构建成功（`Saved/FishGathering/BuildEditorFinal.log`、`BuildGameFinal.log`），最终 `Saved/FishGathering/Final/index.json` 12/12 通过。首轮编译的 TObjectPtr 范围循环和测试friend访问错误已修正。`runtime_behavior` 为真实World、正式四配方/鱼目录/原StateTree回归及监听服务器＋1客户端事件复制，证据 `Saved/FishGathering/Final.log`，过滤 `fish_gathering_evaluated`、`fish_gathering_observed`、`fish_gathering_ended`、`fishing_gathering_clock_changed`、`fish_gathering_network_verified`。测试使用0/1概率和短持续时间确定性验证，不修改生产8%/45秒。
+
+`presentation_delivery` 未完成：未做新Cook、独立进程打包双端默认落盘、正式美术替换及真人手感／平衡验收。解除条件为更新包后双方在 `<打包根目录>/Catfishing/Saved/Logs` 核对上述事件，实测三轴门槛、鱼影和浮漂节奏；原生PIE表现不代替正式交付。整体 Fishing／RunEnvironmentSocial 模块不关闭。
+
 
 ## 2026-09-16：浓度等待与每漂进度
 
@@ -96,7 +116,7 @@
 
 - 16 个运行时 `FishDefinitionId` 对应试探/响应秒数：RiverPatternFish、Loach 为 **1.5/9**；LittleSilverFish、LittleColorFish、StinkyFish 为 **2/11**；LakeGiantShadow、PetalFish、WindbellFish、SaltedFish、EstuaryBass、PufferFish、ElectricEel 为 **2.5/13**；ForestLongtailFish、SilvermoonTrout、Blackfish、Pike 为 **3/15**。资产字段为 0 时逐字段回退到逐鱼配置，再到档位默认；Common=1.75/10、Uncommon=2.5/13、Rare=3/15、Event=2.5/13。不能按表格 fish_id 或资产文件名替换这些运行时 ID。
 - 全部均未配置时，试探按服务器种子从 2～4 秒取值，响应保留旧 3 秒兜底，均输出 Warning。非法非零值不回退；响应显式配置须在 8～15 秒内。正式 16 鱼不走旧兜底。
-- 保留现有窝料等待分布与 1.5 秒提前预警；等待结束进入 Probe，按当刻水域、鱼情、窝料和原抛竿者当前饵种冻结选鱼，生成实际体重比例的 Encounter。Probe 继续轻点逐鱼秒数后才猛沉。**现有 20/14/6 秒均值与 40 秒上限计到 Probe 开始；到真咬另加逐鱼试探期**，不能再把旧均值当完整真咬时间。换饵不重置等待计时器，选鱼后不重抽。
+- 等待使用每漂浓度进度计时，1.5 秒是最多提前预警，高浓度短间隔不受它托底；等待结束进入 Probe，按当刻水域、鱼情、窝料和原抛竿者当前饵种冻结选鱼，鱼影按实际体型预告，有效提竿才生成 Encounter。到真咬另加逐鱼试探秒数。旧 20/14/6 秒随机均值与 40 秒上限退役；聚鱼只缩短等待，换饵不重置等待，选鱼后不重抽。
 - 真咬前不扣饵；真咬时先冻结当前鱼 Actor 与猫的距离 D₀，再消费原抛竿者当时选中的 1 份饵，并按原规则检查 D₀≤Lmax。真咬超时终止，不退款、不重新调度。Probe 入夜销毁鱼影并回 Waiting；已成立真咬不被入夜中断。发布通知前建立完整计时事实，通知内入夜/取消不会复活计时器。
 - 基础完美窗固定 **1 秒**，用独立的 `PerfectWindowEndsServerTime` 复制给 HUD；服务器和提示使用同一个截止时间。完美窗后、响应窗内仍可普通提竿。过期请求即使先于计时器回调也会被拒绝。**成长加成尚未接入**：本地 Growth 只有经验/待选次数，未合并上游成长选项系统。
 - Bite 模板只继续承担本地力量、体力与初始线长倍率。旧三个时间字段退出运行就绪校验和窗口计算，保留为 Deprecated 序列化载荷。尚未迁移 4 份正式 Bite 资产及 `/Game/Data/Fish/DA_Bite_Test01` 的旧载荷；删除条件为编辑器仅迁移这些载荷并复验倍率/引用。正式 `/Game/Data/StateTrees/ST_FishingSession` 仍序列化引用 `FCatFishingOpenTrueBiteWindowTask`，保留类型身份并改显示名为 Begin Probe，内部调用 `BeginProbeFromStateTree`。旧非反射函数 `OpenTrueBiteWindowFromStateTree` 已移除。
@@ -608,15 +628,15 @@ Runner只冻结主控ASC、输入及身体运动样本，并在最终求解后�
 
 - `UCatChumFieldSubsystem`（服务器）：投放建场（中心/半径/三轴腥香酵/时间衰减曲线）
 - 公开态复制：`GameState → UCatChumFieldReplicationComponent → FCatChumFieldPublicItem[]`
-- 咬钩加速：`ScheduleWaitingProbe` 在服务器冻结的落水点采样三轴总量，按 20/14/6 秒锚点校准截顶指数分布；首次计时包含剩余飞行时间。均值计到 Probe 开始，到真咬另加逐鱼试探秒数。
-- 选鱼偏好：三轴采样 · 鱼的 ChumPreference 点积 → 饱和曲线 → 权重放大（最多 ×3）
-- 上述三条是当前实现，不是新版目标；待改为水域面积/鱼量账本、平均分布、重叠区共享收敛曲线、守恒重分配与面积容量上限（见 `Docs/Architecture/项目技术方案.md` §7.1.1 和本文 §6）
+- 等待：`RefreshWaitingBiteClock` 在冻结落水点采样三轴总浓度 A；A>0 时按 15/(1+A/K)，A=0 时 120 秒，K 暂定 17/3。飞行不消费进度；补料、衰减和场消失按新旧间隔折算剩余等待，旧随机分布退役。
+- 聚鱼：`PublishActivatedField` 在成功玩家投料的落点检查三类浓度门槛并判一次概率；`ACatFishGatheringActor` 独立复制事件范围和时间，不合并或延长窝料场。`SampleChumAtPoint` 的 `GatheringBiteSpeedMultiplier` 只进入等待间隔，开始／结束由 `OnGatheringChanged` 即时通知 Session。原生亮环／鱼影是表现起点，正式美术与打包双端另验。
+- 选鱼按三类浓度占比选类别，再按饵权重选鱼，聚鱼倍率不进入抽鱼权重。2026-09-16 已确认连续浓度场，水域鱼量账本、守恒重分配与整数库存方案退役；历史背景见 `Docs/Architecture/项目技术方案.md` §7.1.1。
 
 ### 2.3 会话阶段（谁在推进——最反直觉的部分）
 
 | 阶段 | 写入者 |
 |---|---|
-| Waiting | StateTree 节点 `ScheduleWaitingProbe` **内部自己** EnterPhase，并按泊松抽咬钩延迟起计时器 |
+| Waiting | StateTree 节点 `ScheduleWaitingProbeFromStateTree` 内部进入阶段；`RefreshWaitingBiteClock` 按浓度、成长和聚鱼倍率维护每漂独立进度 |
 | Probe | StateTree 的 EnterPhase 后调用 `BeginProbeFromStateTree`，冻结选鱼数据，不生成实体；ProbeStayTimer 停留逐鱼秒数 |
 | TrueBiteWindow | ProbeStayTimer → `OpenTrueBiteWindowFromAuthority`：冻结 D₀、扣一次当前饵、距离门，然后发布逐鱼响应与独立完美截止时间并让浮漂下沉 |
 | HookedFight | `RequestHook` 验证服务器截止时间，按同一快照判完美，按 Probe 已选数据生成 Encounter 后启动 Runner；不再选鱼或扣饵 |
@@ -747,7 +767,7 @@ Config/DefaultGame.ini    10 个 section（改后必须重启 Editor；软引用
 
 ## 6. 已知待办（都在契约后面，不影响表现层）
 
-- 咬钩公式改版：读取所在面积单元的聚鱼总量、浮漂级计时器、总量变化时比例折算；正式总量→等待时长曲线待裁
+- 咬钩公式：2026-09-16 已按连续浓度和每漂进度替换，2026-09-17 增加聚鱼速度倍率；面积单元鱼量方案退役。正式数值与聚鱼门槛仍待试玩校准。
 - 窝料改版：水域面积/鱼总量/鱼种库存账本、鱼种平均分布、互斥面积单元、共享重叠收敛曲线、守恒重分配与面积容量上限
 - 抄网规格版：概率/硬直/无网拾取/翻肚 30s 苏醒（会新增 Phase/Intent 枚举值→表现层届时"补分支"）
 - 浮漂精准偏移、入夜停咬、拽尾巴救援(W3)、巨鱼协作表现输入

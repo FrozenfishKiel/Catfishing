@@ -6,6 +6,7 @@
 #include "Interaction/CatModelContactComponent.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Engine/ScopedMovementUpdate.h"
 #include "Components/PoseableMeshComponent.h"
 #include "Components/SphereComponent.h"
 #include "PhysicsEngine/BodySetup.h"
@@ -299,6 +300,54 @@ bool FCatModelWalkingPushSlopeTest::RunTest(const FString&)
         TestTrue(TEXT("ordinary body pushing needs no extended hand or retained grip"),!A->GetPhysicalBodyComponent()->GetGrab()->IsReaching(true)
             && !A->GetPhysicalBodyComponent()->GetGrab()->IsReaching(false) && !B->GetPhysicalBodyComponent()->GetGrab()->IsGripping(true) && !B->GetPhysicalBodyComponent()->GetGrab()->IsGripping(false));
     }
+    return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatModelScopedSeparationTest,
+    "Catfishing.ModelContacts.Runtime.ScopedMovementDoesNotRepeatStaleSeparation",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FCatModelScopedSeparationTest::RunTest(const FString&)
+{
+    CatPhysicalTest::FScene Scene;
+    if (!Scene.Initialize(this)) return false;
+    const TCHAR* Path = TEXT("/Game/Character/BP_CuteCatCharacter.BP_CuteCatCharacter_C");
+    auto* A = CatModelContactTest::Spawn(Scene, Path, FVector(0,0,100));
+    auto* B = CatModelContactTest::Spawn(Scene, Path, FVector(160,0,100));
+    if (!A || !B) return false;
+    Scene.Step(90);
+    auto* ModelA = A->FindComponentByClass<UCatModelContactComponent>();
+    auto* ModelB = B->FindComponentByClass<UCatModelContactComponent>();
+    auto* Movement = CastChecked<UCatCharacterMovementComponent>(A->GetCharacterMovement());
+    FVector Normal; double Depth = 0;
+    for (double Distance = 160; Distance > 20; Distance -= 1)
+    {
+        B->SetActorLocation(A->GetActorLocation() + FVector(Distance,0,0));
+        if (ModelA->FindPeerContact(ModelB, Normal, Depth) && Depth > 1.5) break;
+    }
+    if (!TestTrue(TEXT("fixture starts at an actual shallow model overlap"), Depth > 1.5 && Depth < 8)) return false;
+    const FVector Start = A->GetActorLocation();
+    Movement->ResolveModelPeerPenetration();
+    const double ImmediateTravel = FVector::Dist(Start, A->GetActorLocation());
+    A->SetActorLocation(Start);
+    {
+        // ServerMove wraps MoveAutonomous in precisely this kind of deferred parent update.
+        FScopedMovementUpdate Deferred(A->GetCapsuleComponent(), EScopedUpdate::DeferredUpdates);
+        Movement->ResolveModelPeerPenetration();
+    }
+    const double DeferredTravel = FVector::Dist(Start, A->GetActorLocation());
+    TestTrue(TEXT("server scoped movement separates by the same distance as a local move"), FMath::Abs(DeferredTravel - ImmediateTravel) < .1);
+    TestTrue(TEXT("the pair remains separated after the deferred scope completes"), CatModelContactTest::ShapePenetration(ModelA, ModelB) < .3);
+    AddInfo(FString::Printf(TEXT("Event=model_contact_scoped_separation_verified InitialDepthCm=%.3f ImmediateCm=%.3f DeferredCm=%.3f"), Depth, ImmediateTravel, DeferredTravel));
+    A->SetActorLocation(Start);
+    auto* PeerMovement = CastChecked<UCatCharacterMovementComponent>(B->GetCharacterMovement());
+    Movement->Mass = 4; PeerMovement->Mass = 8;
+    Movement->Velocity = FVector(100,20,0); PeerMovement->Velocity = FVector(-40,-5,0);
+    const FVector Momentum = Movement->Velocity*Movement->Mass+PeerMovement->Velocity*PeerMovement->Mass;
+    Movement->ResolveModelPeerPenetration();
+    TestTrue(TEXT("body contact conserves both participants' linear momentum"),
+        Momentum.Equals(Movement->Velocity*Movement->Mass+PeerMovement->Velocity*PeerMovement->Mass,.001));
+    TestTrue(TEXT("contact removes closing speed instead of restoring pre-collision velocity"), FMath::Abs(Movement->Velocity.X-PeerMovement->Velocity.X)<.001);
+    TestTrue(TEXT("normal contact preserves both tangential velocities"), FMath::Abs(Movement->Velocity.Y-20)<.001 && FMath::Abs(PeerMovement->Velocity.Y+5)<.001);
     return !HasAnyErrors();
 }
 

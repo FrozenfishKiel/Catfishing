@@ -13,6 +13,8 @@
 #include "Components/EditableTextBox.h"
 #include "Components/WidgetSwitcher.h"
 #include "Online/CatOnlineSubsystem.h"
+#include "OnlineSubsystem.h"
+#include "OnlineSubsystemUtils.h"
 #include "UI/Frontend/CatFrontendRoomModel.h"
 #include "UI/Frontend/CatFrontendPageController.h"
 #include "UI/Frontend/CatFrontendRootWidget.h"
@@ -77,6 +79,8 @@ bool FCatJoinSearchInteractionTest::RunTest(const FString& Parameters)
      Online->SearchInviteCode.Reset(); Online->LastError = ECatOnlineError::None;
      Online->ActiveRequestId = FGuid::NewGuid(); ++Online->OperationEpoch;
      Online->ActiveSearch = MakeShared<FOnlineSessionSearch>();
+     Online->ActiveSearch->SearchState = EOnlineAsyncTaskState::InProgress;
+     Online->SessionSearchDeadline = FPlatformTime::Seconds() + 30.0;
      Online->FindSessionsHandle = FDelegateHandle(FDelegateHandle::GenerateNewHandle);
      Online->BroadcastSnapshot(TEXT("join_search_interaction_fixture")); View->ShowJoin();
    };
@@ -100,19 +104,101 @@ bool FCatJoinSearchInteractionTest::RunTest(const FString& Parameters)
    TestEqual(TEXT("Reopening does not submit a new epoch"), Online->OperationEpoch, Epoch);
    TestEqual(TEXT("Input survives navigation"), Input->GetText().ToString(), FString(TEXT("ABC234")));
    Back->OnClicked.Broadcast();
+   Online->ActiveSearch->SearchState = EOnlineAsyncTaskState::Done;
    Online->HandleFindSessionsComplete(true, Epoch);
    TestTrue(TEXT("Completion after leaving cannot reopen Join"), Switcher->GetActiveWidget() == View->GetWidgetFromName(TEXT("MenuPage")));
    View->ShowJoin();
    TestTrue(TEXT("Join unlocks on search completion"), Submit->GetIsEnabled());
    TestEqual(TEXT("Completion preserves typed code"), Input->GetText().ToString(), FString(TEXT("ABC234")));
    BeginSearch();
+   Online->ActiveSearch->SearchState = EOnlineAsyncTaskState::Failed;
    Online->HandleFindSessionsComplete(false, Online->OperationEpoch);
    TestTrue(TEXT("Search failure also restores editing and joining"), Input->GetIsEnabled() && Submit->GetIsEnabled());
    TestEqual(TEXT("Search failure retains its error"), Online->LastError, ECatOnlineError::FindFailed);
    BeginSearch(); Online->SearchInviteCode = TEXT("ABC234"); View->ShowJoin();
    TestFalse(TEXT("Automatic code lookup is not background browsing"), Room->IsFindingPublicRooms());
    TestFalse(TEXT("Automatic joining still locks input and navigation"), Input->GetIsEnabled() || Back->GetIsEnabled());
-   Online->SearchInviteCode.Reset(); Online->HandleFindSessionsComplete(true, Online->OperationEpoch);
+   Online->SearchInviteCode.Reset(); Online->ActiveSearch->SearchState = EOnlineAsyncTaskState::Done;
+   Online->HandleFindSessionsComplete(true, Online->OperationEpoch);
+
+   // Steam 右键加入解析失败后，FindSessions 可返回 true 而传入对象仍为 NotStarted，且永远没有回调。
+   for (const auto StuckState : { EOnlineAsyncTaskState::NotStarted, EOnlineAsyncTaskState::InProgress })
+   {
+     BeginSearch(); Online->ActiveSearch->SearchState = StuckState;
+     const uint64 StuckEpoch = Online->OperationEpoch;
+     const FGuid StuckRequest = Online->ActiveRequestId;
+     const double Deadline = Online->SessionSearchDeadline;
+     Online->TickPlatformInvites(0);
+     TestEqual(TEXT("Polling never extends the fixed search deadline"), Online->SessionSearchDeadline, Deadline);
+     TestEqual(TEXT("Search remains pending before the deadline"), Online->ActiveOperation, ECatOnlineOperation::Find);
+     Online->HandleFindSessionsComplete(true, StuckEpoch);
+     TestEqual(TEXT("Unrelated shared completion cannot end this search"), Online->ActiveOperation, ECatOnlineOperation::Find);
+     Online->SessionSearchDeadline = FPlatformTime::Seconds() - 1.0;
+     Online->TickPlatformInvites(0);
+     TestEqual(TEXT("Watchdog releases the operation"), Room->GetSnapshot().ActiveOperation, ECatOnlineOperation::None);
+     TestEqual(TEXT("Timeout preserves the original request ID"), Room->GetSnapshot().RequestId, StuckRequest);
+     TestEqual(TEXT("Watchdog clears the searching session state"), Room->GetSnapshot().SessionState, ECatOnlineSessionState::NoSession);
+     TestEqual(TEXT("Timeout remains visible as a structured error"), Online->LastError, ECatOnlineError::JoinTargetTimedOut);
+     TestFalse(TEXT("Timeout clears the search object"), Online->ActiveSearch.IsValid());
+     TestFalse(TEXT("Timeout clears the Find delegate"), Online->FindSessionsHandle.IsValid());
+     TestEqual(TEXT("Timeout clears the deadline"), Online->SessionSearchDeadline, 0.0);
+     TestTrue(TEXT("Formal Join controls recover after the missing callback"), Input->GetIsEnabled() && Paste->GetIsEnabled()
+       && Back->GetIsEnabled() && Submit->GetIsEnabled() && Refresh->GetIsEnabled());
+     TestEqual(TEXT("Timeout preserves the typed code"), Input->GetText().ToString(), FString(TEXT("ABC234")));
+     Back->OnClicked.Broadcast(); Page->RequestStartGameFlow();
+     TestTrue(TEXT("Start game can open the formal save page after timeout"),
+       Switcher->GetActiveWidget() == View->GetWidgetFromName(TEXT("SaveListPage")));
+     // 本夹具不挂载存档 Model；重新初始化页面流程，避免把存档退出校验混入搜索回归。
+     Page->Initialize(Local, View, nullptr, Room, nullptr);
+     BeginSearch();
+     const uint64 RetryEpoch = Online->OperationEpoch;
+     Online->HandleFindSessionsComplete(true, StuckEpoch);
+     Online->HandleFindSessionsComplete(false, RetryEpoch);
+     TestEqual(TEXT("Late old or shared callbacks cannot finish the retry"), Online->ActiveOperation, ECatOnlineOperation::Find);
+     TestEqual(TEXT("Ignored callbacks preserve the retry epoch"), Online->OperationEpoch, RetryEpoch);
+     Online->ActiveSearch->SearchState = EOnlineAsyncTaskState::Done;
+     Online->HandleFindSessionsComplete(true, RetryEpoch);
+     TestTrue(TEXT("Retry completes normally and unlocks Join"), Submit->GetIsEnabled());
+   }
+
+   // NULL OSS 与 Steam 有相同的“已有搜索却返回 true”行为；用真实接口复现占用和取消，避免只测手填快照。
+   IOnlineSubsystem* Platform = Online::GetSubsystem(World);
+   const IOnlineSessionPtr Sessions = Online->GetWorldSessionInterface();
+   if (TestTrue(TEXT("Isolated fixture uses the NULL session backend"), Platform && Platform->GetSubsystemName() == NULL_SUBSYSTEM && Sessions.IsValid()))
+   {
+     const auto OrphanSearch = MakeShared<FOnlineSessionSearch>();
+     OrphanSearch->bIsLanQuery = true;
+     TestTrue(TEXT("Existing platform search starts"), Sessions->FindSessions(0, OrphanSearch));
+     const FCatOnlineResult Request = Online->RequestFindSessions();
+     TestTrue(TEXT("Platform reports acceptance even while occupied"), Request.bAccepted);
+     TestTrue(TEXT("Production query still owns its search object"), Online->ActiveSearch.IsValid());
+     if (Online->ActiveSearch.IsValid())
+     {
+       TestEqual(TEXT("Occupied backend did not start the supplied query"), Online->ActiveSearch->SearchState, EOnlineAsyncTaskState::NotStarted);
+     }
+     int32 CancelCount = 0;
+     FDelegateHandle CancelHandle = Sessions->AddOnCancelFindSessionsCompleteDelegate_Handle(
+       FOnCancelFindSessionsCompleteDelegate::CreateLambda([&](bool bSuccess)
+       {
+         ++CancelCount;
+         TestTrue(TEXT("Backend confirms cancellation"), bSuccess);
+         TestFalse(TEXT("Find callback is detached before synchronous cancellation"), Online->FindSessionsHandle.IsValid());
+         TestEqual(TEXT("Cancellation does not expose an idle reentry window"), Online->ActiveOperation, ECatOnlineOperation::Find);
+         Sessions->TriggerOnFindSessionsCompleteDelegates(true);
+       }));
+     Online->SessionSearchDeadline = FPlatformTime::Seconds() - 1.0;
+     Online->TickPlatformInvites(0);
+     Sessions->ClearOnCancelFindSessionsCompleteDelegate_Handle(CancelHandle);
+     TestEqual(TEXT("Watchdog cancels the actual backend exactly once"), CancelCount, 1);
+     TestEqual(TEXT("Orphan platform search is released"), OrphanSearch->SearchState, EOnlineAsyncTaskState::Failed);
+     TestEqual(TEXT("Synchronous cancellation cannot override timeout"), Online->LastError, ECatOnlineError::JoinTargetTimedOut);
+     TestTrue(TEXT("Formal Join recovers from the real ignored request"), Submit->GetIsEnabled() && Refresh->GetIsEnabled());
+     TestTrue(TEXT("Production retry is accepted"), Online->RequestFindSessions().bAccepted);
+     TestTrue(TEXT("Retry actually starts on the recovered backend"), Online->ActiveSearch.IsValid()
+       && Online->ActiveSearch->SearchState == EOnlineAsyncTaskState::InProgress);
+     Online->SessionSearchDeadline = FPlatformTime::Seconds() - 1.0;
+     Online->TickPlatformInvites(0);
+   }
  }
  Page->Shutdown(); View->ResetFrontend(); Room->Shutdown();
  return true;

@@ -15,6 +15,7 @@ public:
     FRotator ViewIntent = FRotator::ZeroRotator;
     float WalkSpeed = 0;
     uint32 ControlEpoch = 0;
+    double PolicyServerSeconds = 0;
     bool bSprint = false;
     virtual void Clear() override;
     virtual uint8 GetCompressedFlags() const override;
@@ -36,4 +37,22 @@ struct FCatNetworkMoveDataContainer final : FCharacterNetworkMoveDataContainer
 {
     FCatNetworkMoveData Moves[3];
     FCatNetworkMoveDataContainer();
+};
+
+/** Server-only observed load, associated with the exact move acknowledged by CMC. */
+struct FCatMovePolicy
+{
+    FCatBodyDriveSample Drive;
+    FVector ExternalForce = FVector::ZeroVector;
+    uint32 ControlEpoch = 0;
+    double ServerSeconds = 0;
+    float MoveTime = 0;
+};
+
+struct FCatMoveResponseDataContainer final : FCharacterMoveResponseDataContainer
+{
+    FCatMovePolicy Policy;
+    bool bHasPolicy = false;
+    virtual void ServerFillResponseData(const UCharacterMovementComponent& Movement, const FClientAdjustment& Adjustment) override;
+    virtual bool Serialize(UCharacterMovementComponent& Movement, FArchive& Ar, UPackageMap* Map) override;
 };

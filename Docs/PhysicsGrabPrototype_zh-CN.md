@@ -1,5 +1,49 @@
 # 物理抓握原型使用说明
 
+## 2026-09-17：联机身体互推的分离、载荷重放与本机表现
+
+接续误松竿检查点 `b534a4d8`。本轮保持 CMC、既有模型 PhysicsAsset、玩家力量/重力/跳跃、抓角色协作和个人费用。胶囊继续接受服务器纠正；修复错误的重复分离、接触速度与旧载荷重放，并平滑本机纠正表现，不关闭网络校验。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 模型接触查询 | `Source/Catfishing/Interaction/CatModelContactComponent.cpp::FindPeerContact`→CMC 推力/分离循环；模型骨骼形状挂在根组件下 | ServerMove 的延迟子组件更新使多轮查询重复读取旧重叠；同一2.337cm样本本地移动2.178cm，服务器作用域移动8.947cm | 查询前同步碰撞体到当前根变换，保留已求出的骨骼局部姿态，不重新求动画 | 当前根位置→形状查询→原地形扫掠 | 延迟作用域、本地、坡面/贴墙、37段模型贴合与抓点 | `ScopedMovementDoesNotRepeatStaleSeparation` 修复后两种作用域均2.178cm；模型回归通过 |
+| 接触速度与费用 | `Source/Catfishing/Character/CatCharacterMovementComponent.cpp::ResolveModelPeerPenetration` 原恢复 `SavedVelocity`；`PerformMovement` 原费用结算扣除位置纠正 | 位置受阻却仍输出未受阻速度，下一次预测再穿入 | 实际重叠时按双方逆质量消除法向闭合速度，保留切向速度、原有限驱动力和地形扫掠；已抓连双方仍跳过该分离 | 接触冲量→位置分离→原个人费用/回执；不新增费用入口 | 双方互推、被动方不收费、停止、正反坡、横坡/卡顿、贴墙 | 24组原坡面场景通过，既有停止/贴墙费用失败也在本轮消除；不改断言 |
+| 对应移动的权威载荷 | `Source/Catfishing/Character/CatCharacterNetworkPrediction.h/.cpp` 的 SavedMove、ServerMove、MoveResponse；`CatPhysicalBodySnapshot` 仍提供观察 | 原位置回执与30Hz载荷复制分离，纠正后仍重放旧载荷 | 同一 CMC 回执携带该 MoveTime 的 Drive/ExternalForce/ControlEpoch/ServerSeconds；最多64份短期服务器样本，客户端只上传原输入，不上传载荷 | 服务器真实移动→对应时间戳样本→原 CMC ack/replay；只更新不比回执新的待重放载荷，保留每步冲刺、视角、速度输入 | 序列化、旧Epoch拒绝、更新旧样本而不覆盖新观察、弱网跳跃/传送、搏鱼不重复计费 | 新契约测试及弱网移动/跳跃/控制切换通过；快照和回执是同一权威的观察，不另建玩法状态 |
+| 本机模型与镜头 | CMC `OnClientCorrectionReceived/ClientUpdatePositionAfterServerUpdate`→`CatPhysicsPrototypeVisualComponent::RefreshVisualPose`→普通 `CatCharacter::CalcCamera` | UE 默认只平滑远端角色，本机直接显示纠正跳变 | 完成重放后按纠正前可见位置计算纯表现偏移，以0.10秒指数时间常数衰减；偏移超过100cm直接接受，低于0.01cm清零；普通镜头同样偏移并以10cm球沿偏移扫掠防穿墙；钓鱼专用镜头保持原入口 | 权威根/真实抓点先完成→本机偏移→模型/普通镜头；控制Epoch重置清空偏移 | 分别测根位置、实际 PoseableMesh 和 CalcCamera；画面需实际移动、停止后偏移清零，不能只冻结画面来通过 | 正常/弱网实际模型及普通镜头未出现反向跳帧；胶囊仍如实记录纠正。钓鱼专用镜头真人观感未验收 |
+| 生命周期、配置与资产 | `ResetControlPrediction`、Body `CaptureSnapshot`；原 Grab/Service/Controller 生命周期 | 新预测缓存需随控制域失效 | 重置回执缓存、样本历史及表现偏移；不改输入映射、WBP、Blueprint/PhysicsAsset、存档或资源写入，Cook/资产生成路径不涉及 | 同版本主客端；原销毁、断开和目标释放仍单一入口 | 原抓握/持竿/搏鱼、跳跃、双端与多人回归 | 正常/弱网持竿及完整搏鱼通过；渲染双端抓推/抓角色协作通过，四人链路黄色体力断言失败，未完成 |
+| 检查与旧路径清理 | `Source/Catfishing/Interaction/Tests/CatModelContactTests.cpp`、`Character/Tests/CatNetworkPredictionTests.cpp`、`Source/CatfishingEditor/Character/Animation/Tests/CatLocomotionNetworkTests.cpp` | 原测试未覆盖服务器延迟作用域或持续互推画面 | 保留全部原职责断言，新增根纠正上限10cm、实际模型/镜头反向跳步小于2cm及模型前向额外跳步小于2cm的分层观测；旧未重基载荷路径由新回执衔接。试验过的过期对方速度限速及其字段/测试已全部撤销 | 旧版复现→几何/速度/重放→表现→正式渲染与构建 | 不把表现平滑称为没有纠正，不把本机 PIE 当新包真人验收 | 全链28项通过；正式 Editor/Game Development 构建通过；渲染15/16通过，四人失败单列；无新增资产删除或另一个业务进度入口 |
+
+基线：`Saved/Automation/InteractionRange-20260915/Report-20260917-095331-292/index.json` 正常网络根位置反向跳步6.650cm，120ms延迟/20ms波动/5%丢包13.709cm。`BaselineScopedReport/index.json` 证明重复分离。根位置小于5cm的中间实验未全部通过，因此最终验收明确区分真实物理纠正与可见画面；没有声称弱网零纠正。过期接触速度限速实验曾增大误差，已撤销，不进入交付实现。
+
+当前验证：`Saved/Automation/InteractionRange-20260915/Report-20260917-102325-855/index.json` 共28项，22 clean、6带诊断警告，0失败/未运行。弱网最大根反向跳步5.919cm、实际模型和普通镜头均0cm；正常网络3.178cm、模型和镜头均0cm。原24场景坡面、模型抓点、抬人跳跃/退出、个人费用与恢复、完整持竿搏鱼及正常/弱网失焦均通过。
+
+120 FPS上限补验：`Saved/Automation/InteractionRange-20260915/Final120Report-20260917/index.json` 的3项预测契约及正常/弱网互推共5项通过（3 clean、2带诊断警告）。正常/弱网根反向跳步3.548/4.868cm，模型和普通镜头均0cm；此轮使用 NullRHI 观测运行变换，实际渲染证据采用下列60 FPS上限复验。
+
+最终分层证据：
+
+- contract：正式工程 `FinalEditorTests-20260917.log` / `FinalGameTests-20260917.log` 均成功；回执序列化、控制重置、旧样本重基、不覆盖更新观察、异Epoch拒绝及不等质量接触动量/切向速度回归通过。
+- runtime_behavior：`FinalRenderedReport-20260917/index.json` 16项中15通过，包含两种正式猫双端身体推挤/抓人传力/松手、抓角色协作钓鱼、正式竿60/120Hz搏鱼及历史短线稳定性。四人测试原90秒预算短于现行120秒空窝等待，`Source/CatfishingEditor/Fishing/Tests/CatFishingGroupNetworkTests.cpp::FVerify` 已改为现行等待时长加90秒，全部业务断言保留；`FinalFollowupReport-20260917/index.json` 复验进入真实搏鱼后，停在 `each client receives its own yellow reserve`：主客端余额一致，但服务器余额不再等于夹具初始20。未修改个人费用/黄色体力规则，也未放宽该断言；四人完整费用及终局验收仍未完成，归入唯一需求清单。不能把这次失败称为已通过或已证明是本次引入。
+- presentation_delivery：60 FPS上限的后台渲染复验中，正常/弱网根反向跳步2.065/5.777cm，实际模型和普通镜头反向跳步均0cm，前向额外跳步/跟随/停止归零断言通过。实际双猫截图在 `Saved/Validation/InteractionRange-20260915/Saved/Automation/PeerPrediction/Images/20260917-023127-Lag1.png` 和 `20260917-023136-Lag0.png`，已人工查看，双猫保持直立并接触；这是正式资产在验证场的截图，不能代替湖岸真人联机验收。
+
+日志继续用 `LogCatPhysicsGrab` 的 `model_contact_resolved`、`cmc_prediction_corrected`、`cmc_move_accepted`，新增限频 `cmc_policy_reconciled` 与 `cmc_response_rejected`，按 BodyId/ControlEpoch/MoveTime 关联。`peer_prediction_contact_observed` 是回归观察事件，同时输出真实根、模型和镜头指标。新 Cook、正式湖岸真人体验及 Development 包不加 `-log` 的双端落盘尚未执行；模块仍未整体验收。
+
+## 2026-09-17：视口清输入误松竿
+
+基线 `bba36a5a`。房主归档及两份客户端日志确认：房主打开鱼护窗口时，`KeysFlushed` 同时释放本机和远端玩家的显式持竿，随后 `PrimaryPhysicalHoldLost` 将鱼竿架放。不是重量或拉力超限。工作区已有搏鱼模拟器改动和根目录裁决同步文档，本轮保留且不纳入提交。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 视口入口 | `Source/Catfishing/Framework/Game/CatfishingPlayerController.cpp::FlushPressedKeys`；引擎视口失焦遍历世界全部 Controller | 房主视口取消了远端玩家输入与持竿 | 仅本地 Controller 处理视口清输入，远端记录 `physical_input_flush_ignored` | 本地判定→统一输入清理→父类清键 | 房主失焦不改变客户端同一 GripId/主控 | 已通过：Report-20260917-100213-184，含正常/弱网双端及完整搏鱼退出 |
+| 输入及生命周期 | 同文件 `ClearPhysicalControlInput`→`Source/Catfishing/Character/Physics/CatPhysicalBodyComponent.cpp::ClearControlIntent`；菜单、Ability 取消、硬直调用前者 | 临时清输入与离开身体共用全抓握释放 | 增加显式 `bReleaseExplicitHolds`；Controller 默认临时清输入，换 Pawn/断开/翻天/EndPlay 明确全清；Body 原直接生命周期调用默认全清 | 原 Ability/钓鱼按住态取消→身体清移动/跳跃/普通抓握→疾跑取消；显式持竿仍由原服务裁决 | 菜单不误抛竿、不掉竿；退出仍释放 | 已通过：Report-20260917-100213-184，含正常/弱网双端及完整搏鱼退出 |
+| 服务器与回执 | Body `ServerClearControlIntent`→原 Epoch/Sequence 校验→原 Grab 释放/复制；`SetGrabInput` 已识别 `bExplicitHold` | 客户端临时取消也触发服务器全释放 | RPC 携带清理范围，复用原权限、序号与清理入口；`physical_control_cleared` 记录范围/角色/BodyId/Epoch | 主客端须同版；无新业务状态或扣费入口 | 正常网络及延迟丢包下双方同一握点/主控；过期包拒绝 | 已通过：Report-20260917-100213-184，含正常/弱网双端及完整搏鱼退出 |
+| UI/钓鱼消费者 | `Source/Catfishing/UI/CatUIModalInputMode.cpp`→Controller；`CatAbilityInputBindingComponent::ReleaseAllInputRoutes`、`CatFishingService` 原主控核对 | 保留菜单取消动作和外力传递；只避免取消装备持握 | UI 注释同步；原会话、鱼线、费用、手动架放、普通松手和目标销毁不变 | 取消按住 Ability 后迟到 Release 不执行抛竿 | 完整等待/提竿/收线期间失焦；会话身份不变 | 已通过：Report-20260917-100213-184，含正常/弱网双端及完整搏鱼退出 |
+| 测试与旧口径 | `Source/Catfishing/AbilitySystem/Tests/CatPhysicalInputRouteTests.cpp`；`Source/CatfishingEditor/Inventory/Tests/CatInventoryQuickbarRemoteUseTests.cpp` | 原用例未覆盖房主视口波及远端，且仍用60秒等待预算 | 新增房主和客户端失焦检查；生命周期夹具明确全清；等待预算跟随当前空窝120秒配置加飞行/试探余量，不跳过真实计时器 | 旧实现复现→新实现复验 | 编译及 contract/runtime_behavior 分开；不以绿灯替代正式地图真人手感 | 旧版 `Saved/Automation/InteractionRange-20260915/Report-20260917-095331-292/index.json` 复现两项误松竿断言；同时确认既有60秒预算不足 |
+| 配置、资产、持久化及交付 | 原正式猫/竿 Blueprint、WBP、输入与资产生成路径、Cook 硬引用不改；本说明及唯一需求清单 | 不涉及配置/资源写入、存档或资产迁移 | 不删除未穷举的二进制消费者；旧无范围清理 C++/RPC 签名同步替换 | Editor/Game Development；已有隔离验证脚本 | 新 Cook、无 `-log` 打包双端及真人正式场景尚未验证 | 隔离 Editor Development 已通过；最终正式 Game Development 已通过（FinalGameTests-20260917.log）；不声明模块完成 |
+
+另核查 `CatCharacterMovementComponent::StopMovementImmediately`：原先停速会调用 Body 全清，客户端支持/移动状态变化因此仍可误松竿。已移除该副作用；Controller 翻天、换 Pawn、断开及 EndPlay 保持显式全清。新增停速保留同一 GripId 断言通过。
+
+contract：隔离 Editor Development 构建通过（`BuildEditor-20260917-100131-734.log`）。runtime_behavior：`Saved/Automation/InteractionRange-20260915/Report-20260917-100213-184/index.json` 三项通过；正常网络和弱网的权威与客户端同握点/主控检查通过，真实等待约120秒后提竿、收线、失焦及硬清理通过。presentation_delivery：未验证正式湖岸真人体验、新 Cook 和打包双端落盘；不关闭模块。诊断过滤：`physical_input_flush_ignored`、`physical_control_cleared`、`rod_focus_network_verified`，并以 BodyId/GripId/杆身份关联双方日志。打包复测日志仍位于 `<打包根目录>/Catfishing/Saved/Logs`。
+
 现行正式协作规则（2026-09-15 起）：普通伸爪抓的是持竿角色，手持和架放鱼竿都不能作为协作者目标；主控拿竿仍由服务器显式持握事务建立。本文早期“抓杆协作”章节仅记录当时验证，不能作为当前玩法依据。过期网络测试的修订与证据见 [钓鱼架构：协作网络测试改为抓角色](FishingArchitecture_zh-CN.md)。独立原型道具与内部显式持握接收方不据此删除。
 
 ## 2026-09-11：正式角色 CMC 移动预测（源码检查点）

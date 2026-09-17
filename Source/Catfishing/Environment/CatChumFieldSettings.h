@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Engine/DeveloperSettings.h"
 #include "Engine/EngineTypes.h"
+#include "Environment/CatWaterTypes.h"
 
 #include "CatChumFieldSettings.generated.h"
 
@@ -14,6 +15,20 @@ class CATFISHING_API UCatChumFieldSettings : public UDeveloperSettings
 public:
 	bool IsRuntimeReady() const;
 	bool TryGetInfluenceRadiusScale(double& OutRadiusScale) const;
+	bool IsGatheringConfigurationValid() const;
+	bool MeetsGatheringThreshold(const FCatChumVector& Concentration) const;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Gathering")
+	bool bEnableFishGathering = false;
+	/** 浓度单位，三轴各自达标；不是旧库存模型的鱼条数。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Gathering")
+	FCatChumVector GatheringConcentrationThreshold;
+	UPROPERTY(Config, EditAnywhere, Category = "Gathering", meta=(ClampMin="0", ClampMax="1"))
+	double GatheringTriggerProbability = 0.08;
+	UPROPERTY(Config, EditAnywhere, Category = "Gathering")
+	double GatheringDurationSeconds = 45.0;
+	UPROPERTY(Config, EditAnywhere, Category = "Gathering")
+	double GatheringBiteSpeedMultiplier = 2.5;
 
 	UPROPERTY(Config, EditAnywhere, Category = "Runtime")
 	bool bEnableChumFieldRuntime = false;

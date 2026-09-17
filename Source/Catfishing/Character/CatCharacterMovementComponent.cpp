@@ -42,6 +42,7 @@ UCatCharacterMovementComponent::UCatCharacterMovementComponent()
 	Mass = 4.0f;
 	MaxAcceleration = BrakingDecelerationWalking = 6000.0f;
 	SetNetworkMoveDataContainer(NetworkMoves);
+	SetMoveResponseDataContainer(NetworkResponse);
 	NetworkSmoothingMode = ENetworkSmoothingMode::Exponential;
 	PrimaryComponentTick.TickGroup = TG_PostPhysics;
 }
@@ -62,6 +63,11 @@ void UCatCharacterMovementComponent::TickComponent(float DeltaTime, ELevelTick T
 	if (Cat->IsLocallyControlled() || (Cat->HasAuthority() && !Cat->GetController()))
 		AddInputVector(Body->GetLocalMoveIntent(), true);
 	Super::TickComponent(DeltaTime, TickType, TickFunction);
+	if (Cat->IsLocallyControlled() && !Cat->HasAuthority())
+	{
+		OwnerCorrectionVisualOffset *= FMath::Exp(-FMath::Max(0.0f, DeltaTime)/.10f);
+		if (OwnerCorrectionVisualOffset.IsNearlyZero(.01)) OwnerCorrectionVisualOffset = FVector::ZeroVector;
+	}
 	// Authority-only controllers (e.g. domain test worlds or an unconnected gameplay host)
 	// have neither local player input nor incoming ServerMoves. Preserve their force/floor
 	// simulation. A real remote player's UNetConnection is a Player and never enters here.
@@ -105,8 +111,8 @@ void UCatCharacterMovementComponent::PerformMovement(float DeltaSeconds)
 	if (bAuthority) Body->SetMoveIntent(MoveIntent);
 	if (!bReplayPolicy)
 	{
-		ActiveDrive = bAuthority ? Body->CaptureDriveSample() : Body->GetReplicatedDrive();
-		ActiveExternalForce = bAuthority ? Body->GetExternalForceFromAuthority() : Body->GetReplicatedExternalForce();
+		if (bAuthority) { ActiveDrive = Body->CaptureDriveSample(); ActiveExternalForce = Body->GetExternalForceFromAuthority(); }
+		else { double PolicyTime; GetPredictionPolicy(ActiveDrive, ActiveExternalForce, PolicyTime); }
 	}
 	ActiveDrive.MoveIntent = Body->IsLocomotionEnabled() && !UCatGE_FishingScoopCooldown::IsOperationBlocked(Cat) ? MoveIntent : FVector::ZeroVector;
 	ActiveDrive.bLocomotion = Body->IsLocomotionEnabled();
@@ -227,7 +233,8 @@ void UCatCharacterMovementComponent::StopMovementImmediately()
 {
 	Super::StopMovementImmediately();
 	ClearQueuedExternalImpulse();
-	if (auto* Cat = Cast<ACatCharacter>(CharacterOwner)) Cat->GetPhysicalBodyComponent()->ClearControlIntent(TEXT("MovementStopped"));
+	// Movement can stop during native correction or support changes. Grip lifetime belongs
+	// to explicit input/control cleanup, not to an engine velocity reset.
 }
 
 void UCatCharacterMovementComponent::UpdatePeerPushContacts()
@@ -304,7 +311,6 @@ void UCatCharacterMovementComponent::ResolveModelPeerPenetration()
 	if (!HasValidData() || !CharacterOwner->HasAuthority() || !Model || !Model->HasModelContacts()) return;
 	const FVector Before = UpdatedComponent->GetComponentLocation();
 	const FVector PreviousCorrection = TotalMotionCorrection;
-	const FVector SavedVelocity = Velocity;
 	double MaximumDepth = 0;
 	// Correct only already intersecting model surfaces. Every adjustment sweeps the terrain
 	// capsule and follows its actual walkable floor, rather than teleporting horizontally into a slope.
@@ -318,6 +324,18 @@ void UCatCharacterMovementComponent::ResolveModelPeerPenetration()
 			if (*It == CharacterOwner || Model->HasTractionConnectionWith(It->FindComponentByClass<UCatModelContactComponent>())) continue;
 			FVector Normal; double Depth;
 			if (!Model->FindPeerContact(It->FindComponentByClass<UCatModelContactComponent>(), Normal, Depth) || Depth <= .1) continue;
+			if (auto* PeerMovement = Cast<UCatCharacterMovementComponent>(It->GetCharacterMovement()))
+			{
+				const double ClosingSpeed = FVector::DotProduct(Velocity-PeerMovement->Velocity, Normal);
+				if (ClosingSpeed > 0)
+				{
+					const double InverseMass = 1.0/FMath::Max(1.0f, Mass);
+					const double PeerInverseMass = 1.0/FMath::Max(1.0f, PeerMovement->Mass);
+					const FVector Impulse = Normal*(ClosingSpeed/(InverseMass+PeerInverseMass));
+					Velocity -= Impulse*InverseMass;
+					PeerMovement->Velocity += Impulse*PeerInverseMass;
+				}
+			}
 			MaximumDepth = FMath::Max(MaximumDepth, Depth);
 			const FVector Adjustment = -Normal * FMath::Min(4.0, (Depth - .1) * .5);
 			const FVector OldLocation = UpdatedComponent->GetComponentLocation();
@@ -337,7 +355,6 @@ void UCatCharacterMovementComponent::ResolveModelPeerPenetration()
 		}
 		if (!bAdjusted) break;
 	}
-	Velocity = SavedVelocity;
 	// Collision correction must never become paid player progress or a second motor.
 	TotalMotionCorrection = PreviousCorrection + UpdatedComponent->GetComponentLocation() - Before;
 	if (MaximumDepth > .2 && GetWorld()->GetTimeSeconds() >= NextPeerSeparationLogSeconds)

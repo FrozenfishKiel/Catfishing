@@ -33,6 +33,7 @@
 #include "Inventory/CatInventoryItemInstance.h"
 #include "Components/BoxComponent.h"
 #include "Interaction/CatInteractionSettings.h"
+#include "Interaction/Grab/CatPhysicsGrabComponent.h"
 #include "Data/CatFishCatalogSettings.h"
 #include "Data/CatFishDefinition.h"
 #include "Items/Fish/CatFishPickupActor.h"
@@ -529,6 +530,33 @@ namespace CatInventoryQuickbarRemoteUseTests
 			for (TActorIterator<ACatFishingRodActor> It(ClientWorld.Get()); It; ++It)
 				if (It->GetPresentationState().RodActorId == RodActorId) ClientRod = *It;
 			if (!ClientRod) return false;
+			if (FocusClearStarted <= 0)
+			{
+				// LostFocus iterates all controllers in the listen-server world, including remote ones.
+				const auto* Grab = ServerCharacter->GetPhysicalBodyComponent()->GetGrab();
+				HeldGripBeforeFocus = Grab->IsGripping(true) ? Grab->GetGripState(true).GripId : Grab->GetGripState(false).GripId;
+				for (auto It = ServerWorld->GetPlayerControllerIterator(); It; ++It)
+					if (It->Get()) It->Get()->FlushPressedKeys();
+				ACatFishingRodActor* ServerRod = ServerWorld->GetSubsystem<UCatFishingService>()->FindDeployedRodById(RodActorId);
+				if (!Test->TestTrue(TEXT("host viewport flush cannot release a remote player's rod"), ServerRod
+					&& ServerRod->IsPrimaryOperator(ServerCharacter->GetPlayerState()))) return true;
+				ClientController->FlushPressedKeys();
+				FocusClearStarted = FPlatformTime::Seconds();
+				return false;
+			}
+			if (FPlatformTime::Seconds() - FocusClearStarted < 1.5) return false;
+			ACatFishingRodActor* ServerRod = ServerWorld->GetSubsystem<UCatFishingService>()->FindDeployedRodById(RodActorId);
+			for (ACatCharacter* Character : {ServerCharacter.Get(), Cast<ACatCharacter>(ClientController->GetPawn())})
+			{
+				const auto* Grab = Character->GetPhysicalBodyComponent()->GetGrab();
+				bool bSameHold = false;
+				for (bool bLeft : {true, false}) bSameHold |= Grab->IsGripping(bLeft)
+					&& Grab->GetGripState(bLeft).GripId == HeldGripBeforeFocus && Grab->GetGripState(bLeft).bControlledHold;
+				if (!Test->TestTrue(TEXT("owning-client flush preserves the same controlled grip on both endpoints"), bSameHold)) return true;
+			}
+			if (!Test->TestTrue(TEXT("owning-client flush keeps authority and replicated rod ownership"), ServerRod
+				&& ServerRod->IsPrimaryOperator(ServerCharacter->GetPlayerState()) && ClientRod->IsPrimaryOperator(ClientController->PlayerState))) return true;
+			Test->AddInfo(TEXT("Event=rod_focus_network_verified HostFlush=Isolated ClientFlush=HoldPreserved Result=SameGripAndPrimary"));
 			// 部署后真实物理体必须能被正式交互通道命中；检查运行配置而非仅凭蓝图类实现接口推断可达性。
 			if (!ClientRod->IsUsingPhysicalRod()) return false;
 			const UBoxComponent* Body = ClientRod->GetPhysicalRodBody();
@@ -650,6 +678,8 @@ namespace CatInventoryQuickbarRemoteUseTests
 		FGuid FirstRodId, SecondRodId;
 		/** 远端选格部署出的场景鱼竿身份；后续 E RPC 只把此 ID 对应的复制 Actor 当 target。 */
 		FGuid RodActorId;
+		FGuid HeldGripBeforeFocus;
+		double FocusClearStarted = 0;
 		/** 首次放下动作的稳定请求 ID；同一 ID 的第二次 RPC 必须命中 Actor 缓存而不能翻转操作状态。 */
 		FGuid LeaveRequestId;
 		/** 两根鱼竿刻意不同的运行时耐久样本。 */

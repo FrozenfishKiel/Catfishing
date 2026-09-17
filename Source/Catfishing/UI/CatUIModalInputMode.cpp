@@ -11,7 +11,7 @@
 // 2. 首次打开时保存鼠标可见性并给 Controller 申请一层移动/视角输入锁；重复打开只刷新焦点，不叠加锁。
 // 3. 在交给 Slate 焦点前强制打开 UserWidget 聚焦能力；关闭键不能依赖每张 WBP 手工勾选焦点能力。
 // 4. 切到 UIOnly 并把焦点交给当前页面，让关闭键和按钮点击都由 Widget 接收。
-// 5. 清除本人的移动/按键/抓握意图；物理速度和别人传来的拉力仍由刚体求解。
+// 5. 清除本人的移动、按键与普通抓握，保留固定持竿；外部推拉仍由 CMC 受力流程计算。
 void CatUIModalInputMode::Open(APlayerController* Controller, UUserWidget* FocusWidget,
 	FCatUIModalInputModeState& State)
 {

@@ -11,6 +11,7 @@
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
 #include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
+#include "Fishing/CatFishingSettings.h"
 #include "Components/BoxComponent.h"
 #include "Components/SphereComponent.h"
 #include "Components/SplineComponent.h"
@@ -102,7 +103,7 @@ namespace CatFishingGroupNetwork
 		bool Update() override
 		{
 			const double Now = FPlatformTime::Seconds();
-			if (Now - Started > 90.0)
+			if (Now - Started > GetDefault<UCatFishingSettings>()->UnchummedBiteIntervalSeconds + 90.0)
 			{
 				Test->AddError(FString::Printf(TEXT("Four-player fishing network timeout Stage=%d Join=%d; no network verdict"), Stage, JoinIndex));
 				return true;
