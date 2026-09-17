@@ -239,8 +239,8 @@ public:
 	/** 查找当前最适合接收指定实例的槽位；优先可堆叠格，其次空格，找不到返回 INDEX_NONE。 */
 	int32 FindAvailableSlot(UCatInventoryItemInstance* ItemInstance, int32 Count) const;
 
-	/** 按 NumSlots 补齐库存格；不会删除超过配置数量的已有格子，避免运行期丢物品。 */
-	virtual void InitializeOrRefreshInventorySlots();
+	/** 按 NumSlots 补齐库存格，不裁掉已有格子；默认在新增格子后广播，关闭通知时由调用方在关联提交完成后发布。 */
+	virtual void InitializeOrRefreshInventorySlots(bool bBroadcastChange = true);
 
 	/** 移除所有持有指定实例的格子；清空后会在安全时解除实例复制登记并广播库存变化。 */
 	void RemoveEntry(UCatInventoryItemInstance* ItemInstance);
@@ -274,14 +274,11 @@ public:
 	bool CanFullyAcceptInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch) const;
 
 	/**
-	 * authority 调用整批收货；带 CommitTransaction 时只接受非空定义批次，拒绝任何 InstanceEntries。
-	 * 回调在全部物品入库后同步执行一次；返回 false 会恢复库存条目，回调自身的外部写入必须由调用方恢复。
-	 * 回调不得重入修改本库存或提前通知观察者；本入口不缓存终态，业务调用方负责去重。
-	 * bBroadcastChange 默认开启，成功变更或写入后的回滚都会通知；关闭时成功后的通知由调用方在业务提交完整后发出。
-	 * 无回调的空批次在 authority 上返回 true；带回调的空批次返回 false，且不会执行回调。
+	 * authority 整批接收定义或现有实例；空批次成功，预检拒绝不写库存，写入失败恢复槽位与传入实例宿主。
+	 * 槽位快照不恢复实例合并中的世界载体转移；调用方仍须管理这类外部副作用。本入口不执行业务回调，也不缓存请求终态。
+	 * 默认在成功变更或写入后回滚时广播；关闭通知时由调用方在关联资源提交完整后统一发布。
 	 */
-	bool TryAddInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch,
-		const TFunction<bool()>& CommitTransaction = nullptr, bool bBroadcastChange = true);
+	bool TryAddInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch, bool bBroadcastChange = true);
 
 	/** 只读预检稳定物品 ID 能否进入当前正式库存；商店、奖励和初始化发货用它在提交前确认目录、authority 和容量。 */
 	ECatDomainCommandError ValidateInventoryDefinitionGrantFromAuthority(FGuid RequestId, int32  ItemId,
@@ -304,8 +301,8 @@ public:
 	/** 读取 Actor 级统一收货优先级；数值越大越先尝试接收整批物品。 */
 	int32 GetUnifiedInventoryIntakePriority() const;
 
-	/** authority 按外部配置刷新槽位容量；只补齐新增空槽，不因容量变小删除已有物品。 */
-	void SetInventorySlotCountFromAuthority(int32 NewSlotCount);
+	/** authority 将容量配置限制为非负值并补齐空槽，不裁掉已有格子；默认新增格子后广播，关闭通知时由调用方统一发布。 */
+	void SetInventorySlotCountFromAuthority(int32 NewSlotCount, bool bBroadcastChange = true);
 
 	/** authority 原子替换完整槽位并保持格位顺序；售鱼可暂缓广播，调用方必须在经济提交成功后显式通知或失败时恢复原快照。 */
 	bool ReplaceInventoryEntriesFromAuthority(const TArray<FCatInventoryEntry>& NewEntries, int32 MinimumSlotCount,
@@ -354,9 +351,9 @@ public:
 	/** authority 查询库存活动区是否仍有部署型实例；恢复和失败预算用它判断库存是否处于可写空闲态。 */
 	bool HasActiveHeldInventoryEntriesFromAuthority() const;
 
-	/** 从指定格扣除数量；数量归零时清空格子并在安全时解除实例复制登记。 */
+	/** authority 从指定格扣除正数数量，不足时拒绝；归零清格，并在无其他格引用时解除复制登记。默认广播，业务可延迟到关联提交完成后发布。 */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Catfishing|Inventory")
-	bool ConsumeItemAtSlot(int32 SlotIndex, int32 ConsumeCount);
+	bool ConsumeItemAtSlot(int32 SlotIndex, int32 ConsumeCount, bool bBroadcastChange = true);
 	/** 能力成本消费精确实例并记录终态；默认发布数量变化，关闭通知时调用方须在同步提交完成后发布，重放不再扣量或调用外部效果。 */
 	FCatDomainCommandResult ConsumeAbilityItemFromAuthority(FGuid RequestId, FGuid ItemId, int32 Quantity, bool bPublishChange = true);
 
@@ -455,19 +452,6 @@ public:
 	bool HasPreparedRemoval() const { return PreparedRemovalRequest.IsValid(); }
 
 protected:
-	friend class ACatFishPickupActor;
-	friend class ACatFishGuardActor;
-	friend class ACatFishTankActor;
-	friend class UCatEquipmentComponent;
-	friend class UCatShopTradeController;
-	friend class UCatShopEconomyService;
-	/** Internal mutation lets the fishing coordinator establish its record before notifying observers. */
-	bool ConsumeItemAtSlotInternal(int32 SlotIndex, int32 ConsumeCount, bool bBroadcastChange);
-	/** 真咬换饵：扣当前一份并退旧预留；失败恢复原实例／格子，成功由 Equipment 发布。 */
-	bool ExchangeReservedBaitInternal(int32 CurrentSlot, UCatInventoryItemDefinition* ReturnedBait);
-	/** 收货、转移和购买共用的内部入口；沿用公开接口的定义批次回调约束，失败恢复原格及记录的运行宿主，按开关通知。 */
-	bool TryAddInventoryBatchInternal(const FCatInventoryReceiveBatch& ReceiveBatch, bool bBroadcastChange,
-		const TFunction<bool()>& CommitTransaction = nullptr);
 	/** 本库存独立的显示 Model；组件按需创建并持有，服务器本地提交或客户端复制后更新，其他库存不会写入它。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryModel> InventoryModel;

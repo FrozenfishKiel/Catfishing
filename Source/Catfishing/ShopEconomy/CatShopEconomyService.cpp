@@ -1,4 +1,4 @@
-#include "ShopEconomy/CatShopEconomyService.h"
+﻿#include "ShopEconomy/CatShopEconomyService.h"
 
 #include "AbilitySystem/Attributes/CatEconomyAttributeSet.h"
 #include "AbilitySystem/Effects/CatShopEconomyTransactionEffect.h"
@@ -961,7 +961,7 @@ int32 UCatShopEconomyService::FinalizeRunResourcesFromAuthority(const bool bGrad
 		auto& Entry = Batch.DefinitionEntries.AddDefaulted_GetRef();
 		Entry.ItemDefinition = DriedFish;
 		Entry.Count = Count;
-		if (!Target->TryAddInventoryBatchInternal(Batch, false))
+		if (!Target->TryAddInventoryBatch(Batch, false))
 		{ Rollback(); return Reject(TEXT("DriedFishDeliveryCapacity")); }
 	}
 	int32 Delta = -Balance;

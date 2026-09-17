@@ -1,4 +1,4 @@
-#if WITH_DEV_AUTOMATION_TESTS
+﻿#if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
@@ -88,16 +88,6 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("拒绝请求重放不转为成交"), Trading->RunCartOrder(Command, Shelf, Camp).CartTransaction.Command.bCommitted);
 	Command.Context.RequestId = FGuid::NewGuid();
 
-	bool bCommitCalled = false;
-	TestFalse(TEXT("同步提交失败拒绝整个入库批次"), Inventory->TryAddInventoryBatch(Batch, [&]()
-	{
-		bCommitCalled = true;
-		return false;
-	}, false));
-	TestTrue(TEXT("容量成立后确实执行了提交回调"), bCommitCalled);
-	TestEqual(TEXT("提交失败恢复原有物品数量"),
-		Inventory->CountVisibleInventoryQuantityByItemId(Selected.ItemId), QuantityBefore);
-
 	int32 BroadcastCount = 0;
 	// 监听首次成交与随后重放，回调读取通知当刻的钱货和账本；失败提前返回或重放断言结束后均解除绑定。
 	const FDelegateHandle Handle = Shop->OnPublicTransactionCommitted.AddLambda(
@@ -139,37 +129,8 @@ bool FCatShopInventoryDeliveryReplayTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("重放不增加交易记录"), Shop->GetTransactionLedgerSnapshot().Num(), 1);
 	TestEqual(TEXT("重放不再次广播"), BroadcastCount, 1);
 	Shop->OnPublicTransactionCommitted.Remove(Handle);
-	const TArray<FCatInventoryEntry> ExistingItems = Inventory->GetInventoryEntries();
-	TestFalse(TEXT("已有物品上追加批次后拒绝仍可恢复"), Inventory->TryAddInventoryBatch(Batch, []() { return false; }, false));
-	TestEqual(TEXT("恢复后数量不变"), Inventory->CountVisibleInventoryQuantityByItemId(Selected.ItemId),
-		QuantityBefore + Selected.PurchaseQuantity);
-	TestEqual(TEXT("恢复后保留原槽位数"), Inventory->GetInventoryEntries().Num(), ExistingItems.Num());
-	for (int32 Index = 0; Index < ExistingItems.Num(); ++Index)
-	{
-		TestTrue(TEXT("恢复后保留原实例身份"), Inventory->GetInventoryEntries()[Index].Instance == ExistingItems[Index].Instance);
-		TestEqual(TEXT("恢复后保留堆叠数量"), Inventory->GetInventoryEntries()[Index].StackCount, ExistingItems[Index].StackCount);
-	}
-	FCatInventoryReceiveBatch InstanceBatch;
-	for (const FCatInventoryEntry& Entry : ExistingItems)
-	{
-		if (Entry.Instance)
-		{
-			FCatInventoryInstanceEntry& InstanceEntry = InstanceBatch.InstanceEntries.AddDefaulted_GetRef();
-			InstanceEntry.ItemInstance = Entry.Instance;
-			InstanceEntry.Count = 1;
-			break;
-		}
-	}
-	bCommitCalled = false;
-	TestFalse(TEXT("带付款回调时不接收已有实例"), Inventory->TryAddInventoryBatch(InstanceBatch, [&]()
-	{
-		bCommitCalled = true;
-		return true;
-	}, false));
-	TestFalse(TEXT("拒绝实例批次不执行付款"), bCommitCalled);
-
 	// 使用独立仓库构造满仓状态；随后另建同蓝图货架，避免首次购买已耗尽限量商品而先触发售罄拒绝。
-	// 原仓库已完成身份与回滚检查；销毁后保持世界只有一个无角色仓库，符合正式单仓回退规则。
+	// 原仓库已完成购买与重放检查；销毁后保持世界只有一个无角色仓库，符合正式单仓回退规则。
 	Camp->Destroy();
 	ACatCampInventoryActor* FullCamp = World->SpawnActor<ACatCampInventoryActor>();
 	if (!TestNotNull(TEXT("创建容量不足仓库"), FullCamp)) return false;

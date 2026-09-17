@@ -1,4 +1,4 @@
-#include "FishContainers/CatFishGuardActor.h"
+﻿#include "FishContainers/CatFishGuardActor.h"
 
 #include "Character/CatCharacter.h"
 #include "Components/SceneComponent.h"
@@ -142,7 +142,7 @@ bool ACatFishGuardActor::PickUpFromAuthority(AController* RequestingController, 
 	const bool bOriginalPhysics = WorldCollision->IsSimulatingPhysics();
 	const ECollisionEnabled::Type OriginalBodyCollision = WorldCollision->GetCollisionEnabled();
 	const ECollisionEnabled::Type OriginalInteractionCollision = InteractionCollision->GetCollisionEnabled();
-	if (!CharacterInventory->TryAddInventoryBatchInternal(Batch, false))
+	if (!CharacterInventory->TryAddInventoryBatch(Batch, false))
 	{
 		Character->ReleaseMouthCarriedActorFromAuthority(this);
 		return Finish(false, TEXT("InventoryRejected"));

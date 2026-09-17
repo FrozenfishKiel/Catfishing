@@ -341,8 +341,9 @@ bool UCatInventoryComponent::ReplicateSubobjects(UActorChannel* Channel, FOutBun
 	return Super::ReplicateSubobjects(Channel, Bunch, RepFlags);
 }
 
-// 槽位刷新流程：只在 authority 或单机构造路径补齐空槽；新增格子会标脏并广播，客户端只通过复制拿到服务器数组。
-void UCatInventoryComponent::InitializeOrRefreshInventorySlots()
+// 槽位刷新流程：批次准备中或非 authority 时不写入；无拥有者的构造期也可补齐空槽。
+// 按 NumSlots 只补不裁，新增格子后标脏并按开关通知；关闭通知不会关闭复制，客户端仍通过复制接收数组。
+void UCatInventoryComponent::InitializeOrRefreshInventorySlots(const bool bBroadcastChange)
 {
 	// 批次准备期间禁止重入写格；原实例和数量保持到统一提交或取消。
 	if (HasPreparedRemoval()) return;
@@ -370,7 +371,7 @@ void UCatInventoryComponent::InitializeOrRefreshInventorySlots()
 	{
 		InventoryList.MarkArrayDirty();
 
-		BroadcastInventoryChange();
+		if (bBroadcastChange) BroadcastInventoryChange();
 	}
 }
 
@@ -1026,22 +1027,13 @@ bool UCatInventoryComponent::CanFullyAcceptInventoryBatch(const FCatInventoryRec
 	return SimulateAddInventoryBatch(ReceiveBatch, SimulatedSlots);
 }
 
-// 将收货载荷、同步回调和通知开关原样交给内部入口，返回其权限、容量及提交判定；本层不另写状态或重复执行回调。
-bool UCatInventoryComponent::TryAddInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch,
-	const TFunction<bool()>& CommitTransaction, const bool bBroadcastChange)
-{
-	return TryAddInventoryBatchInternal(ReceiveBatch, bBroadcastChange, CommitTransaction);
-}
-
 // 批次写入流程：
-// 1. 拒绝非 authority；空批次仅在无回调时成功，带回调的实例批次在任何写入前拒绝。
-//    实例合并可能转移世界载体，槽位快照不能恢复这类副作用，因此同步提交只允许定义项。
-// 2. 容量预演通过后保存条目和传入实例的运行宿主，先写定义项再写实例项，逐项写入均不广播。
-// 3. 任一项未完整写入即恢复所存宿主和条目、记录失败；这里不承诺恢复普通实例收货的世界载体转移。
-// 4. 全部入库后才同步调用提交回调；回调拒绝时恢复条目并返回 false，外部事务的恢复由回调负责。
-// 5. 成功且有变更时按开关广播一次并记录成功；写入后的回滚也按同一开关通知，预检拒绝不通知。
-bool UCatInventoryComponent::TryAddInventoryBatchInternal(const FCatInventoryReceiveBatch& ReceiveBatch,
-	const bool bBroadcastChange, const TFunction<bool()>& CommitTransaction)
+// 1. 拒绝批次准备中或非 authority 的写入；空批次直接成功，其他批次先预演容量。
+// 2. 保存槽位与传入实例宿主，先静默写定义项、再写实例项；任一项不完整即恢复快照并返回失败。
+// 3. 恢复范围不包含实例合并时的世界载体转移；此类副作用仍由业务调用方负责。
+// 4. 成功变更或写入后回滚均按开关通知，预检拒绝不通知；本入口不执行业务回调或记录请求终态。
+bool UCatInventoryComponent::TryAddInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch,
+	const bool bBroadcastChange)
 {
 	// 批次准备期间禁止重入写格；原实例和数量保持到统一提交或取消。
 	if (HasPreparedRemoval()) return false;
@@ -1053,11 +1045,7 @@ bool UCatInventoryComponent::TryAddInventoryBatchInternal(const FCatInventoryRec
 
 	if (ReceiveBatch.IsEmpty())
 	{
-		return !CommitTransaction;
-	}
-	if (CommitTransaction && !ReceiveBatch.InstanceEntries.IsEmpty())
-	{
-		return false;
+		return true;
 	}
 
 	if (!CanFullyAcceptInventoryBatch(ReceiveBatch))
@@ -1116,13 +1104,6 @@ bool UCatInventoryComponent::TryAddInventoryBatchInternal(const FCatInventoryRec
 		}
 	}
 
-	if (CommitTransaction && !CommitTransaction())
-	{
-		RollbackBatch();
-		UE_LOG(LogCatInventory, Warning, TEXT("Event=inventory_batch_commit_rejected Owner=%s Result=Restored"),
-			*GetNameSafe(OwningActor));
-		return false;
-	}
 
 	if (bAnyMutation && bBroadcastChange)
 	{
@@ -1287,8 +1268,9 @@ int32 UCatInventoryComponent::GetUnifiedInventoryIntakePriority() const
 	return UnifiedInventoryIntakePriority;
 }
 
-// 槽位容量刷新流程：只允许服务器或尚未拥有 Actor 的构造期路径写配置值；刷新时不会裁掉已有格子。
-void UCatInventoryComponent::SetInventorySlotCountFromAuthority(const int32 NewSlotCount)
+// 槽位容量刷新流程：批次准备中或非 authority 时拒绝；服务器或无拥有者的构造期将配置限制为非负值，再补齐空槽。
+// 刷新不裁掉已有格子，通知开关交给补槽流程；未新增格子时不广播，复制标脏不受开关影响。
+void UCatInventoryComponent::SetInventorySlotCountFromAuthority(const int32 NewSlotCount, const bool bBroadcastChange)
 {
 	// 批次准备期间禁止重入写格；原实例和数量保持到统一提交或取消。
 	if (HasPreparedRemoval()) return;
@@ -1299,7 +1281,7 @@ void UCatInventoryComponent::SetInventorySlotCountFromAuthority(const int32 NewS
 	}
 
 	NumSlots = FMath::Max(0, NewSlotCount);
-	InitializeOrRefreshInventorySlots();
+	InitializeOrRefreshInventorySlots(bBroadcastChange);
 }
 
 // 整表替换流程：
@@ -1816,19 +1798,17 @@ FCatDomainCommandResult UCatInventoryComponent::ConsumeAbilityItemFromAuthority(
 	TerminalCache.Add(Key, Result); TerminalPayloadByKey.Add(Key, Payload);
 	const int32 Slot = FindInventorySlotIndexFromInstanceId(ItemId);
 	// 零数量仍需记录来源与请求终态，永久道具的相同输入重放不能再次产生效果。
-	Result.bCommitted = Quantity == 0 ? Slot != INDEX_NONE : ConsumeItemAtSlotInternal(Slot, Quantity, false);
+	Result.bCommitted = Quantity == 0 ? Slot != INDEX_NONE : ConsumeItemAtSlot(Slot, Quantity, false);
 	Result.Error = Result.bCommitted ? ECatDomainCommandError::None : ECatDomainCommandError::InvalidPayload;
 	TerminalCache.Add(Key, Result);
 	if (Result.bCommitted && Quantity > 0 && bPublishChange) BroadcastInventoryChange(Slot);
 	return Result;
 }
 
-bool UCatInventoryComponent::ConsumeItemAtSlot(const int32 SlotIndex, const int32 ConsumeCount)
-{
-	return ConsumeItemAtSlotInternal(SlotIndex, ConsumeCount, true);
-}
-
-bool UCatInventoryComponent::ConsumeItemAtSlotInternal(const int32 SlotIndex, const int32 ConsumeCount, const bool bBroadcastChange)
+// 扣量流程：先拒绝批次准备中、无权威、非法格位、非正数或数量不足的请求，失败不改变库存。
+// 扣量后同步观察数量并标脏；归零则清格，仅在无其他格引用且启用注册子对象复制时注销实例。
+// 最后按开关发布该格变化；静默扣量仍保留复制标记，由业务调用方在关联资源提交完整后通知观察者。
+bool UCatInventoryComponent::ConsumeItemAtSlot(const int32 SlotIndex, const int32 ConsumeCount, const bool bBroadcastChange)
 {
 	// 批次准备期间禁止重入写格；原实例和数量保持到统一提交或取消。
 	if (HasPreparedRemoval()) return false;
@@ -2022,7 +2002,7 @@ FCatDomainCommandResult UCatInventoryComponent::ReleaseItemToWorldFromAuthority(
 			return Finish(ECatDomainCommandError::PermissionDenied);
 		}
 		// 附着路径也可能触发表现回调；再次核对实例身份后才执行不带广播的扣格，确保请求永远只消费自己的原条目。
-		if (!IsSourceStillCurrent() || !ConsumeItemAtSlotInternal(SlotIndex, 1, false))
+		if (!IsSourceStillCurrent() || !ConsumeItemAtSlot(SlotIndex, 1, false))
 		{
 			if (!bCreatedCarrier) FishActor->RestoreInventoryRetentionFromAuthority(FishItem, OriginalRetainedTransform);
 			else
@@ -2135,7 +2115,7 @@ FCatDomainCommandResult UCatInventoryComponent::ReleaseItemToWorldFromAuthority(
 		const FCatInventoryEntry* Current = GetInventoryEntryAtSlot(SlotIndex);
 		// 构造期间数量改变可能把“整堆离库”变成部分离库；拒绝该批，避免地面首件和库存余量共用原 ID。
 		if (!Current || Current->Instance != SourceItem || Current->StackCount != SourceQuantity) return Finish(ECatDomainCommandError::InvalidPayload);
-		if (!ConsumeItemAtSlotInternal(SlotIndex, Quantity, false)) return Finish(ECatDomainCommandError::InvalidPayload);
+		if (!ConsumeItemAtSlot(SlotIndex, Quantity, false)) return Finish(ECatDomainCommandError::InvalidPayload);
 		const FVector ThrowVelocity = Forward * Settings->DropForwardSpeed + FVector(0, 0, Settings->DropUpwardSpeed);
 		for (int32 Index = 0; Index < PreparedBatchActors.Num(); ++Index)
 		{
@@ -2222,7 +2202,7 @@ FCatDomainCommandResult UCatInventoryComponent::ReleaseItemToWorldFromAuthority(
 	TerminalPayloadByKey.Add(Key, Payload);
 	TerminalCache.Add(Key, Result);
 	const FCatInventoryEntry* Current = GetInventoryEntryAtSlot(SlotIndex);
-	if (!Current || Current->Instance != SourceItem || Current->StackCount != SourceQuantity || !ConsumeItemAtSlotInternal(SlotIndex, Quantity, false))
+	if (!Current || Current->Instance != SourceItem || Current->StackCount != SourceQuantity || !ConsumeItemAtSlot(SlotIndex, Quantity, false))
 	{
 		if (!bNewActor && Current && Current->Instance == SourceItem) ReleasedItem->SetRuntimeOwnerActor(PreviousRuntimeOwner);
 		return Finish(ECatDomainCommandError::InvalidPayload);
@@ -2975,22 +2955,7 @@ bool UCatInventoryComponent::MoveHeldInventoryEntriesToCustodianFromAuthority(
 	return true;
 }
 
-// T13，钓鱼规则 §2.3/§4.5：库存拥有原子写入，Session 不创建第二份数量状态。
-bool UCatInventoryComponent::ExchangeReservedBaitInternal(const int32 CurrentSlot, UCatInventoryItemDefinition* ReturnedBait)
-{
-	// 批次准备期间禁止重入写格；原实例和数量保持到统一提交或取消。
-	if (HasPreparedRemoval()) return false;
-	if (!GetOwner() || !GetOwner()->HasAuthority() || !ReturnedBait) return false;
-	const TArray<FCatInventoryEntry> Before = InventoryList.Entries;
-	if (!ConsumeItemAtSlotInternal(CurrentSlot, 1, false)) return false;
-	int32 Remaining = 1;
-	bool bFullyAdded = false;
-	AddEntry(ReturnedBait, Remaining, bFullyAdded, nullptr, false);
-	if (bFullyAdded && Remaining == 0) return true;
-	ReplaceInventoryEntriesFromAuthority(Before, Before.Num(), false);
-	return false;
-}
-
+// 携带上限查询：先读类别基础限制；不执行限制、无类别或基础无限时直接返回无限，否则叠加拥有者成长容量并限制在整数上限内。
 int32 UCatInventoryComponent::GetEffectiveCarryLimit(const ECatInventoryCarryCategory Category) const
 {
 	const int32 Base = GetDefault<UCatInventorySettings>()->GetCarryLimitForCategory(Category);

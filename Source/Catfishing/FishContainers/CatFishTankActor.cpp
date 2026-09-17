@@ -1,4 +1,4 @@
-#include "FishContainers/CatFishTankActor.h"
+﻿#include "FishContainers/CatFishTankActor.h"
 
 #include "Components/SceneComponent.h"
 #include "Character/CatCharacter.h"
@@ -197,15 +197,8 @@ bool ACatFishTankActor::ApplyCapacityUpgradeFromAuthority(const int32 TargetTier
 	{
 		CommittedUpgradeRequestIds.Add(RequestId);
 	}
-	if (!bPublish)
-	{
-		TArray<FCatInventoryEntry> Entries = FishInventory->GetInventoryEntries();
-		Entries.SetNum(NewCapacity);
-		FishInventory->NumSlots = NewCapacity;
-		verify(FishInventory->ReplaceInventoryEntriesFromAuthority(Entries, NewCapacity, false));
-		return true;
-	}
-	FishInventory->SetInventorySlotCountFromAuthority(NewCapacity);
+	FishInventory->SetInventorySlotCountFromAuthority(NewCapacity, bPublish);
+	if (!bPublish) return true;
 	if (WorldInfo)
 	{
 		WorldInfo->RefreshSummary();

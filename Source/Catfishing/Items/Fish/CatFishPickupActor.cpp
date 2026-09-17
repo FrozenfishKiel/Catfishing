@@ -1,4 +1,4 @@
-#include "Items/Fish/CatFishPickupActor.h"
+﻿#include "Items/Fish/CatFishPickupActor.h"
 #include "Inventory/CatWorldDropProtectionComponent.h"
 #include "Environment/CatWaterQuerySubsystem.h"
 #include "Condition/CatFishThrowEffectActor.h"
@@ -550,7 +550,7 @@ FCatCaptureCommitResult ACatFishPickupActor::StoreInFishGuardFromAuthority(ACont
 	bool bReceived = false;
 	{
 		TGuardValue<TWeakObjectPtr<UCatInventoryComponent>> StoreScope(InventoryStoreTarget, TargetInventory);
-		bReceived = TargetInventory->TryAddInventoryBatchInternal(ReceiveBatch, false);
+		bReceived = TargetInventory->TryAddInventoryBatch(ReceiveBatch, false);
 	}
 	if (!bReceived)
 	{

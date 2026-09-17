@@ -1,4 +1,4 @@
-#include "ShopEconomy/Trading/CatShopTradeController.h"
+﻿#include "ShopEconomy/Trading/CatShopTradeController.h"
 
 #include "Inventory/CatInventorySettings.h"
 #include "Camp/CatCampHubActor.h"
@@ -538,7 +538,7 @@ FCatShopOrderResult UCatShopTradeController::RunCartOrder(const FCatShopCartComm
 			Targets.FishTank->CommittedUpgradeRequestIds = UpgradeIdsBefore;
 			auto* Inventory = Targets.FishTank->FishInventory.Get();
 			verify(Inventory->ReplaceInventoryEntriesFromAuthority(TankBefore, TankBefore.Num(), false));
-			Inventory->NumSlots = TankBefore.Num();
+			Inventory->SetInventorySlotCountFromAuthority(TankBefore.Num(), false);
 		}
 		UE_LOG(LogCatfishing, Warning, TEXT("Event=shop_cart_rolled_back RequestId=%s World=%s NetMode=%d Authority=1 Targets=%d Wallet=Unchanged Stock=RestoredByEconomy"),
 			*Command.Context.RequestId.ToString(), *GetNameSafe(World), World->GetNetMode(), Before.Num());
@@ -551,7 +551,7 @@ FCatShopOrderResult UCatShopTradeController::RunCartOrder(const FCatShopCartComm
 #if WITH_DEV_AUTOMATION_TESTS
 			if (FailDeliveryStepForTest == Step++) { Rollback(); return false; }
 #endif
-			if (!Pair.Key->TryAddInventoryBatchInternal(Pair.Value, false)) { Rollback(); return false; }
+			if (!Pair.Key->TryAddInventoryBatch(Pair.Value, false)) { Rollback(); return false; }
 		}
 		for (const int32 Tier : Tiers)
 		{

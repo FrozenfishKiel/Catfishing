@@ -1,4 +1,4 @@
-#include "Equipment/CatEquipmentComponent.h"
+﻿#include "Equipment/CatEquipmentComponent.h"
 #include "EngineUtils.h"
 #include "UObject/UObjectIterator.h"
 
@@ -775,7 +775,7 @@ FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingBaitDeferred(
 	if (!Bait || !Bait->CanServeFishingBait() || !Bait->bRunConsumable || !Entry || !Entry->Instance
 		|| Entry->Instance->GetItemId() != BaitId || Entry->StackCount < 1)
 		return Reject(ECatDomainCommandError::NotFound, TEXT("CurrentBaitUnavailable"));
-	if (!Inventory->ConsumeItemAtSlotInternal(SlotIndex, 1, false))
+	if (!Inventory->ConsumeItemAtSlot(SlotIndex, 1, false))
 		return Reject(ECatDomainCommandError::CapacityExceeded, TEXT("ConsumeFailed"));
 	// 唯一数量写入已完成。先关闭记录，再刷新读模型和通知，回调可迁移/销毁协调器。
 	Record->bBaitCommitted = true;
