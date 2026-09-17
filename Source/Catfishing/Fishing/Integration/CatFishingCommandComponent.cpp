@@ -24,6 +24,7 @@
 #include "Fishing/Presentation/CatFishingCameraComponent.h"
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatBackPackComponent.h"
 #include "Inventory/CatInventoryItemInstance.h"
 #include "Logging/CatLog.h"
 #include "Logging/CatLogContext.h"
@@ -108,7 +109,7 @@ UCatFishingCommandComponent::UCatFishingCommandComponent()
 	PrimaryComponentTick.bCanEverTick = false; // 纯事件驱动，不需要每帧轮询
 }
 
-// 选中鱼竿 Use 流程：
+// 切格自动拿竿与物品能力共用的权威部署流程：
 // 1. 确认调用者就是本组件所属的权威 Controller，避免库存实例跨玩家借用命令组件。
 // 2. 再要求请求携带有效的指定实例，服务据此只从该实例所在库存格借出。
 // 3. 最后复用既有 PlaceRod 事务并投递钓鱼回执，同时把结果归并回库存 Use 的通用错误码。
@@ -129,7 +130,19 @@ FCatDomainCommandResult UCatFishingCommandComponent::PlaceRodFromInventoryUseOnA
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Result;
 	}
+	auto* Character = Cast<ACatCharacter>(RequestingController->GetPawn());
+	auto* BackPack = Character ? Cast<UCatBackPackComponent>(Character->GetInventoryComponent()) : nullptr;
+	const int32 Slot = BackPack ? BackPack->FindInventorySlotIndexFromInstanceId(Command.RequestedRodItemInstanceId) : INDEX_NONE;
+	if (!BackPack || !BackPack->ReserveQuickbarHeldSlotFromAuthority(Slot, Command.RequestedRodItemInstanceId))
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=quickbar_rod_reservation_rejected RequestId=%s ItemId=%s %s"),
+			*Command.RequestId.ToString(), *Command.RequestedRodItemInstanceId.ToString(), *CatLogContext::BuildControllerFields(RequestingController));
+		return Result;
+	}
 	const FCatFishingCommandResult FishingResult = Fishing->PlaceRod(RequestingController, Command);
+	if (!FishingResult.bCommitted && BackPack->GetQuickbarHeldSlot().ItemInstanceId == Command.RequestedRodItemInstanceId)
+		BackPack->ClearQuickbarHeldSlotFromAuthority();
 	DeliverResultFromAuthority(FishingResult);
 	Result.bCommitted = FishingResult.bCommitted;
 	Result.Revision = FishingResult.EquipmentRevision;

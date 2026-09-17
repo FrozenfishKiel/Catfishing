@@ -56,7 +56,7 @@ class CATFISHING_API UCatFishingCommandComponent : public UActorComponent
 
 public:
 	UCatFishingCommandComponent();
-	/** 选中鱼竿的库存 Use 进入权威放竿事务；只接受组件所属 Controller 和指定实例，失败不会改写装备选择。 */
+	/** 切格与拿竿 GA 共用的权威部署事务；预留指定原格，失败释放预留，不代替调用方改变选中格。 */
 	FCatDomainCommandResult PlaceRodFromInventoryUseOnAuthority(APlayerController* RequestingController,
 		const FCatPlaceRodCommand& Command);
 	/**
