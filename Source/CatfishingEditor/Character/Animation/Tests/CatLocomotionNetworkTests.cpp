@@ -10,6 +10,7 @@
 #include "Character/Physics/CatPhysicsPrototypeVisualComponent.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
+#include "Camera/CameraTypes.h"
 #include "Components/BoxComponent.h"
 #include "Components/SphereComponent.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
@@ -41,6 +42,123 @@
 
 namespace CatLocomotionNetwork
 {
+	/** Sustained body contact through real ServerMoves; ordinary movement tests never touch a peer. */
+	class FPeerPushVerify final : public IAutomationLatentCommand
+	{
+	public:
+		FPeerPushVerify(FAutomationTestBase* InTest, bool InLag) : Test(InTest), bLag(InLag), Started(FPlatformTime::Seconds()) {}
+		bool Update() override
+		{
+			const double Now = FPlatformTime::Seconds();
+			if (Now - Started > 45) { Test->AddError(FString::Printf(TEXT("peer prediction timeout Stage=%d"), Stage)); return true; }
+			UWorld* Server = nullptr; UWorld* Client = nullptr;
+			for (const auto& Context : GEngine->GetWorldContexts()) if (Context.WorldType == EWorldType::PIE && Context.World())
+			{
+				if (Context.World()->GetNetMode() == NM_ListenServer) Server = Context.World();
+				if (Context.World()->GetNetMode() == NM_Client) Client = Context.World();
+			}
+			if (!Server || !Client) return false;
+			auto* PC = Client->GetFirstPlayerController();
+			auto* Local = PC ? Cast<ACatCharacter>(PC->GetPawn()) : nullptr;
+			if (!Local || !PC->PlayerState || PC->AcknowledgedPawn != Local) return false;
+			ACatCharacter* Remote = nullptr; ACatCharacter* Host = nullptr;
+			for (TActorIterator<ACatCharacter> It(Server); It; ++It)
+			{
+				if (It->GetPlayerState() && It->GetPlayerState()->GetPlayerId() == PC->PlayerState->GetPlayerId()) Remote = *It;
+				else Host = *It;
+			}
+			if (!Remote || !Host) return false;
+			auto* LocalBody = Local->GetPhysicalBodyComponent(); auto* RemoteBody = Remote->GetPhysicalBodyComponent();
+			auto* HostBody = Host->GetPhysicalBodyComponent();
+			auto* Visual = Local->FindComponentByClass<UCatPhysicsPrototypeVisualComponent>()->GetVisualMesh();
+			FMinimalViewInfo View; Local->CalcCamera(1.0f/60, View);
+			if (Stage == 0)
+			{
+				PC->SetActorTickEnabled(false);
+				for (auto It = Server->GetPlayerControllerIterator(); It; ++It) if (It->Get()) It->Get()->SetActorTickEnabled(false);
+				RemoteBody->TeleportBodyFromAuthority(FTransform(FRotator::ZeroRotator, FVector(-100,0,RemoteBody->GetStandRootHeightCm())), TEXT("PeerPredictionSetup"));
+				HostBody->TeleportBodyFromAuthority(FTransform(FRotator::ZeroRotator, FVector(0,0,HostBody->GetStandRootHeightCm())), TEXT("PeerPredictionSetup"));
+				Stage = 1; StageStarted = Now; return false;
+			}
+			if (Stage == 1)
+			{
+				if (Now-StageStarted < 1 || LocalBody->GetControlEpoch()!=RemoteBody->GetControlEpoch() || !LocalBody->IsGrounded() || !HostBody->IsGrounded()) return false;
+				if (bLag)
+				{
+					FPacketSimulationSettings Packets; Packets.PktLag=120; Packets.PktLagVariance=20; Packets.PktLoss=5;
+					Server->GetNetDriver()->SetPacketSimulationSettings(Packets); Client->GetNetDriver()->SetPacketSimulationSettings(Packets);
+				}
+				StartHost = Host->GetActorLocation(); PreviousLocal = Local->GetActorLocation();
+				PreviousVisual = Visual->GetComponentLocation(); PreviousCamera = View.Location;
+				StartVisual = PreviousVisual; StartCamera = PreviousCamera;
+				LocalBody->SetMoveIntent(FVector::ForwardVector);
+				Stage=2; StageStarted=Now; return false;
+			}
+			if (Stage == 2)
+			{
+				if (FApp::CanEverRender() && Now-StageStarted > 4 && !Observer.IsValid())
+				{
+					FVector Center=Local->GetActorLocation();
+					for (TActorIterator<ACatCharacter> It(Client); It; ++It)
+						if (*It!=Local) { Center=(Center+It->GetActorLocation())*.5; break; }
+					Observer=Client->SpawnActor<ACameraActor>();
+					if (Observer.IsValid())
+					{
+						const FVector At=Center+FVector(-100,-280,130);
+						Observer->SetActorLocationAndRotation(At,(Center-At).Rotation());
+						Observer->GetCameraComponent()->FieldOfView=55;
+						PC->SetViewTarget(Observer.Get());
+					}
+				}
+				if (Now-StageStarted > 1.5)
+				{
+					MaxBackstep = FMath::Max(MaxBackstep, PreviousLocal.X-Local->GetActorLocation().X);
+					MaxVisualBackstep = FMath::Max(MaxVisualBackstep, PreviousVisual.X-Visual->GetComponentLocation().X);
+					MaxCameraBackstep = FMath::Max(MaxCameraBackstep, PreviousCamera.X-View.Location.X);
+					const double TravelBudget = LocalBody->GetEffectiveMaxMovementSpeedCmS()*Client->GetDeltaSeconds();
+					MaxVisualExcessStep = FMath::Max(MaxVisualExcessStep, FMath::Abs(PreviousVisual.X-Visual->GetComponentLocation().X)-TravelBudget);
+				}
+				PreviousLocal=Local->GetActorLocation();
+				PreviousVisual=Visual->GetComponentLocation(); PreviousCamera=View.Location;
+				if (Now-StageStarted < 5) return false;
+				Test->TestTrue(TEXT("ungripped client body pushes authority peer"), Host->GetActorLocation().X-StartHost.X > 30);
+				Test->TestTrue(TEXT("contact root corrections remain below the old repeated separation displacement"), MaxBackstep < 10);
+				Test->TestTrue(TEXT("owning client's actual rendered mesh does not snap backwards during sustained contact"), MaxVisualBackstep < 2);
+				Test->TestTrue(TEXT("owning client's normal camera does not snap backwards during sustained contact"), MaxCameraBackstep < 2);
+				Test->TestTrue(TEXT("rendered correction does not jump forwards beyond voluntary travel either"), MaxVisualExcessStep < 2);
+				Test->TestTrue(TEXT("mesh and camera really follow the pushed player instead of freezing"), Visual->GetComponentLocation().X-StartVisual.X > 30 && View.Location.X-StartCamera.X > 30);
+				Test->AddInfo(FString::Printf(TEXT("Event=peer_prediction_contact_observed Lag=%d ContactSeconds=3.5 MaxRootBackstepCm=%.3f MaxVisualBackstepCm=%.3f MaxCameraBackstepCm=%.3f PeerTravelCm=%.3f"), bLag, MaxBackstep, MaxVisualBackstep, MaxCameraBackstep, Host->GetActorLocation().X-StartHost.X));
+				if (FApp::CanEverRender())
+				{
+					FViewport* Viewport = Client->GetGameViewport() ? Client->GetGameViewport()->Viewport : nullptr;
+					TArray<FColor> Pixels;
+					if (Test->TestTrue(TEXT("capture the actual owning-client contact viewport"), Viewport && GetViewportScreenShot(Viewport,Pixels)))
+					{
+						const FIntPoint Size=Viewport->GetSizeXY(); TArray64<uint8> Png;
+						FImageUtils::PNGCompressImageArray(Size.X,Size.Y,TArrayView64<const FColor>(Pixels.GetData(),Pixels.Num()),Png);
+						const FString Directory=FPaths::ProjectSavedDir()/TEXT("Automation/PeerPrediction/Images");
+						IFileManager::Get().MakeDirectory(*Directory,true);
+						const FString File=Directory/FString::Printf(TEXT("%s-Lag%d.png"),*FDateTime::UtcNow().ToString(TEXT("%Y%m%d-%H%M%S")),bLag);
+						Test->TestTrue(TEXT("save actual contact viewport"),FFileHelper::SaveArrayToFile(Png,*File));
+						Test->AddInfo(FString::Printf(TEXT("Event=peer_prediction_view_captured File=%s"),*File));
+					}
+				}
+				LocalBody->SetMoveIntent(FVector::ZeroVector); Stage=3; StageStarted=Now; return false;
+			}
+			if (Now-StageStarted < 2) return false;
+			Test->TestTrue(TEXT("body contact converges after input release"), FVector::Dist(Local->GetActorLocation(), Remote->GetActorLocation()) < 3);
+			Test->TestTrue(TEXT("correction presentation fully settles after stopping"), CastChecked<UCatCharacterMovementComponent>(Local->GetCharacterMovement())->GetOwnerCorrectionVisualOffset().IsNearlyZero(.01));
+			Test->TestTrue(TEXT("body pushing leaves no grip or reaching input"), !LocalBody->GetGrab()->IsReaching(true) && !LocalBody->GetGrab()->IsReaching(false));
+			return true;
+		}
+	private:
+		FAutomationTestBase* Test;
+		bool bLag;
+		double Started, StageStarted=0, MaxBackstep=0, MaxVisualBackstep=0, MaxCameraBackstep=0, MaxVisualExcessStep=0;
+		int32 Stage=0;
+		FVector StartHost, PreviousLocal, PreviousVisual, PreviousCamera, StartVisual, StartCamera;
+		TWeakObjectPtr<ACameraActor> Observer;
+	};
 	/** Real PIE net drivers with delayed/lost packets. Proves response before authority receipt,
 	 * eventual reconciliation, predicted jump and rejection of pre-teleport saved input. */
 	class FPredictionVerify final : public IAutomationLatentCommand
@@ -380,7 +498,7 @@ namespace CatLocomotionNetwork
 
 }
 
-static bool RunLocomotionNetwork(FAutomationTestBase* Test, bool bCute, bool bPrediction = false)
+static bool RunLocomotionNetwork(FAutomationTestBase* Test, bool bCute, bool bPrediction = false, int32 PeerPush = -1)
 {
 	const FString ClassPath = bCute ? TEXT("/Game/Character/BP_CuteCatCharacter.BP_CuteCatCharacter_C") : TEXT("/Game/Character/BP_CatCharacter.BP_CatCharacter_C");
 	if (!Test->TestTrue(TEXT("requires an idle validation editor"), GEditor && GEngine && !GEditor->PlayWorld)) return false;
@@ -420,7 +538,8 @@ static bool RunLocomotionNetwork(FAutomationTestBase* Test, bool bCute, bool bPr
 		if (Driver.DefName == TEXT("GameNetDriver"))
 			Driver.DriverClassName = Driver.DriverClassNameFallback = TEXT("/Script/OnlineSubsystemUtils.IpNetDriver");
 	ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
-	if (bPrediction) FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<CatLocomotionNetwork::FPredictionVerify>(Test));
+	if (PeerPush >= 0) FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<CatLocomotionNetwork::FPeerPushVerify>(Test, PeerPush != 0));
+	else if (bPrediction) FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<CatLocomotionNetwork::FPredictionVerify>(Test));
 	else FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<CatLocomotionNetwork::FVerify>(Test,bCute));
 	ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
 	FAutomationTestFramework::Get().EnqueueLatentCommand(Restore);
@@ -441,4 +560,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatCMCPredictionNetworkTest,
 	"Catfishing.CMC.Network.CuteCatPredictsAndReconcilesWithLagAndLoss",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 bool FCatCMCPredictionNetworkTest::RunTest(const FString& Parameters) { return RunLocomotionNetwork(this,true,true); }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatPeerPredictionNetworkTest,
+	"Catfishing.CMC.Network.BodyPushPrediction.NormalNetwork",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FCatPeerPredictionNetworkTest::RunTest(const FString&) { return RunLocomotionNetwork(this,true,false,0); }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatPeerPredictionLagNetworkTest,
+	"Catfishing.CMC.Network.BodyPushPrediction.LagAndLoss",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FCatPeerPredictionLagNetworkTest::RunTest(const FString&) { return RunLocomotionNetwork(this,true,false,1); }
 #endif

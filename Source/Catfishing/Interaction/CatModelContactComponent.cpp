@@ -156,6 +156,12 @@ bool UCatModelContactComponent::FindPeerContact(const UCatModelContactComponent*
 {
     Normal = FVector::ZeroVector; SeparationTravelCm = 0;
     if (!Other || !HasModelContacts() || !Other->HasModelContacts()) return false;
+    // ServerMove defers child transforms around MoveAutonomous. Each separation step
+    // must query the current root, not repeatedly resolve the pre-move overlap.
+    // Keep the last evaluated bone-local pose; evaluating animation here would rewind it.
+    for (const auto* Model : {this, Other})
+        for (UCatModelContactBody* Contact : Model->Bodies)
+            Contact->UpdateComponentToWorld(EUpdateTransformFlags::None, ETeleportType::TeleportPhysics);
     const FVector Difference = Other->GetOwner()->GetActorLocation()-GetOwner()->GetActorLocation();
     const FVector Approach = Difference.GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER,
         GetOwner()->GetUniqueID() < Other->GetOwner()->GetUniqueID() ? FVector::ForwardVector : -FVector::ForwardVector);

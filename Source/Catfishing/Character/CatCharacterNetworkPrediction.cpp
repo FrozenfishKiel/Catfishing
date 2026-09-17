@@ -20,7 +20,7 @@ void FCatSavedMove::Clear()
 {
     Super::Clear();
     Drive = {}; ExternalForce = FVector::ZeroVector; ViewIntent = FRotator::ZeroRotator;
-    WalkSpeed = 0; ControlEpoch = 0; bSprint = false;
+    WalkSpeed = 0; ControlEpoch = 0; PolicyServerSeconds = 0; bSprint = false;
 }
 
 uint8 FCatSavedMove::GetCompressedFlags() const
@@ -35,8 +35,7 @@ void FCatSavedMove::SetMoveFor(ACharacter* Character, float InDeltaTime, const F
     const auto* Cat = CastChecked<ACatCharacter>(Character);
     auto* Body = Cat->GetPhysicalBodyComponent();
     const auto* Movement = CastChecked<UCatCharacterMovementComponent>(Character->GetCharacterMovement());
-    Drive = Body->GetReplicatedDrive();
-    ExternalForce = Body->GetReplicatedExternalForce();
+    Movement->GetPredictionPolicy(Drive, ExternalForce, PolicyServerSeconds);
     ViewIntent = Body->GetViewIntent();
     WalkSpeed = Body->MaxMovementSpeedCmS;
     ControlEpoch = Body->GetControlEpoch();
@@ -81,6 +80,93 @@ FCatNetworkMoveDataContainer::FCatNetworkMoveDataContainer()
     NewMoveData = &Moves[0]; PendingMoveData = &Moves[1]; OldMoveData = &Moves[2];
 }
 
+void FCatMoveResponseDataContainer::ServerFillResponseData(const UCharacterMovementComponent& Movement, const FClientAdjustment& Adjustment)
+{
+    FCharacterMoveResponseDataContainer::ServerFillResponseData(Movement, Adjustment);
+    bHasPolicy = false;
+    const auto& CatMovement = static_cast<const UCatCharacterMovementComponent&>(Movement);
+    for (int32 Index = CatMovement.AuthorityMovePolicies.Num()-1; Index >= 0; --Index)
+        if (CatMovement.AuthorityMovePolicies[Index].MoveTime == Adjustment.TimeStamp)
+        {
+            Policy = CatMovement.AuthorityMovePolicies[Index]; bHasPolicy = true; break;
+        }
+}
+
+bool FCatMoveResponseDataContainer::Serialize(UCharacterMovementComponent& Movement, FArchive& Ar, UPackageMap* Map)
+{
+    const bool bSuccess = FCharacterMoveResponseDataContainer::Serialize(Movement, Ar, Map);
+    Ar.SerializeBits(&bHasPolicy, 1);
+    if (bHasPolicy)
+    {
+        Ar.SerializeIntPacked(Policy.ControlEpoch);
+        Ar << Policy.ServerSeconds << Policy.ExternalForce;
+        auto& Drive = Policy.Drive;
+        Ar << Drive.MoveIntent << Drive.HoldLocation << Drive.MaxSpeed << Drive.MaxForce;
+        uint16 Flags = (Drive.bFishing ? 1 : 0) | (Drive.bCooperative ? 2 : 0) | (Drive.bLocomotion ? 4 : 0)
+            | (Drive.bConnected ? 8 : 0) | (Drive.bUnderLoad ? 16 : 0) | (Drive.bPassiveBodyContact ? 32 : 0)
+            | (Drive.bBodyContactDriven ? 64 : 0) | (Drive.bHoldActive ? 128 : 0);
+        Ar.SerializeBits(&Flags, 8);
+        if (Ar.IsLoading())
+        {
+            Policy.MoveTime = ClientAdjustment.TimeStamp;
+            Drive.bFishing = !!(Flags&1); Drive.bCooperative = !!(Flags&2); Drive.bLocomotion = !!(Flags&4);
+            Drive.bConnected = !!(Flags&8); Drive.bUnderLoad = !!(Flags&16); Drive.bPassiveBodyContact = !!(Flags&32);
+            Drive.bBodyContactDriven = !!(Flags&64); Drive.bHoldActive = !!(Flags&128);
+        }
+    }
+    return bSuccess && !Ar.IsError();
+}
+
+void UCatCharacterMovementComponent::GetPredictionPolicy(FCatBodyDriveSample& Drive, FVector& Force, double& ServerSeconds) const
+{
+    const auto* Body = CastChecked<ACatCharacter>(CharacterOwner)->GetPhysicalBodyComponent();
+    Drive = Body->GetReplicatedDrive(); Force = Body->GetReplicatedExternalForce();
+    ServerSeconds = Body->GetReplicatedPolicyServerSeconds();
+    if (ReceivedMovePolicy.ServerSeconds > 0 && ReceivedMovePolicy.ControlEpoch == Body->GetControlEpoch()
+        && ReceivedMovePolicy.ServerSeconds >= ServerSeconds)
+    {
+        Drive = ReceivedMovePolicy.Drive; Force = ReceivedMovePolicy.ExternalForce; ServerSeconds = ReceivedMovePolicy.ServerSeconds;
+    }
+}
+
+void UCatCharacterMovementComponent::ClientHandleMoveResponse(const FCharacterMoveResponseDataContainer& MoveResponse)
+{
+    const auto& Response = static_cast<const FCatMoveResponseDataContainer&>(MoveResponse);
+    const auto* Body = CastChecked<ACatCharacter>(CharacterOwner)->GetPhysicalBodyComponent();
+    // An old control epoch must not move a new pawn/teleported body, even if native time still matches.
+    if (Response.bHasPolicy && Response.Policy.ControlEpoch != Body->GetControlEpoch())
+    {
+        if (GetWorld()->GetTimeSeconds() >= NextMoveRejectLogSeconds)
+        {
+            NextMoveRejectLogSeconds = GetWorld()->GetTimeSeconds()+1;
+            UE_LOG(LogCatPhysicsGrab, Log, TEXT("Event=cmc_response_rejected World=%s NetMode=%d Authority=0 LocalRole=%d Actor=%s BodyId=%s ControlEpoch=%u ResponseEpoch=%u MoveTime=%.3f Result=StaleControlEpoch"),
+                *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), int32(CharacterOwner->GetLocalRole()), *GetNameSafe(CharacterOwner),
+                *Body->GetBodyId().ToString(), Body->GetControlEpoch(), Response.Policy.ControlEpoch, Response.Policy.MoveTime);
+        }
+        return;
+    }
+    Super::ClientHandleMoveResponse(MoveResponse);
+    if (!Response.bHasPolicy || !ClientPredictionData || !ClientPredictionData->LastAckedMove.IsValid()
+        || ClientPredictionData->LastAckedMove->TimeStamp != Response.Policy.MoveTime
+        || Response.Policy.ServerSeconds < ReceivedMovePolicy.ServerSeconds) return;
+    ReceivedMovePolicy = Response.Policy;
+    int32 Rebased = 0;
+    for (const auto& Pending : ClientPredictionData->SavedMoves)
+    {
+        auto& Move = static_cast<FCatSavedMove&>(*Pending);
+        if (Move.ControlEpoch != ReceivedMovePolicy.ControlEpoch || Move.PolicyServerSeconds > ReceivedMovePolicy.ServerSeconds) continue;
+        Move.Drive = ReceivedMovePolicy.Drive; Move.ExternalForce = ReceivedMovePolicy.ExternalForce;
+        Move.PolicyServerSeconds = ReceivedMovePolicy.ServerSeconds; ++Rebased;
+    }
+    if (MoveResponse.IsCorrection() && GetWorld()->GetTimeSeconds() >= NextPolicyLogSeconds)
+    {
+        NextPolicyLogSeconds = GetWorld()->GetTimeSeconds()+1;
+        UE_LOG(LogCatPhysicsGrab, Log, TEXT("Event=cmc_policy_reconciled World=%s NetMode=%d Authority=0 LocalRole=%d Actor=%s BodyId=%s ControlEpoch=%u MoveTime=%.3f PolicyServerSeconds=%.3f RebasedMoves=%d Result=AuthoritativeLoad"),
+            *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), int32(CharacterOwner->GetLocalRole()), *GetNameSafe(CharacterOwner),
+            *Body->GetBodyId().ToString(), Body->GetControlEpoch(), ReceivedMovePolicy.MoveTime, ReceivedMovePolicy.ServerSeconds, Rebased);
+    }
+}
+
 FNetworkPredictionData_Client* UCatCharacterMovementComponent::GetPredictionData_Client() const
 {
     if (!ClientPredictionData)
@@ -120,6 +206,15 @@ void UCatCharacterMovementComponent::ServerMove_PerformMovement(const FCharacter
     }
     const float PreviousTime = GetPredictionData_Server_Character()->CurrentClientTimeStamp;
     Super::ServerMove_PerformMovement(MoveData);
+    if (GetPredictionData_Server_Character()->CurrentClientTimeStamp != PreviousTime)
+    {
+        FCatMovePolicy Policy;
+        Policy.Drive = ActiveDrive; Policy.ExternalForce = LastExternalForce;
+        Policy.ControlEpoch = Body->GetControlEpoch(); Policy.ServerSeconds = GetWorld()->GetTimeSeconds();
+        Policy.MoveTime = MoveData.TimeStamp;
+        AuthorityMovePolicies.Add(Policy);
+        if (AuthorityMovePolicies.Num() > 64) AuthorityMovePolicies.RemoveAt(0, AuthorityMovePolicies.Num()-64, EAllowShrinking::No);
+    }
     if (GetPredictionData_Server_Character()->CurrentClientTimeStamp != PreviousTime
         && (!Velocity.IsNearlyZero(3) || !MoveData.Acceleration.IsNearlyZero())
         && GetWorld()->GetTimeSeconds() >= NextPredictionLogSeconds)
@@ -144,6 +239,8 @@ void UCatCharacterMovementComponent::ResetControlPrediction()
         ClientPredictionData->bUpdatePosition = false;
     }
     bReplayPolicy = false;
+    ReceivedMovePolicy = {}; AuthorityMovePolicies.Reset();
+    OwnerCorrectionVisualOffset = FVector::ZeroVector; bPendingOwnerCorrection = false;
     ConsumeInputVector();
     if (CharacterOwner) CharacterOwner->StopJumping();
 }
@@ -155,6 +252,13 @@ bool UCatCharacterMovementComponent::ClientUpdatePositionAfterServerUpdate()
     const FRotator LiveView = Body->GetViewIntent();
     const bool bLiveSprint = bWantsSprint;
     const bool bUpdated = Super::ClientUpdatePositionAfterServerUpdate();
+    if (bPendingOwnerCorrection)
+    {
+        // Compare against the fully replayed position, never the old server pose before replay.
+        const FVector Offset = PreCorrectionVisualLocation-CharacterOwner->GetActorLocation();
+        OwnerCorrectionVisualOffset = Offset.Size() <= 100 ? Offset : FVector::ZeroVector;
+        bPendingOwnerCorrection = false;
+    }
     Body->SetMovementSpeed(LiveSpeed);
     Body->SetViewIntent(LiveView);
     bWantsSprint = bLiveSprint;
@@ -168,6 +272,11 @@ void UCatCharacterMovementComponent::OnClientCorrectionReceived(FNetworkPredicti
 {
     Super::OnClientCorrectionReceived(ClientData, TimeStamp, NewLocation, NewVelocity, NewBase,
         BaseBoneName, bHasBase, bBaseRelativePosition, ServerMovementMode, ServerGravityDirection);
+    if (!bPendingOwnerCorrection && CharacterOwner->IsLocallyControlled())
+    {
+        PreCorrectionVisualLocation = CharacterOwner->GetActorLocation()+OwnerCorrectionVisualOffset;
+        bPendingOwnerCorrection = true;
+    }
     ++CorrectionCount;
     // Compare the same acknowledged move, not today's predicted position against a past server pose.
     if (ClientData.LastAckedMove.IsValid())

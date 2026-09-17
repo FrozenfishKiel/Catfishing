@@ -36,6 +36,10 @@ public:
 	virtual bool ClientUpdatePositionAfterServerUpdate() override;
 	virtual void UpdateFromCompressedFlags(uint8 Flags) override;
 	virtual void ServerMove_PerformMovement(const FCharacterNetworkMoveData& MoveData) override;
+	virtual void ClientHandleMoveResponse(const FCharacterMoveResponseDataContainer& MoveResponse) override;
+	void GetPredictionPolicy(FCatBodyDriveSample& Drive, FVector& Force, double& ServerSeconds) const;
+	/** Cosmetic correction only; authoritative collision and grab anchors never consume it. */
+	FVector GetOwnerCorrectionVisualOffset() const { return OwnerCorrectionVisualOffset; }
 	virtual void OnClientCorrectionReceived(FNetworkPredictionData_Client_Character& ClientData, float TimeStamp,
 		FVector NewLocation, FVector NewVelocity, FMovementBaseInterfaceData* NewBase, FName BaseBoneName,
 		bool bHasBase, bool bBaseRelativePosition, uint8 ServerMovementMode, FVector ServerGravityDirection) override;
@@ -66,7 +70,15 @@ public:
 	FVector GetTotalMotionCorrection() const { return TotalMotionCorrection; }
 private:
 	friend class FCatSavedMove;
+	friend struct FCatMoveResponseDataContainer;
 	FCatNetworkMoveDataContainer NetworkMoves;
+	FCatMoveResponseDataContainer NetworkResponse;
+	TArray<FCatMovePolicy> AuthorityMovePolicies;
+	FCatMovePolicy ReceivedMovePolicy;
+	double NextPolicyLogSeconds = 0;
+	FVector OwnerCorrectionVisualOffset = FVector::ZeroVector;
+	FVector PreCorrectionVisualLocation = FVector::ZeroVector;
+	bool bPendingOwnerCorrection = false;
 	FCatBodyDriveSample ActiveDrive;
 	FVector ActiveExternalForce = FVector::ZeroVector;
 	FVector LastExternalForce = FVector::ZeroVector;

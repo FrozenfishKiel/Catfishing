@@ -67,6 +67,8 @@ struct FCatPhysicalBodySnapshot
 	/** Authority policy for CMC prediction. No client can submit force or stamina values. */
 	UPROPERTY() FCatBodyDriveSample Drive;
 	UPROPERTY() FVector ExternalForce = FVector::ZeroVector;
+	/** Authority observation time, used only to order prediction policy samples. */
+	UPROPERTY() double PolicyServerSeconds = 0;
 	UPROPERTY() uint32 ControlEpoch = 0;
 };
 
@@ -92,6 +94,7 @@ public:
 	FVector GetLocalMoveIntent() const { return MoveInput; }
 	FCatBodyDriveSample GetReplicatedDrive() const { return Snapshot.Drive; }
 	FVector GetReplicatedExternalForce() const { return Snapshot.ExternalForce; }
+	double GetReplicatedPolicyServerSeconds() const { return Snapshot.PolicyServerSeconds; }
 	double GetFacingYawDegrees() const { return FacingYawDegrees; }
 	FTickFunction& GetPostMovementTick();
 	FVector GetExternalForceFromAuthority();

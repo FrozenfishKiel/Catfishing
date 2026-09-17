@@ -273,6 +273,7 @@ void UCatPhysicalBodyComponent::CaptureSnapshot()
 	{
 		Snapshot.Drive = CaptureDriveSample();
 		Snapshot.ExternalForce = CharacterMovement->GetLastExternalForce();
+		Snapshot.PolicyServerSeconds = GetWorld()->GetTimeSeconds();
 	}
 	++Snapshot.Revision;
 }

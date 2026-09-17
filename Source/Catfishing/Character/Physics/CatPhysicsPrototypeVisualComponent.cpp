@@ -1,5 +1,6 @@
 #include "Character/Physics/CatPhysicsPrototypeVisualComponent.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
+#include "Character/CatCharacterMovementComponent.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
 
 #include "Animation/AnimSequence.h"
@@ -225,6 +226,8 @@ void UCatPhysicsPrototypeVisualComponent::RefreshVisualPose(const float DeltaTim
 		const FTransform UnsmoothedSource = InitialAnimationRelativeTransform * AnimationSource->GetAttachParent()->GetComponentTransform();
 		FTransform VisualPose = InitialVisualRelativeTransform * BodyRoot->GetComponentTransform();
 		VisualPose.AddToTranslation(AnimationSource->GetComponentLocation() - UnsmoothedSource.GetLocation());
+		if (const auto* Movement = GetOwner()->FindComponentByClass<UCatCharacterMovementComponent>())
+			VisualPose.AddToTranslation(Movement->GetOwnerCorrectionVisualOffset());
 		VisualPose.SetRotation(AnimationSource->GetComponentQuat() * UnsmoothedSource.GetRotation().Inverse() * VisualPose.GetRotation());
 		VisualMesh->SetWorldTransform(VisualPose);
 	}
