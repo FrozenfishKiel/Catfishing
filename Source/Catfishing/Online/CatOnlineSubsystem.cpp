@@ -68,6 +68,8 @@ namespace CatOnlineNames
 	static constexpr double HostLobbyReadyRetrySeconds = 2.0;
 	/** 平台已确认邀请等待前台和本地身份的最长秒数；接受时冻结期限，持续未就绪也不能重新开始计时。 */
 	static constexpr double AcceptedInviteWaitSeconds = 30.0;
+	/** 普通列表搜索包含平台内部占用等待；独立于入房 Beacon 的连接与授权预算。 */
+	static constexpr double SessionSearchWaitSeconds = 30.0;
 }
 
 namespace CatOnlineMapPreloadProgress
@@ -1796,6 +1798,7 @@ FCatOnlineResult UCatOnlineSubsystem::RequestFindSessions(const FString& InviteC
 	ActiveSearch->QuerySettings.Set(CatOnlineNames::ProjectSetting, CatOnlineNames::ProjectId, EOnlineComparisonOp::Equals);
 	ActiveSearch->QuerySettings.Set(CatOnlineNames::ProtocolSetting, CatOnlineNames::ProtocolVersion, EOnlineComparisonOp::Equals);
 	ActiveSearch->QuerySettings.Set(CatOnlineNames::MapSetting, GameplayMapPackage, EOnlineComparisonOp::Equals);
+	SessionSearchDeadline = FPlatformTime::Seconds() + CatOnlineNames::SessionSearchWaitSeconds;
 	const uint64 SubmittedEpoch = OperationEpoch;
 	FindSessionsHandle = OperationSessionInterface->AddOnFindSessionsCompleteDelegate_Handle(
 		FOnFindSessionsCompleteDelegate::CreateUObject(this, &ThisClass::HandleFindSessionsComplete, SubmittedEpoch));
@@ -1803,6 +1806,15 @@ FCatOnlineResult UCatOnlineSubsystem::RequestFindSessions(const FString& InviteC
 	const bool bStillAwaitingCompletion = ActiveOperation == ECatOnlineOperation::Find
 		&& OperationEpoch == SubmittedEpoch
 		&& FindSessionsHandle.IsValid();
+	if (bRequestQueued && bStillAwaitingCompletion && ActiveSearch->SearchState == EOnlineAsyncTaskState::NotStarted)
+	{
+		// UE Steam 在其他搜索占用时也返回 true，但不启动传入对象；不得把它当作已完成或无限等待。
+		const APlayerController* Controller = GetGameInstance()->GetFirstLocalPlayerController();
+		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_search_not_started RequestId=%s Epoch=%llu World=%s NetMode=%d Role=%s Actor=%s Authority=%d LocalRole=%d Player=Local WaitSeconds=%.0f Result=AwaitingDeadline"),
+			*ActiveRequestId.ToString(), OperationEpoch, *GetNameSafe(GetWorld()), GetWorld() ? int32(GetWorld()->GetNetMode()) : -1,
+			*UEnum::GetValueAsString(SessionRole), *GetNameSafe(Controller), Controller && Controller->HasAuthority(),
+			Controller ? int32(Controller->GetLocalRole()) : -1, CatOnlineNames::SessionSearchWaitSeconds);
+	}
 	if (!bRequestQueued && bStillAwaitingCompletion)
 	{
 		SessionState = ECatOnlineSessionState::NoSession;
@@ -2601,12 +2613,45 @@ void UCatOnlineSubsystem::HandleCreateSessionComplete(const FName SessionName, c
 	FinishOperationSuccess();
 }
 
-// Find 回调流程：只消费当前 Find epoch；失败清空结果，成功为每个匹配平台结果生成随机句柄和不含原始身份的摘要，随后发布唯一终态。
+// 超时先解除共享 Find 广播，再取消平台搜索（包括 Steam 解析失败遗留的占用），最后发布唯一失败终态。
+// 取消期间仍保持 Find，不能让同步回调或 UI 重入提交新操作；不自动重试、不自动加入房间。
+void UCatOnlineSubsystem::ExpireSessionSearch()
+{
+	const IOnlineSessionPtr Sessions = OperationSessionInterface;
+	const int32 SearchState = ActiveSearch.IsValid() ? int32(ActiveSearch->SearchState) : -1;
+	if (Sessions.IsValid() && FindSessionsHandle.IsValid())
+	{
+		Sessions->ClearOnFindSessionsCompleteDelegate_Handle(FindSessionsHandle);
+	}
+	FindSessionsHandle.Reset();
+	SessionSearchDeadline = 0.0;
+	const bool bCancelAccepted = Sessions.IsValid() && Sessions->CancelFindSessions();
+	const APlayerController* Controller = GetGameInstance()->GetFirstLocalPlayerController();
+	UE_LOG(LogCatOnline, Warning, TEXT("Event=online_search_timed_out RequestId=%s Epoch=%llu World=%s NetMode=%d Role=%s Actor=%s Authority=%d LocalRole=%d Player=Local SearchState=%d CancelAccepted=%d Result=JoinTargetTimedOut"),
+		*ActiveRequestId.ToString(), OperationEpoch, *GetNameSafe(GetWorld()), GetWorld() ? int32(GetWorld()->GetNetMode()) : -1,
+		*UEnum::GetValueAsString(SessionRole), *GetNameSafe(Controller), Controller && Controller->HasAuthority(),
+		Controller ? int32(Controller->GetLocalRole()) : -1, SearchState, bCancelAccepted);
+	SearchResultsByHandle.Reset();
+	SearchSummaries.Reset();
+	SessionState = ECatOnlineSessionState::NoSession;
+	FinishOperationFailure(ECatOnlineError::JoinTargetTimedOut);
+}
+
+// Find 回调流程：只消费当前 Find epoch 和搜索对象终态；失败清空结果，成功为匹配结果生成 opaque 摘要，随后发布唯一终态。
 void UCatOnlineSubsystem::HandleFindSessionsComplete(const bool bWasSuccessful, const uint64 CallbackEpoch)
 {
 	if (ActiveOperation != ECatOnlineOperation::Find || CallbackEpoch != OperationEpoch || !FindSessionsHandle.IsValid())
 	{
 		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_callback_ignored Callback=Find Epoch=%llu CurrentEpoch=%llu"), CallbackEpoch, OperationEpoch);
+		return;
+	}
+	// OSS 完成委托为共享广播；取消前的旧任务可能在新请求期间广播，必须同时核对本次搜索对象的终态。
+	if (!ActiveSearch.IsValid() || (ActiveSearch->SearchState != EOnlineAsyncTaskState::Done
+		&& ActiveSearch->SearchState != EOnlineAsyncTaskState::Failed))
+	{
+		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_search_callback_unmatched RequestId=%s Epoch=%llu World=%s NetMode=%d SearchState=%d Result=Ignored"),
+			*ActiveRequestId.ToString(), OperationEpoch, *GetNameSafe(GetWorld()), GetWorld() ? int32(GetWorld()->GetNetMode()) : -1,
+			ActiveSearch.IsValid() ? int32(ActiveSearch->SearchState) : -1);
 		return;
 	}
 	if (OperationSessionInterface.IsValid())
@@ -2617,7 +2662,7 @@ void UCatOnlineSubsystem::HandleFindSessionsComplete(const bool bWasSuccessful, 
 	FindSessionsHandle.Reset();
 	SearchResultsByHandle.Reset();
 	SearchSummaries.Reset();
-	if (!bWasSuccessful || !ActiveSearch.IsValid())
+	if (!bWasSuccessful || ActiveSearch->SearchState != EOnlineAsyncTaskState::Done)
 	{
 		ActiveSearch.Reset();
 		SessionState = ECatOnlineSessionState::NoSession;
@@ -2867,6 +2912,11 @@ void UCatOnlineSubsystem::HandleSessionUserInviteAccepted(const bool bWasSuccess
 bool UCatOnlineSubsystem::TickPlatformInvites(float DeltaSeconds)
 {
 	(void)DeltaSeconds;
+	if (ActiveOperation == ECatOnlineOperation::Find && SearchInviteCode.IsEmpty()
+		&& SessionSearchDeadline > 0.0 && FPlatformTime::Seconds() >= SessionSearchDeadline)
+	{
+		ExpireSessionSearch();
+	}
 	if (ActiveOperation == ECatOnlineOperation::UpdateRoom && FPlatformTime::Seconds() >= RoomSettingsDeadline)
 	{ HandleRoomSettingsComplete(NAME_GameSession, false, OperationEpoch); }
 	if (ActiveOperation == ECatOnlineOperation::Find && !SearchInviteCode.IsEmpty()) { PollCodeSearch(); }
@@ -3390,6 +3440,7 @@ void UCatOnlineSubsystem::ClearRunTeardownDelegate()
 // 操作委托清理流程：只在保存的精确 Session 接口上逐一清理有效句柄；每个 Clear 同时 Reset 句柄，重复调用不会影响后续 epoch。
 void UCatOnlineSubsystem::ClearOperationDelegates()
 {
+	SessionSearchDeadline = 0.0;
 	CodeSearch.Reset();
 	if (UGameInstance* Instance = GetGameInstance())
 	{

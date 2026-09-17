@@ -392,6 +392,10 @@ private:
 	/** 当前搜索对象；只在 Find epoch 内存活，回调结案或清理时释放。 */
 	TSharedPtr<FOnlineSessionSearch> ActiveSearch;
 
+	/** 普通房间搜索的固定单调截止时间（秒）；平台受理但不回调也必须收口，终态清零。 */
+	double SessionSearchDeadline = 0.0;
+	void ExpireSessionSearch();
+
 	/** 当前 Steam 好友缓存代际的 opaque 句柄到平台身份映射；刷新和反初始化会整代替换，UI 永不读取原始身份。 */
 	TMap<FGuid, TSharedPtr<const FUniqueNetId>> FriendsByHandle;
 
