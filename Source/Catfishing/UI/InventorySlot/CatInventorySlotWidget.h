@@ -6,7 +6,6 @@
 #include "Inventory/CatInventoryComponent.h"
 #include "CatInventorySlotWidget.generated.h"
 
-class UCatInventoryItemDefinition;
 class UImage;
 class UBorder;
 class UTextBlock;
@@ -38,8 +37,6 @@ class CATFISHING_API UCatInventorySlotWidget : public UUserWidget
 public:
 	/** 把本格绑定到明确库存位置并显示条目；父库存 UI 遍历 Model 列表时调用。 */
 	void SetSlotContext(int32 InSlotIndex, UCatInventoryComponent* InInventory, const FCatInventoryEntry& InEntry);
-	/** 手持实例的格位投影，不创建库存条目。 */
-	void SetHeldItemPresentation(const UCatInventoryItemDefinition* Definition, bool bInUse);
 
 	/** 读取本格的显示副本；它服务图片、数量和按钮状态，真实使用/交换仍把库存宿主与槽位交给服务器重读。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Inventory")

@@ -1,9 +1,8 @@
-#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
+﻿#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "GameplayEffectExtension.h"
 #include "AbilitySystemComponent.h"
 #include "Growth/CatGrowthComponent.h"
 #include "GameFramework/Actor.h"
-#include "AbilitySystem/Physics/CatPhysicalEffortComponent.h"
 
 #include "Net/UnrealNetwork.h"
 
@@ -107,10 +106,6 @@ void UCatSurvivalAttributeSet::OnRep_FishingStrength(const FGameplayAttributeDat
 void UCatSurvivalAttributeSet::OnRep_FightStamina(const FGameplayAttributeData& OldFightStamina)
 {
 	GAMEPLAYATTRIBUTE_REPNOTIFY(UCatSurvivalAttributeSet, FightStamina, OldFightStamina);
-	if (const auto* ASC = GetOwningAbilitySystemComponent())
-		if (AActor* Avatar = ASC->GetAvatarActor())
-			if (auto* Effort = Avatar->FindComponentByClass<UCatPhysicalEffortComponent>())
-				Effort->ObserveStaminaFromReplication(double(OldFightStamina.GetCurrentValue()) + GetYellowFightStamina());
 }
 
 // MaxFightStamina 复制通知流程：使用标准 RepNotify 更新搏斗体力上限；显示层和接力会话都只观察 ASC 的同一份上限。
@@ -123,9 +118,4 @@ void UCatSurvivalAttributeSet::OnRep_MaxFightStamina(const FGameplayAttributeDat
 void UCatSurvivalAttributeSet::OnRep_YellowFightStamina(const FGameplayAttributeData& OldYellowFightStamina)
 {
 	GAMEPLAYATTRIBUTE_REPNOTIFY(UCatSurvivalAttributeSet, YellowFightStamina, OldYellowFightStamina);
-	// 裁决②：绿段归零后仍需观察黄段消费；不引入第二份复制余额。
-	if (const auto* ASC = GetOwningAbilitySystemComponent())
-		if (AActor* Avatar = ASC->GetAvatarActor())
-			if (auto* Effort = Avatar->FindComponentByClass<UCatPhysicalEffortComponent>())
-				Effort->ObserveStaminaFromReplication(double(GetFightStamina()) + OldYellowFightStamina.GetCurrentValue());
 }

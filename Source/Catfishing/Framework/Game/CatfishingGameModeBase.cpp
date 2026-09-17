@@ -1,4 +1,5 @@
-#include "Framework/Game/CatfishingGameModeBase.h"
+﻿#include "Framework/Game/CatfishingGameModeBase.h"
+#include "AbilitySystem/Tags/CatStateTags.h"
 #include "Online/CatRoomAdmission.h"
 #include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
 
@@ -866,13 +867,13 @@ bool ACatfishingGameModeBase::CanAcceptGameplayCommand(const AController* Contro
 bool ACatfishingGameModeBase::CanAcceptFishingCommand(const AController* Controller) const
 {
 	const ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
-	const UCatConditionComponent* Conditions = Character ? Character->GetConditionComponent() : nullptr;
+	const UCatAbilitySystemComponent* Conditions = Character ? Character->GetCatAbilitySystemComponent() : nullptr;
 	return CanAcceptGameplayCommand(Controller)
 		&& (RunPublicState.Phase.Phase == ECatRunPhase::DayActive
 			|| RunPublicState.Phase.Phase == ECatRunPhase::NormalNight
 			|| RunPublicState.Phase.Phase == ECatRunPhase::FailureSettlementNight
 			|| RunPublicState.Phase.Phase == ECatRunPhase::SuccessSettlementNight)
-		&& Conditions && !Conditions->GetSnapshot().bDowned;
+		&& Conditions && !Conditions->HasMatchingGameplayTag(CatStateTags::Downed);
 }
 
 bool ACatfishingGameModeBase::CanGenerateNewFishingBites() const
@@ -2219,7 +2220,7 @@ bool ACatfishingGameModeBase::RefreshEnvironmentAndPublish()
 // 雨天淋湿驱动流程（猫册 §3.1.6）：环境快照每次发布后遍历世界里的猫，把 Weather==Rain 直接写成湿毛。
 // 这是 SetWetFromAuthority 的第一个产品调用方——09-11 对表记的「该函数全项目零调用者、
 // Environment 与 Condition 之间没有任何接缝」就是缺这一条。
-// 非雨天不强行擦干还泡在水里的猫：Wet 的另一个来源是浸没，两个来源在这里按「或」合并。
+// 天气仅维护自己的湿毛来源；浸没来源由 Condition.Water 效果持有，ASC 标签计数自然表达两者的“或”。
 // 未做：设计写的是「渐湿」，但参数页没有变湿速率，这里先按天气切换即时置位，速率待策划拍。
 void ACatfishingGameModeBase::ApplyWeatherWetnessToCharacters()
 {
@@ -2236,8 +2237,7 @@ void ACatfishingGameModeBase::ApplyWeatherWetnessToCharacters()
 		{
 			continue;
 		}
-		const bool bInWater = Conditions->GetSnapshot().WaterExposure != ECatWaterExposureState::Dry;
-		Conditions->SetWetFromAuthority(bRaining || bInWater);
+		Conditions->SetWetFromAuthority(bRaining);
 	}
 }
 

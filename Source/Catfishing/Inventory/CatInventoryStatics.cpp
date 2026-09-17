@@ -1,4 +1,6 @@
-#include "Inventory/CatInventoryStatics.h"
+﻿#include "Inventory/CatInventoryStatics.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Tags/CatStateTags.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "ShopEconomy/Trading/CatShopTradeController.h"
 #include "ShopEconomy/CatFishBuyerActor.h"
@@ -318,7 +320,7 @@ FCatDomainCommandResult UCatInventoryStatics::MoveItemBetweenInventoryHostsFromA
 					&& CatInventoryAccessRules::ResolveReachableFishContainer(Endpoint.Host, ControlledCharacter) != Endpoint.Inventory;
 			};
 			if (!ControlledCharacter->HasAuthority() || !ControlledCharacter->GetConditionComponent()
-				|| (ControlledCharacter->GetConditionComponent()->GetSnapshot().bDowned
+				|| (ControlledCharacter->GetCatAbilitySystemComponent()->HasMatchingGameplayTag(CatStateTags::Downed)
 					&& (SourceInventoryHost != ControlledCharacter || TargetInventoryHost != ControlledCharacter))
 				|| InvalidFishEndpoint(SourceEndpoint) || InvalidFishEndpoint(TargetEndpoint))
 			{

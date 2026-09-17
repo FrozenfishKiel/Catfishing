@@ -3,7 +3,6 @@
 #include "Inventory/CatInventorySettings.h"
 #include "Growth/CatGrowthComponent.h"
 #include "Inventory/CatInventoryItemInstance.h"
-#include "Inventory/CatInventoryItemDefinition.h"
 #include "Net/UnrealNetwork.h"
 
 // 构造流程：保留父类全部库存事实和复制行为，只声明背包是角色默认整批收货目标。
@@ -47,7 +46,7 @@ int32 UCatBackPackComponent::GetConfiguredPlayerSlotCapacity() const
 		0.0, double(MAX_int32)));
 }
 
-// 格位与 held entry 身份配对，不复制或创建第二份物品。
+// 预留流程：权威端核对原格中的单件实例，已有预留只接受同一身份；写入归还格后触发复制，库存通知仍由实际移出操作发出。
 bool UCatBackPackComponent::ReserveQuickbarHeldSlotFromAuthority(const int32 SlotIndex, const FGuid ItemId)
 {
 	const auto* Entry = GetInventoryEntryAtSlot(SlotIndex);
@@ -56,43 +55,38 @@ bool UCatBackPackComponent::ReserveQuickbarHeldSlotFromAuthority(const int32 Slo
 	if (QuickbarHeldSlot.ItemInstanceId.IsValid()) return QuickbarHeldSlot.ItemInstanceId == ItemId;
 	QuickbarHeldSlot.SlotIndex = SlotIndex;
 	QuickbarHeldSlot.ItemInstanceId = ItemId;
-	QuickbarHeldSlot.ItemId = Entry->Instance->GetItemDefinition()->GetItemId();
-	OnRep_QuickbarHeldSlot();
 	GetOwner()->ForceNetUpdate();
 	return true;
 }
-// 接回预留流程：先确认服务器持有的实例和空格，再校验已有预留是否一致；成功写入格位、实例和数字物品身份并刷新复制。
-// 参数 ItemId 是实例 GUID；已有同实例同格预留时幂等返回，不重复通知，只有首次预留才写入数字物品编号。
+// 接回预留流程：确认服务器持有的实例和空格，再校验已有预留是否一致；成功只写入格位与实例 GUID 并刷新复制。
+// 参数 ItemId 是实例 GUID；已有同实例同格预留时幂等返回，库存 UI 不观察这份操作预留。
 bool UCatBackPackComponent::ReserveExistingHeldQuickbarSlotFromAuthority(const int32 SlotIndex, const FGuid ItemId)
 {
 	const auto* Entry = FindHeldInventoryEntryFromAuthority(ItemId);
 	if (!GetOwner() || !GetOwner()->HasAuthority() || !IsValidInventorySlotIndex(SlotIndex) || HasItemAtSlot(SlotIndex)
-		|| !Entry || !Entry->Instance || Entry->StackCount != 1 || !Entry->Instance->GetItemDefinition()) return false;
+		|| !Entry || !Entry->Instance || Entry->StackCount != 1) return false;
 	if (QuickbarHeldSlot.ItemInstanceId.IsValid())
 		return QuickbarHeldSlot.ItemInstanceId == ItemId && QuickbarHeldSlot.SlotIndex == SlotIndex;
 	QuickbarHeldSlot.SlotIndex = SlotIndex;
 	QuickbarHeldSlot.ItemInstanceId = ItemId;
-	QuickbarHeldSlot.ItemId = Entry->Instance->GetItemDefinition()->GetItemId();
-	OnRep_QuickbarHeldSlot();
 	GetOwner()->ForceNetUpdate();
 	return true;
 }
 
+// 解除流程：权威端清空已有预留并触发复制；库存的实际归还或移出另有统一通知，不在这里重复广播。
 void UCatBackPackComponent::ClearQuickbarHeldSlotFromAuthority()
 {
 	if (!GetOwner() || !GetOwner()->HasAuthority() || !QuickbarHeldSlot.ItemInstanceId.IsValid()) return;
 	QuickbarHeldSlot = FCatQuickbarHeldSlot{};
-	OnRep_QuickbarHeldSlot();
 	GetOwner()->ForceNetUpdate();
 }
+// 使用锁更新流程：只接受权威端对有效预留的值变化，再触发拥有者复制；不会因锁定或解锁而重建库存界面。
 void UCatBackPackComponent::SetQuickbarHeldSlotInUseFromAuthority(const bool bInUse)
 {
 	if (!GetOwner() || !GetOwner()->HasAuthority() || !QuickbarHeldSlot.ItemInstanceId.IsValid() || QuickbarHeldSlot.bInUse == bInUse) return;
 	QuickbarHeldSlot.bInUse = bInUse;
-	OnRep_QuickbarHeldSlot();
 	GetOwner()->ForceNetUpdate();
 }
-void UCatBackPackComponent::OnRep_QuickbarHeldSlot() { BroadcastInventoryChange(); }
 void UCatBackPackComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);

@@ -1,4 +1,4 @@
-﻿#include "CatInventoryActionsAuthoringLibrary.h"
+#include "CatInventoryActionsAuthoringLibrary.h"
 #include "AbilitySystem/Items/Abilities/CatItemGameplayAbility.h"
 #include "AbilitySystem/Items/Abilities/CatGA_ConsumeFish.h"
 #include "AbilitySystem/Items/Abilities/CatGA_DeployFishingRod.h"
@@ -171,11 +171,10 @@ bool UCatInventoryActionsAuthoringLibrary::MigrateEquipmentAbilitySetGrants()
 	});
 	DefaultSet->GrantedAbilities.RemoveAll([](const FCatAbilitySetAbility& Entry) { return Entry.Ability == UCatGA_CancelBodyAction::StaticClass(); });
 	FCatAbilitySetAbility CancelEntry; CancelEntry.Ability = UCatGA_CancelBodyAction::StaticClass(); CancelEntry.Level = 1;
-	CancelEntry.InputTag = CatFishingAbilityTags::Input_Fishing_Cancel; CancelEntry.ActivationPolicy = ECatAbilityActivationPolicy::OnInputTriggered;
+	CancelEntry.InputTag = CatFishingAbilityTags::Input_Fishing_Cancel;
 	DefaultSet->GrantedAbilities.Add(CancelEntry);
 	DefaultSet->GrantedAbilities.RemoveAll([](const FCatAbilitySetAbility& Entry) { return Entry.Ability == UCatGA_ConsumeFish::StaticClass(); });
 	FCatAbilitySetAbility Eat; Eat.Ability = UCatGA_ConsumeFish::StaticClass(); Eat.Level = 1;
-	Eat.ActivationPolicy = ECatAbilityActivationPolicy::OnInputTriggered;
 	DefaultSet->GrantedAbilities.Add(Eat);
 	bool bSucceeded = CatInventoryActionsAuthoring::SaveAuthoringAsset(*DefaultSet) && CatInventoryActionsAuthoring::SaveAuthoringAsset(*RodSet);
 	FAssetRegistryModule& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")); TArray<FAssetData> Assets;

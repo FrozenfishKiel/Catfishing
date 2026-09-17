@@ -1,4 +1,6 @@
 ﻿#include "Environment/CatChumPlacementService.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Tags/CatStateTags.h"
 
 #include "Equipment/Fragments/CatEquipmentFragment_Chum.h"
 
@@ -108,7 +110,7 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::InvalidPayload));
 	}
 	ACatCharacter* Character = Cast<ACatCharacter>(RequestingController->GetPawn());
-	const UCatConditionComponent* Conditions = Character ? Character->GetConditionComponent() : nullptr;
+	const UCatAbilitySystemComponent* Conditions = Character ? Character->GetCatAbilitySystemComponent() : nullptr;
 	UCatEquipmentComponent* Equipment = Character ? Character->GetEquipmentComponent() : nullptr;
 	UCatInventoryComponent* OwnerInventory = Character ? Character->GetInventoryComponent() : nullptr;
 	if (!OwnerInventory)
@@ -142,7 +144,7 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 	{
 		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::EquipmentUnavailable));
 	}
-	if (!Character || !Conditions || Conditions->GetSnapshot().bDowned || !Definition
+	if (!Character || !Conditions || Conditions->HasMatchingGameplayTag(CatStateTags::Downed) || !Definition
 		|| !Definition->CanServeChumPlacement()
 		|| !Definition->IsRuntimeDefinitionReady()
 		|| FormalChumInstance == nullptr

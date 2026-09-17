@@ -1,4 +1,4 @@
-#include "AbilitySystem/Config/CatAbilitySettings.h"
+﻿#include "AbilitySystem/Config/CatAbilitySettings.h"
 
 #include "AbilitySystem/Config/CatAbilityInputConfig.h"
 #include "AbilitySystem/Config/CatAbilitySet.h"
@@ -37,7 +37,7 @@ bool UCatAbilitySettings::IsFishingRuntimeReady() const
 	const UCatAbilityInputConfig* InputConfig = AbilityInputConfig.LoadSynchronous();
 	float FishingStrength = 0.0f;
 	float MaxFightStamina = 0.0f;
-	return AbilitySet && AbilitySet->IsDefaultCharacterAbilitySetReady() && InputConfig && InputConfig->IsRuntimeReady()
+	return AbilitySet && AbilitySet->IsRuntimeReady() && InputConfig && InputConfig->IsRuntimeReady()
 		&& TryGetInitialAttributesForCharacter(NAME_None, FishingStrength, MaxFightStamina);
 }
 

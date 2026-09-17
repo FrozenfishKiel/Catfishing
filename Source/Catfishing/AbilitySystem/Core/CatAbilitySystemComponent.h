@@ -1,25 +1,26 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "AbilitySystemComponent.h"
 #include "AbilitySystem/Config/CatAbilitySet.h"
 #include "CatAbilitySystemComponent.generated.h"
 
+/** Character 持有的公共 GAS 入口；管理输入、默认授予及状态来源句柄，资源数值仍由效果和属性集保存。 */
 UCLASS()
 class CATFISHING_API UCatAbilitySystemComponent : public UAbilitySystemComponent
 {
 	GENERATED_BODY()
 
 public:
+	/** 服务器按来源键替换整组状态；键在同一 ASC 内唯一。空集合撤销该来源；失败返回 false 并保留旧效果，其他来源不受影响。 */
+	bool SetStateTagsFromAuthority(FName Source, const FGameplayTagContainer& Tags);
+	/** 撤销本 ASC 管理的全部状态来源；最终销毁时调用，不影响其他系统拥有的 GE。 */
+	void ClearStateSourcesFromAuthority();
+	/** 组件退出时清除来源效果，然后交由 GAS 完成剩余回收。 */
+	virtual void EndPlay(const EEndPlayReason::Type Reason) override;
+
 	/** 从任意 Actor 解析项目 ASC；调用方只拿到 Cat ASC 能力面，不需要知道当前身体类如何实现 AbilitySystemInterface。 */
 	static UCatAbilitySystemComponent* FindCatAbilitySystemFromActor(AActor* Actor);
-
-	/** 记录某个 Ability Spec 对应的输入标签与激活策略；AbilitySet 授予时写入，输入帧处理时读取。 */
-	void RegisterAbilityInput(FGameplayAbilitySpecHandle Handle, FGameplayTag InputTag,
-		ECatAbilityActivationPolicy ActivationPolicy);
-
-	/** 移除某个 Ability Spec 的输入索引；Ability 被撤销或生命周期结束时调用，防止失效句柄继续响应输入。 */
-	void UnregisterAbilityInput(FGameplayAbilitySpecHandle Handle);
 
 	/** 记录当前帧按下的输入标签；真正激活在 ProcessAbilityInput 中统一发生，便于预测事件成对发送。 */
 	void AbilityInputTagPressed(FGameplayTag InputTag);
@@ -85,28 +86,26 @@ public:
 	/** 读取当前黄色储备；HUD 与搏斗结算共用属性快照。 */
 	float GetYellowFightStamina() const;
 
-	/** 返回绿色与黄色当前体力之和，供搏斗判断实际可支付额度。 */
+	/** 搏斗支付预检使用的可用余额读取口；绿段与黄段都能支付，因此合并两者当前值，不把绿色上限当成余额。 */
 	double GetTotalFightStamina() const;
 
-	/** 返回绿色上限加当前黄色储备，供 HUD 展示当前总容量。 */
+	/** HUD 总容量读取口；黄色储备没有独立上限，以当前储备加绿色上限表达此刻容量，避免展示不存在的黄段恢复空间。 */
 	double GetTotalFightStaminaCapacity() const;
 
 	/** 清理 ActorInfo 前先清输入状态；防止无占有期间失效输入句柄继续激活 Ability。 */
 	virtual void ClearActorInfo() override;
 
 protected:
-	/** Ability 授予后从 SourceTags 中抽取输入标签；让 AbilitySet 成为输入绑定的唯一配置源。 */
-	virtual void OnGiveAbility(FGameplayAbilitySpec& AbilitySpec) override;
-
-	/** Ability 移除前同步撤销输入索引；随后再交给 GAS 父类处理 Spec 生命周期。 */
+	/** Ability 移除前清除其输入边沿；随后再交给 GAS 父类处理 Spec 生命周期。 */
 	virtual void OnRemoveAbility(FGameplayAbilitySpec& AbilitySpec) override;
 
 private:
-	/** 输入标签到 Ability Spec 的索引；PlayerController 只提交标签，具体 Ability 由此处解析。 */
-	TMap<FGameplayTag, TArray<FGameplayAbilitySpecHandle>> SpecHandlesByInputTag;
-
-	/** Ability Spec 到激活策略的索引；ProcessAbilityInput 用它区分点按、按住和授予即激活。 */
-	TMap<FGameplayAbilitySpecHandle, ECatAbilityActivationPolicy> ActivationPolicyByHandle;
+	/** 状态来源到独立 GE 的唯一所有权记录；标签内容读取效果 Spec，不再缓存一份状态。 */
+	TMap<FName, FActiveGameplayEffectHandle> StateEffects;
+	/** 倒地状态监听只在首次 ActorInfo 初始化时绑定，重占有不重复注册。 */
+	FDelegateHandle DownedTagHandle;
+	/** 首次进入倒地时取消明确带倒地中断标签的能力；求助不受影响，角色物理及钓鱼退出由既有消费者处理。 */
+	void HandleDownedTagChanged(FGameplayTag Tag, int32 Count);
 
 	/** 本帧刚按下的 Ability Spec；帧末清空，不跨帧保存边沿。 */
 	TArray<FGameplayAbilitySpecHandle> InputPressedSpecHandles;
@@ -120,8 +119,6 @@ private:
 	/** 配置默认 AbilitySet 的授予句柄集合；ASC authority 写入，最终销毁时用它整组撤销输入 Ability 和初始效果。 */
 	FCatGrantedAbilitySetHandles ConfiguredDefaultAbilitySetHandles;
 
-	/** 默认 AbilitySet 是否已经由本 ASC 授予；authority 重占有时读取它避免重复 GiveAbility。 */
-	bool bConfiguredDefaultAbilitySetGranted = false;
 
 	/** 初始身体属性是否已经由本 ASC 成功播种；authority 重占有保持 true，重连新 Character 的新 ASC 重新开始。 */
 	bool bInitialCharacterAttributesApplied = false;

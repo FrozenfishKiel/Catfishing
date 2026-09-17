@@ -9,15 +9,11 @@ USTRUCT()
 struct FCatQuickbarHeldSlot
 {
 	GENERATED_BODY()
+	/** 原实例归还的位置；背包据此阻止其他物品占格，Controller 据此恢复选中位置。 */
 	UPROPERTY() int32 SlotIndex = INDEX_NONE;
+	/** 当前借出物品的唯一身份；拿竿和归还流程核对它，不另存物品种类或显示数据。 */
 	UPROPERTY() FGuid ItemInstanceId;
-	/** 保留格中的物品种类编号；背包维护占位、恢复手持时读取，零表示尚无物品。 */
-	UPROPERTY() int32 ItemId = 0;
-
-	/** 旧英文物品身份，仅供旧资产和旧档案单向迁移读取；新运行逻辑不读写，转换后清空。 */
-	UPROPERTY()
-	FName DefinitionId = NAME_None;
-
+	/** 鱼竿正在使用的权威事实；复制给拥有者后用于禁止切格，不驱动物品图标。 */
 	UPROPERTY() bool bInUse = false;
 };
 
@@ -41,18 +37,21 @@ public:
 	 */
 	virtual bool EnforcesCarryLimits() const override { return true; }
 
+	/** 为即将离库的单件原实例保留归还格；只更新预留复制，库存内容变化由实际移出操作通知。 */
 	bool ReserveQuickbarHeldSlotFromAuthority(int32 SlotIndex, FGuid ItemId);
 	/** 地上接回的原实例已在活动区；为它保留空格，不执行第二次 Use。 */
 	bool ReserveExistingHeldQuickbarSlotFromAuthority(int32 SlotIndex, FGuid ItemId);
+	/** 权威端解除归还格预留；不会凭空改变库存条目或发出库存刷新。 */
 	void ClearQuickbarHeldSlotFromAuthority();
+	/** 同步当前鱼竿的使用锁，供拥有客户端限制切格；不修改库存内容。 */
 	void SetQuickbarHeldSlotInUseFromAuthority(bool bInUse);
 	const FCatQuickbarHeldSlot& GetQuickbarHeldSlot() const { return QuickbarHeldSlot; }
 	virtual bool CanAcceptInventoryEntryAtSlot(const FCatInventoryEntry& Entry, int32 TargetSlotIndex) const override;
 	virtual bool CanAcceptInventoryDefinitionAtSlot(const UCatInventoryItemDefinition& Definition, int32 TargetSlotIndex) const override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 private:
-	UPROPERTY(ReplicatedUsing=OnRep_QuickbarHeldSlot) FCatQuickbarHeldSlot QuickbarHeldSlot;
-	UFUNCTION() void OnRep_QuickbarHeldSlot();
+	/** 随身借出物品的归还格与操作锁；服务器写入、仅拥有者接收，库存 UI 始终只读取库存 Model。 */
+	UPROPERTY(Replicated) FCatQuickbarHeldSlot QuickbarHeldSlot;
 	/** 读取项目基础格数与角色成长容量之和；缺失项按零处理，初始化和成长扩容据此替代蓝图遗留容量。 */
 	int32 GetConfiguredPlayerSlotCapacity() const;
 };

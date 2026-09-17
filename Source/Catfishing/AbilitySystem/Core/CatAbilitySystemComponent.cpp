@@ -1,4 +1,6 @@
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Tags/CatStateTags.h"
+#include "AbilitySystem/Effects/CatGE_PersistentState.h"
 #include "Data/CatFishDefinition.h"
 #include "Growth/CatGrowthComponent.h"
 #include "AbilitySystem/Items/CatItemAbilityComponent.h"
@@ -13,22 +15,6 @@
 #include "Abilities/GameplayAbility.h"
 #include "Logging/CatLog.h"
 
-namespace
-{
-	ECatAbilityActivationPolicy ResolveActivationPolicy(const FGameplayTagContainer& Tags)
-	{
-		if (Tags.HasTagExact(CatFishingAbilityTags::Ability_ActivationPolicy_WhileInputActive))
-		{
-			return ECatAbilityActivationPolicy::WhileInputActive;
-		}
-		if (Tags.HasTagExact(CatFishingAbilityTags::Ability_ActivationPolicy_OnGranted))
-		{
-			return ECatAbilityActivationPolicy::OnGranted;
-		}
-		return ECatAbilityActivationPolicy::OnInputTriggered;
-	}
-}
-
 UCatAbilitySystemComponent* UCatAbilitySystemComponent::FindCatAbilitySystemFromActor(AActor* Actor)
 {
 	// ASC 解析流程：只通过 GAS 标准 AbilitySystemInterface/BlueprintLibrary 查询，再收窄成项目 ASC；
@@ -37,73 +23,40 @@ UCatAbilitySystemComponent* UCatAbilitySystemComponent::FindCatAbilitySystemFrom
 		: nullptr;
 }
 
-void UCatAbilitySystemComponent::RegisterAbilityInput(const FGameplayAbilitySpecHandle Handle,
-	const FGameplayTag InputTag, const ECatAbilityActivationPolicy ActivationPolicy)
-{
-	if (!Handle.IsValid())
-	{
-		return;
-	}
-	ActivationPolicyByHandle.Add(Handle, ActivationPolicy);
-	if (InputTag.IsValid())
-	{
-		SpecHandlesByInputTag.FindOrAdd(InputTag).AddUnique(Handle);
-	}
-}
-
-void UCatAbilitySystemComponent::UnregisterAbilityInput(const FGameplayAbilitySpecHandle Handle)
-{
-	ActivationPolicyByHandle.Remove(Handle);
-	for (auto It = SpecHandlesByInputTag.CreateIterator(); It; ++It)
-	{
-		It.Value().RemoveSingleSwap(Handle);
-		if (It.Value().IsEmpty())
-		{
-			It.RemoveCurrent();
-		}
-	}
-	InputPressedSpecHandles.RemoveSingleSwap(Handle);
-	InputReleasedSpecHandles.RemoveSingleSwap(Handle);
-	InputHeldSpecHandles.RemoveSingleSwap(Handle);
-}
-
+// 输入按下流程：直接从 GAS Spec 的来源标签匹配能力，记录本帧边沿；不再维护第二份标签到句柄索引。
 void UCatAbilitySystemComponent::AbilityInputTagPressed(const FGameplayTag InputTag)
 {
+	// 钓鱼负责人尚未迁移抄网操作锁，保留现有准入限制，不能把缺少新状态标签当成允许操作。
 	if (HasMatchingGameplayTag(CatFishingAbilityTags::Cooldown_Fishing_Scoop)) return;
-	const TArray<FGameplayAbilitySpecHandle>* Handles = SpecHandlesByInputTag.Find(InputTag);
-	if (!Handles)
+	if (!InputTag.IsValid()) return;
+	for (FGameplayAbilitySpec& Spec : GetActivatableAbilities())
 	{
-		return;
-	}
-	for (const FGameplayAbilitySpecHandle Handle : *Handles)
-	{
-		if (FGameplayAbilitySpec* Spec = FindAbilitySpecFromHandle(Handle))
+		if (Spec.Ability && Spec.GetDynamicSpecSourceTags().HasTagExact(InputTag))
 		{
-			Spec->InputPressed = true;
-			InputPressedSpecHandles.AddUnique(Handle);
-			InputHeldSpecHandles.AddUnique(Handle);
+			Spec.InputPressed = true;
+			InputPressedSpecHandles.AddUnique(Spec.Handle);
+			InputHeldSpecHandles.AddUnique(Spec.Handle);
 		}
 	}
 }
 
+// 输入松开流程：直接从 GAS Spec 的来源标签匹配能力，记录本帧边沿；不再维护第二份标签到句柄索引。
 void UCatAbilitySystemComponent::AbilityInputTagReleased(const FGameplayTag InputTag)
 {
-	const TArray<FGameplayAbilitySpecHandle>* Handles = SpecHandlesByInputTag.Find(InputTag);
-	if (!Handles)
+	if (!InputTag.IsValid()) return;
+	for (FGameplayAbilitySpec& Spec : GetActivatableAbilities())
 	{
-		return;
-	}
-	for (const FGameplayAbilitySpecHandle Handle : *Handles)
-	{
-		if (FGameplayAbilitySpec* Spec = FindAbilitySpecFromHandle(Handle))
+		if (Spec.Ability && Spec.GetDynamicSpecSourceTags().HasTagExact(InputTag))
 		{
-			Spec->InputPressed = false;
-			InputReleasedSpecHandles.AddUnique(Handle);
-			InputHeldSpecHandles.RemoveSingleSwap(Handle);
+			Spec.InputPressed = false;
+			InputReleasedSpecHandles.AddUnique(Spec.Handle);
+			InputHeldSpecHandles.RemoveSingleSwap(Spec.Handle);
 		}
 	}
 }
 
+// 输入消费流程：暂停或抄网操作锁期间保留边沿；从能力资产 Tag 判断是否按住重激活，再收集首次按下的待激活 Spec；AbilitySet 不保存另一份策略。
+// 活动实例直接收到同一激活键下的按下事件；激活请求统一执行后再转发释放事件，最后清除本帧边沿而保留按住集合。
 void UCatAbilitySystemComponent::ProcessAbilityInput(const float DeltaTime, const bool bGamePaused)
 {
 	(void)DeltaTime;
@@ -112,12 +65,13 @@ void UCatAbilitySystemComponent::ProcessAbilityInput(const float DeltaTime, cons
 		return;
 	}
 
+	// 输入任务可同步消耗最后一件来源并撤销 Spec；沿用 GAS 列表锁，将回收延后到本帧遍历结束。
+	ABILITYLIST_SCOPE_LOCK();
 	TArray<FGameplayAbilitySpecHandle> AbilitiesToActivate;
 	for (const FGameplayAbilitySpecHandle Handle : InputHeldSpecHandles)
 	{
 		const FGameplayAbilitySpec* Spec = FindAbilitySpecFromHandle(Handle);
-		const ECatAbilityActivationPolicy* Policy = ActivationPolicyByHandle.Find(Handle);
-		if (Spec && Policy && *Policy == ECatAbilityActivationPolicy::WhileInputActive && !Spec->IsActive())
+		if (Spec && Spec->Ability && Spec->Ability->GetAssetTags().HasTagExact(CatFishingAbilityTags::Ability_ActivationPolicy_WhileInputActive) && !Spec->IsActive())
 		{
 			AbilitiesToActivate.AddUnique(Handle);
 		}
@@ -130,12 +84,12 @@ void UCatAbilitySystemComponent::ProcessAbilityInput(const float DeltaTime, cons
 			{
 				// Task 订阅当前能力实例的激活键；Spec 上的旧键不能用于实例化能力的输入事件。
 				const UGameplayAbility* Instance = Spec->GetPrimaryInstance();
-				const FPredictionKey ActivationKey = Instance ? Instance->GetCurrentActivationInfo().GetActivationPredictionKey() : Spec->ActivationInfo.GetActivationPredictionKey();
+				const FPredictionKey ActivationKey = Instance ? Instance->GetCurrentActivationInfo().GetActivationPredictionKey() : FPredictionKey();
 				AbilitySpecInputPressed(*Spec);
 				InvokeReplicatedEvent(EAbilityGenericReplicatedEvent::InputPressed, Handle,
 					ActivationKey);
 			}
-			else if (ActivationPolicyByHandle.FindRef(Handle) != ECatAbilityActivationPolicy::OnGranted)
+			else
 			{
 				AbilitiesToActivate.AddUnique(Handle);
 			}
@@ -151,7 +105,7 @@ void UCatAbilitySystemComponent::ProcessAbilityInput(const float DeltaTime, cons
 		{
 			// 与 WaitInputRelease 使用同一实例激活键，避免松开事件留在无人监听的旧 Spec 键下。
 			const UGameplayAbility* Instance = Spec->GetPrimaryInstance();
-			const FPredictionKey ActivationKey = Instance ? Instance->GetCurrentActivationInfo().GetActivationPredictionKey() : Spec->ActivationInfo.GetActivationPredictionKey();
+			const FPredictionKey ActivationKey = Instance ? Instance->GetCurrentActivationInfo().GetActivationPredictionKey() : FPredictionKey();
 			AbilitySpecInputReleased(*Spec);
 			InvokeReplicatedEvent(EAbilityGenericReplicatedEvent::InputReleased, Handle,
 				ActivationKey);
@@ -207,7 +161,7 @@ bool UCatAbilitySystemComponent::CancelBodyActionAbilitiesFromAuthority()
 // Character ASC ActorInfo 建立流程：
 // 1. 先读取项目能力设置，只有显式启用的 Full 复制策略才建立 Owner/Avatar，未启用时主动清理引擎可能留下的临时 ActorInfo。
 // 2. 再把同一个 Character Actor 同时作为 Owner 和 Avatar 写入 GAS，这是当前项目选择的 Character-owned ASC 边界。
-// 3. 返回值只表示 ActorInfo 是否可继续用于授予 Ability 或播种属性；具体属性、AbilitySet 和输入资产的完整性由各自后续入口再裁决。
+// 3. 绑定一次倒地取消监听并刷新当前物品来源授予；返回值只表示 ActorInfo 是否可继续用于授予 Ability 或播种属性；具体属性、AbilitySet 和输入资产的完整性由各自后续入口再裁决。
 bool UCatAbilitySystemComponent::InitializeCharacterOwnerAvatar(AActor* CharacterOwnerAvatar)
 {
 	const UCatAbilitySettings* Settings = GetDefault<UCatAbilitySettings>();
@@ -218,36 +172,34 @@ bool UCatAbilitySystemComponent::InitializeCharacterOwnerAvatar(AActor* Characte
 	}
 	SetReplicationMode(EGameplayEffectReplicationMode::Full);
 	InitAbilityActorInfo(CharacterOwnerAvatar, CharacterOwnerAvatar);
+	if (!DownedTagHandle.IsValid()) DownedTagHandle = RegisterGameplayTagEvent(CatStateTags::Downed, EGameplayTagEventType::NewOrRemoved).AddUObject(this, &ThisClass::HandleDownedTagChanged);
 	if (auto* Items = CharacterOwnerAvatar->FindComponentByClass<UCatItemAbilityComponent>()) Items->RefreshGrantedAbilities();
 	return true;
 }
 
 // 默认 AbilitySet 授予流程：
-// 1. 先要求本 ASC 已处在 authority Owner 上、尚未授予，并且项目设置声明 Fishing GAS 资产完整。
+// 1. 先要求本 ASC 已处在 authority Owner 上、尚未授予，并且项目设置启用 GAS；具体集合有效性由 AbilitySet 校验。
 // 2. 再同步加载配置的 AbilitySet，通过 AbilitySet 自己的 GiveToAbilitySystem 写入 Ability、输入标签和初始效果。
-// 3. 只有整组授予成功才记录句柄和已授予状态；失败保持无临时代用品，后续重占有仍可重试。
+// 3. 以本来源已有句柄判断是否授予，只有整组授予成功才保留句柄；失败保持无临时代用品，后续重占有仍可重试。
 bool UCatAbilitySystemComponent::GrantConfiguredDefaultAbilitySetFromAuthority()
 {
 	const UCatAbilitySettings* Settings = GetDefault<UCatAbilitySettings>();
-	if (!GetOwnerActor() || !IsOwnerActorAuthoritative() || bConfiguredDefaultAbilitySetGranted
-		|| !Settings || !Settings->IsFishingRuntimeReady())
+	if (!GetOwnerActor() || !IsOwnerActorAuthoritative() || ConfiguredDefaultAbilitySetHandles.HasAnyGrantedHandle()
+		|| !Settings || !Settings->IsRuntimeEnabled())
 	{
 		return false;
 	}
 	const UCatAbilitySet* AbilitySet = Settings->DefaultAbilitySet.LoadSynchronous();
-	bConfiguredDefaultAbilitySetGranted = AbilitySet
-		&& AbilitySet->GiveToAbilitySystem(this, ConfiguredDefaultAbilitySetHandles);
-	return bConfiguredDefaultAbilitySetGranted;
+	return AbilitySet && AbilitySet->GiveToAbilitySystem(this, ConfiguredDefaultAbilitySetHandles);
 }
 
 // 默认 AbilitySet 撤销流程：
 // 1. 只读取本 ASC 记录的授予句柄，不重新读取设置或猜测当前资产路径，避免销毁尾声同步加载无关资源。
-// 2. TakeFromAbilitySystem 会撤销 AbilitySpec、初始 GameplayEffect 和输入索引；重复调用只清空空句柄集合。
-// 3. 最后清掉已授予标记，让同一个组件在极端生命周期重入时仍保持幂等。
+// 2. TakeFromAbilitySystem 会撤销 AbilitySpec、初始 GameplayEffect，Spec 撤销会清理对应输入边沿；重复调用只清空空句柄集合。
+// 3. 句柄集合本身就是授予所有权，不另存已授予标记。
 void UCatAbilitySystemComponent::RevokeConfiguredDefaultAbilitySet()
 {
 	ConfiguredDefaultAbilitySetHandles.TakeFromAbilitySystem(this);
-	bConfiguredDefaultAbilitySetGranted = false;
 }
 
 // Character 初始属性播种流程：
@@ -365,23 +317,12 @@ void UCatAbilitySystemComponent::ClearActorInfo()
 	Super::ClearActorInfo();
 }
 
-void UCatAbilitySystemComponent::OnGiveAbility(FGameplayAbilitySpec& AbilitySpec)
-{
-	Super::OnGiveAbility(AbilitySpec);
-	const FGameplayTag InputRoot = FGameplayTag::RequestGameplayTag(FName(TEXT("Cat.Input")));
-	const FGameplayTagContainer& Tags = AbilitySpec.GetDynamicSpecSourceTags();
-	for (const FGameplayTag Tag : Tags)
-	{
-		if (Tag.MatchesTag(InputRoot) && Tag != InputRoot)
-		{
-			RegisterAbilityInput(AbilitySpec.Handle, Tag, ResolveActivationPolicy(Tags));
-		}
-	}
-}
-
+// 撤销流程：清除仅属于本 Spec 的输入边沿，再让 GAS 回收能力；不存在额外注册表或激活策略副本。
 void UCatAbilitySystemComponent::OnRemoveAbility(FGameplayAbilitySpec& AbilitySpec)
 {
-	UnregisterAbilityInput(AbilitySpec.Handle);
+	InputPressedSpecHandles.RemoveSingleSwap(AbilitySpec.Handle);
+	InputReleasedSpecHandles.RemoveSingleSwap(AbilitySpec.Handle);
+	InputHeldSpecHandles.RemoveSingleSwap(AbilitySpec.Handle);
 	Super::OnRemoveAbility(AbilitySpec);
 }
 
@@ -445,4 +386,67 @@ double UCatAbilitySystemComponent::GetTotalFightStaminaCapacity() const
 float UCatAbilitySystemComponent::GetYellowFightStamina() const
 {
 	return GetNumericAttribute(UCatSurvivalAttributeSet::GetYellowFightStaminaAttribute());
+}
+
+// 来源更新流程：校验服务器与来源，空集合撤销；相同活动效果直接返回，否则先授予新效果再移除旧句柄，避免共同 Tag 短暂归零。
+// 新效果创建或应用失败时返回 false，保留原来源的活动效果；成功后替换句柄，GAS 的 Tag 通知和复制负责驱动消费者。
+bool UCatAbilitySystemComponent::SetStateTagsFromAuthority(FName Source, const FGameplayTagContainer& Tags)
+{
+	if (!IsOwnerActorAuthoritative() || Source.IsNone()) return false;
+	const FActiveGameplayEffectHandle Previous = StateEffects.FindRef(Source);
+	if (Tags.IsEmpty())
+	{
+		StateEffects.Remove(Source);
+		if (Previous.IsValid())
+		{
+			RemoveActiveGameplayEffect(Previous);
+			UE_LOG(LogCatCharacter, Log, TEXT("Event=gas_state_source_removed Source=%s Owner=%s World=%s Authority=1 NetMode=%d"),
+				*Source.ToString(), *GetNameSafe(GetOwner()), *GetNameSafe(GetWorld()), int32(GetOwner()->GetNetMode()));
+		}
+		return true;
+	}
+	if (const FActiveGameplayEffect* Active = GetActiveGameplayEffect(Previous); Active && Active->Spec.DynamicGrantedTags == Tags) return true;
+	FGameplayEffectContextHandle Context = MakeEffectContext();
+	Context.AddSourceObject(this);
+	FGameplayEffectSpecHandle Spec = MakeOutgoingSpec(UCatGE_PersistentState::StaticClass(), 1, Context);
+	if (!Spec.IsValid()) return false;
+	Spec.Data->DynamicGrantedTags = Tags;
+	const FActiveGameplayEffectHandle Applied = ApplyGameplayEffectSpecToSelf(*Spec.Data.Get());
+	if (!Applied.IsValid())
+	{
+		UE_LOG(LogCatCharacter, Warning, TEXT("Event=gas_state_source_rejected Source=%s Owner=%s Reason=EffectNotApplied"), *Source.ToString(), *GetNameSafe(GetOwner()));
+		return false;
+	}
+	StateEffects.Add(Source, Applied);
+	if (Previous.IsValid()) RemoveActiveGameplayEffect(Previous);
+	UE_LOG(LogCatCharacter, Log, TEXT("Event=gas_state_source_changed Source=%s Tags=%s Owner=%s World=%s Authority=1 NetMode=%d"),
+		*Source.ToString(), *Tags.ToStringSimple(), *GetNameSafe(GetOwner()), *GetNameSafe(GetWorld()), int32(GetOwner()->GetNetMode()));
+	return true;
+}
+
+// 全量清理流程：先移走所有权表再撤销效果，效果回调看不到旧句柄；每个来源独立移除，不清空其他系统状态。
+void UCatAbilitySystemComponent::ClearStateSourcesFromAuthority()
+{
+	if (!IsOwnerActorAuthoritative()) return;
+	const auto Effects = MoveTemp(StateEffects);
+	for (const auto& Pair : Effects) RemoveActiveGameplayEffect(Pair.Value);
+}
+
+// 倒地通知流程：服务器在 Tag 首次出现时只取消明确声明倒地中断的能力；求助未声明该标签，状态移除也不自动重启动作。
+void UCatAbilitySystemComponent::HandleDownedTagChanged(FGameplayTag Tag, int32 Count)
+{
+	if (Count > 0 && IsOwnerActorAuthoritative())
+	{
+		const FGameplayTagContainer InterruptTags(CatStateTags::AbilityInterruptOnDowned);
+		CancelAbilities(&InterruptTags);
+	}
+}
+
+// 最终退出流程：解绑本组件的状态回调，再回收状态与默认授予；ActorInfo 的短暂清理不删除仍属于同一身体的状态。
+void UCatAbilitySystemComponent::EndPlay(const EEndPlayReason::Type Reason)
+{
+	RegisterGameplayTagEvent(CatStateTags::Downed, EGameplayTagEventType::NewOrRemoved).Remove(DownedTagHandle);
+	ClearStateSourcesFromAuthority();
+	RevokeConfiguredDefaultAbilitySet();
+	Super::EndPlay(Reason);
 }

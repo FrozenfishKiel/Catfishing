@@ -1,4 +1,6 @@
 ﻿#include "ShopEconomy/Trading/CatShopTradeController.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Tags/CatStateTags.h"
 
 #include "Inventory/CatInventorySettings.h"
 #include "Camp/CatCampHubActor.h"
@@ -347,7 +349,7 @@ FCatShopOrderResult UCatShopTradeController::SubmitFishSaleFromPlayer(AControlle
 	const ACatfishingGameModeBase* GameMode = GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>();
 	if (!Shop || !Character || StableId.IsEmpty() || !RequestId.IsValid()) return Finish(ECatDomainCommandError::InvalidPayload);
 	if (!GameMode || !GameMode->CanAcceptGameplayCommand(RequestingController)) return Finish(ECatDomainCommandError::CommandsClosed);
-	if (!Character->GetConditionComponent() || Character->GetConditionComponent()->GetSnapshot().bDowned)
+	if (!Character->GetConditionComponent() || Character->GetCatAbilitySystemComponent()->HasMatchingGameplayTag(CatStateTags::Downed))
 		return Finish(ECatDomainCommandError::PermissionDenied);
 	AActor* Source = Guard ? static_cast<AActor*>(Guard) : Character;
 	if (!IsValid(Buyer) || Buyer->GetWorld() != GetWorld() || !Buyer->CanServeSource(RequestingController, Source)

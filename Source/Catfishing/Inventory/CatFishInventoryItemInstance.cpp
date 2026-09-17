@@ -1,4 +1,6 @@
-#include "Inventory/CatFishInventoryItemInstance.h"
+﻿#include "Inventory/CatFishInventoryItemInstance.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Tags/CatStateTags.h"
 #include "Inventory/Fragments/CatItemUseFragment.h"
 #include "AbilitySystem/Effects/CatFishExperienceEffect.h"
 #include "Growth/CatGrowthComponent.h"
@@ -30,7 +32,7 @@ bool UCatFishInventoryItemInstance::CanExecuteInventoryAction(const FGameplayTag
 		return Super::CanExecuteInventoryAction(Action, Entry, UserPawn, OutReason);
 	OutReason = NSLOCTEXT("CatInventory", "FishActionUnavailable", "当前容器或身体状态不允许此操作");
 	ACatCharacter* Character = Cast<ACatCharacter>(UserPawn);
-	if (!Character || !Character->GetConditionComponent() || Character->GetConditionComponent()->GetSnapshot().bDowned
+	if (!Character || !Character->GetConditionComponent() || Character->GetCatAbilitySystemComponent()->HasMatchingGameplayTag(CatStateTags::Downed)
 		|| Entry.Instance != this || Entry.StackCount != 1 || !GetItemDefinition()
 		|| !GetItemDefinition()->InventoryActions.ContainsByPredicate([&](const FCatInventoryActionDefinition& Row) { return Row.Action == Action; })) return false;
 	UCatInventoryComponent* Inventory = Entry.SlotOwnerComponent;

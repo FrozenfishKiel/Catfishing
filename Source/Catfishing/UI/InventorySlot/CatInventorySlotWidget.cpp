@@ -251,18 +251,3 @@ bool UCatInventorySlotWidget::NativeOnDrop(const FGeometry& InGeometry, const FD
 	Controller->ServerMoveInventoryItemBetweenHosts(RequestId, SourceHost, SourceIndex, TargetHost, TargetIndex);
 	return true;
 }
-
-void UCatInventorySlotWidget::SetHeldItemPresentation(const UCatInventoryItemDefinition* Definition, const bool bInUse)
-{
-	UTexture2D* Thumbnail = Definition ? Definition->GetInventoryThumbnail().LoadSynchronous() : nullptr;
-	if (ThumbnailImage)
-	{
-		ThumbnailImage->SetBrushFromTexture(Thumbnail, true);
-		ThumbnailImage->SetVisibility(Thumbnail ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-	}
-	if (QuantityTextBlock)
-	{
-		QuantityTextBlock->SetText(bInUse ? NSLOCTEXT("Catfishing", "QuickbarItemInUse", "使用中") : NSLOCTEXT("Catfishing", "QuickbarItemEquipped", "已装备"));
-		QuantityTextBlock->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
-	}
-}

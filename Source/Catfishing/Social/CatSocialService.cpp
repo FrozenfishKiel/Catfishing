@@ -1,4 +1,6 @@
-#include "Social/CatSocialService.h"
+﻿#include "Social/CatSocialService.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Tags/CatStateTags.h"
 
 #include "Character/CatCharacter.h"
 #include "Framework/Game/CatfishingGameState.h"
@@ -256,6 +258,6 @@ FString UCatSocialService::ResolveStableNetId(const AController* Controller)
 // Social 状态检查流程：要求项目 Character 和 Condition 均有效且未倒地；缺组件或倒地都不能发起、被授权或完成空间交互。
 bool UCatSocialService::IsCharacterSociallyActive(const ACatCharacter* Character)
 {
-	const UCatConditionComponent* Conditions = Character ? Character->GetConditionComponent() : nullptr;
-	return Conditions && !Conditions->GetSnapshot().bDowned;
+	const UCatAbilitySystemComponent* Conditions = Character ? Character->GetCatAbilitySystemComponent() : nullptr;
+	return Conditions && !Conditions->HasMatchingGameplayTag(CatStateTags::Downed);
 }

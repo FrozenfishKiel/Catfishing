@@ -1,4 +1,6 @@
 ﻿#include "FishContainers/CatFishGuardActor.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Tags/CatStateTags.h"
 
 #include "Character/CatCharacter.h"
 #include "Components/SceneComponent.h"
@@ -111,7 +113,7 @@ bool ACatFishGuardActor::PickUpFromAuthority(AController* RequestingController, 
 	};
 	if (!HasAuthority() || !RequestId.IsValid()) return Finish(false, TEXT("InvalidRequest"));
 	if (!IsGrounded() || !bInteractionEnabled || (FishInventory && FishInventory->HasPreparedRemoval())) return Finish(false, TEXT("UnavailableGuard"));
-	if (!Character || !Character->GetConditionComponent() || Character->GetConditionComponent()->GetSnapshot().bDowned)
+	if (!Character || !Character->GetConditionComponent() || Character->GetCatAbilitySystemComponent()->HasMatchingGameplayTag(CatStateTags::Downed))
 		return Finish(false, TEXT("UnavailableCharacter"));
 	if (!IsAuthorityRequestSpatiallyValid(RequestingController)) return Finish(false, TEXT("UnreachableGuard"));
 	if (Character->GetMouthCarriedActor() != nullptr) return Finish(false, TEXT("MouthOccupied"));

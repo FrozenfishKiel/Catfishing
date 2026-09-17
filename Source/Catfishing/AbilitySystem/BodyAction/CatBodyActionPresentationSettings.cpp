@@ -1,17 +1,16 @@
-#include "AbilitySystem/BodyAction/CatBodyActionPresentationSettings.h"
+﻿#include "AbilitySystem/BodyAction/CatBodyActionPresentationSettings.h"
 
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "Animation/AnimMontage.h"
 
 namespace
 {
-	/** 追加一个保留 BodyAction 的默认表现记录；默认将动作事件本身作为表现键，不猜测 Montage 资产。 */
+	/** 追加一个保留 BodyAction 的默认表现记录；不指定 Cue 或猜测 Montage 资产。 */
 	void AddDefaultBodyActionPresentationConfig(TArray<FCatBodyActionPresentationConfig>& Configs, const FGameplayTag BodyActionEventTag, const float LeadInSeconds)
 	{
 		FCatBodyActionPresentationConfig Config;
 		Config.BodyActionEventTag = BodyActionEventTag;
 		Config.LeadInSeconds = LeadInSeconds;
-		Config.PresentationEventTag = BodyActionEventTag;
 		Configs.Add(Config);
 	}
 }
@@ -50,16 +49,9 @@ float UCatBodyActionPresentationSettings::GetLeadInSeconds(const FGameplayTag Bo
 	return FMath::Max(0.0f, Config ? Config->LeadInSeconds : DefaultLeadInSeconds);
 }
 
-FGameplayTag UCatBodyActionPresentationSettings::GetPresentationEventTag(const FGameplayTag BodyActionEventTag) const
-{
-	// 表现键读取流程：显式键有效时使用它；否则返回动作事件标签，让开始和停止表现始终共享同一个可追踪键。
-	if (const FCatBodyActionPresentationConfig* Config = FindPresentationConfig(BodyActionEventTag); Config && Config->PresentationEventTag.IsValid()) return Config->PresentationEventTag;
-	return BodyActionEventTag;
-}
-
 UAnimMontage* UCatBodyActionPresentationSettings::LoadMontage(const FGameplayTag BodyActionEventTag) const
 {
-	// Montage 读取流程：只有命中配置且软引用有效时同步加载；缺资源返回空让蓝图表现继续承接。
+	// Montage 读取流程：只有命中配置且软引用有效时同步加载；缺资源返回空，由 GA 保留原有前摇和提交时点。
 	const FCatBodyActionPresentationConfig* Config = FindPresentationConfig(BodyActionEventTag);
 	return Config && !Config->Montage.IsNull() ? Config->Montage.LoadSynchronous() : nullptr;
 }

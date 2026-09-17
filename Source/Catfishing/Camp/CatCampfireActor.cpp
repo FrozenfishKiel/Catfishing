@@ -1,4 +1,6 @@
-#include "Camp/CatCampfireActor.h"
+﻿#include "Camp/CatCampfireActor.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Tags/CatStateTags.h"
 
 #include "Character/CatCharacter.h"
 #include "Components/SceneComponent.h"
@@ -90,8 +92,8 @@ bool ACatCampfireActor::CanInteract_Implementation(AController* RequestingContro
 	{
 		return false;
 	}
-	const UCatConditionComponent* Condition = Character->GetConditionComponent();
-	return !Condition || !Condition->GetSnapshot().bDowned;
+	const UCatAbilitySystemComponent* Condition = Character->GetCatAbilitySystemComponent();
+	return !Condition || !Condition->HasMatchingGameplayTag(CatStateTags::Downed);
 }
 
 // 提示文案流程：固定给动作名「坐下」（交互册「显示提示：【F】坐下」）。

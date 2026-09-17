@@ -1,4 +1,6 @@
 ﻿#include "Items/Fish/CatFishPickupActor.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Tags/CatStateTags.h"
 #include "Inventory/CatWorldDropProtectionComponent.h"
 #include "Environment/CatWaterQuerySubsystem.h"
 #include "Condition/CatFishThrowEffectActor.h"
@@ -512,7 +514,7 @@ FCatCaptureCommitResult ACatFishPickupActor::StoreInFishGuardFromAuthority(ACont
 	{
 		return Finish();
 	}
-	if (!Character->GetConditionComponent() || Character->GetConditionComponent()->GetSnapshot().bDowned
+	if (!Character->GetConditionComponent() || Character->GetCatAbilitySystemComponent()->HasMatchingGameplayTag(CatStateTags::Downed)
 		|| !CatInventoryAccessRules::ResolveReachableFishContainer(TargetInventoryHost, Character))
 	{
 		Result.Command.Error = ECatDomainCommandError::PermissionDenied;
@@ -836,7 +838,7 @@ bool ACatFishPickupActor::ResolveFishingPickupFromAuthority(AController* Request
 	FCatDomainCommandResult Terminal;
 	Terminal.RequestId = RequestId;
 	ACatCharacter* Character = RequestingController ? Cast<ACatCharacter>(RequestingController->GetPawn()) : nullptr;
-	UCatConditionComponent* Condition = Character ? Character->GetConditionComponent() : nullptr;
+	UCatAbilitySystemComponent* Condition = Character ? Character->GetCatAbilitySystemComponent() : nullptr;
 	if (!HasAuthority() || !bIdentityInitialized || !RequestId.IsValid() || StableNetId.IsEmpty())
 	{
 		Terminal.Error = ECatDomainCommandError::InvalidPayload;
@@ -846,7 +848,7 @@ bool ACatFishPickupActor::ResolveFishingPickupFromAuthority(AController* Request
 	{
 		Terminal.Error = ECatDomainCommandError::AlreadyResolved;
 	}
-	else if (!Character || UCatGE_FishingScoopCooldown::IsOperationBlocked(Character) || !Condition || Condition->GetSnapshot().bDowned || !IsAuthorityRequestSpatiallyValid(RequestingController))
+	else if (!Character || UCatGE_FishingScoopCooldown::IsOperationBlocked(Character) || !Condition || Condition->HasMatchingGameplayTag(CatStateTags::Downed) || !IsAuthorityRequestSpatiallyValid(RequestingController))
 	{
 		Terminal.Error = ECatDomainCommandError::PermissionDenied;
 	}

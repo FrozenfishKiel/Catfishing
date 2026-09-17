@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "TimerManager.h"
@@ -20,6 +20,7 @@ class UCatFishingViewBridge;
 class UCatGrowthComponent;
 class ULocalPlayer;
 struct FOnAttributeChangeData;
+struct FGameplayTag;
 
 /** HUD Model 完整投影变化通知；PageController/Subsystem 收到后只渲染 HUD WBP。 */
 DECLARE_MULTICAST_DELEGATE(FCatHUDModelChanged);
@@ -34,7 +35,7 @@ public:
 	/** 绑定当前 LocalPlayer、Controller 和 Character；成功后订阅 Run、状态和钓鱼变化并发布首份 HUD 投影。 */
 	bool Bind(ULocalPlayer* InLocalPlayer, APlayerController* InController, ACatCharacter* InCharacter);
 
-	/** 成对解除 Run、ASC、Condition、Fishing 命令和会话桥订阅，并清空当前 HUD 投影。 */
+	/** 成对解除 Run、ASC 属性与状态标签、Fishing 命令和会话桥订阅，并清空当前 HUD 投影。 */
 	void Unbind();
 
 	/** 主动重读当前 HUD 所需只读事实；外部生命周期变化都收敛到这里。 */
@@ -57,8 +58,8 @@ private:
 	/** ASC 属性变化入口；忽略单项载荷后重读完整 HUD 事实。 */
 	void HandleAttributeChanged(const FOnAttributeChangeData& ChangeData);
 
-	/** Condition 快照变化入口；重读完整 HUD 投影。 */
-	void HandleConditionChanged();
+	/** ASC 状态标签变化入口；仅角色状态分支触发完整 HUD 投影刷新。 */
+	void HandleConditionChanged(FGameplayTag Tag, int32 Count);
 
 	/** Growth 快照变化入口；重读完整 HUD 投影。 */
 	void HandleGrowthChanged();
@@ -177,7 +178,7 @@ private:
 	/** MaxFightStamina 属性变化解绑句柄；上限变化时 HUD 必须重算体力文本和进度条比例。 */
 	FDelegateHandle MaxFightStaminaChangedHandle;
 
-	/** Condition 快照变化解绑句柄。 */
+	/** ASC 通用标签通知的订阅句柄；Bind 创建，Unbind 从原 ASC 移除。 */
 	FDelegateHandle ConditionChangedHandle;
 
 	/** Growth 快照变化解绑句柄。 */
