@@ -985,7 +985,7 @@ bool ACatfishingPlayerController::IsQuickbarSelectionLocked() const
 	return false;
 }
 
-// 选格确认流程：先重放已处理请求，再核对槽位中的精确身份和选择锁；成功只更新服务器焦点并回执，不部署或收回鱼竿。
+// 选格确认流程：核对精确身份与使用锁后先收旧竿，再从选中原实例拿竿；失败恢复原持有并回执旧焦点。
 void ACatfishingPlayerController::ServerSelectQuickbarSlot_Implementation(const FGuid RequestId,
 	const int32 SlotIndex, const FGuid ExpectedItemId)
 {
@@ -1005,9 +1005,66 @@ void ACatfishingPlayerController::ServerSelectQuickbarSlot_Implementation(const 
 	if (RequestId.IsValid() && BackPack && Fishing && BackPack->IsValidInventorySlotIndex(SlotIndex)
 		&& ActualId == ExpectedItemId && CanForwardGameplayCommand() && !IsQuickbarSelectionLocked())
 	{
-		// 选格只更新焦点；既有手持装备和已经启动的能力继续绑定原实例。
-		bCommitted = true;
-		Reason = bCommitted ? TEXT("Selected") : TEXT("InvalidSelection");
+		ACatFishingRodActor* OldRod = Fishing->FindRodOperatedBy(PlayerState);
+		const FGuid OldId = OldRod ? OldRod->GetPresentationState().ItemInstanceId : FGuid();
+		const bool bSameHeld = OldRod && OldId == ExpectedItemId;
+		bool bReleased = true;
+		if (OldRod && !bSameHeld)
+		{
+			if (FishingCommandComponent) FishingCommandComponent->ClearHeldInputForLifecycle(TEXT("QuickbarSelection"));
+			FCatLeaveRodCommand Leave;
+			Leave.Context.RequestId = FGuid::NewGuid();
+			Leave.Context.RodActorId = OldRod->GetPresentationState().RodActorId;
+			Leave.Context.ExpectedRodActorRevision = OldRod->GetPresentationState().RodActorRevision;
+			bReleased = Fishing->LeaveRod(this, Leave).bCommitted;
+			if (bReleased && Held.ItemInstanceId == OldId)
+			{
+				FCatPackRodCommand Pack;
+				Pack.Context.RequestId = FGuid::NewGuid();
+				Pack.Context.RodActorId = OldRod->GetPresentationState().RodActorId;
+				Pack.Context.ExpectedRodActorRevision = OldRod->GetPresentationState().RodActorRevision;
+				bReleased = Fishing->PackRod(this, Pack).bCommitted;
+			}
+			if (bReleased) BackPack->ClearQuickbarHeldSlotFromAuthority();
+		}
+		// 拿竿不走已删除的库存 Use；与拿竿 GA 共用领域命令、预留和回执。
+		const auto TakeRod = [this](const FGuid ItemId, const FGuid TakeRequestId)
+		{
+			const auto* Character = Cast<ACatCharacter>(GetPawn());
+			if (!Character || !FishingCommandComponent) return false;
+			FCatPlaceRodCommand Command;
+			Command.RequestId = TakeRequestId;
+			Command.RequestedRodItemInstanceId = ItemId;
+			Command.ExpectedEquipmentRevision = Character->GetEquipmentComponent()->GetSnapshot().Revision;
+			return FishingCommandComponent->PlaceRodFromInventoryUseOnAuthority(this, Command).bCommitted;
+		};
+		if (bReleased)
+		{
+			Entry = BackPack->GetInventoryEntryAtSlot(SlotIndex);
+			const auto* Definition = Entry && Entry->Instance ? Cast<UCatEquipmentItemDefinition>(Entry->Instance->GetItemDefinition()) : nullptr;
+			if (!bSameHeld && ExpectedItemId.IsValid() && Definition && Definition->CanServeFishingRod())
+				bCommitted = Entry->Instance->GetItemInstanceId() == ExpectedItemId && TakeRod(ExpectedItemId, RequestId);
+			else bCommitted = bSameHeld || (Entry && Entry->Instance ? Entry->Instance->GetItemInstanceId() : FGuid()) == ExpectedItemId;
+		}
+		if (!bCommitted && IsValid(OldRod) && OldRod->GetPresentationState().bDeployed && !Fishing->FindRodOperatedBy(PlayerState))
+		{
+			FCatOperateRodCommand Restore;
+			Restore.Context.RequestId = FGuid::NewGuid(); Restore.Context.RodActorId = OldRod->GetPresentationState().RodActorId;
+			Restore.Context.ExpectedRodActorRevision = OldRod->GetPresentationState().RodActorRevision;
+			const auto Restored = Fishing->OperateRod(this, Restore);
+			if (FishingCommandComponent) FishingCommandComponent->DeliverResultFromAuthority(Restored);
+			UE_LOG(LogCatfishing, Warning, TEXT("Event=quickbar_selection_restore RequestId=%s ItemId=%s Restored=%d Stage=WorldRod %s"),
+				*RequestId.ToString(), *OldId.ToString(), Restored.bCommitted, *CatLogContext::BuildControllerFields(this));
+		}
+		if (!bCommitted && OldId.IsValid() && Held.ItemInstanceId == OldId && !Fishing->FindRodOperatedBy(PlayerState))
+		{
+			const auto* Previous = BackPack->GetInventoryEntryAtSlot(Held.SlotIndex);
+			const bool bRestored = Previous && Previous->Instance && Previous->Instance->GetItemInstanceId() == OldId
+				&& TakeRod(OldId, FGuid::NewGuid());
+			UE_LOG(LogCatfishing, Warning, TEXT("Event=quickbar_selection_restore RequestId=%s ItemId=%s Restored=%d Stage=Inventory %s"),
+				*RequestId.ToString(), *OldId.ToString(), bRestored, *CatLogContext::BuildControllerFields(this));
+		}
+		Reason = bCommitted ? TEXT("Selected") : TEXT("RodTransitionRejected");
 	}
 	else if (IsQuickbarSelectionLocked()) Reason = TEXT("ItemInUse");
 	if (bCommitted) AuthorityQuickbarSlotIndex = SlotIndex;

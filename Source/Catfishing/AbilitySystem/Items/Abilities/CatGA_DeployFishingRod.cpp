@@ -1,5 +1,4 @@
 #include "AbilitySystem/Items/Abilities/CatGA_DeployFishingRod.h"
-#include "Inventory/CatBackPackComponent.h"
 #include "Character/CatCharacter.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentItemDefinition.h"
@@ -14,13 +13,8 @@ FCatDomainCommandResult UCatGA_DeployFishingRod::ExecuteEquipmentUse(const FCatI
 	auto* Controller = Cast<ACatfishingPlayerController>(Context.RequestingController);
 	auto* Commands = Controller ? Controller->GetFishingCommandComponent() : nullptr;
 	if (!Definition.CanServeFishingRod() || !Character || !Commands) return Result;
-	// 借出前保留本次来源格，防止库存通知中的收货占掉原位；拿竿失败释放同一预留，仍由领域服务归还原实例。
-	auto* BackPack = Cast<UCatBackPackComponent>(Context.SourceInventory);
-	if (!BackPack || !BackPack->ReserveQuickbarHeldSlotFromAuthority(Context.InventorySlotIndex, UseTarget.ItemId)) return Result;
+	// 原格预留与失败释放由切格和 GA 共用的部署入口处理。
 	FCatPlaceRodCommand Command; Command.RequestId = Context.RequestId; Command.RequestedRodItemInstanceId = UseTarget.ItemId;
 	Command.ExpectedEquipmentRevision = Character->GetEquipmentComponent()->GetSnapshot().Revision;
-	Result = Commands->PlaceRodFromInventoryUseOnAuthority(Controller, Command);
-	if (!Result.bCommitted && BackPack->GetQuickbarHeldSlot().ItemInstanceId == UseTarget.ItemId)
-		BackPack->ClearQuickbarHeldSlotFromAuthority();
-	return Result;
+	return Commands->PlaceRodFromInventoryUseOnAuthority(Controller, Command);
 }

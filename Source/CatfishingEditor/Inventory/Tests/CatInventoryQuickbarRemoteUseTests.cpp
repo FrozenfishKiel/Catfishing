@@ -144,6 +144,7 @@ namespace CatInventoryQuickbarRemoteUseTests
 			case 18: return CancelRemoteChum();
 			case 19: return VerifyRemoteChumCancellation();
 			case 20: return VerifyRemotePackedRodSelection();
+			case 21: return VerifyRemoteSelectionPackedRod();
 			default: Test->AddError(TEXT("Remote quickbar use test reached an unknown stage.")); return true;
 			}
 		}
@@ -495,11 +496,10 @@ namespace CatInventoryQuickbarRemoteUseTests
 			Test->AddInfo(TEXT("Event=tools_left_click_network_verified Scope=ChumConsumption,ScoopTarget,InventoryReceipt,FishingReceipt,MouthReplication"));
 			return true;
 		}
-		/** 远端选择第二根鱼竿并按左键；服务器部署时必须读取该槽的实例，第一根仍留在背包。 */
+		/** 远端只选择第二根鱼竿；无需左键，服务器部署精确实例，第一根仍留在背包。 */
 		bool DeployRemoteSecondRod()
 		{
 			if (!Test->TestTrue(TEXT("remote selects second rod locally"), ClientController->RequestSelectQuickbarSlotFromInput(SecondRodSlot))) return true;
-			ClientController->BeginSelectedItemUseFromInput();
 			Stage = 7; return false;
 		}
 		/** 查询正式服务器鱼竿 Actor 与 held/visible 背包条目，确认 world payload 使用第二根的 ID 和耐久而第一根未被拿走。 */
@@ -521,7 +521,27 @@ namespace CatInventoryQuickbarRemoteUseTests
 				&& FMath::IsNearlyEqual(HeldInstance->GetRodDurability(), SecondRodDurability));
 			if (!bSecondRodPayloadMatches || !bFirstRodStillVisible || !bRodDurabilityRemainsDistinct) return true;
 			RodActorId = Rod->GetPresentationState().RodActorId;
+			if (!bSelectionRoundTripVerified)
+			{
+				if (ClientBackpack->GetQuickbarHeldSlot().ItemInstanceId != SecondRodId) return false;
+				ClientController->RequestSelectQuickbarSlotFromInput(FirstChumSlot);
+				Stage = 21; return false;
+			}
 			Stage = 8; return false;
+		}
+		/** 切到普通物品必须在两端收回同一根竿，再只靠选格拿回，验证真实 RPC 和库存复制。 */
+		bool VerifyRemoteSelectionPackedRod()
+		{
+			auto* Fishing = ServerWorld->GetSubsystem<UCatFishingService>();
+			if (Fishing->FindRodOperatedBy(ServerCharacter->GetPlayerState()) || ClientBackpack->GetQuickbarHeldSlot().ItemInstanceId.IsValid()) return false;
+			if (ClientBackpack->FindInventorySlotIndexFromInstanceId(SecondRodId) != SecondRodSlot) return false;
+			for (TActorIterator<ACatFishingRodActor> It(ClientWorld.Get()); It; ++It)
+				if (It->GetPresentationState().RodActorId == RodActorId) return false;
+			Test->TestNull(TEXT("切格收回服务器原世界竿"), Fishing->FindDeployedRodById(RodActorId));
+			Test->TestEqual(TEXT("服务器归还精确原格"), ServerBackpack->FindInventorySlotIndexFromInstanceId(SecondRodId), SecondRodSlot);
+			Test->AddInfo(TEXT("Event=quickbar_rod_selection_roundtrip_verified ServerObserved=1 ClientObserved=1 Input=SelectionOnly"));
+			bSelectionRoundTripVerified = true;
+			return DeployRemoteSecondRod();
 		}
 		/** 从远端客户端找到同一复制鱼竿后通过正式交互 RPC 放下；target 就是该 Actor，不能改走最近竿或 R 路径。 */
 		bool RequestRemoteTargetedRodLeave()
@@ -650,6 +670,7 @@ namespace CatInventoryQuickbarRemoteUseTests
 			Test->TestNull(TEXT("原世界鱼竿已经收回"), Fishing ? Fishing->FindDeployedRodById(RodActorId) : nullptr);
 			return true;
 		}
+		bool bSelectionRoundTripVerified = false;
 		/** Automation 的断言写入对象。 */
 		FAutomationTestBase* Test = nullptr;
 		/** PIE 启动后的超时计时基准。 */
