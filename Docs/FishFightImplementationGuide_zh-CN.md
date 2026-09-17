@@ -1,4 +1,4 @@
-# 鱼运动与遛鱼逻辑：设计与实现
+﻿# 鱼运动与遛鱼逻辑：设计与实现
 
 ## 2026-09-16 E 接回物品栏与 X 保持选中鱼竿
 
@@ -45,7 +45,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | 选择入口、权威与回执 | `Source/Catfishing/Framework/Game/CatfishingPlayerController.cpp`：Native slot tag→RequestSelect→ServerSelect | 原本仅本地选中，G 才 Use；改为选杆立即装备，进行中的会话禁止换格 | 原格/实例身份复核、可靠 RPC、最终格位回执；同一实例重放不重复装备 | 先准备格位接收方，再接 Use/Leave/Pack | 错配 ID、换竿、快速选格、普通/弱网 | 已接入；最终定向报告见下 |
 | 库存与资源 | `Inventory/CatBackPackComponent`→通用库存 held entry/ReturnHeld | 取竿使可见格消失；需要手持期间保留源格，但不能复制第二份物品 | owner-only `QuickbarHeldSlot` 只含 SlotIndex/ItemId/DefinitionId/bInUse；按实例限制收货格 | 新 reservation→旧库存同实例事务→收回/架竿释放 | 收货不能占用手持格，X 容量预检，失败恢复操作位 | 不改存档 schema/扣饵入口；原 held entry 导出合同保留，旅行仍由原离场链托管 |
-| 收货容量预检 | `Inventory/CatInventoryComponent::SimulateAddInventoryBatch`→`SimulateAddItemDefinition` | 仅按定义模拟，无法区分原竿和同型号新竿 | 实例批次保留实例身份并复用实际接收规则；定义批次禁止占用手持格 | 与 BackPack reservation 同步 | 同型号新竿预检拒绝、原竿归还预检接受、通用库存收货回归 | 最终容量回归见下 |
+| 收货容量预检 | `Inventory/CatInventoryComponent::AllocateInventoryIntake`（预检与正式入库共用） | 仅按定义模拟，无法区分原竿和同型号新竿 | 实例批次保留实例身份并复用实际接收规则；定义批次禁止占用手持格 | 与 BackPack reservation 同步 | 同型号新竿预检拒绝、原竿归还预检接受、通用库存收货回归 | 最终容量回归见下 |
 | 输入边沿 | `AbilitySystem/Input/CatAbilityInputBindingComponent`→Primary/selected Use；`CatFishingPrimaryActionAbility::EndAbility` | 左键空手只抓握；取消 Primary 也发 Released，可能误抛钩 | 按下固定 Use/GAS/Grab 接收者；取消清瞄准而不抛钩 | 先改取消，再切选格及 R/X | 松键、菜单取消、持竿约束、持续窝料 | 已接入；真实鼠标路由/会话保持测试见下 |
 | 架竿、咬钩与终局 | `Fishing/CatFishingService::LeaveRod`→Session.Suspend；`ResolveHookSelectionFromAuthority/OpenTrueBiteWindowFromAuthority/RequestHookFromAuthority` | 离竿清空 FisherCharacter 后抽鱼失败，D0=-1；正常断竿误报初始化失败 | 抽鱼用会话竿/原装备；无人持竿时 D0 从握把到冻结落点计算（cm）；已裁断竿回执成功，不二次 Invalidated | 不重启等待/真咬计时；不预生成鱼；保留同一 SessionId 和原扣饵来源 | 无人等待到真咬、架竿后接管、合法提钩断竿重放 | 已接入；原断竿阈值与正常窗口默认值不变 |
 | 世界交互与离场托管 | `Fishing/Actors/CatFishingRodActor`→E trace/Service；`ResolveRodEquipmentFromAuthority` 被授予、抛钩、收竿调用 | 竿物理体很细；能力来源只找 Owner Pawn，离场后找不到实例 | 附加半厚至少 8cm 的 Visibility 查询盒，禁焊接/物理/重叠；先找托管装备，再找活体来源 | 不加新物理质量，保留原会话；E 的原实例迁移按本文最新补充 | 偏离细杆6cm的真实查询、离场后接管原实例能力 | 早前版本已接入查询；遮挡仍用原 first-hit 查询。世界竿 E 接回现已按本文上方最新口径扩展 |

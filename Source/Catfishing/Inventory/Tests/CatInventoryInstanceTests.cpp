@@ -9,6 +9,8 @@
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "Inventory/CatBackPackComponent.h"
 #include "Inventory/CatInventoryComponent.h"
+#include "FishContainers/CatFishTankActor.h"
+#include "Inventory/CatFishOnlyInventoryComponent.h"
 #include "Inventory/CatInventoryItemDefinition.h"
 #include "Inventory/CatInventoryItemInstance.h"
 #include "Inventory/CatFishInventoryItemInstance.h"
@@ -146,7 +148,7 @@ bool FCatInventoryReturnHeldUsesOriginalComponentTest::RunTest(const FString& Pa
 	const FGuid InstanceId = OriginalInstance->GetItemInstanceId();
 
 	FCatInventoryEntry HeldEntry;
-	if (!TestTrue(TEXT("普通库存成功借出同一实例"), OrdinaryInventory->HoldInventoryEntryAtSlotFromAuthority(0, HeldEntry))) return false;
+	if (!TestTrue(TEXT("普通库存成功借出同一实例"), OrdinaryInventory->HoldInventoryItemInstanceFromAuthority(FGuid::NewGuid(), InstanceId, HeldEntry).bCommitted)) return false;
 	FCatInventoryEntry ReturnedEntry;
 	const FCatDomainCommandResult ReturnResult = OrdinaryInventory->ReturnHeldInventoryItemInstanceFromAuthority(
 		FGuid::NewGuid(), InstanceId, 1, ReturnedEntry);
@@ -378,6 +380,68 @@ bool FCatInventoryIntakeAllocationTest::RunTest(const FString& Parameters)
 	Inventory->OnInventoryObservedChanged.Remove(Observer);
 	TestEqual(TEXT("只通知一次"), Notifications, 1);
 	TestEqual(TEXT("原实例身份不变"), Original->GetItemInstanceId(), OriginalId);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatInventoryNotificationReentryTest,
+	"Catfishing.Unit.Inventory.NotificationsObserveCommittedResourceCommands",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+// 先在发货与移格通知中重放同请求，核对只通知一次且不重复改格，再在借出、归还通知中核对保管记录已交接。
+// 最后用鱼缸离库预留阻止升级，确认档位不变；取消预留后用同一升级请求验证可以继续执行。
+bool FCatInventoryNotificationReentryTest::RunTest(const FString& Parameters)
+{
+	FTestWorldWrapper Fixture;
+	if (!TestTrue(TEXT("创建世界"), Fixture.CreateTestWorld(EWorldType::Game))) return false;
+	AActor* Owner = Fixture.GetTestWorld()->SpawnActor<AActor>();
+	UCatInventoryComponent* Inventory = CatInventoryInstanceTests::AddInventoryComponent(*Owner, 2);
+	UCatInventoryItemDefinition* Definition = CatInventoryInstanceTests::CreateOrdinaryDefinition();
+	const FGuid GrantId = FGuid::NewGuid();
+	int32 Notifications = 0;
+	FDelegateHandle Observer = Inventory->OnInventoryObservedChanged.AddLambda([&]()
+	{
+		if (++Notifications != 1) return;
+		const auto Replay = Inventory->GrantResolvedInventoryDefinitionFromAuthority(GrantId, Definition, 1);
+		TestTrue(TEXT("发货通知重放为已提交终态"), Replay.bTerminalReplay);
+		TestEqual(TEXT("已提交发货仍可查询同载荷"), Inventory->ValidateResolvedInventoryDefinitionGrantFromAuthority(GrantId, Definition, 1), ECatDomainCommandError::None);
+	});
+	TestTrue(TEXT("正式发货"), Inventory->GrantResolvedInventoryDefinitionFromAuthority(GrantId, Definition, 1).bCommitted);
+	Inventory->OnInventoryObservedChanged.Remove(Observer);
+	TestEqual(TEXT("发货仅通知一次"), Notifications, 1);
+	TestFalse(TEXT("未重复发货到空格"), Inventory->HasItemAtSlot(1));
+	UCatInventoryItemInstance* Original = Inventory->GetInventoryEntryAtSlot(0)->Instance;
+	const FGuid ItemId = Original->GetItemInstanceId();
+	const FGuid MoveId = FGuid::NewGuid();
+	Notifications = 0;
+	Observer = Inventory->OnInventoryObservedChanged.AddLambda([&]()
+	{
+		if (++Notifications != 1) return;
+		TestTrue(TEXT("移动通知重放为已提交终态"), Inventory->MoveItemToInventoryFromAuthority(MoveId, 0, Inventory, 1, TEXT("ReentrantMove")).bTerminalReplay);
+	});
+	TestTrue(TEXT("移动到空格"), Inventory->MoveItemToInventoryFromAuthority(MoveId, 0, Inventory, 1, TEXT("ReentrantMove")).bCommitted);
+	Inventory->OnInventoryObservedChanged.Remove(Observer);
+	TestEqual(TEXT("移动仅通知一次"), Notifications, 1);
+	TestTrue(TEXT("重放后物品留在目标格"), Inventory->GetInventoryEntryAtSlot(1)->Instance == Original);
+	bool bReturning = false;
+	Observer = Inventory->OnInventoryObservedChanged.AddLambda([&]()
+	{
+		TestEqual(TEXT("取还通知看到完整活动记录"), Inventory->FindHeldInventoryEntryFromAuthority(ItemId) != nullptr, !bReturning);
+	});
+	FCatInventoryEntry Held;
+	TestTrue(TEXT("借出原实例"), Inventory->HoldInventoryItemInstanceFromAuthority(FGuid::NewGuid(), ItemId, Held).bCommitted);
+	bReturning = true;
+	TestTrue(TEXT("归还原实例"), Inventory->ReturnHeldInventoryItemInstanceFromAuthority(FGuid::NewGuid(), ItemId, 2, Held).bCommitted);
+	Inventory->OnInventoryObservedChanged.Remove(Observer);
+	ACatFishTankActor* Tank = Fixture.GetTestWorld()->SpawnActor<ACatFishTankActor>();
+	const FGuid Reservation = FGuid::NewGuid();
+	const FGuid Upgrade = FGuid::NewGuid();
+	const int32 Tier = Tank->GetCapacityTier();
+	TestTrue(TEXT("升级前无预留时可升下一档"), Tank->CanApplyCapacityUpgradeFromAuthority(Tier + 1, Upgrade));
+	TestTrue(TEXT("建立同步离库预留"), Tank->GetFishInventoryComponent()->PrepareRemovalFromAuthority(Reservation, {}));
+	TestFalse(TEXT("预留中不虚报升级成功"), Tank->ApplyCapacityUpgradeFromAuthority(Tier + 1, Upgrade, false));
+	TestEqual(TEXT("拒绝不变档位"), Tank->GetCapacityTier(), Tier);
+	Tank->GetFishInventoryComponent()->FinishRemovalFromAuthority(Reservation, false);
+	TestTrue(TEXT("取消预留后同升级请求可执行"), Tank->ApplyCapacityUpgradeFromAuthority(Tier + 1, Upgrade, false));
 	return !HasAnyErrors();
 }
 

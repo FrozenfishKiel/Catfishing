@@ -119,8 +119,8 @@ namespace CatRodReplacementTests
 			UCatInventoryComponent* PlayerInventory = Character ? Character->GetInventoryComponent() : nullptr;
 			if (!Test.TestTrue(TEXT("公共仓库和玩家正式库存存在"), CampInventory && PlayerInventory)) return false;
 			if (!Test.TestTrue(TEXT("商店交付 T2 到公共仓库"),
-				CampInventory->GrantInventoryDefinitionFromAuthority(
-					FGuid::NewGuid(), 34, 1).bCommitted)) return false;
+				CampInventory->GrantResolvedInventoryDefinitionFromAuthority(
+					FGuid::NewGuid(), GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(34), 1).bCommitted)) return false;
 			const int32 CampIndex = CampInventory->FindFirstInventorySlotIndexByItemId(34);
 			const FCatInventoryEntry* SourceEntry = CampInventory->GetInventoryEntryAtSlot(CampIndex);
 			if (!Test.TestTrue(TEXT("仓库存在真实 T2"),

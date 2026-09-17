@@ -1,3 +1,4 @@
+#include "Inventory/CatInventoryStatics.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "ShopEconomy/Trading/CatShopTradeController.h"
 #include "ShopEconomy/CatFishBuyerActor.h"
@@ -6,7 +7,6 @@
 #include "Inventory/CatWorldDropProtectionComponent.h"
 #include "Inventory/CatInventoryWorldItem.h"
 #include "Components/SkeletalMeshComponent.h"
-#include "Inventory/CatInventoryStatics.h"
 
 #include "Camp/CatCampSettings.h"
 #include "Character/CatCharacter.h"

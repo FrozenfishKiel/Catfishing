@@ -1,4 +1,4 @@
-# 钓鱼核心架构（技术文档）
+﻿# 钓鱼核心架构（技术文档）
 
 
 ## 2026-09-16：浓度等待与每漂进度
@@ -131,7 +131,7 @@
 | 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
 | --- | --- | --- | --- | --- | --- | --- |
 | 使用权、调用方和结果 | `FishingService::BeginCast` → `Equipment::BeginFishingUse`；`CatFishingUseResults.h` | 原 Begin 预扣1；现只验有饵并锁竿，单位仍为份 | 所有 C++ 调用方改读 `bUseAccepted`；删除 `bBaitFrozen` | 先接收方、再调用方与回执 | 重复Begin、缺饵、最后一份、借竿、通知中离场 | 已迁移所有调用方；BaitRestock、OwnedRodLifecycle 与 BorrowedRod 审计通过，资产扫描0引用 |
-| 真咬数量写入 | `Session::OpenTrueBiteWindowFromAuthority` → `CommitFishingBaitDeferred` → `Inventory::ConsumeItemAtSlotInternal` | 原冻结抛竿饵；现扣原抛竿者当前选择 | 单一写口，先写数量并置已提交，再通知；捕获仅只读核对 | 写入→记录→选择/版本→复制 | 换饵、缺饵、回调重入、真咬重放 | 已删除预警与捕获补扣；BaitConfirmation 3/3通过，覆盖正式选饵、缺饵、重入、取消与满包；正式StateTree预警不扣/真咬扣通过 |
+| 真咬数量写入 | `Session::OpenTrueBiteWindowFromAuthority` → `CommitFishingBaitDeferred` → `Inventory::ConsumeItemAtSlot` | 原冻结抛竿饵；现扣原抛竿者当前选择 | 单一写口，先写数量并置已提交，再通知；捕获仅只读核对 | 写入→记录→选择/版本→复制 | 换饵、缺饵、回调重入、真咬重放 | 已删除预警与捕获补扣；BaitConfirmation 3/3通过，覆盖正式选饵、缺饵、重入、取消与满包；正式StateTree预警不扣/真咬扣通过 |
 | 终局、托管和持久化 | `ReleaseFishingUse`；`PreserveFishingResourcesForEquipmentShutdown` → `MoveFishingResourcesToCustodian` | 原退款、待退记录和托管退款格；现无退款，饵留原背包 | 删除全部退款字段、重试委托、离场待退扫描及专用扩容；保留原竿精确身份/磨损 | 迁移实例与记录→重绑Session→通知 | 满包释放、背包导出、原宿主销毁与保留竿 | 退款链全部删除；OwnedRodLifecycle 的离场导出/原宿主销毁/托管无补饵通过；借竿磨损与满包释放通过 |
 | D₀与入场计算 | `OpenTrueBiteWindowFromAuthority` → `ResolveHookSelectionFromAuthority` → `TryEnterHookedFightFromAuthority` | 原提竿时量竿尖距离；现真咬量鱼猫距 | 私有 `TrueBiteDistanceCentimeters=-1`；不复制不持久化；超限在完美折减前拒绝 | 冻结时点→扣饵→超限判断→窗口→物理投影 | 等于/大于Lmax、响应窗移动、完美与几何 | BiteTimingWorld 的D₀冻结、等于/大于Lmax、浮漂保留通过；OwnerRodHold真实输入→提竿→Runner通过 |
 | 超时、网络和表现消费者 | `HandleTrueBiteWindowExpired/FinalizeSession` → Session/Hook既有快照；`/Game/Data/StateTrees/ST_FishingSession` | 原WindowExpired回Waiting；现真咬超时直接终局 | 保留未真咬夜间竞态使用的WindowExpired→Waiting；真咬超时清全部计时器并停树 | 清理→原回执/复制→原HUD/漂终局 | 正式树、真实输入/Runner、WBP加载与联机回归 | 正式StateTree真咬超时终局、计时器清理及WBP绑定通过；GroupListenThreeClients在既有助手抓握断言失败，未证明本轮多人全链完成；真人画面和新包双端日志未验证 |

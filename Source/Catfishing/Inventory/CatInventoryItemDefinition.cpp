@@ -26,7 +26,7 @@ void UCatInventoryItemFragment::OnInstanceCreated(UCatInventoryItemInstance* Ins
 	(void)Instance;
 }
 
-// 定义构造流程：普通物品默认声明通用丢弃和放置；派生定义及资产可改清单，运行状态和执行仍由实例承载。
+// 定义构造流程：普通物品默认声明通用丢弃和放置；派生定义及资产可改清单，实例只保存事实并查询可用性，动作执行归 GA 或世界交互。
 UCatInventoryItemDefinition::UCatInventoryItemDefinition(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {

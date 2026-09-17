@@ -1,4 +1,4 @@
-﻿#if WITH_DEV_AUTOMATION_TESTS
+#if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
@@ -75,8 +75,8 @@ namespace CatFishingBaitRestockTests
 			UCatInventoryComponent* PlayerInventory = Character ? Character->GetInventoryComponent() : nullptr;
 			if (!Test.TestTrue(TEXT("公共仓库和玩家正式库存存在"), CampInventory && PlayerInventory)) return false;
 			if (!Test.TestTrue(TEXT("同种鱼饵交付公共仓库"),
-				CampInventory->GrantInventoryDefinitionFromAuthority(
-					FGuid::NewGuid(), 4, 3).bCommitted)) return false;
+				CampInventory->GrantResolvedInventoryDefinitionFromAuthority(
+					FGuid::NewGuid(), GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(4), 3).bCommitted)) return false;
 			const int32 SourceIndex = CampInventory->FindFirstInventorySlotIndexByItemId(4);
 			const FCatInventoryEntry* SourceEntry = CampInventory->GetInventoryEntryAtSlot(SourceIndex);
 			const TArray<FCatInventoryEntry> PlayerEntries = PlayerInventory->GetInventoryEntries();

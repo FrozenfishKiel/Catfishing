@@ -1,4 +1,4 @@
-﻿#include "FishContainers/CatFishTankActor.h"
+#include "FishContainers/CatFishTankActor.h"
 
 #include "Components/SceneComponent.h"
 #include "Character/CatCharacter.h"
@@ -130,6 +130,8 @@ bool ACatFishTankActor::CanApplyCapacityUpgradeFromAuthority(const int32 TargetT
 	{
 		return true;
 	}
+	// 离库预留期间容量写入会被拒绝；必须在付款和记录档位之前拒绝这次新升级。
+	if (FishInventory->HasPreparedRemoval()) return false;
 	if (TargetTier != CapacityTier + 1)
 	{
 		return false;
@@ -152,6 +154,8 @@ bool ACatFishTankActor::CanApplyCapacityUpgradeSequenceFromAuthority(
 	{
 		return true;
 	}
+	// 离库预留期间容量写入会被拒绝；必须在付款和记录档位之前拒绝这次新升级。
+	if (FishInventory->HasPreparedRemoval()) return false;
 	TArray<int32> SortedTiers = TargetTiers;
 	SortedTiers.Sort();
 	const UCatFishContainerSettings* Settings = GetDefault<UCatFishContainerSettings>();

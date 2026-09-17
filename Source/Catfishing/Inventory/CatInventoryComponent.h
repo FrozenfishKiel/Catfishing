@@ -280,13 +280,6 @@ public:
 	 */
 	bool TryAddInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch, bool bBroadcastChange = true);
 
-	/** 只读预检稳定物品 ID 能否进入当前正式库存；商店、奖励和初始化发货用它在提交前确认目录、authority 和容量。 */
-	ECatDomainCommandError ValidateInventoryDefinitionGrantFromAuthority(FGuid RequestId, int32  ItemId,
-		int32 Count) const;
-
-	/** authority 按稳定物品 ID 向当前正式库存发货；库存组件负责目录解析、幂等和整批写入，并返回提交状态与错误码。 */
-	FCatDomainCommandResult GrantInventoryDefinitionFromAuthority(FGuid RequestId, int32  ItemId, int32 Count);
-
 	/** 只读预检已经解析出的物品定义能否进入当前正式库存；调用方用它把容量和堆叠裁决交回 Inventory。 */
 	ECatDomainCommandError ValidateResolvedInventoryDefinitionGrantFromAuthority(
 		FGuid RequestId, UCatInventoryItemDefinition* ItemDefinition, int32 Count) const;
@@ -319,9 +312,6 @@ public:
 	/** authority 从指定槽位移出完整 entry；部署、跨容器转移等需要保留实例身份的流程用它接走正式库存事实。 */
 	bool RemoveInventoryEntryAtSlotFromAuthority(int32 TargetIndex, FCatInventoryEntry& OutRemovedEntry);
 
-	/** authority 把指定槽位完整借出到库存内部活动区；部署型物品用它离开可见格子，收回时必须像普通拾取一样重新占用真实空位。 */
-	bool HoldInventoryEntryAtSlotFromAuthority(int32 SlotIndex, FCatInventoryEntry& OutHeldEntry);
-
 	/** authority 按实例身份借出部署型物品；正式库存负责服务器校验、槽位解析和 held entry，返回值交给部署/回滚调用方串联同一实例。 */
 	FCatDomainCommandResult HoldInventoryItemInstanceFromAuthority(FGuid RequestId, FGuid ItemInstanceId, FCatInventoryEntry& OutHeldEntry);
 
@@ -329,18 +319,12 @@ public:
 	FCatDomainCommandResult ReturnHeldInventoryItemInstanceFromAuthority(FGuid RequestId, FGuid ItemInstanceId,
 		int32 MinimumSlotCount, FCatInventoryEntry& OutReturnedEntry);
 
-	/** authority 把活动区里同一不可堆叠实例归还当前库存；这是部署型物品收回时复用本组件容量规则的低层拼装点。 */
-	bool ReturnHeldInventoryEntryFromAuthority(FGuid ItemInstanceId, int32 MinimumSlotCount,
-		FCatInventoryEntry& OutReturnedEntry);
-
-
 	/** authority 退役活动区里的同一实例；存档已接管部署物时用它清掉本库存活动区保管记录。 */
 	bool RetireHeldInventoryEntryFromAuthority(FGuid ItemInstanceId);
 	/** Transfer exact deployed instances during owner teardown; callers rebind consumers before publishing. */
 	bool MoveHeldInventoryEntriesToCustodianFromAuthority(UCatInventoryComponent* Target, const TArray<FGuid>& ItemInstanceIds);
 
-	/** authority 读取活动区里某个实例的可写 entry；调用方只能用于同一服务器事务内同步运行状态。 */
-	FCatInventoryEntry* FindHeldInventoryEntryFromAuthority(FGuid ItemInstanceId);
+
 
 	/** authority 读取活动区里某个实例的只读 entry；导出或预检只需要观察时用它避免暴露可写库存格。 */
 	const FCatInventoryEntry* FindHeldInventoryEntryFromAuthority(FGuid ItemInstanceId) const;
@@ -498,15 +482,6 @@ protected:
 
 	/** 准备新实例并核对准备期间原条目未变，再迁移载体、写条目与复制登记；拒绝时不提交本批次，也不撤销重入变更，通知由调用方发布。 */
 	bool ApplyInventoryIntake(TArray<FInventoryIntakeSlot>& Slots);
-
-	/** 稳定物品发货预检的共用裁决；调用方可以来自目录 ID 或已解析定义，但最终都按同一份库存载荷签名回答。 */
-	ECatDomainCommandError ValidateInventoryDefinitionGrantFromAuthorityInternal(
-		FGuid RequestId, int32  ItemId, UCatInventoryItemDefinition* ItemDefinition, int32 Count) const;
-
-	/** 稳定物品发货提交的共用写入口；它是正式库存写入的唯一实现，外层系统只负责把自己的业务意图解析成库存定义。 */
-	FCatDomainCommandResult GrantInventoryDefinitionFromAuthorityInternal(
-		FGuid RequestId, int32  ItemId,
-		UCatInventoryItemDefinition* ItemDefinition, int32 Count);
 
 	/** 读取某个定义的有效堆叠上限；集中处理非法配置，确保预演和正式入库口径一致。 */
 	int32 GetMaxStackCountForDefinition(const UCatInventoryItemDefinition& ItemDefinition) const;

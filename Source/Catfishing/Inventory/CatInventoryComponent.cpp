@@ -1,22 +1,13 @@
 #include "Inventory/CatInventoryComponent.h"
-#include "Inventory/CatWorldDropProtectionComponent.h"
 #include "Growth/CatGrowthComponent.h"
 
 #include "GameFramework/Pawn.h"
 #include "Character/CatCharacter.h"
-#include "Components/PrimitiveComponent.h"
-#include "Components/SkeletalMeshComponent.h"
-#include "Condition/CatConditionComponent.h"
 #include "Engine/World.h"
 #include "Equipment/CatEquipmentItemDefinition.h"
 #include "Fishing/CatFishingService.h"
-#include "FishContainers/CatFishGuardActor.h"
-#include "FishContainers/CatFishTankActor.h"
-#include "FishContainers/CatFishPickupSettings.h"
 #include "Inventory/CatFishOnlyInventoryComponent.h"
 #include "Inventory/CatFishInventoryItemInstance.h"
-#include "Items/Fish/CatFishPickupActor.h"
-#include "Inventory/CatInventoryWorldItem.h"
 #include "Inventory/CatInventoryAccessRules.h"
 #include "Camp/CatCampSettings.h"
 #include "Inventory/CatInventoryItemDefinition.h"
@@ -24,7 +15,6 @@
 #include "Inventory/CatInventorySettings.h"
 #include "Logging/CatLog.h"
 #include "Net/UnrealNetwork.h"
-#include "PhysicsEngine/BodySetup.h"
 #include "UI/Inventory/CatInventoryModel.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogCatInventory, Log, All);
@@ -813,37 +803,20 @@ bool UCatInventoryComponent::TryAddInventoryBatch(const FCatInventoryReceiveBatc
 	return true;
 }
 
-// 稳定 ID 发货预检入口流程：先从正式库存目录解析定义资产，再进入共用预检；目录缺失时让内部流程统一返回无效载荷。
-ECatDomainCommandError UCatInventoryComponent::ValidateInventoryDefinitionGrantFromAuthority(
-	const FGuid RequestId, const int32  ItemId, const int32 Count) const
-{
-	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
-	UCatInventoryItemDefinition* ItemDefinition =
-		InventorySettings != nullptr ? InventorySettings->FindRuntimeDefinition(ItemId) : nullptr;
-	return ValidateInventoryDefinitionGrantFromAuthorityInternal(RequestId, ItemId, ItemDefinition, Count);
-}
-
-// 已解析定义发货预检流程：调用方已经完成业务目录解析时，库存仍按定义自己的稳定 ID 建立同一份载荷口径。
-ECatDomainCommandError UCatInventoryComponent::ValidateResolvedInventoryDefinitionGrantFromAuthority(
-	const FGuid RequestId, UCatInventoryItemDefinition* ItemDefinition, const int32 Count) const
-{
-	const int32  ItemId = ItemDefinition != nullptr ? ItemDefinition->GetItemId() : 0;
-	return ValidateInventoryDefinitionGrantFromAuthorityInternal(RequestId, ItemId, ItemDefinition, Count);
-}
-
-// 稳定定义发货预检共用流程：
+// 已解析定义发货预检流程：
 // 1. 先处理已缓存载荷，允许同一请求在提交前后重复询问，但不允许换定义或数量。
 // 2. 首次预检必须确认 authority、稳定 ID、定义运行配置和数量都有效，避免来源系统传入半配置资产。
 // 3. 最后只用正式库存批次预演容量，调用方不能在自己系统里复制堆叠和格子规则。
-ECatDomainCommandError UCatInventoryComponent::ValidateInventoryDefinitionGrantFromAuthorityInternal(
-	const FGuid RequestId, const int32  ItemId, UCatInventoryItemDefinition* ItemDefinition, const int32 Count) const
+ECatDomainCommandError UCatInventoryComponent::ValidateResolvedInventoryDefinitionGrantFromAuthority(
+	const FGuid RequestId, UCatInventoryItemDefinition* ItemDefinition, const int32 Count) const
 {
+	const int32 ItemId = ItemDefinition ? ItemDefinition->GetItemId() : 0;
 	const FString Key = MakeTerminalKey(TEXT("GrantInventoryDefinition"), RequestId);
-	const FString PayloadPrefix = FString::Printf(TEXT("Definition=%s|Count=%d|"),
+	const FString PayloadSignature = FString::Printf(TEXT("Definition=%s|Count=%d"),
 		*FString::FromInt(ItemId), Count);
 	if (const FString* CachedPayload = TerminalPayloadByKey.Find(Key))
 	{
-		return CachedPayload->StartsWith(PayloadPrefix)
+		return *CachedPayload == PayloadSignature
 			? ECatDomainCommandError::None
 			: ECatDomainCommandError::InvalidPayload;
 	}
@@ -851,8 +824,7 @@ ECatDomainCommandError UCatInventoryComponent::ValidateInventoryDefinitionGrantF
 	const AActor* OwningActor = GetOwner();
 	if (!RequestId.IsValid() || OwningActor == nullptr || !OwningActor->HasAuthority()
 		|| (ItemId == 0) || Count <= 0 || ItemDefinition == nullptr
-		|| !ItemDefinition->IsInventoryRuntimeDefinitionReady()
-		|| ItemDefinition->GetItemId() != ItemId)
+		|| !ItemDefinition->IsInventoryRuntimeDefinitionReady())
 	{
 		return ECatDomainCommandError::InvalidPayload;
 	}
@@ -866,35 +838,15 @@ ECatDomainCommandError UCatInventoryComponent::ValidateInventoryDefinitionGrantF
 		: ECatDomainCommandError::CapacityExceeded;
 }
 
-// 稳定 ID 发货提交入口流程：先从正式库存目录解析定义资产，再进入共用发货事务；幂等和写入不在公开入口重复实现。
-FCatDomainCommandResult UCatInventoryComponent::GrantInventoryDefinitionFromAuthority(
-	const FGuid RequestId, const int32  ItemId, const int32 Count)
-{
-	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
-	UCatInventoryItemDefinition* ItemDefinition =
-		InventorySettings != nullptr ? InventorySettings->FindRuntimeDefinition(ItemId) : nullptr;
-	return GrantInventoryDefinitionFromAuthorityInternal(
-		RequestId, ItemId, ItemDefinition, Count);
-}
-
-// 已解析定义发货提交流程：调用方只把业务定义交给库存，实际幂等、容量和写入仍落在统一库存命令上。
+// 已解析定义发货提交流程：
+// 1. 以请求 ID 查本组件缓存，并用定义的稳定 ID 与数量核对载荷；同载荷只返回首次结果，换载荷拒绝。
+// 2. 首次请求必须在 authority 且定义运行配置完整，再按当前容量和堆叠规则裁决是否可写入。
+// 3. 容量通过后静默整批收货；容量不足或实例准备失败分别返回拒绝，不发布库存变化。
+// 4. 先记录首次结果和载荷，再对成功提交广播，保证观察者重放不会再次发货；最后写入诊断日志。
 FCatDomainCommandResult UCatInventoryComponent::GrantResolvedInventoryDefinitionFromAuthority(
 	const FGuid RequestId, UCatInventoryItemDefinition* ItemDefinition, const int32 Count)
 {
-	const int32  ItemId = ItemDefinition != nullptr ? ItemDefinition->GetItemId() : 0;
-	return GrantInventoryDefinitionFromAuthorityInternal(
-		RequestId, ItemId, ItemDefinition, Count);
-}
-
-// 稳定定义发货提交共用流程：
-// 1. 先按稳定 ID、数量和来源上下文建立幂等签名，所有来源共享同一条重放规则。
-// 2. 首次请求必须在 authority 且定义运行配置完整，再按当前容量和堆叠规则裁决是否可写入。
-// 3. 通过后只调用库存批次收货；堆叠、实例创建和变化广播都集中在本组件。
-// 4. 所有首次终态都会缓存并写入诊断日志，便于商店、奖励或 Equipment 入口跨端追查。
-FCatDomainCommandResult UCatInventoryComponent::GrantInventoryDefinitionFromAuthorityInternal(
-	const FGuid RequestId, const int32  ItemId,
-	UCatInventoryItemDefinition* ItemDefinition, const int32 Count)
-{
+	const int32 ItemId = ItemDefinition ? ItemDefinition->GetItemId() : 0;
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	const FString Key = MakeTerminalKey(TEXT("GrantInventoryDefinition"), RequestId);
@@ -917,8 +869,7 @@ FCatDomainCommandResult UCatInventoryComponent::GrantInventoryDefinitionFromAuth
 	const AActor* OwningActor = GetOwner();
 	if (!RequestId.IsValid() || OwningActor == nullptr || !OwningActor->HasAuthority()
 		|| (ItemId == 0) || Count <= 0 || ItemDefinition == nullptr
-		|| !ItemDefinition->IsInventoryRuntimeDefinitionReady()
-		|| ItemDefinition->GetItemId() != ItemId)
+		|| !ItemDefinition->IsInventoryRuntimeDefinitionReady())
 	{
 		Result.Error = ECatDomainCommandError::InvalidPayload;
 	}
@@ -932,7 +883,7 @@ FCatDomainCommandResult UCatInventoryComponent::GrantInventoryDefinitionFromAuth
 		{
 			Result.Error = ECatDomainCommandError::CapacityExceeded;
 		}
-		else if (TryAddInventoryBatch(ReceiveBatch))
+		else if (TryAddInventoryBatch(ReceiveBatch, false))
 		{
 			Result.bCommitted = true;
 			Result.Error = ECatDomainCommandError::None;
@@ -945,6 +896,7 @@ FCatDomainCommandResult UCatInventoryComponent::GrantInventoryDefinitionFromAuth
 
 	TerminalCache.Add(Key, Result);
 	TerminalPayloadByKey.Add(Key, PayloadSignature);
+	if (Result.bCommitted) BroadcastInventoryChange();
 	UE_LOG(LogCatInventory, Log,
 		TEXT("Event=inventory_definition_grant Owner=%s Request=%s Committed=%s Error=%s Definition=%s Count=%d"),
 		*GetNameSafe(OwningActor), *RequestId.ToString(EGuidFormats::DigitsWithHyphens),
@@ -1123,216 +1075,79 @@ bool UCatInventoryComponent::RemoveInventoryEntryAtSlotFromAuthority(
 	return true;
 }
 
-// 活动区持有流程：
-// 1. 先要求服务器、合法槽位和有效实例 ID，避免客户端或空格制造活动记录。
-// 2. 再确认这是不可堆叠的完整实例，数量型或可堆叠物继续走 Consume 或普通收货批次，避免归还时被合并到别的栈里。
-// 3. 同一实例不能已经被本库存借出，防止一次部署命令重复移出同一件物品。
-// 4. 成功后复用正式移出入口清空可见槽位，并把完整 entry 放入活动区维持同一实例身份。
-// 5. 活动 entry 只服务部署事务和磨损写回；原槽位保持空闲，收回必须走统一入包。
-bool UCatInventoryComponent::HoldInventoryEntryAtSlotFromAuthority(
-	const int32 SlotIndex, FCatInventoryEntry& OutHeldEntry)
-{
-	OutHeldEntry = FCatInventoryEntry(this);
-	AActor* OwningActor = GetOwner();
-	if (OwningActor == nullptr || !OwningActor->HasAuthority() || !IsValidInventorySlotIndex(SlotIndex))
-	{
-		return false;
-	}
-
-	const FCatInventoryEntry& SourceEntry = InventoryList.Entries[SlotIndex];
-	const FGuid ItemInstanceId = SourceEntry.Instance != nullptr ? SourceEntry.Instance->GetItemInstanceId() : FGuid();
-	const UCatInventoryItemDefinition* SourceDefinition =
-		SourceEntry.Instance != nullptr ? SourceEntry.Instance->GetItemDefinition() : nullptr;
-	if (!ItemInstanceId.IsValid() || SourceEntry.StackCount != 1 || SourceDefinition == nullptr
-		|| GetMaxStackCountForDefinition(*SourceDefinition) > 1 || ActiveHeldItemEntries.Contains(ItemInstanceId))
-	{
-		return false;
-	}
-
-	FCatInventoryEntry RemovedEntry;
-	if (!RemoveInventoryEntryAtSlotFromAuthority(SlotIndex, RemovedEntry))
-	{
-		return false;
-	}
-
-	RemovedEntry.SlotOwnerComponent = this;
-	RemovedEntry.LastObservedCount = RemovedEntry.StackCount;
-	SyncInventoryItemRuntimeOwner(RemovedEntry.Instance);
-
-	FCatInventoryEntry& HeldEntry = ActiveHeldItemEntries.Add(ItemInstanceId);
-	HeldEntry = RemovedEntry;
-	OutHeldEntry = HeldEntry;
-	UE_LOG(LogCatInventory, Log,
-		TEXT("Event=inventory_hold_item Owner=%s Instance=%s SourceSlot=%d Count=%d"),
-		*GetNameSafe(OwningActor), *ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
-		SlotIndex, RemovedEntry.StackCount);
-	return true;
-}
-
-// 按实例借出流程：
-// 1. 先确认调用来自 authority，再按实例身份重读当前正式背包里的可见条目。
-// 2. 再由库存自己按实例 ID 找可见槽位，调用方不用知道这个实例当前落在哪个格子。
-// 3. 找到槽位后复用 held 规则检查不可堆叠、未借出和复制登记，成功才把可见格移入活动区。
-// 4. 本函数不缓存终态，因为放竿等外层流程可能在 Actor 生成失败后回滚借出；RequestId 只用于把日志和外层命令串起来。
-// 5. 成功或失败都返回结构化结果，让上层刷新而不是继续猜测槽位。
+// 先按实例找原格，拒绝无权威、无效请求、离库预留、已借出或非独立单件；校验失败保持可见库存和保管记录不变。
+// 静默扣除原格后建立同一实例的活动保管记录并填写结果，最后通知；观察者看到的格子与保管记录已完成交接。
+// RequestId 关联部署日志而不缓存终态，外层创建鱼竿失败时仍可归还后重新借出同一件物品。
 FCatDomainCommandResult UCatInventoryComponent::HoldInventoryItemInstanceFromAuthority(
-	const FGuid RequestId, const FGuid ItemInstanceId,
-	FCatInventoryEntry& OutHeldEntry)
+	const FGuid RequestId, const FGuid ItemInstanceId, FCatInventoryEntry& OutHeldEntry)
 {
 	OutHeldEntry = FCatInventoryEntry(this);
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
-
-
-	AActor* OwningActor = GetOwner();
-	if (OwningActor == nullptr || !OwningActor->HasAuthority() || !RequestId.IsValid()
-		|| !ItemInstanceId.IsValid())
-	{
+	const int32 SlotIndex = FindInventorySlotIndexFromInstanceId(ItemInstanceId);
+	const FCatInventoryEntry* Entry = GetInventoryEntryAtSlot(SlotIndex);
+	const UCatInventoryItemDefinition* Definition = Entry && Entry->Instance ? Entry->Instance->GetItemDefinition() : nullptr;
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !RequestId.IsValid() || !ItemInstanceId.IsValid())
 		Result.Error = ECatDomainCommandError::InvalidPayload;
-	}
-	else if (ActiveHeldItemEntries.Contains(ItemInstanceId))
-	{
+	else if (HasPreparedRemoval() || ActiveHeldItemEntries.Contains(ItemInstanceId))
 		Result.Error = ECatDomainCommandError::InvalidPhase;
-	}
+	else if (!Entry) Result.Error = ECatDomainCommandError::NotFound;
+	else if (!Definition || Entry->StackCount != 1 || GetMaxStackCountForDefinition(*Definition) > 1)
+		Result.Error = ECatDomainCommandError::InvalidPhase;
 	else
 	{
-		const int32 SlotIndex = FindInventorySlotIndexFromInstanceId(ItemInstanceId);
-		if (SlotIndex == INDEX_NONE)
+		const FCatInventoryEntry Held = *Entry;
+		if (ConsumeItemAtSlot(SlotIndex, 1, false))
 		{
-			Result.Error = ECatDomainCommandError::NotFound;
-		}
-		else if (HoldInventoryEntryAtSlotFromAuthority(SlotIndex, OutHeldEntry))
-		{
+			ActiveHeldItemEntries.Add(ItemInstanceId, Held);
+			OutHeldEntry = Held;
 			Result.bCommitted = true;
 			Result.Error = ECatDomainCommandError::None;
+			BroadcastInventoryChange(SlotIndex);
 		}
-		else
-		{
-			Result.Error = ECatDomainCommandError::InvalidPhase;
-		}
+		else Result.Error = ECatDomainCommandError::InvalidPhase;
 	}
-
-	UE_LOG(LogCatInventory, Log,
-		TEXT("Event=inventory_hold_item_instance Owner=%s Request=%s Item=%s Committed=%s Error=%s"),
-		*GetNameSafe(OwningActor), *RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-		*ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error));
+	UE_LOG(LogCatInventory, Log, TEXT("Event=inventory_hold_item_instance Owner=%s Request=%s Item=%s Committed=%d Error=%s"),
+		*GetNameSafe(GetOwner()), *RequestId.ToString(), *ItemInstanceId.ToString(), Result.bCommitted, *UEnum::GetValueAsString(Result.Error));
 	return Result;
 }
 
-// 按实例归还流程：
-// 1. 先校验 authority、RequestId 和实例身份，避免外层收杆或 Use 回滚在错误宿主、空载荷上改动活动区状态。
-// 2. 再由库存自己读取 held entry；缺失返回 NotFound，空实例、可堆叠物、数量异常或可见库存重复实例返回 InvalidPhase。
-// 3. 预检通过后复用低层归还流程；低层入口负责补足最低槽数、容量预演、复制登记、变化广播和活动记录删除。
-// 4. 本函数不缓存终态，因为外层 Equipment::Use/UnUse 仍可能在读模型刷新失败后把刚归还的实例重新借回活动区。
-// 5. 成功或失败都输出包含 RequestId 的诊断日志，方便串联外层部署/收口请求。
+// 先读取保管记录并校验权威、请求、独立单件和可见库存无重复实例；离库预留或非法状态直接拒绝。
+// 静默设置最低槽数并把原实例整件入库，成功后删除活动记录、填写输出再通知；入库失败保留活动记录，但不撤销已补齐的空槽。
+// 本入口不缓存请求终态，外层仍可在部署回退时重新借出；跨玩家接管与保存继续读取同一张保管表。
 FCatDomainCommandResult UCatInventoryComponent::ReturnHeldInventoryItemInstanceFromAuthority(
-	const FGuid RequestId, const FGuid ItemInstanceId, const int32 MinimumSlotCount,
-	FCatInventoryEntry& OutReturnedEntry)
+	const FGuid RequestId, const FGuid ItemInstanceId, const int32 MinimumSlotCount, FCatInventoryEntry& OutReturnedEntry)
 {
 	OutReturnedEntry = FCatInventoryEntry(this);
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
-
-
-	AActor* OwningActor = GetOwner();
-	if (OwningActor == nullptr || !OwningActor->HasAuthority() || !RequestId.IsValid()
-		|| !ItemInstanceId.IsValid())
-	{
+	const FCatInventoryEntry* Held = ActiveHeldItemEntries.Find(ItemInstanceId);
+	const UCatInventoryItemDefinition* Definition = Held && Held->Instance ? Held->Instance->GetItemDefinition() : nullptr;
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !RequestId.IsValid() || !ItemInstanceId.IsValid())
 		Result.Error = ECatDomainCommandError::InvalidPayload;
-	}
+	else if (!Held) Result.Error = ECatDomainCommandError::NotFound;
+	else if (HasPreparedRemoval() || !Definition || Held->StackCount != 1 || GetMaxStackCountForDefinition(*Definition) > 1
+		|| FindInventorySlotIndexFromInstance(Held->Instance) != INDEX_NONE)
+		Result.Error = ECatDomainCommandError::InvalidPhase;
 	else
 	{
-		const FCatInventoryEntry* HeldEntry = ActiveHeldItemEntries.Find(ItemInstanceId);
-		if (HeldEntry == nullptr)
+		const FCatInventoryEntry Returning = *Held;
+		SetInventorySlotCountFromAuthority(MinimumSlotCount, false);
+		FCatInventoryReceiveBatch Batch;
+		Batch.InstanceEntries.Add({1, Returning.Instance});
+		if (TryAddInventoryBatch(Batch, false))
 		{
-			Result.Error = ECatDomainCommandError::NotFound;
+			OutReturnedEntry = Returning;
+			ActiveHeldItemEntries.Remove(ItemInstanceId);
+			Result.bCommitted = true;
+			Result.Error = ECatDomainCommandError::None;
+			BroadcastInventoryChange();
 		}
-		else if (HeldEntry->Instance == nullptr || HeldEntry->StackCount <= 0)
-		{
-			Result.Error = ECatDomainCommandError::InvalidPhase;
-		}
-		else
-		{
-			const UCatInventoryItemDefinition* HeldDefinition = HeldEntry->Instance->GetItemDefinition();
-			if (HeldDefinition == nullptr || HeldEntry->StackCount != 1
-				|| GetMaxStackCountForDefinition(*HeldDefinition) > 1
-				|| FindInventorySlotIndexFromInstance(HeldEntry->Instance) != INDEX_NONE)
-			{
-				Result.Error = ECatDomainCommandError::InvalidPhase;
-			}
-			else if (ReturnHeldInventoryEntryFromAuthority(
-				ItemInstanceId, MinimumSlotCount, OutReturnedEntry))
-			{
-				Result.bCommitted = true;
-				Result.Error = ECatDomainCommandError::None;
-			}
-			else
-			{
-				Result.Error = ECatDomainCommandError::CapacityExceeded;
-			}
-		}
+		else Result.Error = ECatDomainCommandError::CapacityExceeded;
 	}
-
-	UE_LOG(LogCatInventory, Log,
-		TEXT("Event=inventory_return_held_item_instance Owner=%s Request=%s Item=%s MinimumSlotCount=%d Committed=%s Error=%s"),
-		*GetNameSafe(OwningActor), *RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-		*ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), MinimumSlotCount,
-		Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error));
+	UE_LOG(LogCatInventory, Log, TEXT("Event=inventory_return_held_item_instance Owner=%s Request=%s Item=%s MinimumSlotCount=%d Committed=%d Error=%s"),
+		*GetNameSafe(GetOwner()), *RequestId.ToString(), *ItemInstanceId.ToString(), MinimumSlotCount, Result.bCommitted, *UEnum::GetValueAsString(Result.Error));
 	return Result;
-}
-
-// 活动区持有归还流程：
-// 1. 先按实例 ID 找到活动区记录，并拒绝已经重新出现在可见库存里的异常状态。
-// 2. 活动记录必须仍是不可堆叠的单实例；这让收回结果一定是同一 UObject 重新入包，而不是按定义生成另一件。
-// 3. 归还不记原槽、不补隐藏容量，直接构造实例批次交给当前库存组件入包，防止 Actor 路由把它交给另一份库存。
-// 4. 只有当前库存入包成功后才删除活动记录；失败时实例仍留在活动区，调用方可以把世界鱼竿恢复为可见并允许重试。
-bool UCatInventoryComponent::ReturnHeldInventoryEntryFromAuthority(
-	const FGuid ItemInstanceId, const int32 MinimumSlotCount, FCatInventoryEntry& OutReturnedEntry)
-{
-	OutReturnedEntry = FCatInventoryEntry(this);
-	AActor* OwningActor = GetOwner();
-	if (OwningActor == nullptr || !OwningActor->HasAuthority() || !ItemInstanceId.IsValid())
-	{
-		return false;
-	}
-
-	FCatInventoryEntry* HeldEntry = ActiveHeldItemEntries.Find(ItemInstanceId);
-	if (HeldEntry == nullptr || HeldEntry->Instance == nullptr || HeldEntry->StackCount <= 0)
-	{
-		return false;
-	}
-	const UCatInventoryItemDefinition* HeldDefinition = HeldEntry->Instance->GetItemDefinition();
-	if (HeldDefinition == nullptr || HeldEntry->StackCount != 1
-		|| GetMaxStackCountForDefinition(*HeldDefinition) > 1)
-	{
-		return false;
-	}
-	if (FindInventorySlotIndexFromInstance(HeldEntry->Instance) != INDEX_NONE)
-	{
-		return false;
-	}
-
-	SetInventorySlotCountFromAuthority(MinimumSlotCount);
-	FCatInventoryReceiveBatch ReceiveBatch;
-	FCatInventoryInstanceEntry& InstanceEntry = ReceiveBatch.InstanceEntries.AddDefaulted_GetRef();
-	InstanceEntry.ItemInstance = HeldEntry->Instance;
-	InstanceEntry.Count = HeldEntry->StackCount;
-	if (!TryAddInventoryBatch(ReceiveBatch))
-	{
-		UE_LOG(LogCatInventory, Warning,
-			TEXT("Event=inventory_return_held_current_inventory_rejected Owner=%s Instance=%s MinimumSlotCount=%d Count=%d"),
-			*GetNameSafe(OwningActor), *ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
-			MinimumSlotCount, HeldEntry->StackCount);
-		return false;
-	}
-
-	OutReturnedEntry = *HeldEntry;
-	ActiveHeldItemEntries.Remove(ItemInstanceId);
-	UE_LOG(LogCatInventory, Log,
-		TEXT("Event=inventory_return_held_item Owner=%s Instance=%s Source=CurrentInventory Count=%d"),
-		*GetNameSafe(OwningActor), *ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
-		OutReturnedEntry.StackCount);
-	return true;
 }
 
 // 活动区持有退役流程：
@@ -1358,18 +1173,7 @@ bool UCatInventoryComponent::RetireHeldInventoryEntryFromAuthority(const FGuid I
 	return true;
 }
 
-// 活动 entry 查找流程：只在服务器侧按稳定实例 ID 返回本库存活动区里的同一份 entry，不触发归还或复制变化。
-FCatInventoryEntry* UCatInventoryComponent::FindHeldInventoryEntryFromAuthority(const FGuid ItemInstanceId)
-{
-	if (GetOwner() == nullptr || !GetOwner()->HasAuthority() || !ItemInstanceId.IsValid())
-	{
-		return nullptr;
-	}
-
-	return ActiveHeldItemEntries.Find(ItemInstanceId);
-}
-
-// 活动 entry 只读查找流程：和可写入口保持同一 authority 与实例 ID 规则，查询本身不会补槽、归还或退役物品。
+// 活动 entry 只读查找流程：拒绝非 authority 或无效实例 ID，随后返回保管表中的记录；查询不补槽、不归还也不退役物品。
 const FCatInventoryEntry* UCatInventoryComponent::FindHeldInventoryEntryFromAuthority(
 	const FGuid ItemInstanceId) const
 {
@@ -1721,7 +1525,7 @@ bool UCatInventoryComponent::CanUseItemAtSlot(const int32 SlotIndex, APawn* User
 // 1. 先用 Source 组件自己的终态缓存处理同一 RequestId 重放；载荷变化会被拒绝而不读取当前格子。
 // 2. 再复核 Source/Target 的 authority、当前槽位和目标组件；服务器按此刻条目执行，不接受客户端提供内容快照。
 // 3. 通过后复用内部交换规则完成合并、搬空格或互换，并由实际变更决定是否通知双方库存。
-// 4. 最后统一广播变化并缓存首次结果；调用方只拿结构化终态刷新 UI 或同步钓具读模型。
+// 4. 先缓存首次结果和载荷，再向发生变化的来源与目标广播；通知中的同请求重放只读取缓存，不重复交换。
 FCatDomainCommandResult UCatInventoryComponent::MoveItemToInventoryFromAuthority(const FGuid RequestId,
 	const int32 SourceSlotIndex,
 	UCatInventoryComponent* TargetInventory, const int32 TargetSlotIndex, const FString& IdempotencyPayloadContext)
@@ -1770,18 +1574,17 @@ FCatDomainCommandResult UCatInventoryComponent::MoveItemToInventoryFromAuthority
 			this, SourceSlotIndex, TargetInventory, TargetSlotIndex);
 		Result.bCommitted = Mutation.bChanged;
 		Result.Error = Mutation.Error;
-		if (Mutation.bChanged)
-		{
-			BroadcastInventoryChange(SourceSlotIndex);
-			if (TargetInventory != this)
-			{
-				TargetInventory->BroadcastInventoryChange(TargetSlotIndex);
-			}
-		}
+
 	}
 
 	TerminalCache.Add(Key, Result);
 	TerminalPayloadByKey.Add(Key, PayloadSignature);
+	// 先缓存终态，观察者即使在通知中重放交换，也不能把刚换好的两个物品再换回去。
+	if (Result.bCommitted)
+	{
+		BroadcastInventoryChange(SourceSlotIndex);
+		if (TargetInventory != this) TargetInventory->BroadcastInventoryChange(TargetSlotIndex);
+	}
 	UE_LOG(LogCatInventory, Log,
 		TEXT("Event=inventory_move_item World=%s NetMode=%d Authority=%s Owner=%s Request=%s SourceSlot=%d TargetOwner=%s TargetSlot=%d Committed=%s Error=%s"),
 		*GetPathNameSafe(GetWorld()), static_cast<int32>(GetNetMode()),

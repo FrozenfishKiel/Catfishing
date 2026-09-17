@@ -1,4 +1,4 @@
-# Items / Inventory 收敛审查报告
+﻿# Items / Inventory 收敛审查报告
 
 > 2026-09-14 历史说明：本文记录先前库存改造。商店两段交付及确认回执已由即时成交链替代；下文有关确认入口、交付状态的说明不再代表当前实现。现行入口是 `UCatShopEconomyService::PurchaseCatalogCart`，见商店购物车技术方案。
 
@@ -147,7 +147,7 @@ Source/Catfishing/Inventory/Tests/CatInventoryInstanceTests.cpp 新增 Entry/Ins
 - 调用方：Camp/Save、Equipment Use 回调。
 - 消费方：复制客户端、Save DTO、Fishing 部署。
 - 风险与审查重点：检查临时空 Entry 不广播；检查失败路径不丢 held 实例。
-- 程序员建议先看：`RestoreInventorySlotsFromAuthority`、`ReturnHeldInventoryEntryFromAuthority`。
+- 程序员建议先看：`RestoreInventorySlotsFromAuthority`、`ReturnHeldInventoryItemInstanceFromAuthority`。
 
 ### CP-03 `Source/Catfishing/Inventory/CatInventoryItemDefinition.h:35` `FindFragment<T>`
 
