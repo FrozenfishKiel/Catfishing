@@ -20,6 +20,7 @@ class UCatFishingViewBridge;
 class UCatGrowthComponent;
 class ULocalPlayer;
 struct FOnAttributeChangeData;
+struct FGameplayTag;
 
 /** HUD Model 完整投影变化通知；PageController/Subsystem 收到后只渲染 HUD WBP。 */
 DECLARE_MULTICAST_DELEGATE(FCatHUDModelChanged);

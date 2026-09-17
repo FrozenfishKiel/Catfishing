@@ -1,6 +1,6 @@
-﻿#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+﻿#include "Inventory/CatFishInventoryItemInstance.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "AbilitySystem/Tags/CatStateTags.h"
-#include "Inventory/CatFishInventoryItemInstance.h"
 #include "Inventory/Fragments/CatItemUseFragment.h"
 #include "AbilitySystem/Effects/CatFishExperienceEffect.h"
 #include "Growth/CatGrowthComponent.h"

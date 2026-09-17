@@ -1,6 +1,6 @@
-﻿#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+﻿#include "Environment/CatChumPlacementService.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "AbilitySystem/Tags/CatStateTags.h"
-#include "Environment/CatChumPlacementService.h"
 
 #include "Equipment/Fragments/CatEquipmentFragment_Chum.h"
 

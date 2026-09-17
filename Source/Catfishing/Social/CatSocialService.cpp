@@ -1,6 +1,6 @@
-﻿#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+﻿#include "Social/CatSocialService.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "AbilitySystem/Tags/CatStateTags.h"
-#include "Social/CatSocialService.h"
 
 #include "Character/CatCharacter.h"
 #include "Framework/Game/CatfishingGameState.h"

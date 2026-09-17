@@ -1,6 +1,6 @@
-﻿#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+﻿#include "AbilitySystem/Items/Abilities/CatItemGameplayAbility.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "AbilitySystem/Tags/CatStateTags.h"
-#include "AbilitySystem/Items/Abilities/CatItemGameplayAbility.h"
 #include "AbilitySystem/Items/CatItemAbilityComponent.h"
 #include "AbilitySystem/Costs/CatAbilityCost_Item.h"
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"

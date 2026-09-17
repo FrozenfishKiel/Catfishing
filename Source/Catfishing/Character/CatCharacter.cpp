@@ -1,6 +1,6 @@
-﻿#include "Fishing/CatFishingService.h"
+﻿#include "Character/CatCharacter.h"
+#include "Fishing/CatFishingService.h"
 #include "AbilitySystem/Tags/CatStateTags.h"
-#include "Character/CatCharacter.h"
 #include "Interaction/Carry/CatCarryableActor.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "AbilitySystem/Physics/CatPhysicalEffortComponent.h"

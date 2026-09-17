@@ -1,5 +1,5 @@
-﻿#include "AbilitySystem/Tags/CatStateTags.h"
-#include "Framework/Game/CatfishingGameModeBase.h"
+﻿#include "Framework/Game/CatfishingGameModeBase.h"
+#include "AbilitySystem/Tags/CatStateTags.h"
 #include "Online/CatRoomAdmission.h"
 #include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
 

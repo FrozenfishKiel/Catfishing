@@ -1,5 +1,5 @@
-﻿#include "AbilitySystem/Tags/CatStateTags.h"
-#include "Condition/CatConditionPresentationComponent.h"
+﻿#include "Condition/CatConditionPresentationComponent.h"
+#include "AbilitySystem/Tags/CatStateTags.h"
 
 #include "AbilitySystemComponent.h"
 #include "Character/CatCharacter.h"

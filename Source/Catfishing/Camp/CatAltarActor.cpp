@@ -1,6 +1,6 @@
-﻿#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+﻿#include "Camp/CatAltarActor.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "AbilitySystem/Tags/CatStateTags.h"
-#include "Camp/CatAltarActor.h"
 #include "FishContainers/CatFishGuardActor.h"
 #include "Inventory/CatFishOnlyInventoryComponent.h"
 #include "Inventory/CatFishInventoryItemInstance.h"

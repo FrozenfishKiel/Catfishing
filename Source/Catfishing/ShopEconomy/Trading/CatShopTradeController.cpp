@@ -1,6 +1,6 @@
-﻿#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+﻿#include "ShopEconomy/Trading/CatShopTradeController.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "AbilitySystem/Tags/CatStateTags.h"
-#include "ShopEconomy/Trading/CatShopTradeController.h"
 
 #include "Inventory/CatInventorySettings.h"
 #include "Camp/CatCampHubActor.h"
