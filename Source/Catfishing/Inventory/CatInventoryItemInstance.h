@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "Framework/Core/CatDomainCommandTypes.h"
@@ -51,18 +51,6 @@ public:
 	/** 查询定义声明的操作当前是否可用；客户端只读生成置灰原因，服务器执行前用同一规则复核。 */
 	virtual bool CanExecuteInventoryAction(const FGameplayTag& Action, const FCatInventoryEntry& Entry,
 		APawn* UserPawn, FText& OutReason) const;
-	/** 已解析的服务器库存请求进入此虚函数；基类分发通用动作，特殊实例可扩展标识而无需修改菜单或RPC。 */
-	virtual FCatDomainCommandResult ExecuteInventoryActionFromAuthority(const FGameplayTag& Action,
-		const FCatInventoryEntry& Entry, const FCatInventoryItemUseContext& Context, int32 Quantity);
-	/** 通用丢弃实现；复用库存世界事务，子类只有丢弃语义不同才需重写。 */
-	virtual FCatDomainCommandResult DropFromInventoryFromAuthority(const FCatInventoryEntry& Entry,
-		const FCatInventoryItemUseContext& Context, int32 Quantity);
-	/** 通用放置实现；继续使用已有地面求解和库存提交，避免每种物品复制离库代码。 */
-	virtual FCatDomainCommandResult PlaceFromInventoryFromAuthority(const FCatInventoryEntry& Entry,
-		const FCatInventoryItemUseContext& Context, int32 Quantity);
-	/** 叼起扩展点；基础物品不支持，由具备相应语义的实例重写。 */
-	virtual FCatDomainCommandResult CarryFromInventoryFromAuthority(const FCatInventoryEntry& Entry,
-		const FCatInventoryItemUseContext& Context);
 	/** 构造一份空物品实例；定义资产会在正式入库前由库存组件写入。 */
 	UCatInventoryItemInstance(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 

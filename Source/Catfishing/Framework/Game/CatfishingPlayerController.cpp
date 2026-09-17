@@ -1,4 +1,4 @@
-﻿#include "Framework/Game/CatfishingPlayerController.h"
+#include "Framework/Game/CatfishingPlayerController.h"
 #include "AbilitySystem/Items/CatItemAbilityComponent.h"
 #include "Inventory/Fragments/CatItemUseFragment.h"
 #include "EngineUtils.h"
@@ -1232,7 +1232,7 @@ void ACatfishingPlayerController::ClearSelectedItemUseInput(const bool bCancelle
 // 统一库存操作 RPC 路由流程：
 // 1. 先记录客户端提交的宿主、槽位、实例、动作和数量，供房主端与客户端日志按 RequestId 对照。
 // 2. 命令门关闭时只产生拒绝回执；开启时由 Statics 重新解析当前 Pawn 可访问的正式库存，绝不信任客户端定义或效果。
-// 3. 组件随后复核实例身份、数量、定义声明和实时可用性，并把动作交给实例虚函数提交。
+// 3. 组件随后复核实例身份、数量、定义声明和实时可用性，并把场景操作交给既有世界交互实现。
 // 4. 最后按成功或拒绝的诊断等级落盘并可靠回送 owning client；重放只回显首次终态，不重复执行副作用。
 void ACatfishingPlayerController::ServerExecuteInventoryAction_Implementation(const FGuid RequestId,
 	AActor* SourceInventoryHost, const int32 SourceSlotIndex, const FGuid ItemInstanceId,
@@ -1244,12 +1244,7 @@ void ACatfishingPlayerController::ServerExecuteInventoryAction_Implementation(co
 		*GetNameSafe(SourceInventoryHost), SourceSlotIndex, *ItemInstanceId.ToString(), *Action.ToString(), Quantity);
 	if (!CanForwardGameplayCommand()) Result.Error = ECatDomainCommandError::CommandsClosed;
 	else Result = UCatInventoryStatics::ExecuteInventoryActionFromAuthority(Cast<ACatCharacter>(GetPawn()),
-		RequestId, SourceInventoryHost, SourceSlotIndex, ItemInstanceId, Action, Quantity, Target,
-		[WeakThis = TWeakObjectPtr<ThisClass>(this)](const FCatDomainCommandResult& Final)
-		{
-			if (ThisClass* Controller = WeakThis.Get()) Controller->DeliverCampCommandResultToOwningClient(Final);
-		});
-	if (Result.bPending) return;
+		RequestId, SourceInventoryHost, SourceSlotIndex, ItemInstanceId, Action, Quantity, Target);
 	const FString Event = FString::Printf(
 		TEXT("Event=inventory_action_result World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s RequestId=%s Host=%s Slot=%d Instance=%s Action=%s Quantity=%d Committed=%d Replay=%d Error=%s"),
 		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority(), static_cast<int32>(GetLocalRole()), *GetName(),

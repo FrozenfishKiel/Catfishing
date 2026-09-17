@@ -54,35 +54,6 @@ bool UCatFishInventoryItemInstance::CanExecuteInventoryAction(const FGameplayTag
 	OutReason = FText::GetEmpty(); return true;
 }
 
-// 只扩展鱼的出售标识，公共动作仍由基类调用虚函数；不在RPC添加类型分支。
-FCatDomainCommandResult UCatFishInventoryItemInstance::ExecuteInventoryActionFromAuthority(const FGameplayTag& Action,
-	const FCatInventoryEntry& Entry, const FCatInventoryItemUseContext& Context, const int32 Quantity)
-{
-	if (Action == CatInventoryActionTags::Sell) return SellFromInventoryFromAuthority(Entry, Context);
-	return Super::ExecuteInventoryActionFromAuthority(Action, Entry, Context, Quantity);
-}
-
-// 叼鱼沿用已验证的库存世界事务；其内部继续验证容器、原载体和嘴部占用，失败时保留库存鱼。
-FCatDomainCommandResult UCatFishInventoryItemInstance::CarryFromInventoryFromAuthority(const FCatInventoryEntry& Entry,
-	const FCatInventoryItemUseContext& Context)
-{
-	return Context.SourceInventory->ReleaseItemToWorldFromAuthority(Cast<ACatCharacter>(Context.UserPawn),
-		Context.RequestId, Context.InventorySlotIndex, GetItemInstanceId(), 1, ECatInventoryWorldAction::Carry);
-}
-
-// 单鱼出售只固定本实例身份；服务器交易控制器重新校验地面鱼护、买家和价格后扣鱼入账。
-FCatDomainCommandResult UCatFishInventoryItemInstance::SellFromInventoryFromAuthority(const FCatInventoryEntry& Entry,
-	const FCatInventoryItemUseContext& Context)
-{
-	FCatDomainCommandResult Result; Result.RequestId = Context.RequestId;
-	ACatFishGuardActor* Guard = Context.SourceInventory ? Cast<ACatFishGuardActor>(Context.SourceInventory->GetOwner()) : nullptr;
-	ACatFishBuyerActor* Buyer = Guard ? ACatFishBuyerActor::FindAvailableBuyer(Context.RequestingController, Guard) : nullptr;
-	UCatShopTradeController* Trading = Context.UserPawn && Context.UserPawn->HasAuthority()
-		? Context.UserPawn->GetWorld()->GetSubsystem<UCatShopTradeController>() : nullptr;
-	if (!Trading || !Buyer) { Result.Error = ECatDomainCommandError::PermissionDenied; return Result; }
-	return Trading->SubmitFishSaleFromPlayer(Context.RequestingController, Buyer, Guard, {GetItemInstanceId()}, Context.RequestId).Delivery;
-}
-
 // 鱼实例构造流程：基础实例已分配 ItemInstanceId；鱼专属字段等捕获提交时再由服务器写入。
 UCatFishInventoryItemInstance::UCatFishInventoryItemInstance(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)

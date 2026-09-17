@@ -17,15 +17,6 @@ public:
 	/** 鱼补充容器叼起与单鱼出售条件；普通操作继续复用基类，只读查询不会冻结买家或售价。 */
 	virtual bool CanExecuteInventoryAction(const FGameplayTag& Action, const FCatInventoryEntry& Entry,
 		APawn* UserPawn, FText& OutReason) const override;
-	/** 鱼单独分发出售，其余操作回到基类虚函数链，避免通用库存认识买家。 */
-	virtual FCatDomainCommandResult ExecuteInventoryActionFromAuthority(const FGameplayTag& Action,
-		const FCatInventoryEntry& Entry, const FCatInventoryItemUseContext& Context, int32 Quantity) override;
-	/** 沿用现有鱼容器到嘴部事务，保留鱼身份、原载体和失败回滚。 */
-	virtual FCatDomainCommandResult CarryFromInventoryFromAuthority(const FCatInventoryEntry& Entry,
-		const FCatInventoryItemUseContext& Context) override;
-	/** 重新寻找当前可服务买家，再调用已有单鱼交易，不接受客户端价格。 */
-	virtual FCatDomainCommandResult SellFromInventoryFromAuthority(const FCatInventoryEntry& Entry,
-		const FCatInventoryItemUseContext& Context);
 	/** 构造一条空鱼实例；捕获提交成功前不会写入鱼身份和重量。 */
 	UCatFishInventoryItemInstance(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 

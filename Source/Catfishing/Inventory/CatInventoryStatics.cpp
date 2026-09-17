@@ -1,3 +1,11 @@
+#include "PhysicsEngine/BodySetup.h"
+#include "ShopEconomy/Trading/CatShopTradeController.h"
+#include "ShopEconomy/CatFishBuyerActor.h"
+#include "FishContainers/CatFishPickupSettings.h"
+#include "FishContainers/CatFishGuardActor.h"
+#include "Inventory/CatWorldDropProtectionComponent.h"
+#include "Inventory/CatInventoryWorldItem.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Inventory/CatInventoryStatics.h"
 
 #include "Camp/CatCampSettings.h"
@@ -361,8 +369,7 @@ FCatDomainCommandResult UCatInventoryStatics::MoveItemBetweenInventoryHostsFromA
 // 菜单路由只解析当前可访问的来源库存；操作内容与实例身份交给该库存唯一入口，成功后刷新既有装备投影。
 FCatDomainCommandResult UCatInventoryStatics::ExecuteInventoryActionFromAuthority(ACatCharacter* Character,
 	const FGuid RequestId, AActor* SourceHost, const int32 SourceSlot, const FGuid ItemInstanceId,
-	const FGameplayTag Action, const int32 Quantity, const FCatInventoryUseTarget& Target,
-	TFunction<void(const FCatDomainCommandResult&)> OnCompleted)
+	const FGameplayTag Action, const int32 Quantity, const FCatInventoryUseTarget& Target)
 {
 	FCatDomainCommandResult Result; Result.RequestId = RequestId;
 	FCatInventoryHostEndpoint Endpoint;
@@ -373,7 +380,6 @@ FCatDomainCommandResult UCatInventoryStatics::ExecuteInventoryActionFromAuthorit
 	Context.RequestId = RequestId; Context.RequestingController = Character->GetController();
 	Context.UserPawn = Character; Context.SourceInventory = Endpoint.Inventory; Context.InventorySlotIndex = Endpoint.SlotIndex;
 	Context.Target = Target;
-	Context.OnCompleted = MoveTemp(OnCompleted);
 	Result = Endpoint.Inventory->ExecuteItemActionFromAuthority(Context, ItemInstanceId, Action, Quantity);
 	if (Result.bCommitted && Endpoint.Equipment) Endpoint.Equipment->RefreshLoadoutFromInventoryComponentFromAuthority();
 	return Result;
@@ -434,4 +440,356 @@ bool UCatInventoryStatics::TryAddInventoryBatchToActor(AActor* TargetActor,
 	}
 
 	return false;
+}
+
+// 调用方库存已校验并预占请求；先重读来源，Sell 直接提交商店交易并沿用其通知，其他动作进入载体流程。
+// Carry 校验容器、鱼和嘴部约束后附着；Drop/Place 先准备载体并检查碰撞与落点，再复核来源并静默扣量。
+// 失败清理本次候选，Carry 按失败阶段解除认领或恢复保管表现；不恢复整份库存快照。返回后由库存缓存菜单结果并发布世界动作通知。
+FCatDomainCommandResult UCatInventoryStatics::ExecuteResolvedInventoryActionFromAuthority(
+	const FCatInventoryItemUseContext& Context, const FGameplayTag ActionTag, const int32 Quantity)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = Context.RequestId;
+	UCatInventoryComponent* Inventory = Context.SourceInventory;
+	ACatCharacter* Character = Cast<ACatCharacter>(Context.UserPawn);
+	if (!Inventory || !Character || !Character->HasAuthority())
+	{ Result.Error = ECatDomainCommandError::PermissionDenied; return Result; }
+	const int32 SlotIndex = Context.InventorySlotIndex;
+	const FGuid RequestId = Context.RequestId;
+	const FCatInventoryEntry* Source = Inventory->GetInventoryEntryAtSlot(SlotIndex);
+	if (!Source || !Source->Instance) { Result.Error = ECatDomainCommandError::InvalidPayload; return Result; }
+	const FGuid ItemInstanceId = Source->Instance->GetItemInstanceId();
+	if (ActionTag == CatInventoryActionTags::Sell)
+	{
+		ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(Inventory->GetOwner());
+		ACatFishBuyerActor* Buyer = Guard ? ACatFishBuyerActor::FindAvailableBuyer(Context.RequestingController, Guard) : nullptr;
+		UCatShopTradeController* Trading = Character->GetWorld()->GetSubsystem<UCatShopTradeController>();
+		if (!Trading || !Buyer) { Result.Error = ECatDomainCommandError::PermissionDenied; return Result; }
+		return Trading->SubmitFishSaleFromPlayer(Context.RequestingController, Buyer, Guard, {ItemInstanceId}, RequestId).Delivery;
+	}
+	const ECatInventoryWorldAction Action = ActionTag == CatInventoryActionTags::Drop ? ECatInventoryWorldAction::Drop
+		: ActionTag == CatInventoryActionTags::Place ? ECatInventoryWorldAction::Place : ECatInventoryWorldAction::Carry;
+	if (ActionTag != CatInventoryActionTags::Drop && ActionTag != CatInventoryActionTags::Place && ActionTag != CatInventoryActionTags::Carry)
+	{ Result.Error = ECatDomainCommandError::InvalidPayload; return Result; }
+	AActor* WorldActor = nullptr;
+	bool bNewActor = false;
+	TArray<TObjectPtr<AActor>> PreparedBatchActors;
+	const auto Finish = [&](const ECatDomainCommandError Error)
+	{
+		Result.Error = Error;
+		Result.bCommitted = Error == ECatDomainCommandError::None;
+		if (!Result.bCommitted && bNewActor && IsValid(WorldActor)) WorldActor->Destroy();
+		if (!Result.bCommitted)
+		{
+			for (AActor* PreparedActor : PreparedBatchActors)
+			{
+				if (IsValid(PreparedActor) && PreparedActor != WorldActor) PreparedActor->Destroy();
+			}
+		}
+		const FString Event = FString::Printf(TEXT("Event=inventory_world_release RequestId=%s ItemInstanceId=%s Quantity=%d Action=%d Actor=%s Error=%s World=%s NetMode=%d Authority=%d LocalRole=%d"),
+			*RequestId.ToString(), *ItemInstanceId.ToString(), Quantity, static_cast<int32>(Action), *GetNameSafe(WorldActor),
+			*UEnum::GetValueAsString(Error), *GetNameSafe(Inventory->GetWorld()), Inventory->GetOwner() ? Inventory->GetOwner()->GetNetMode() : -1,
+			Inventory->GetOwner() && Inventory->GetOwner()->HasAuthority(), Inventory->GetOwner() ? static_cast<int32>(Inventory->GetOwner()->GetLocalRole()) : -1);
+		if (Result.bCommitted) { UE_LOG(LogCatfishing, Log, TEXT("%s"), *Event); }
+		else { UE_LOG(LogCatfishing, Warning, TEXT("%s"), *Event); }
+		return Result;
+	};
+	const FCatInventoryEntry* Entry = Inventory->GetInventoryEntryAtSlot(SlotIndex);
+	const UCatInventorySettings* Settings = GetDefault<UCatInventorySettings>();
+	// Carry 事务流程：
+	// 1. 库存入口已校验身份与动作可用性；此处再限定为可达鱼护/鱼缸内完整的一条鱼，并检查空嘴和真实挂点。
+	// 2. 复用或生成载体，认领嘴部后完成附着；每次可能重入的初始化或表现操作后复核来源，失败清理本次认领或恢复保管表现。
+	// 3. 静默扣格后更新鱼实例宿主和载体可见性，保留原鱼身份、重量与缩放；返回库存入口后才记录结果并通知。
+	if (Action == ECatInventoryWorldAction::Carry)
+	{
+		UCatFishInventoryItemInstance* FishItem = Cast<UCatFishInventoryItemInstance>(Entry->Instance);
+		AActor* OriginalWorldActor = FishItem ? FishItem->GetWorldActor() : nullptr;
+		AActor* OriginalRuntimeOwner = FishItem ? FishItem->GetRuntimeOwnerActor() : nullptr;
+		// 不只检查格子：回调若转移或重新关联同一实例，本请求已失去原始来源契约，不能继续提交。
+		const auto IsSourceStillCurrent = [&]()
+		{
+			const FCatInventoryEntry* CurrentEntry = Inventory->GetInventoryEntryAtSlot(SlotIndex);
+			return CurrentEntry && CurrentEntry->Instance == FishItem && CurrentEntry->StackCount == 1
+				&& FishItem && FishItem->GetItemInstanceId() == ItemInstanceId
+				&& FishItem->GetWorldActor() == OriginalWorldActor && FishItem->GetRuntimeOwnerActor() == OriginalRuntimeOwner
+				&& CatInventoryAccessRules::ResolveReachableFishContainer(Inventory->GetOwner(), Character) == Inventory;
+		};
+		const bool bFishContainer = CatInventoryAccessRules::ResolveReachableFishContainer(Inventory->GetOwner(), Character) == Inventory;
+		if (!bFishContainer || !FishItem || !FishItem->GetFishDefinition()
+			|| !FishItem->GetFishDefinition()->IsInventoryRuntimeDefinitionReady()
+			|| !FMath::IsFinite(FishItem->GetFishWeightKilograms()) || FishItem->GetFishWeightKilograms() <= 0
+			|| Quantity != 1 || Entry->StackCount != 1 || Character->GetMouthCarriedActor() != nullptr)
+			return Finish(ECatDomainCommandError::PermissionDenied);
+		// 容器取鱼必须有真实嘴部挂点；在生成载体或认领嘴部前拒绝，不能退化成附着到空骨架根。
+		const UCatFishPickupSettings* PickupSettings = GetDefault<UCatFishPickupSettings>();
+		if (!PickupSettings || !Character->GetMesh() || !Character->GetMesh()->DoesSocketExist(PickupSettings->MouthCarrySocketName))
+			return Finish(ECatDomainCommandError::DependencyUnavailable);
+		AActor* CarriedActor = FishItem->GetWorldActor();
+		const FTransform OriginalRetainedTransform = IsValid(CarriedActor) ? CarriedActor->GetActorTransform() : FTransform::Identity;
+		bool bCreatedCarrier = false;
+		if (!IsValid(CarriedActor))
+		{
+			UCatInventoryItemDefinition* FishDefinition = FishItem->GetItemDefinition();
+			UClass* CarrierClass = FishDefinition ? FishDefinition->WorldActorClass.LoadSynchronous() : nullptr;
+			if (!CarrierClass || !CarrierClass->IsChildOf(ACatFishPickupActor::StaticClass())) return Finish(ECatDomainCommandError::DependencyUnavailable);
+			CarriedActor = Inventory->GetWorld()->SpawnActorDeferred<AActor>(CarrierClass, Character->GetActorTransform(), nullptr, Character,
+				ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+			bCreatedCarrier = true;
+			if (!CarriedActor) return Finish(ECatDomainCommandError::DependencyUnavailable);
+		}
+		ACatFishPickupActor* FishActor = Cast<ACatFishPickupActor>(CarriedActor);
+		WorldActor = CarriedActor;
+		if (!FishActor || (!bCreatedCarrier && !FishActor->CanCarryInventoryItemFromAuthority(FishItem)))
+		{
+			if (bCreatedCarrier && IsValid(CarriedActor)) CarriedActor->Destroy();
+			return Finish(ECatDomainCommandError::InvalidPayload);
+		}
+		const bool bClaimedByThisRequest = Character->TryClaimMouthCarriedActorFromAuthority(FishActor);
+		if (!bClaimedByThisRequest)
+		{
+			if (bCreatedCarrier && IsValid(CarriedActor)) CarriedActor->Destroy();
+			return Finish(ECatDomainCommandError::PermissionDenied);
+		}
+		if (bCreatedCarrier)
+		{
+			CarriedActor->SetActorHiddenInGame(true);
+			CarriedActor->SetActorEnableCollision(false);
+			CarriedActor->FinishSpawning(Character->GetActorTransform());
+		}
+		// FinishSpawning 可能运行组件或蓝图回调；提交前必须重新确认原格尚是同一条鱼，不能按旧 SlotIndex 扣掉后来换入的实例。
+		if (!IsSourceStillCurrent())
+		{
+			Character->ReleaseMouthCarriedActorFromAuthority(FishActor);
+			if (bCreatedCarrier && IsValid(CarriedActor)) CarriedActor->Destroy();
+			return Finish(ECatDomainCommandError::InvalidPayload);
+		}
+		if (bCreatedCarrier && !FishActor->InitializeFromInventoryForCarryFromAuthority(FishItem, 1))
+		{
+			Character->ReleaseMouthCarriedActorFromAuthority(FishActor);
+			FishActor->Destroy();
+			return Finish(ECatDomainCommandError::InvalidPayload);
+		}
+		if (!IsSourceStillCurrent())
+		{
+			Character->ReleaseMouthCarriedActorFromAuthority(FishActor);
+			if (bCreatedCarrier && IsValid(CarriedActor)) CarriedActor->Destroy();
+			return Finish(ECatDomainCommandError::InvalidPayload);
+		}
+		if (!FishActor->BeginMouthCarryFromAuthority(Character, Character->GetPlayerState(), false))
+		{
+			Character->ReleaseMouthCarriedActorFromAuthority(FishActor);
+			if (!bCreatedCarrier) FishActor->RestoreInventoryRetentionFromAuthority(FishItem, OriginalRetainedTransform);
+			if (bCreatedCarrier && IsValid(CarriedActor)) CarriedActor->Destroy();
+			return Finish(ECatDomainCommandError::PermissionDenied);
+		}
+		// 附着路径也可能触发表现回调；再次核对实例身份后才执行不带广播的扣格，确保请求永远只消费自己的原条目。
+		if (!IsSourceStillCurrent() || !Inventory->ConsumeItemAtSlot(SlotIndex, 1, false))
+		{
+			if (!bCreatedCarrier) FishActor->RestoreInventoryRetentionFromAuthority(FishItem, OriginalRetainedTransform);
+			else
+			{
+				Character->ReleaseMouthCarriedActorFromAuthority(FishActor);
+				FishActor->Destroy();
+			}
+			return Finish(ECatDomainCommandError::InvalidPayload);
+		}
+		FishItem->SetWorldActor(FishActor);
+		FishItem->SetRuntimeOwnerActor(FishActor);
+		// 退出容器保管态后恢复 Actor 总开关；嘴叼期间仍由组件的 NoCollision 禁止碰撞，后续 Drop 才能正常恢复真实刚体。
+		FishActor->SetActorEnableCollision(true);
+		FishActor->SetActorHiddenInGame(false);
+		// 在返回库存入口前完成网络更新；入口随后记录成功结果再通知，观察者即使重放或销毁鱼，也不会重新执行本段载体操作。
+		FishActor->ForceNetUpdate();
+		Character->ForceNetUpdate();
+		const FCatDomainCommandResult Completed = Finish(ECatDomainCommandError::None);
+		return Completed;
+	}
+	if (!Settings || !FMath::IsFinite(Settings->PlacementRangeCentimeters) || Settings->PlacementRangeCentimeters <= 0
+		|| !FMath::IsFinite(Settings->PlacementHeightDifferenceCentimeters) || Settings->PlacementHeightDifferenceCentimeters < 0
+		|| !FMath::IsFinite(Settings->PlacementSlopeDegrees) || Settings->PlacementSlopeDegrees < 0 || Settings->PlacementSlopeDegrees >= 90
+		|| !FMath::IsFinite(Settings->DropForwardSpeed) || Settings->DropForwardSpeed < 0
+		|| !FMath::IsFinite(Settings->DropUpwardSpeed) || Settings->DropUpwardSpeed < 0)
+		return Finish(ECatDomainCommandError::InvalidPayload);
+	UCatInventoryItemInstance* SourceItem = Entry->Instance;
+	const int32 SourceQuantity = Entry->StackCount;
+	UCatInventoryItemDefinition* Definition = SourceItem->GetItemDefinition();
+	if (!Definition || !Definition->IsInventoryRuntimeDefinitionReady()) return Finish(ECatDomainCommandError::InvalidPayload);
+	// 多件丢弃事务流程：
+	// 1. 只在 Drop 且数量大于一时进入；Place 与单件 Drop 完整保留下面的原实例/原载体路径，鱼护搬运也已在上方提前返回。
+	// 2. 全堆的第一件保留原实例 ID，部分堆的来源实例继续留在库存，因此所有丢出件各自复制并获得新 ID；旧载体不参与本批，避免一个 Actor 同时承接多件。
+	// 3. 先创建并初始化所有 qty=1 载体，按物理尺寸计算分散偏移，使用外接球间距隔开候选，候选保持禁用碰撞以免挡住后续落点射线；此阶段任何失败都会销毁新载体且不扣库存。
+	// 4. 全部落点通过后才以一次 Consume 扣量，再统一发布各载体、继承同一抛掷速度并在全堆转出时销毁旧保管载体。
+	if (Action == ECatInventoryWorldAction::Drop && Quantity > 1)
+	{
+		AActor* OriginalWorldActor = SourceItem->GetWorldActor();
+		if (OriginalWorldActor && (!IsValid(OriginalWorldActor) || OriginalWorldActor->GetWorld() != Inventory->GetWorld()))
+			return Finish(ECatDomainCommandError::InvalidPayload);
+		UClass* ActorClass = OriginalWorldActor ? OriginalWorldActor->GetClass() : Definition->WorldActorClass.LoadSynchronous();
+		if (!ActorClass || !ActorClass->ImplementsInterface(UCatInventoryWorldItem::StaticClass()))
+			return Finish(ECatDomainCommandError::DependencyUnavailable);
+		const bool bReleasesEntireStack = Quantity == Entry->StackCount;
+		const FVector Forward = Character->GetActorForwardVector().GetSafeNormal2D();
+		const FVector Right = Character->GetActorRightVector().GetSafeNormal2D();
+		if (Forward.IsNearlyZero() || Right.IsNearlyZero()) return Finish(ECatDomainCommandError::PermissionDenied);
+		TArray<UCatInventoryItemInstance*> PreparedItems;
+		TArray<FTransform> PreparedTransforms;
+		TArray<TObjectPtr<UPrimitiveComponent>> PreparedBodies;
+		PreparedItems.Reserve(Quantity);
+		PreparedTransforms.Reserve(Quantity);
+		PreparedBodies.Reserve(Quantity);
+		PreparedBatchActors.Reserve(Quantity);
+		for (int32 Index = 0; Index < Quantity; ++Index)
+		{
+			FTransform SpawnTransform = Character->GetActorTransform();
+			if (OriginalWorldActor) SpawnTransform.SetScale3D(OriginalWorldActor->GetActorScale3D());
+			AActor* PreparedActor = Inventory->GetWorld()->SpawnActorDeferred<AActor>(ActorClass, SpawnTransform, nullptr, Character,
+				ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+			if (!PreparedActor) return Finish(ECatDomainCommandError::DependencyUnavailable);
+			PreparedBatchActors.Add(PreparedActor);
+			PreparedActor->SetReplicates(false);
+			PreparedActor->SetActorHiddenInGame(true);
+			PreparedActor->SetActorEnableCollision(false);
+			// 预检只操作副本；全堆首件继承稳定 ID，原库存实例和原载体直到提交前仍保持原关系。
+			UCatInventoryItemInstance* PreparedItem = DuplicateObject<UCatInventoryItemInstance>(SourceItem, PreparedActor);
+			if (!PreparedItem) return Finish(ECatDomainCommandError::DependencyUnavailable);
+			PreparedItem->SetWorldActor(nullptr);
+			PreparedItem->SetItemInstanceIdFromAuthority(Index == 0 && bReleasesEntireStack ? ItemInstanceId : FGuid::NewGuid());
+			ICatInventoryWorldItem* Receiver = Cast<ICatInventoryWorldItem>(PreparedActor);
+			if (!Receiver || !Receiver->InitializeFromInventoryFromAuthority(PreparedItem, 1))
+				return Finish(ECatDomainCommandError::InvalidPayload);
+			PreparedActor->FinishSpawning(SpawnTransform);
+			PreparedActor->SetReplicates(false);
+			PreparedActor->SetActorHiddenInGame(true);
+			PreparedActor->SetActorEnableCollision(false);
+			UPrimitiveComponent* PreparedBody = Cast<UPrimitiveComponent>(PreparedActor->GetRootComponent());
+			if (!PreparedBody || PreparedBody->Mobility != EComponentMobility::Movable || !PreparedBody->GetBodySetup()
+				|| PreparedBody->GetBodySetup()->AggGeom.GetElementCount() == 0
+				|| PreparedBody->GetBodySetup()->CollisionTraceFlag == CTF_UseComplexAsSimple)
+				return Finish(ECatDomainCommandError::PermissionDenied);
+			PreparedBody->SetSimulatePhysics(false);
+			const double Spacing = FMath::Max(30.0, PreparedBody->Bounds.SphereRadius * 2.0 + 10.0);
+			const int32 Column = Index % 3 - 1;
+			const int32 Row = Index / 3;
+			FTransform PreparedTransform;
+			if (!UCatInventoryStatics::FindWorldReleaseTransform(Character, PreparedActor, Action, *Settings, PreparedTransform,
+				Right * (Column * Spacing) + Forward * (Row * Spacing))) return Finish(ECatDomainCommandError::PermissionDenied);
+			PreparedActor->SetActorTransform(PreparedTransform, false, nullptr, ETeleportType::TeleportPhysics);
+			// 候选彼此不加入世界查询；显式比较外接球保证公开后不会重叠，真实环境仍由统一落点求解检查。
+			for (const UPrimitiveComponent* PreviousBody : PreparedBodies)
+			{
+				if (FVector::DistSquared(PreparedBody->Bounds.Origin, PreviousBody->Bounds.Origin)
+					< FMath::Square(PreparedBody->Bounds.SphereRadius + PreviousBody->Bounds.SphereRadius + 2.0))
+					return Finish(ECatDomainCommandError::PermissionDenied);
+			}
+			PreparedItems.Add(PreparedItem);
+			PreparedTransforms.Add(PreparedTransform);
+			PreparedBodies.Add(PreparedBody);
+		}
+		const FCatInventoryEntry* Current = Inventory->GetInventoryEntryAtSlot(SlotIndex);
+		// 构造期间数量改变可能把“整堆离库”变成部分离库；拒绝该批，避免地面首件和库存余量共用原 ID。
+		if (!Current || Current->Instance != SourceItem || Current->StackCount != SourceQuantity) return Finish(ECatDomainCommandError::InvalidPayload);
+		if (!Inventory->ConsumeItemAtSlot(SlotIndex, Quantity, false)) return Finish(ECatDomainCommandError::InvalidPayload);
+		const FVector ThrowVelocity = Forward * Settings->DropForwardSpeed + FVector(0, 0, Settings->DropUpwardSpeed);
+		for (int32 Index = 0; Index < PreparedBatchActors.Num(); ++Index)
+		{
+			AActor* PreparedActor = PreparedBatchActors[Index];
+			UPrimitiveComponent* PreparedBody = PreparedBodies[Index];
+			// 所有 Actor 与刚体已在扣格前逐个验证；提交后不再存在可恢复的失败分支，避免半笔库存事务。
+			check(PreparedActor && PreparedBody);
+			PreparedItems[Index]->SetWorldActor(PreparedActor);
+			PreparedItems[Index]->SetRuntimeOwnerActor(PreparedActor);
+			PreparedActor->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+			PreparedActor->SetActorTransform(PreparedTransforms[Index], false, nullptr, ETeleportType::TeleportPhysics);
+			PreparedActor->SetOwner(nullptr);
+			PreparedActor->SetInstigator(nullptr);
+			PreparedActor->SetActorHiddenInGame(false);
+			PreparedActor->SetActorEnableCollision(true);
+			PreparedBody->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+			PreparedBody->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Block);
+			PreparedBody->SetCollisionResponseToChannel(ECC_WorldDynamic, ECR_Block);
+			PreparedBody->SetSimulatePhysics(true);
+			PreparedBody->SetPhysicsLinearVelocity(ThrowVelocity);
+			PreparedActor->SetReplicates(ActorClass->GetDefaultObject<AActor>()->GetIsReplicated());
+			PreparedActor->ForceNetUpdate();
+		}
+		if (bReleasesEntireStack && IsValid(OriginalWorldActor) && !PreparedBatchActors.Contains(OriginalWorldActor))
+			OriginalWorldActor->Destroy();
+		WorldActor = PreparedBatchActors[0];
+		const FCatDomainCommandResult Completed = Finish(ECatDomainCommandError::None);
+		UE_LOG(LogCatfishing, Log, TEXT("Event=inventory_drop_batch_published RequestId=%s Instance=%s Quantity=%d Actors=%d"),
+			*RequestId.ToString(), *ItemInstanceId.ToString(), Quantity, PreparedBatchActors.Num());
+		return Completed;
+	}
+	AActor* SourceWorldActor = SourceItem->GetWorldActor();
+	if (SourceWorldActor && (!IsValid(SourceWorldActor) || SourceWorldActor->GetWorld() != Inventory->GetWorld())) return Finish(ECatDomainCommandError::InvalidPayload);
+	WorldActor = Quantity == Entry->StackCount ? SourceWorldActor : nullptr;
+	UCatInventoryItemInstance* ReleasedItem = SourceItem;
+	if (!WorldActor)
+	{
+		UClass* ActorClass = SourceWorldActor ? SourceWorldActor->GetClass() : Definition->WorldActorClass.LoadSynchronous();
+		if (!ActorClass || !ActorClass->ImplementsInterface(UCatInventoryWorldItem::StaticClass())) return Finish(ECatDomainCommandError::DependencyUnavailable);
+		FTransform SpawnTransform = Character->GetActorTransform();
+		if (SourceWorldActor) SpawnTransform.SetScale3D(SourceWorldActor->GetActorScale3D());
+		WorldActor = Inventory->GetWorld()->SpawnActorDeferred<AActor>(ActorClass, SpawnTransform, nullptr, Character,
+			ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+		bNewActor = true;
+		if (!WorldActor) return Finish(ECatDomainCommandError::DependencyUnavailable);
+		WorldActor->SetActorHiddenInGame(true);
+		WorldActor->SetActorEnableCollision(false);
+		ReleasedItem = DuplicateObject<UCatInventoryItemInstance>(SourceItem, WorldActor);
+		ReleasedItem->SetWorldActor(nullptr);
+		if (Quantity < Entry->StackCount) ReleasedItem->SetItemInstanceIdFromAuthority(FGuid::NewGuid());
+		ICatInventoryWorldItem* Receiver = Cast<ICatInventoryWorldItem>(WorldActor);
+		if (!Receiver || !Receiver->InitializeFromInventoryFromAuthority(ReleasedItem, Quantity)) return Finish(ECatDomainCommandError::InvalidPayload);
+		WorldActor->FinishSpawning(SpawnTransform);
+	}
+	else if (WorldActor->GetWorld() != Inventory->GetWorld())
+	{
+		return Finish(ECatDomainCommandError::InvalidPayload);
+	}
+	UPrimitiveComponent* Body = Cast<UPrimitiveComponent>(WorldActor->GetRootComponent());
+	FTransform Transform;
+	// 先检查真实刚体形状和可移动性；不能以设置了SimulatePhysics布尔值就假定物体确实能够运动。
+	if (!Body || Body->Mobility != EComponentMobility::Movable || !Body->GetBodySetup()
+		|| Body->GetBodySetup()->AggGeom.GetElementCount() == 0
+		|| Body->GetBodySetup()->CollisionTraceFlag == CTF_UseComplexAsSimple
+		|| !UCatInventoryStatics::FindWorldReleaseTransform(Character, WorldActor, Action, *Settings, Transform))
+		return Finish(ECatDomainCommandError::PermissionDenied);
+	AActor* PreviousRuntimeOwner = ReleasedItem->GetRuntimeOwnerActor();
+	// 原物保管期间数量可能已合并或消耗；公开前必须更新拾取载荷，不能再次发放拾取前的旧数量。
+	if (!bNewActor)
+	{
+		ICatInventoryWorldItem* Receiver = Cast<ICatInventoryWorldItem>(WorldActor);
+		if (!Receiver || !Receiver->InitializeFromInventoryFromAuthority(ReleasedItem, Quantity))
+		{
+			ReleasedItem->SetRuntimeOwnerActor(PreviousRuntimeOwner);
+			return Finish(ECatDomainCommandError::InvalidPayload);
+		}
+	}
+	const FCatInventoryEntry* Current = Inventory->GetInventoryEntryAtSlot(SlotIndex);
+	if (!Current || Current->Instance != SourceItem || Current->StackCount != SourceQuantity || !Inventory->ConsumeItemAtSlot(SlotIndex, Quantity, false))
+	{
+		if (!bNewActor && Current && Current->Instance == SourceItem) ReleasedItem->SetRuntimeOwnerActor(PreviousRuntimeOwner);
+		return Finish(ECatDomainCommandError::InvalidPayload);
+	}
+	ReleasedItem->SetRuntimeOwnerActor(WorldActor);
+	Body->SetSimulatePhysics(false);
+	WorldActor->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+	WorldActor->SetActorTransform(Transform, false, nullptr, ETeleportType::TeleportPhysics);
+	WorldActor->SetOwner(nullptr);
+	WorldActor->SetInstigator(nullptr);
+	WorldActor->SetActorHiddenInGame(false);
+	WorldActor->SetActorEnableCollision(true);
+	Body->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	Body->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Block);
+	Body->SetCollisionResponseToChannel(ECC_WorldDynamic, ECR_Block);
+	if (Action == ECatInventoryWorldAction::Drop)
+	{
+		Body->SetSimulatePhysics(true);
+		Body->SetPhysicsLinearVelocity(Character->GetActorForwardVector().GetSafeNormal2D() * Settings->DropForwardSpeed + FVector(0, 0, Settings->DropUpwardSpeed));
+	}
+	UCatWorldDropProtectionComponent::ArmFromAuthority(WorldActor);
+	WorldActor->ForceNetUpdate();
+	const FCatDomainCommandResult Completed = Finish(ECatDomainCommandError::None);
+	return Completed;
 }

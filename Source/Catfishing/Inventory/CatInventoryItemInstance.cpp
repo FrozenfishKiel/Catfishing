@@ -1,4 +1,4 @@
-﻿#include "Inventory/CatInventoryItemInstance.h"
+#include "Inventory/CatInventoryItemInstance.h"
 #include "Inventory/Fragments/CatItemUseFragment.h"
 #include "Character/CatCharacter.h"
 #include "Inventory/CatInventoryStatics.h"
@@ -39,46 +39,6 @@ bool UCatInventoryItemInstance::CanExecuteInventoryAction(const FGameplayTag& Ac
 	}
 	OutReason = NSLOCTEXT("CatInventory", "ActionUnsupported", "此物品不支持这项操作");
 	return false;
-}
-
-// 通用分发先核对服务器与来源实例；特殊标识由子类重写，已声明的基础动作只进入各自虚函数，不在UI或RPC按物品类型分支。
-FCatDomainCommandResult UCatInventoryItemInstance::ExecuteInventoryActionFromAuthority(const FGameplayTag& Action,
-	const FCatInventoryEntry& Entry, const FCatInventoryItemUseContext& Context, const int32 Quantity)
-{
-	FCatDomainCommandResult Result;
-	Result.RequestId = Context.RequestId;
-	if (!Context.UserPawn || !Context.UserPawn->HasAuthority() || !Context.SourceInventory || Entry.Instance != this)
-	{ Result.Error = ECatDomainCommandError::PermissionDenied; return Result; }
-	if (Action == CatInventoryActionTags::Drop) return DropFromInventoryFromAuthority(Entry, Context, Quantity);
-	if (Action == CatInventoryActionTags::Place) return PlaceFromInventoryFromAuthority(Entry, Context, Quantity);
-	if (Action == CatInventoryActionTags::Carry) return CarryFromInventoryFromAuthority(Entry, Context);
-	Result.Error = ECatDomainCommandError::InvalidPayload;
-	return Result;
-}
-
-// 丢弃复用同一库存事务；这里只选择语义，数量扣减、载体准备和重试幂等仍由库存负责。
-FCatDomainCommandResult UCatInventoryItemInstance::DropFromInventoryFromAuthority(const FCatInventoryEntry& Entry,
-	const FCatInventoryItemUseContext& Context, const int32 Quantity)
-{
-	return Context.SourceInventory->ReleaseItemToWorldFromAuthority(Cast<ACatCharacter>(Context.UserPawn),
-		Context.RequestId, Context.InventorySlotIndex, GetItemInstanceId(), Quantity, ECatInventoryWorldAction::Drop);
-}
-
-// 放置复用既有空间求解和库存提交；保持所选数量的原有放置语义。
-FCatDomainCommandResult UCatInventoryItemInstance::PlaceFromInventoryFromAuthority(const FCatInventoryEntry& Entry,
-	const FCatInventoryItemUseContext& Context, const int32 Quantity)
-{
-	return Context.SourceInventory->ReleaseItemToWorldFromAuthority(Cast<ACatCharacter>(Context.UserPawn),
-		Context.RequestId, Context.InventorySlotIndex, GetItemInstanceId(), Quantity, ECatInventoryWorldAction::Place);
-}
-
-// 基类没有嘴部携带能力；拒绝而不创建世界物，鱼等具体实例按已有领域合同覆盖。
-FCatDomainCommandResult UCatInventoryItemInstance::CarryFromInventoryFromAuthority(const FCatInventoryEntry& Entry,
-	const FCatInventoryItemUseContext& Context)
-{
-	FCatDomainCommandResult Result; Result.RequestId = Context.RequestId;
-	Result.Error = ECatDomainCommandError::InvalidPayload;
-	return Result;
 }
 
 // 实例构造流程：实例先处于无定义状态，只有被库存组件正式接收后才绑定定义并参与复制。

@@ -357,12 +357,11 @@ public:
 	/** 能力成本消费精确实例并记录终态；默认发布数量变化，关闭通知时调用方须在同步提交完成后发布，重放不再扣量或调用外部效果。 */
 	FCatDomainCommandResult ConsumeAbilityItemFromAuthority(FGuid RequestId, FGuid ItemId, int32 Quantity, bool bPublishChange = true);
 
-	/** 丢弃、放置或 Carry 当前槽位的指定实例；Carry 只从鱼护或鱼缸移出数量一到嘴部且不做地面查询，其余动作生成或复用世界物并在空间检查成功后扣量，沿本库存终态缓存防止重复提交。 */
-	/** 菜单操作唯一库存提交；复核请求载荷、槽位身份及定义清单，再调用实例虚函数，终态缓存防止换格后重复作用于新物品。 */
+	/** 菜单操作的唯一库存命令入口；复核载荷、槽位、访问与定义声明，预占请求后交给 Statics 执行并缓存结果。世界操作成功后通知库存，出售通知沿商店事务发布。 */
 	FCatDomainCommandResult ExecuteItemActionFromAuthority(const FCatInventoryItemUseContext& Context,
 		FGuid ItemInstanceId, FGameplayTag Action, int32 Quantity);
 
-	/** 丢弃、放置或 Carry 指定实例；物品虚函数复用此事务，成功后才扣库存并公开地面或嘴部载体。 */
+	/** 将丢弃、放置或 Carry 的枚举入口转换为菜单动作标签和上下文，复用 ExecuteItemActionFromAuthority 的校验、请求缓存与执行链。 */
 	FCatDomainCommandResult ReleaseItemToWorldFromAuthority(ACatCharacter* Character, FGuid RequestId,
 		int32 SlotIndex, FGuid ItemInstanceId, int32 Quantity, ECatInventoryWorldAction Action);
 
