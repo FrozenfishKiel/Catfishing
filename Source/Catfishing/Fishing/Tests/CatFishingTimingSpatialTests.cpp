@@ -150,7 +150,11 @@ bool FCatFishingR3BaitDistanceTest::RunTest(const FString& Parameters)
 		Session->AttemptSnapshot.RodItemInstanceId = L.RodItemInstanceId;
 		Session->bStartupInProgress = true;
 		F.Cat->SetActorLocation(FVector(300, 0, 0));
+		Session->Snapshot.RodActor = World->SpawnActor<ACatFishingRodActor>();
+		Session->Snapshot.RodActor->SetActorLocation(FVector(450, 50, 0));
 		Session->AttemptSnapshot.ServerCorrectedLandingWorldPoint = FVector(bOverlong ? 10000 : 1000, 0, 0);
+		const double ExpectedBiteDistance = FVector::Distance(Session->Snapshot.RodActor->GetRodTipWorldTransform().GetLocation(),
+			Session->AttemptSnapshot.ServerCorrectedLandingWorldPoint);
 		const bool bOpened = Session->OpenTrueBiteWindowFromAuthority();
 		TestNull(TEXT("真咬距离门不依赖提前生成鱼"), Session->Snapshot.FishEncounterActor.Get());
 		TestEqual(TEXT("真咬超 Lmax 不进入合法窗口"), bOpened, !bOverlong);
@@ -163,9 +167,9 @@ bool FCatFishingR3BaitDistanceTest::RunTest(const FString& Parameters)
 				double(World->GetTimerManager().GetTimerRemaining(Session->TrueBiteTimerHandle)), 12.0);
 			TestEqual(TEXT("实际完美窗保持基础 1 秒"),
 				Session->Snapshot.PerfectWindowEndsServerTime - Session->Snapshot.PhaseStartedServerTime, 1.0);
-			TestEqual(TEXT("真咬 D0 使用移动后的猫到冻结落点距离"), Session->TrueBiteDistanceCentimeters, 700.0);
+			TestEqual(TEXT("真咬 D0 使用竿尖到冻结落点距离"), Session->TrueBiteDistanceCentimeters, ExpectedBiteDistance);
 			F.Cat->SetActorLocation(FVector(500, 0, 0));
-			TestEqual(TEXT("响应窗移动不改冻结 D0"), Session->TrueBiteDistanceCentimeters, 700.0);
+			TestEqual(TEXT("响应窗移动不改冻结 D0"), Session->TrueBiteDistanceCentimeters, ExpectedBiteDistance);
 			F.Equipment->CommitFishingBaitDeferred(F.SessionId);
 			TestEqual(TEXT("真咬重放不重复扣饵"), Inventory->CountVisibleInventoryQuantityByItemId(16), 1);
 		}
@@ -375,6 +379,7 @@ bool FCatFishingCatalogTimingTimersTest::RunTest(const FString& Parameters)
 		Session->bStartupInProgress = true;
 		F.Cat->SetActorLocation(FVector(0, 0, 100));
 		Session->AttemptSnapshot.ServerCorrectedLandingWorldPoint = FVector(1000, 0, 0);
+		Session->Snapshot.RodActor = World->SpawnActor<ACatFishingRodActor>();
 		if (!TestTrue(TEXT("正式鱼默认值进入真实真咬开窗入口"), Session->OpenTrueBiteWindowFromAuthority())) return false;
 		const double Expected = Catalog->ResolveBiteTiming(*Fish).TrueBiteWindowSeconds;
 		TestEqual(TEXT("计时器真正使用配置响应秒数"), double(World->GetTimerManager().GetTimerRemaining(Session->TrueBiteTimerHandle)), Expected);
@@ -538,7 +543,11 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 			&& Session->Snapshot.Outcome == ECatFishingOutcome::None
 			&& !TActorIterator<ACatFishPickupActor>(World));
 		TestTrue(TEXT("本场猫力确实超过旧倍数门槛"), 50.0 >= Session->Snapshot.FishStrength * 2.0);
-		const double Expected = D0 * (bPerfect ? 0.9 : 1.0);
+		const FVector InitialMouth = FCatFishBodyModel::MouthPosition(Session->FightRunner->Config.FishBody.Geometry,
+			InitialFishPosition, Session->FightRunner->State.FishBody.Heading);
+		const double HookedDistance = FVector::Distance(Rod->GetRodTipWorldTransform().GetLocation(), InitialMouth);
+		const double Expected = HookedDistance * (bPerfect ? 0.9 : 1.0);
+		TestTrue(TEXT("测试区分旧猫距与竿尖鱼嘴距离"), FMath::Abs(HookedDistance - D0) > 1.0);
 		const double Actual = Session->FightRunner->State.LineLengthCentimeters;
 		const double Distance = FVector::Distance(Rod->GetRodTipWorldTransform().GetLocation(), Encounter->GetMouthWorldLocation());
 		TestEqual(TEXT("实际入场线长完美乘0.9，非完美乘1"), Actual, Expected, 0.01);
@@ -546,8 +555,8 @@ bool FCatFishingPerfectLineProductionTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("完美时实际鱼嘴投影到缩短的线长"), Distance, Expected, 0.01);
 		else
 		{
-			TestTrue(TEXT("非完美保持原鱼位置，允许既有松线"), Encounter->GetActorLocation().Equals(InitialFishPosition, 0.01));
-			TestTrue(TEXT("实际鱼始终在合法线长内"), Distance <= Actual + 0.01);
+			TestTrue(TEXT("非完美保持原鱼位置"), Encounter->GetActorLocation().Equals(InitialFishPosition, 0.01));
+			TestEqual(TEXT("普通中鱼没有多余线长"), Distance, Actual, 0.01);
 		}
 		AddInfo(FString::Printf(TEXT("Event=formal_perfect_line_verified Perfect=%d D0Cm=%.3f ExpectedCm=%.3f RunnerLineCm=%.3f ActorDistanceCm=%.3f"), bPerfect, D0, Expected, Actual, Distance));
 

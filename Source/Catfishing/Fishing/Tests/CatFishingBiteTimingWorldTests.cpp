@@ -364,7 +364,7 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("实际预警持续完整时段（帧量化容差）"), World->GetTimeSeconds() - ObservedWarningTime, 1.5 + ResolvedTiming.ProbeDurationSeconds, 0.06);
 		TestEqual(TEXT("true bite consumes exactly one actual bait"), BaitCharacter->GetInventoryComponent()->CountVisibleInventoryQuantityByItemId(4), 0);
 		const double D0 = Session->TrueBiteDistanceCentimeters;
-		TestEqual(TEXT("D0 uses frozen fish spawn point at true bite"), D0, FVector::Distance(Portions == 4 ? BaitRod->GetGripWorldTransform().GetLocation() : BaitCharacter->GetActorLocation(), Session->AttemptSnapshot.ServerCorrectedLandingWorldPoint), 0.01);
+		TestEqual(TEXT("D0 uses the rod tip and frozen fish spawn point at true bite"), D0, FVector::Distance(BaitRod->GetRodTipWorldTransform().GetLocation(), Session->AttemptSnapshot.ServerCorrectedLandingWorldPoint), 0.01);
 		BaitCharacter->SetActorLocation(FVector(-1200, 0, 0));
 		TestEqual(TEXT("response-window movement does not recalculate D0"), Session->TrueBiteDistanceCentimeters, D0);
 		TestNull(TEXT("真咬开窗仍未生成实体"), Session->GetSnapshot().FishEncounterActor.Get());
@@ -424,6 +424,8 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 			BoundarySession->FisherCharacter = BaitCharacter;
 			BoundarySession->bStartupInProgress = true;
 			BaitCharacter->SetActorLocation(FVector(-Distance, 0, 0));
+			BoundarySession->AttemptSnapshot.ServerCorrectedLandingWorldPoint = BaitRod->GetRodTipWorldTransform().GetLocation()
+				+ FVector(Distance, 0, 0);
 			BoundaryHook->InitializeAuthoritativeIdentity(BoundarySession->Snapshot.FishingSessionId, BoundarySession->Snapshot.CastAttemptId);
 			BoundaryHook->SetActorLocation(FVector::ZeroVector);
 			if (!BaitEquipment->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(), BaitEquipment->GetSnapshot().Revision, 4, 1).bCommitted) return false;

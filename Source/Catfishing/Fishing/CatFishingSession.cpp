@@ -1143,10 +1143,10 @@ bool ACatFishingSession::OpenTrueBiteWindowFromAuthority()
 
 	// 真咬成立时才消费当前饵；预警、试探和抛竿准入均不扣数量。
 	// 先采样该时点，库存通知中的移动不能改变 D0。
-	const FVector BiteOrigin = FisherCharacter.IsValid() ? FisherCharacter->GetActorLocation()
-		: Snapshot.RodActor ? Snapshot.RodActor->GetGripWorldTransform().GetLocation()
-		: AttemptSnapshot.ServerCorrectedLandingWorldPoint;
-	TrueBiteDistanceCentimeters = FVector::Distance(BiteOrigin, AttemptSnapshot.ServerCorrectedLandingWorldPoint);
+	const FVector BiteOrigin = IsValid(Snapshot.RodActor)
+		? Snapshot.RodActor->GetRodTipWorldTransform().GetLocation() : FVector::ZeroVector;
+	TrueBiteDistanceCentimeters = IsValid(Snapshot.RodActor)
+		? FVector::Distance(BiteOrigin, AttemptSnapshot.ServerCorrectedLandingWorldPoint) : -1.0;
 	UCatEquipmentComponent* Equipment = CastEquipment.Get();
 	const FCatFishingUseOperationResult BaitCommit = Equipment
 		? Equipment->CommitFishingBaitDeferred(Snapshot.FishingSessionId) : FCatFishingUseOperationResult{};
@@ -1169,7 +1169,7 @@ bool ACatFishingSession::OpenTrueBiteWindowFromAuthority()
 		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated, TEXT("True bite distance unavailable"));
 		return false;
 	}
-	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_true_bite_distance SessionId=%s D0Cm=%.3f LmaxCm=%.3f FishPoint=FrozenLanding World=%s NetMode=%d Authority=1 LocalRole=%d Fisher=%s"),
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_true_bite_distance SessionId=%s D0Cm=%.3f LmaxCm=%.3f Origin=RodTip FishPoint=FrozenLanding World=%s NetMode=%d Authority=1 LocalRole=%d Fisher=%s"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), TrueBiteDistanceCentimeters, RodFragment->MaximumLineLengthCentimeters,
 		*GetNameSafe(World), int32(GetNetMode()), int32(GetLocalRole()), *GetNameSafe(FisherCharacter.Get()));
 	if (TrueBiteDistanceCentimeters > RodFragment->MaximumLineLengthCentimeters)
@@ -1545,9 +1545,13 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	InitialState.CatStamina = AbilitySystem->GetTotalFightStamina();
 	InitialState.FishStamina = Snapshot.FishFightStaminaRemaining * FishStaminaScale;
 	const FVector RodTipWorldPosition = Rod->GetRodTipWorldTransform().GetLocation();
-	const double RequestedInitialLineLength = TrueBiteDistanceCentimeters * LineLengthScale;
-	const double MinimumPhysicalLineLength = FMath::Abs(
-		Encounter->GetMouthWorldLocation().Z - RodTipWorldPosition.Z);
+	InitialState.FishBody.Heading = (Encounter->GetMouthWorldLocation() - RodTipWorldPosition).GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER, FVector::ForwardVector);
+	const FVector InitialMouthWorldPosition = FCatFishBodyModel::MouthPosition(Config.FishBody.Geometry,
+		Encounter->GetActorLocation(), InitialState.FishBody.Heading);
+	// 真咬 D0 只用于当刻的距离准入；提钩可能发生在移动/转杆之后，线长必须取本次真实端点。
+	const double HookedMouthDistance = FVector::Distance(RodTipWorldPosition, InitialMouthWorldPosition);
+	const double RequestedInitialLineLength = HookedMouthDistance * LineLengthScale;
+	const double MinimumPhysicalLineLength = FMath::Abs(InitialMouthWorldPosition.Z - RodTipWorldPosition.Z);
 	// 完美提竿会缩短初始线长，但“账面线长”绝不能直接变得比鱼嘴到竿尖的真实距离还短。
 	// 先把请求值限制在竿尖到当前水面的最短物理长度内，下面再用同一长度真正投影鱼的位置。
 	if (!FMath::IsFinite(RequestedInitialLineLength) || TrueBiteDistanceCentimeters < 0.0
@@ -1559,7 +1563,6 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		return false;
 	}
 	InitialState.LineLengthCentimeters = FMath::Max(RequestedInitialLineLength, MinimumPhysicalLineLength);
-	InitialState.FishBody.Heading = (Encounter->GetMouthWorldLocation() - RodTipWorldPosition).GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER, FVector::ForwardVector);
 	InitialState.FishWorldPosition = Encounter->GetActorLocation();
 	InitialState.MotionIntent = ECatFishMotionIntent::StrugglingOutward; // 刚上钩默认视为鱼在向外挣扎。
 	InitialState.CatAction = ECatFightCatAction::None;
@@ -1608,6 +1611,10 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	// 保证 Runner 从第一步起始终满足 D <= L_paid，同时尽可能保留完美提竿的缩线收益。
 	InitialState.LineLengthCentimeters = ReconciledInitialLineLength;
 	InitialState.FishWorldPosition = Encounter->GetActorLocation(); // 用刚落位的实际权威位置覆盖，作为 Runner 的真正起点。
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_initial_line_resolved SessionId=%s CastAttemptId=%s RodActor=%s FishActor=%s Origin=RodTip Endpoint=FishMouth BiteDistanceCm=%.3f HookedDistanceCm=%.3f Scale=%.3f LineLengthCm=%.3f ResolvedDistanceCm=%.3f World=%s NetMode=%d Authority=1 LocalRole=%d"),
+		*Snapshot.FishingSessionId.ToString(), *AttemptSnapshot.CastAttemptId.ToString(), *GetNameSafe(Rod), *GetNameSafe(Encounter),
+		TrueBiteDistanceCentimeters, HookedMouthDistance, LineLengthScale, InitialState.LineLengthCentimeters, ResolvedInitialDistance,
+		*GetNameSafe(GetWorld()), int32(GetNetMode()), int32(GetLocalRole()));
 
 	// 嘴点是同一个静态局部点；附着复制让客户端钩和鱼共享一份移动快照。
 	if (Snapshot.HookActor)

@@ -342,7 +342,7 @@ private:
 
 	/** 鱼运行态在会话创建时冻结的真实重量，单位千克。 */
 	double FishWeightKilograms = 0.0;
-	/** 真咬成立时的鱼猫距离（cm）；负值表示尚未冻结，不能从试探表现回填。 */
+	/** 真咬成立时竿尖到冻结落点的距离（cm），用于当刻准入；提钩线长另取当时竿尖到鱼嘴。负值表示尚未冻结。 */
 	double TrueBiteDistanceCentimeters = -1.0;
 
 	/**
