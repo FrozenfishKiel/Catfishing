@@ -57,6 +57,8 @@ void UCatFrontendSettingsModel::Shutdown()
 	BoundLocalPlayer.Reset();
 	UserSettings = nullptr;
 	DraftLanguage.Reset();
+	DraftAudioInputDeviceId.Reset();
+	Microphones.Reset();
 	AvailableLanguages.Reset();
 	DraftFullscreenMode = EWindowMode::WindowedFullscreen;
 	DraftScreenResolution = FIntPoint::ZeroValue;
@@ -333,10 +335,27 @@ bool UCatFrontendSettingsModel::IsInputModeSettingAvailable() const
 	return false;
 }
 
-// 麦克风可用性读取流程：当前 Steam IOnlineVoice 只提供本地语音的开始/停止和状态查询，未提供输入设备枚举或选择，故不创建会被忽略的设备偏好。
+// 麦克风可用性读取流程：列表只由支持的平台实际枚举；空列表不开放选择。
 bool UCatFrontendSettingsModel::IsMicrophoneSettingAvailable() const
 {
-	return false;
+	return UserSettings && !Microphones.IsEmpty();
+}
+
+void UCatFrontendSettingsModel::RefreshMicrophones()
+{
+	Microphones.Reset();
+	if (UserSettings && CatVoiceInput::IsSupported(GetLocalPlayerWorld())) { CatVoiceInput::Enumerate(Microphones); }
+	PublishChanged(LOCTEXT("MicrophonesRefreshed", "设备列表已刷新；新接入麦克风若无法应用，请重启游戏后再试。"));
+}
+
+void UCatFrontendSettingsModel::SetDraftAudioInputDeviceId(const FString& DeviceId)
+{
+	if (DraftAudioInputDeviceId != DeviceId && IsMicrophoneSettingAvailable()
+		&& Microphones.ContainsByPredicate([&DeviceId](const FCatVoiceInputDevice& Device) { return Device.Id == DeviceId; }))
+	{
+		DraftAudioInputDeviceId = DeviceId;
+		PublishChanged(LOCTEXT("MicrophoneDraftChanged", "麦克风等待应用。"));
+	}
 }
 
 // 震动可用性读取流程：当前存在本地 PlayerController 时可写其正式 ForceFeedback gate；Controller 尚未创建或已切图时明确禁用。
@@ -628,6 +647,7 @@ bool UCatFrontendSettingsModel::IsOutputDeviceSettingAvailable() const
 // 3. 请求存在即 pending；八秒超时或完成后解除等待，Shutdown 取消请求，失效结果不能覆盖重初始化后的列表。
 bool UCatFrontendSettingsModel::RefreshAudioOutputDevices()
 {
+	RefreshMicrophones();
 	UWorld* World = GetLocalPlayerWorld();
 	if (ActiveAudioOutputRequest || !World || !UserSettings)
 	{
@@ -708,7 +728,8 @@ bool UCatFrontendSettingsModel::Apply()
 	const bool bDefaultsWereRequested = bDraftDefaultsRequested;
 	const FString SavedAudioOutputDeviceIdBeforeApply = UserSettings->GetAudioOutputDeviceId();
 	const bool bVibrationWasRequested = bDraftVibrationEnabled != UserSettings->IsVibrationEnabled();
-	const bool bVoiceChatWasRequested = bDraftVoiceChatEnabled != UserSettings->IsVoiceChatEnabled();
+	const bool bVoiceChatWasRequested = bDraftVoiceChatEnabled != UserSettings->IsVoiceChatEnabled()
+		|| DraftAudioInputDeviceId != UserSettings->GetAudioInputDeviceId();
 	const bool bAudioWasRequested = !FMath::IsNearlyEqual(DraftMasterVolume, UserSettings->GetMasterVolume())
 		|| !FMath::IsNearlyEqual(DraftMusicVolume, UserSettings->GetMusicVolume())
 		|| !FMath::IsNearlyEqual(DraftSFXVolume, UserSettings->GetSFXVolume())
@@ -716,7 +737,7 @@ bool UCatFrontendSettingsModel::Apply()
 		|| !FMath::IsNearlyEqual(DraftVoiceVolume, UserSettings->GetVoiceVolume());
 	if (bDraftDefaultsRequested)
 	{
-		UserSettings->SetToDefaults();
+		UserSettings->SetNonVoiceSettingsToDefaults();
 	}
 	UserSettings->SetFullscreenMode(DraftFullscreenMode);
 	UserSettings->SetScreenResolution(DraftScreenResolution);
@@ -733,8 +754,8 @@ bool UCatFrontendSettingsModel::Apply()
 	const bool bVibrationApplied = !bVibrationWasRequested
 		|| UserSettings->ApplyVibration(GetLocalPlayerController(), bDraftVibrationEnabled);
 	const bool bVoiceChatApplied = !bVoiceChatWasRequested || (BoundLocalPlayer.IsValid() && IsVoiceChatSettingAvailable()
-		&& UserSettings->ApplyVoiceChat(GetLocalPlayerWorld(), static_cast<uint8>(BoundLocalPlayer->GetControllerId()),
-			bDraftVoiceChatEnabled));
+		&& UserSettings->ApplyVoicePreferences(GetLocalPlayerWorld(), static_cast<uint8>(BoundLocalPlayer->GetControllerId()),
+			DraftAudioInputDeviceId, bDraftVoiceChatEnabled));
 	const bool bBackgroundMuteApplied = UserSettings->ApplyMuteAudioWhenUnfocused(bDraftMuteAudioWhenUnfocused);
 	// 辅助功能五项与控制三项都是纯偏好：没有引擎 API 可以「应用」，保存本身就是生效。
 	// 所以它们不参与上面那一串 bXxxApplied 的成败判定——它们不会失败，也不该拖累别的项的结果文案。
@@ -785,6 +806,12 @@ bool UCatFrontendSettingsModel::Apply()
 		return true;
 	}
 
+	if (!bVoiceChatApplied)
+	{
+		PublishChanged(LOCTEXT("MicrophoneApplyFailed", "语音设置未能全部应用，麦克风仍保留上次选择；若无法恢复则已停止发送。请检查设备，或重启游戏后再试。"));
+		return false;
+	}
+
 	if (!bAudioApplied)
 	{
 		PublishChanged(LOCTEXT("SettingsAppliedWithoutAudio", "画面设置已应用；正式声音分类资产或音频设备不可用。"));
@@ -830,6 +857,7 @@ void UCatFrontendSettingsModel::RestoreDefaults()
 	DraftDisplayGamma = Defaults.DisplayGamma;
 	bDraftVibrationEnabled = Defaults.bVibrationEnabled;
 	bDraftVoiceChatEnabled = Defaults.bVoiceChatEnabled;
+	DraftAudioInputDeviceId = Defaults.AudioInputDeviceId;
 	bDraftMuteAudioWhenUnfocused = Defaults.bMuteAudioWhenUnfocused;
 	DraftMasterVolume = Defaults.MasterVolume;
 	DraftMusicVolume = Defaults.MusicVolume;
@@ -872,6 +900,7 @@ bool UCatFrontendSettingsModel::HasPendingChanges() const
 		|| !FMath::IsNearlyEqual(DraftDisplayGamma, UserSettings->GetDisplayGamma())
 		|| (IsVibrationSettingAvailable() && bDraftVibrationEnabled != UserSettings->IsVibrationEnabled())
 		|| (IsVoiceChatSettingAvailable() && bDraftVoiceChatEnabled != UserSettings->IsVoiceChatEnabled())
+		|| DraftAudioInputDeviceId != UserSettings->GetAudioInputDeviceId()
 		|| bDraftMuteAudioWhenUnfocused != UserSettings->IsMuteAudioWhenUnfocused()
 		|| !FMath::IsNearlyEqual(DraftTextSizeScale, UserSettings->GetTextSizeScale())
 		|| bDraftHighContrastUI != UserSettings->IsHighContrastUIEnabled()
@@ -921,6 +950,7 @@ void UCatFrontendSettingsModel::ReloadDraftFromSettings()
 	DraftDisplayGamma = UserSettings->GetDisplayGamma();
 	bDraftVibrationEnabled = UserSettings->IsVibrationEnabled();
 	bDraftVoiceChatEnabled = UserSettings->IsVoiceChatEnabled();
+	DraftAudioInputDeviceId = UserSettings->GetAudioInputDeviceId();
 	DraftMasterVolume = UserSettings->GetMasterVolume();
 	DraftMusicVolume = UserSettings->GetMusicVolume();
 	DraftSFXVolume = UserSettings->GetSFXVolume();

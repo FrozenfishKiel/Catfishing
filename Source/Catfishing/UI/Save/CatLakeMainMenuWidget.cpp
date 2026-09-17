@@ -38,6 +38,7 @@ void UCatLakeMainMenuWidget::ResetLakeMenuSettings()
 	UnbindSettingsModelChanges();
 	SettingsModel.Reset();
 	AudioOutputDeviceIdsByOption.Reset();
+	MicrophoneIdsByOption.Reset();
 	bRefreshingSettingsControls = false;
 }
 
@@ -415,6 +416,8 @@ void UCatLakeMainMenuWidget::BindSettingsControls()
 	if (VoiceChatCheckBox) { VoiceChatCheckBox->OnCheckStateChanged.RemoveDynamic(this, &ThisClass::HandleVoiceChatChanged); VoiceChatCheckBox->OnCheckStateChanged.AddDynamic(this, &ThisClass::HandleVoiceChatChanged); }
 	if (MuteAudioWhenUnfocusedCheckBox) { MuteAudioWhenUnfocusedCheckBox->OnCheckStateChanged.RemoveDynamic(this, &ThisClass::HandleMuteAudioWhenUnfocusedChanged); MuteAudioWhenUnfocusedCheckBox->OnCheckStateChanged.AddDynamic(this, &ThisClass::HandleMuteAudioWhenUnfocusedChanged); }
 	if (AudioOutputDeviceComboBox) { AudioOutputDeviceComboBox->OnSelectionChanged.RemoveDynamic(this, &ThisClass::HandleAudioOutputDeviceSelectionChanged); AudioOutputDeviceComboBox->OnSelectionChanged.AddDynamic(this, &ThisClass::HandleAudioOutputDeviceSelectionChanged); }
+	if (MicrophoneComboBox) { MicrophoneComboBox->OnSelectionChanged.RemoveDynamic(this, &ThisClass::HandleMicrophoneSelectionChanged); MicrophoneComboBox->OnSelectionChanged.AddDynamic(this, &ThisClass::HandleMicrophoneSelectionChanged); }
+	if (MicrophoneComboBox) { MicrophoneComboBox->OnOpening.RemoveDynamic(this, &ThisClass::HandleMicrophoneOpening); MicrophoneComboBox->OnOpening.AddDynamic(this, &ThisClass::HandleMicrophoneOpening); }
 	if (MasterVolumeSlider) { MasterVolumeSlider->OnValueChanged.RemoveDynamic(this, &ThisClass::HandleMasterVolumeChanged); MasterVolumeSlider->OnValueChanged.AddDynamic(this, &ThisClass::HandleMasterVolumeChanged); }
 	if (MusicVolumeSlider) { MusicVolumeSlider->OnValueChanged.RemoveDynamic(this, &ThisClass::HandleMusicVolumeChanged); MusicVolumeSlider->OnValueChanged.AddDynamic(this, &ThisClass::HandleMusicVolumeChanged); }
 	if (SFXVolumeSlider) { SFXVolumeSlider->OnValueChanged.RemoveDynamic(this, &ThisClass::HandleSFXVolumeChanged); SFXVolumeSlider->OnValueChanged.AddDynamic(this, &ThisClass::HandleSFXVolumeChanged); }
@@ -444,6 +447,8 @@ void UCatLakeMainMenuWidget::UnbindSettingsControls()
 	if (VoiceChatCheckBox) { VoiceChatCheckBox->OnCheckStateChanged.RemoveDynamic(this, &ThisClass::HandleVoiceChatChanged); }
 	if (MuteAudioWhenUnfocusedCheckBox) { MuteAudioWhenUnfocusedCheckBox->OnCheckStateChanged.RemoveDynamic(this, &ThisClass::HandleMuteAudioWhenUnfocusedChanged); }
 	if (AudioOutputDeviceComboBox) { AudioOutputDeviceComboBox->OnSelectionChanged.RemoveDynamic(this, &ThisClass::HandleAudioOutputDeviceSelectionChanged); }
+	if (MicrophoneComboBox) { MicrophoneComboBox->OnSelectionChanged.RemoveDynamic(this, &ThisClass::HandleMicrophoneSelectionChanged); }
+	if (MicrophoneComboBox) { MicrophoneComboBox->OnOpening.RemoveDynamic(this, &ThisClass::HandleMicrophoneOpening); }
 	if (MasterVolumeSlider) { MasterVolumeSlider->OnValueChanged.RemoveDynamic(this, &ThisClass::HandleMasterVolumeChanged); }
 	if (MusicVolumeSlider) { MusicVolumeSlider->OnValueChanged.RemoveDynamic(this, &ThisClass::HandleMusicVolumeChanged); }
 	if (SFXVolumeSlider) { SFXVolumeSlider->OnValueChanged.RemoveDynamic(this, &ThisClass::HandleSFXVolumeChanged); }
@@ -453,7 +458,7 @@ void UCatLakeMainMenuWidget::UnbindSettingsControls()
 
 // 这里把主界面设置模型投影成局内设置页：无模型时只显示明确降级文本，不尝试写配置或关闭菜单。
 // 有模型时先打开回填保护，再按当前分类切换四个面板，随后重建语言、窗口、分辨率、质量和音频输出下拉项。
-// 音频输出显示项会重新映射到设备 ID；语音输入和麦克风保持正式不可用状态，结果文本和蓝图扩展点最后刷新。
+// 输入与输出设备显示项映射到稳定 ID；未接通的语音输入模式保持禁用，结果文本和蓝图扩展点最后刷新。
 void UCatLakeMainMenuWidget::HandleSettingsModelChanged()
 {
 	UCatFrontendSettingsModel* Model = SettingsModel.Get();
@@ -569,16 +574,30 @@ void UCatLakeMainMenuWidget::HandleSettingsModelChanged()
 	if (MicrophoneUnavailableText)
 	{
 		MicrophoneUnavailableText->SetText(FText::FromString(Model->IsMicrophoneSettingAvailable()
-			? TEXT("当前麦克风由平台管理。") : TEXT("当前语音服务不支持选择麦克风，请在系统声音设置中更改默认输入设备。")));
+			? TEXT("选择后点击应用。默认设备按游戏启动时的平台设置确定。") : TEXT("未检测到可选择的麦克风，或当前语音服务不支持设备选择。")));
 		MicrophoneUnavailableText->SetVisibility(ESlateVisibility::Visible);
 		MicrophoneUnavailableText->SetIsEnabled(false);
 	}
 	if (MicrophoneComboBox)
 	{
+		MicrophoneIdsByOption.Reset();
 		MicrophoneComboBox->ClearOptions();
-		MicrophoneComboBox->AddOption(TEXT("当前平台不支持此设置"));
-		MicrophoneComboBox->SetSelectedOption(TEXT("当前平台不支持此设置"));
-		MicrophoneComboBox->SetIsEnabled(false);
+		FString SelectedOption;
+		for (const FCatVoiceInputDevice& Device : Model->GetMicrophones())
+		{
+			FString Option = Device.Name;
+			for (int32 Duplicate = 2; MicrophoneIdsByOption.Contains(Option); ++Duplicate) { Option = FString::Printf(TEXT("%s (%d)"), *Device.Name, Duplicate); }
+			MicrophoneIdsByOption.Add(Option, Device.Id);
+			MicrophoneComboBox->AddOption(Option);
+			if (Device.Id == Model->GetDraftAudioInputDeviceId()) { SelectedOption = Option; }
+		}
+		if (SelectedOption.IsEmpty())
+		{
+			SelectedOption = Model->GetDraftAudioInputDeviceId().IsEmpty() ? TEXT("平台默认（设备不可用）") : TEXT("已保存的麦克风当前不可用");
+			MicrophoneComboBox->AddOption(SelectedOption);
+		}
+		MicrophoneComboBox->SetSelectedOption(SelectedOption);
+		MicrophoneComboBox->SetIsEnabled(Model->IsMicrophoneSettingAvailable());
 	}
 	if (AudioOutputDeviceComboBox)
 	{
@@ -765,7 +784,21 @@ void UCatLakeMainMenuWidget::HandleMuteAudioWhenUnfocusedChanged(bool bIsChecked
 	}
 }
 
-// 输出设备选择流程：用本次刷新建立的显示项映射找正式设备 ID；映射缺失时忽略失效 UI 选择。
+// 麦克风展开时刷新列表；选择处理只把已枚举设备 ID 交给草稿 Model。
+void UCatLakeMainMenuWidget::HandleMicrophoneOpening()
+{
+	if (!bRefreshingSettingsControls) { if (UCatFrontendSettingsModel* Model = SettingsModel.Get()) { Model->RefreshMicrophones(); } }
+}
+
+void UCatLakeMainMenuWidget::HandleMicrophoneSelectionChanged(FString SelectedItem, ESelectInfo::Type SelectionType)
+{
+	if (bRefreshingSettingsControls) { return; }
+	if (UCatFrontendSettingsModel* Model = SettingsModel.Get())
+	{
+		if (const FString* DeviceId = MicrophoneIdsByOption.Find(SelectedItem)) { Model->SetDraftAudioInputDeviceId(*DeviceId); }
+	}
+}
+
 void UCatLakeMainMenuWidget::HandleAudioOutputDeviceSelectionChanged(FString SelectedItem, ESelectInfo::Type SelectionType)
 {
 	if (bRefreshingSettingsControls)

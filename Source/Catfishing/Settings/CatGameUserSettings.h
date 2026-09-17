@@ -84,6 +84,9 @@ struct CATFISHING_API FCatGameUserSettingsDefaultSnapshot
 	/** 默认输出设备偏好；空值表示跟随平台系统默认设备，不把某次枚举到的设备 ID 固定保存。 */
 	FString AudioOutputDeviceId;
 
+	/** Windows 捕获设备稳定 GUID；空值表示本次启动时的平台默认输入设备。 */
+	FString AudioInputDeviceId;
+
 	/** 默认文字大小倍率；辅助功能页的「文字大小」。 */
 	float TextSizeScale = 1.0f;
 
@@ -155,6 +158,13 @@ public:
 
 	/** 启停当前 World 本地用户的 OSS 语音；开启须注册成功，关闭同时清包，接口命令提交后更新偏好，但不保证物理采集或远端接收。 */
 	bool ApplyVoiceChat(UWorld* World, uint8 LocalUserNum, bool bEnableVoiceChat);
+
+	/** 同一事务应用输入设备和发送开关；失败保留旧设备，恢复失败时停发。恢复调用不改保存偏好。 */
+	bool ApplyVoicePreferences(UWorld* World, uint8 LocalUserNum, const FString& DeviceId, bool bEnable, bool bRestoreOnly = false);
+	const FString& GetAudioInputDeviceId() const { return AudioInputDeviceId; }
+
+	/** 页面恢复默认仍需真实切换麦克风；先保留旧语音偏好直到设备事务完成。 */
+	void SetNonVoiceSettingsToDefaults();
 
 	/** 在正式 Session 完成本地 talker 注册后恢复已保存的发送选择；由 Online 成功回调调用，不保存新偏好，不修改远端 talker。 */
 	void RestoreVoiceChatForLocalPlayers(UWorld* World);
@@ -400,6 +410,10 @@ private:
 	/** 已在 Mixer 活动设备信息中确认的输出设备 ID；页面最终确认后写入，空值表示不覆盖平台默认输出设备。 */
 	UPROPERTY(Config)
 	FString AudioOutputDeviceId;
+
+	/** Windows 捕获设备稳定 GUID；空值表示本次启动时的平台默认输入设备。 */
+	UPROPERTY(Config)
+	FString AudioInputDeviceId;
 
 	/** 已保存的文字大小倍率；消费方是 WBP 的字号换算，本类不改 Slate 全局字体。 */
 	UPROPERTY(Config)

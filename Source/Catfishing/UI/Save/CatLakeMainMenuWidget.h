@@ -322,6 +322,9 @@ private:
 	UFUNCTION() void HandleVoiceChatChanged(bool bIsChecked);
 	/** 后台静音勾选输入处理；只写失焦音量草稿，应用前不改变当前音频。 */
 	UFUNCTION() void HandleMuteAudioWhenUnfocusedChanged(bool bIsChecked);
+	/** 麦克风选择写入设备草稿；展开时重新枚举，不在选择阶段录音或保存。 */
+	UFUNCTION() void HandleMicrophoneSelectionChanged(FString SelectedItem, ESelectInfo::Type SelectionType);
+	UFUNCTION() void HandleMicrophoneOpening();
 	/** 输出设备下拉输入处理；通过本 View 的显示项到设备 ID 映射写入正式设备草稿。 */
 	UFUNCTION() void HandleAudioOutputDeviceSelectionChanged(FString SelectedItem, ESelectInfo::Type SelectionType);
 	/** 主音量滑块输入处理；只写分类混音草稿，应用前不触碰 AudioDevice。 */
@@ -344,6 +347,8 @@ private:
 
 	/** 输出设备下拉显示项到正式 AudioMixer ID 的瞬态映射；每次设置模型刷新时重建，选择回调用它避免猜 ID。 */
 	TMap<FString, FString> AudioOutputDeviceIdsByOption;
+	/** 输入设备显示项到 DirectSound GUID 的映射；空 GUID 是平台默认选择。 */
+	TMap<FString, FString> MicrophoneIdsByOption;
 
 	/** SettingsModel 刷新通知的解绑句柄；模型重新注入或菜单 Controller 拆除时按句柄移除。 */
 	FDelegateHandle SettingsModelChangedHandle;
@@ -495,7 +500,7 @@ private:
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> MicrophoneUnavailableText;
 
-	/** 麦克风选择下拉框；当前仅作为禁用占位，不写任何草稿。 */
+	/** 麦克风选择下拉框；写入本地草稿，应用后才切换实际采集设备。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UComboBoxString> MicrophoneComboBox;
 

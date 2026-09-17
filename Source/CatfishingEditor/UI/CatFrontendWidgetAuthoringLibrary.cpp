@@ -628,9 +628,9 @@ namespace CatFrontendWidgetAuthoring
 		UComboBoxString* VoiceInputMode = AddComboBox(Tree, AddSettingRow(Tree, GamePanel, TEXT("VoiceInputMode"), TEXT("语音输入模式")), TEXT("VoiceInputModeComboBox"), UnavailableVoiceOptions);
 		UTextBlock* VoiceInputModeUnavailable = AddText(Tree, GamePanel, TEXT("VoiceInputModeUnavailableText"),
 			TEXT("当前语音服务不支持切换输入模式。"), 14);
-		UComboBoxString* Microphone = AddComboBox(Tree, AddSettingRow(Tree, GamePanel, TEXT("Microphone"), TEXT("麦克风设备")), TEXT("MicrophoneComboBox"), UnavailableVoiceOptions);
+		UComboBoxString* Microphone = AddComboBox(Tree, AddSettingRow(Tree, GamePanel, TEXT("Microphone"), TEXT("麦克风设备")), TEXT("MicrophoneComboBox"), { TEXT("设备列表待加载") });
 		UTextBlock* MicrophoneUnavailable = AddText(Tree, GamePanel, TEXT("MicrophoneUnavailableText"),
-			TEXT("当前语音服务不支持选择麦克风，请在系统声音设置中更改默认输入设备。"), 14);
+			TEXT("设备列表将在打开设置后加载；选择麦克风后点击应用。"), 14);
 		if (!VoiceInputMode || !Microphone)
 		{
 			return false;
@@ -662,7 +662,7 @@ namespace CatFrontendWidgetAuthoring
 			return false;
 		}
 		AudioOutputDevice->SetIsEnabled(false);
-		UButton* RefreshDevices = AddButton(Tree, AudioPanel, TEXT("RefreshAudioOutputDevicesButton"), TEXT("刷新输出设备"));
+		UButton* RefreshDevices = AddButton(Tree, AudioPanel, TEXT("RefreshAudioOutputDevicesButton"), TEXT("刷新音频设备"));
 		CastChecked<UVerticalBoxSlot>(RefreshDevices->Slot)->SetHorizontalAlignment(HAlign_Right);
 
 		AddText(Tree, Column, TEXT("FrontendSettingsResultTextBlock"), TEXT(""), 16);
@@ -996,9 +996,9 @@ namespace CatFrontendWidgetAuthoring
 		UComboBoxString* VoiceInputMode = AddComboBox(Tree, AddSettingRow(Tree, GamePanel, TEXT("VoiceInputMode"), TEXT("语音输入模式")), TEXT("VoiceInputModeComboBox"), UnavailableVoiceOptions);
 		UTextBlock* VoiceInputModeUnavailable = AddText(Tree, GamePanel, TEXT("VoiceInputModeUnavailableText"),
 			TEXT("当前语音服务不支持切换输入模式。"), 14);
-		UComboBoxString* Microphone = AddComboBox(Tree, AddSettingRow(Tree, GamePanel, TEXT("Microphone"), TEXT("麦克风设备")), TEXT("MicrophoneComboBox"), UnavailableVoiceOptions);
+		UComboBoxString* Microphone = AddComboBox(Tree, AddSettingRow(Tree, GamePanel, TEXT("Microphone"), TEXT("麦克风设备")), TEXT("MicrophoneComboBox"), { TEXT("设备列表待加载") });
 		UTextBlock* MicrophoneUnavailable = AddText(Tree, GamePanel, TEXT("MicrophoneUnavailableText"),
-			TEXT("当前语音服务不支持选择麦克风，请在系统声音设置中更改默认输入设备。"), 14);
+			TEXT("设备列表将在打开设置后加载；选择麦克风后点击应用。"), 14);
 		if (!VoiceInputMode || !Microphone)
 		{
 			return false;
@@ -1032,7 +1032,7 @@ namespace CatFrontendWidgetAuthoring
 			return false;
 		}
 		AudioOutputDevice->SetIsEnabled(false);
-		UButton* RefreshDevices = AddButton(Tree, AudioPanel, TEXT("RefreshAudioOutputDevicesButton"), TEXT("刷新输出设备"));
+		UButton* RefreshDevices = AddButton(Tree, AudioPanel, TEXT("RefreshAudioOutputDevicesButton"), TEXT("刷新音频设备"));
 		CastChecked<UVerticalBoxSlot>(RefreshDevices->Slot)->SetHorizontalAlignment(HAlign_Right);
 
 		// 控制分类只保留已有入口与右侧说明，不在作者器中发明按键设置；底部命令独立于滚动区，始终保持同一行。

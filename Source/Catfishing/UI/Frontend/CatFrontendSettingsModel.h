@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AudioMixerBlueprintLibrary.h"
+#include "Online/Voice/CatVoiceInputDevice.h"
 #include "CoreMinimal.h"
 #include "GenericPlatform/GenericWindow.h"
 #include "UObject/Object.h"
@@ -19,7 +20,7 @@ DECLARE_MULTICAST_DELEGATE(FCatFrontendSettingsChanged);
 
 /**
  * 主界面设置页的本地草稿 Model；它从正式 UCatGameUserSettings 读取已生效值，在 Apply 前不触碰引擎、音频或国际化运行态。
- * 控制细项与麦克风选择尚无正式来源时只暴露不可用状态；输出设备与网络语音通过各自引擎/OSS API 真实提交，不保存假偏好。
+ * 设备与网络语音通过各自引擎/OSS API 真实提交；不支持的平台只暴露不可用状态。
  */
 UCLASS()
 class CATFISHING_API UCatFrontendSettingsModel : public UObject
@@ -146,8 +147,12 @@ public:
 	/** 返回语音输入模式是否有正式运行时来源；当前 Steam IOnlineVoice 只提供 push-to-talk 风格的开始/停止调用，没有可持久化的模式选择，故为 false。 */
 	bool IsInputModeSettingAvailable() const;
 
-	/** 返回麦克风选择是否已有正式设备管理来源；当前 Steam IOnlineVoice 只支持开始/停止网络语音而不提供输入设备枚举或选择，故为 false。 */
+	/** 仅 UE 5.8 Win64 Steam 且实际枚举到可寻址设备时开放选择。 */
 	bool IsMicrophoneSettingAvailable() const;
+	void RefreshMicrophones();
+	const TArray<FCatVoiceInputDevice>& GetMicrophones() const { return Microphones; }
+	const FString& GetDraftAudioInputDeviceId() const { return DraftAudioInputDeviceId; }
+	void SetDraftAudioInputDeviceId(const FString& DeviceId);
 
 	/** 返回震动开关是否可应用给当前本地 PlayerController；存在 Controller 时会写入其 ForceFeedback gate，设备本身仍由平台决定。 */
 	bool IsVibrationSettingAvailable() const;
@@ -272,7 +277,7 @@ public:
 	/** 恢复可实现项目设置的默认草稿；只修改页面草稿，仍需玩家显式 Apply 才会实际改动窗口、语言、UI 或声音。 */
 	void RestoreDefaults();
 
-	/** 待应用状态只比较项目当前可真实提交的草稿字段；语音输入模式和麦克风这类不可用项不会制造脏数据。 */
+	/** 待应用状态只比较项目当前可真实提交的草稿字段；语音输入模式等不可用项不会制造脏数据。 */
 	bool HasPendingChanges() const;
 
 	/** 返回最近一次初始化、应用或降级的可显示结果；View 只展示文本，不依此文本推导业务状态。 */
@@ -282,6 +287,7 @@ public:
 	FCatFrontendSettingsChanged OnChanged;
 
 private:
+	friend class FCatMicrophoneSettingsInteractionTest;
 	/**
 	 * 从正式设置来源重建整份草稿；Initialize、Cancel 与 Apply 后调用，确保页面不保留已提交前的变更前值或无效音频草稿。
 	 */
@@ -339,6 +345,8 @@ private:
 
 	/** 待应用的语言 culture 名称；页面输入写入、Apply 成功后由国际化系统持久化，Cancel 从当前语言重读。 */
 	FString DraftLanguage;
+	FString DraftAudioInputDeviceId;
+	TArray<FCatVoiceInputDevice> Microphones;
 
 	/** 当前本地化资源系统实际发现的游戏 culture 列表；Initialize 写入、Shutdown 清空，语言控件只读取这份运行时来源。 */
 	TArray<FString> AvailableLanguages;

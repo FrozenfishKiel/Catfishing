@@ -576,6 +576,9 @@ private:
 	UFUNCTION() void HandleVoiceChatChanged(bool bIsChecked);
 	/** 后台静音勾选输入处理；只写失焦音量草稿，Apply 前不改变当前窗口音频。 */
 	UFUNCTION() void HandleMuteAudioWhenUnfocusedChanged(bool bIsChecked);
+	/** 麦克风选择写入设备草稿；展开时重新枚举，不在选择阶段录音或保存。 */
+	UFUNCTION() void HandleMicrophoneSelectionChanged(FString SelectedItem, ESelectInfo::Type SelectionType);
+	UFUNCTION() void HandleMicrophoneOpening();
 	/** 输出设备下拉输入处理；通过 View 的稳定显示项映射提交真实 AudioMixer 设备 ID，不从显示文字猜 ID。 */
 	UFUNCTION() void HandleAudioOutputDeviceSelectionChanged(FString SelectedItem, ESelectInfo::Type SelectionType);
 	/** 主音量滑块输入处理；只写 SettingsModel 草稿，Apply 前不改变 AudioDevice。 */
@@ -762,6 +765,8 @@ private:
 
 	/** 输出设备下拉显示项到正式 AudioMixer ID 的瞬态映射；SettingsModel 刷新时重建，选择回调只读它以避免从名称或索引猜设备身份。 */
 	TMap<FString, FString> AudioOutputDeviceIdsByOption;
+	/** 输入设备显示项到 DirectSound GUID 的映射；空 GUID 是平台默认选择。 */
+	TMap<FString, FString> MicrophoneIdsByOption;
 
 	/** SaveModel 变化通知的解绑句柄；InitializeFrontend 绑定，ResetFrontend 与析构前移除。 */
 	FDelegateHandle SaveModelChangedHandle;
