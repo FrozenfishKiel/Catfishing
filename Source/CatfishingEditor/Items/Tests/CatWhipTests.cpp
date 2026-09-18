@@ -11,6 +11,8 @@
 #include "Character/CatCharacter.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Character/Physics/CatPhysicsPrototypeVisualComponent.h"
+#include "Camp/CatCampInventoryActor.h"
+#include "Components/SphereComponent.h"
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
 #include "Components/BoxComponent.h"
@@ -82,7 +84,7 @@ public:
 class FExercise : public IAutomationLatentCommand
 {
 public:
-    explicit FExercise(FAutomationTestBase* In):Test(In){}
+    explicit FExercise(FAutomationTestBase* In,bool InFacingRegression=false):Test(In),bFacingRegression(InFacingRegression){}
     bool Update() override
     {
         if (Start==0) Start=FPlatformTime::Seconds();
@@ -195,6 +197,14 @@ private:
         auto* Inv=Attacker->GetInventoryComponent();
         for (int32 I=Inv->GetInventorySlotCount()-1;I>=0;--I) Inv->RemoveItemInstanceFromIndex(I);
         ResetPositions();
+        if (bFacingRegression)
+        {
+            // Use the production camp interaction volume, not a synthetic collision profile.
+            Camp=Server->SpawnActor<ACatCampInventoryActor>(FVector(45,70,40),FRotator::ZeroRotator);
+            const auto* Sphere=Camp->FindComponentByClass<USphereComponent>();
+            Test->TestEqual(TEXT("仓库交互球阻挡交互射线"),Sphere->GetCollisionResponseToChannel(ECC_Visibility),ECR_Block);
+            Test->TestEqual(TEXT("仓库交互球不阻挡身体"),Sphere->GetCollisionResponseToChannel(ECC_Pawn),ECR_Ignore);
+        }
         auto* Pickup=Server->SpawnActor<ACatWhipActor>(Cls,Attacker->GetActorLocation()+FVector(30,0,20),FRotator::ZeroRotator);
         if (!Test->TestTrue(TEXT("正式拾取Actor发放同一实物"),Pickup && Pickup->Interact_Implementation(Attacker->GetController(),FGuid::NewGuid()))) return true;
         for (const auto& E:Inv->GetInventoryEntries()) if(E.Instance && E.Instance->GetItemId()==44) ItemId=E.Instance->GetItemInstanceId();
@@ -206,7 +216,8 @@ private:
         auto* A=Attacker->GetPhysicalBodyComponent(); auto* B=Victim->GetPhysicalBodyComponent();
         A->TeleportBodyFromAuthority(FTransform(FRotator::ZeroRotator,FVector(0,0,A->GetStandRootHeightCm())),TEXT("WhipTest"));
         B->TeleportBodyFromAuthority(FTransform(FRotator::ZeroRotator,FVector(85,0,B->GetStandRootHeightCm())),TEXT("WhipTest"));
-        Attacker->GetController()->SetControlRotation(FRotator::ZeroRotator); ClientPC->SetControlRotation(FRotator::ZeroRotator);
+        const FRotator View(0,bFacingRegression?(Stage<3?90:180):0,0);
+        Attacker->GetController()->SetControlRotation(View); ClientPC->SetControlRotation(View);
         VictimStart=Victim->GetActorLocation();
     }
     void MakeWall()
@@ -240,12 +251,28 @@ private:
             { bCaptured=true; Capture(); }
         }
         for(TActorIterator<ACatWhipActor> It(Server.Get());It;++It)
-            if(It->GetOwner()==Attacker.Get()) {MaxHits=FMath::Max(MaxHits,It->GetHitCount()); MaxOccluded=FMath::Max(MaxOccluded,It->GetOccludedTargetCount());}
+            if(It->GetOwner()==Attacker.Get())
+            {
+                MaxHits=FMath::Max(MaxHits,It->GetHitCount()); MaxOccluded=FMath::Max(MaxOccluded,It->GetOccludedTargetCount());
+                if (bFacingRegression && !bServerFacingChecked)
+                {
+                    bServerFacingChecked=true;
+                    Test->TestTrue(TEXT("镜头偏转时服务器鞭子仍朝猫身体前方"),It->GetActorForwardVector().Dot(Attacker->GetActorForwardVector())>.99);
+                    Test->TestTrue(TEXT("场景确实分离猫与镜头朝向"),FMath::Abs(FMath::FindDeltaAngleDegrees(Attacker->GetActorRotation().Yaw,Attacker->GetControlRotation().Yaw))>80);
+                }
+            }
+        if (bFacingRegression && !bClientFacingChecked)
+            for(TActorIterator<ACatWhipActor> It(Client.Get());It;++It)
+                if(It->GetOwner()==ClientPC->GetPawn())
+                {
+                    bClientFacingChecked=true;
+                    Test->TestTrue(TEXT("客户端鞭子同样朝猫身体前方"),It->GetActorForwardVector().Dot(ClientPC->GetPawn()->GetActorForwardVector())>.99);
+                }
         bClientSeen|=CountSwing(Client.Get())>0;
         if(!FirstRequest.IsValid()) for(const auto& Spec:Attacker->GetCatAbilitySystemComponent()->GetActivatableAbilities())
             if(Spec.IsActive()) if(const auto* GA=Cast<UCatGA_UseWhip>(Spec.GetPrimaryInstance())) FirstRequest=GA->GetUseTarget().RequestId;
     }
-    void Transition(int32 Next) {Stage=Next; At=Server->GetTimeSeconds();}
+    void Transition(int32 Next) {Stage=Next; At=Server->GetTimeSeconds(); bServerFacingChecked=bClientFacingChecked=false;}
     void Capture()
     {
         auto* Rig=Client->SpawnActor<AActor>();
@@ -274,28 +301,34 @@ private:
     double Age() const {return Server->GetTimeSeconds()-At;}
     FAutomationTestBase* Test; double Start=0,At=0; int32 Stage=0,MaxHits=0,MaxOccluded=0; bool bClientSeen=false;
     bool bServerMontage=false,bClientMontage=false,bCaptured=false;
+    bool bFacingRegression=false,bServerFacingChecked=false,bClientFacingChecked=false;
     TWeakObjectPtr<UWorld> Server,Client;
     TWeakObjectPtr<ACatfishingPlayerController> ClientPC;
     TWeakObjectPtr<ACatCharacter> Attacker,Victim;
     TWeakObjectPtr<AActor> Wall;
+    TWeakObjectPtr<ACatCampInventoryActor> Camp;
     FGuid ItemId,FirstRequest; FVector VictimStart;
 };
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatWhipNetworkTest,"Catfishing.Editor.Whip.RemoteUseAndCleanup",
-    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ProductFilter)
-bool FCatWhipNetworkTest::RunTest(const FString&)
+static bool RunWhipNetworkTest(FAutomationTestBase* Test,bool FacingRegression)
 {
-    if(!TestTrue(TEXT("idle editor"),GEditor && GEngine && !GEditor->PlayWorld)) return false;
+    if(!Test->TestTrue(TEXT("idle editor"),GEditor && GEngine && !GEditor->PlayWorld)) return false;
     const auto Restore=MakeShared<CatWhipTests::FRestore>();
     auto* S=GetMutableDefault<ULevelEditorPlaySettings>(); S->SetPlayNetMode(PIE_ListenServer); S->SetPlayNumberOfClients(2); S->SetRunUnderOneProcess(true);
     for(auto& D:GEngine->NetDriverDefinitions) if(D.DefName==TEXT("GameNetDriver"))
     {D.DriverClassName=TEXT("/Script/OnlineSubsystemUtils.IpNetDriver"); D.DriverClassNameFallback=D.DriverClassName;}
     ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/Catfishing/Maps/TestMap")));
     ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
-    FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<CatWhipTests::FExercise>(this));
+    FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<CatWhipTests::FExercise>(Test,FacingRegression));
     ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
     FAutomationTestFramework::Get().EnqueueLatentCommand(Restore);
     return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatWhipNetworkTest,"Catfishing.Editor.Whip.RemoteUseAndCleanup",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ProductFilter)
+bool FCatWhipNetworkTest::RunTest(const FString&) {return RunWhipNetworkTest(this,false);}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatWhipFacingTest,"Catfishing.Editor.Whip.BodyFacingAndCampInteraction",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ProductFilter)
+bool FCatWhipFacingTest::RunTest(const FString&) {return RunWhipNetworkTest(this,true);}
 #endif

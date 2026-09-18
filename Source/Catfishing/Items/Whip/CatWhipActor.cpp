@@ -91,12 +91,14 @@ bool ACatWhipActor::StartSwingFromAuthority(ACatCharacter* Character, FGuid Requ
 {
     if (!HasAuthority() || SwingOwner || !Character || !RequestId.IsValid() || !ItemId.IsValid() || !IsWhipConfigurationReady()) return false;
     SwingOwner = Character; SwingRequestId = RequestId; SourceItemId = ItemId;
-    SwingStartServerTime = ServerTime(); SwingYaw = Character->GetControlRotation().Yaw;
+    // Freeze the body's actual facing at activation; looking around must not aim the whip.
+    SwingStartServerTime = ServerTime(); SwingYaw = Character->GetActorRotation().Yaw;
     SetOwner(Character); SetInstigator(Character); SetReplicateMovement(false);
     HitTargets.Reset(); OccludedTargets.Reset(); LastSampleTime = 0;
     OnRep_Swing(); SetLifeSpan(GetSwingDuration()+1.f); ForceNetUpdate();
-    UE_LOG(LogCatSocial, Log, TEXT("Event=whip_swing_started RequestId=%s Item=%s Actor=%s Player=%s World=%s NetMode=%d Authority=1 LocalRole=%d Duration=%.3f Window=%.3f:%.3f ImpulseNs=%.3f"),
-        *SwingRequestId.ToString(), *SourceItemId.ToString(), *GetName(), *GetNameSafe(Character), *GetNameSafe(GetWorld()), GetNetMode(), GetLocalRole(), GetSwingDuration(), HitWindowStart, HitWindowEnd, ImpulseNewtonSeconds);
+    UE_LOG(LogCatSocial, Log, TEXT("Event=whip_swing_started RequestId=%s Item=%s Actor=%s Player=%s World=%s NetMode=%d Authority=1 LocalRole=%d Duration=%.3f Window=%.3f:%.3f ImpulseNs=%.3f BodyYaw=%.2f ViewYaw=%.2f SwingYaw=%.2f"),
+        *SwingRequestId.ToString(), *SourceItemId.ToString(), *GetName(), *GetNameSafe(Character), *GetNameSafe(GetWorld()), GetNetMode(), GetLocalRole(), GetSwingDuration(), HitWindowStart, HitWindowEnd, ImpulseNewtonSeconds,
+        Character->GetActorRotation().Yaw, Character->GetControlRotation().Yaw, SwingYaw);
     return true;
 }
 
@@ -169,13 +171,15 @@ void ACatWhipActor::Sweep(const FVector& Start, const FVector& End)
         FCollisionQueryParams Sight = Query; Sight.AddIgnoredActor(Target);
         FHitResult Wall;
         const FVector Contact = Hit.bStartPenetrating ? Hit.Location : Hit.ImpactPoint;
-        if (GetWorld()->LineTraceSingleByChannel(Wall,GetActorLocation(),Contact,ECC_Visibility,Sight))
+        // Interaction targeting volumes block Visibility but are not solid obstacles.
+        // Match body-blocking geometry without changing the shared interaction profiles.
+        if (GetWorld()->LineTraceSingleByChannel(Wall,GetActorLocation(),Contact,ECC_Pawn,Sight))
         {
             if (!OccludedTargets.Contains(Target))
             {
                 OccludedTargets.Add(Target);
-                UE_LOG(LogCatSocial, Log, TEXT("Event=whip_hit_occluded RequestId=%s Target=%s Blocker=%s World=%s NetMode=%d Authority=1 Result=Occluded"),
-                    *SwingRequestId.ToString(), *GetNameSafe(Target), *GetNameSafe(Wall.GetActor()), *GetNameSafe(GetWorld()), GetNetMode());
+                UE_LOG(LogCatSocial, Log, TEXT("Event=whip_hit_occluded RequestId=%s Target=%s Blocker=%s Component=%s World=%s NetMode=%d Authority=1 Result=Occluded"),
+                    *SwingRequestId.ToString(), *GetNameSafe(Target), *GetNameSafe(Wall.GetActor()), *GetNameSafe(Wall.GetComponent()), *GetNameSafe(GetWorld()), GetNetMode());
             }
             continue;
         }
