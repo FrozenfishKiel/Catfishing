@@ -91,6 +91,8 @@ def verify():
     require(cdo.get_editor_property('attack_animation')==anim,'Actor animation not linked')
     require(cdo.get_editor_property('skeletal_mesh').skeletal_mesh_asset==mesh,'Actor mesh not linked')
     require(cdo.get_editor_property('item_definition')==item,'Pickup source missing')
+    require(cdo.get_editor_property('impulse_newton_seconds')==18.0,'Whip horizontal impulse not migrated')
+    require(cdo.get_editor_property('upward_impulse_newton_seconds')==12.0,'Whip upward impulse not migrated')
     for slot in mesh.get_editor_property('materials'):
         require(slot.material_interface.get_editor_property('used_with_skeletal_mesh'),'Material lacks skeletal usage')
     fragment=item.get_editor_property('fragments')[0]
@@ -130,6 +132,8 @@ if os.environ.get('WHIP_VERIFY_ONLY')!='1':
     cdo=unreal.get_default_object(bp.generated_class())
     cdo.get_editor_property('skeletal_mesh').set_skeletal_mesh_asset(mesh)
     cdo.set_editor_property('attack_animation',attack)
+    cdo.set_editor_property('impulse_newton_seconds',18.0)
+    cdo.set_editor_property('upward_impulse_newton_seconds',12.0)
     item_factory=unreal.DataAssetFactory(); item_factory.set_editor_property('data_asset_class',unreal.CatInventoryItemDefinition)
     item=create_asset('Item_Whip',unreal.CatInventoryItemDefinition,item_factory,'/Game/Catfishing/Data/Items')
     item.set_editor_property('item_id',ITEM_ID)

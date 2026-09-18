@@ -7,6 +7,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerState.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "Settings/LevelEditorPlaySettings.h"
 #include "Character/CatCharacter.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
@@ -46,6 +47,8 @@ bool FCatWhipAssetTest::RunTest(const FString&)
     const auto* Actor=Config->SwingActorClass.GetDefaultObject();
     if (!TestNotNull(TEXT("世界使用Actor"),Actor)) return false;
     TestTrue(TEXT("骨架和命中窗口有效"),Actor->IsWhipConfigurationReady());
+    TestEqual(TEXT("正式皮鞭水平击飞冲量"),Actor->ImpulseNewtonSeconds,18.f);
+    TestEqual(TEXT("正式皮鞭向上击飞冲量"),Actor->UpwardImpulseNewtonSeconds,12.f);
     TestEqual(TEXT("持久原物不消耗"),Config->ConsumeCount,0);
     TestEqual(TEXT("拾取载体与使用Actor同类"),Item->WorldActorClass.LoadSynchronous(),Config->SwingActorClass.Get());
     const auto& Ref=Actor->GetWhipMesh()->GetSkeletalMeshAsset()->GetRefSkeleton();
@@ -118,6 +121,12 @@ public:
                 Test->TestTrue(TEXT("客户端看见服务器使用Actor"),bClientSeen);
                 Test->TestTrue(TEXT("服务器实际播放当前骨架占位蒙太奇"),bServerMontage);
                 Test->TestTrue(TEXT("拥有客户端实际播放当前骨架占位蒙太奇"),bClientMontage);
+                Test->TestTrue(TEXT("受击猫实际腾空并恢复落地"),bVictimAirborne && Victim->GetCharacterMovement()->IsMovingOnGround());
+                Test->TestTrue(TEXT("受击高度超过20厘米"),MaxVictimHeightCm>20);
+                Test->TestTrue(TEXT("远端看见受击猫腾空超过20厘米"),MaxClientVictimHeightCm>20);
+                Test->TestTrue(TEXT("抽击产生超过1米的水平击退"),FVector::Dist2D(VictimStart,Victim->GetActorLocation())>100);
+                Test->AddInfo(FString::Printf(TEXT("Event=whip_launch_verified HeightCm=%.2f ClientHeightCm=%.2f TravelCm=%.2f Landed=%d"),
+                    MaxVictimHeightCm,MaxClientVictimHeightCm,FVector::Dist2D(VictimStart,Victim->GetActorLocation()),Victim->GetCharacterMovement()->IsMovingOnGround()));
                 Test->TestTrue(TEXT("权威受击猫产生水平位移"),FVector::Dist2D(VictimStart,Victim->GetActorLocation())>1);
                 bool bVictimReplicated=false;
                 for (TActorIterator<ACatCharacter> It(Client.Get());It;++It)
@@ -238,6 +247,11 @@ private:
     {
         if (Stage==3)
         {
+            MaxVictimHeightCm=FMath::Max(MaxVictimHeightCm,Victim->GetActorLocation().Z-VictimStart.Z);
+            bVictimAirborne|=Victim->GetCharacterMovement()->IsFalling();
+            for(TActorIterator<ACatCharacter> It(Client.Get());It;++It)
+                if(It->GetPlayerState() && It->GetPlayerState()->GetPlayerId()==Victim->GetPlayerState()->GetPlayerId())
+                    MaxClientVictimHeightCm=FMath::Max(MaxClientVictimHeightCm,It->GetActorLocation().Z-VictimStart.Z);
             auto Playing=[](ACatCharacter* Cat)
             {
                 auto* Anim=Cat && Cat->GetMesh()?Cat->GetMesh()->GetAnimInstance():nullptr;
@@ -301,6 +315,8 @@ private:
     double Age() const {return Server->GetTimeSeconds()-At;}
     FAutomationTestBase* Test; double Start=0,At=0; int32 Stage=0,MaxHits=0,MaxOccluded=0; bool bClientSeen=false;
     bool bServerMontage=false,bClientMontage=false,bCaptured=false;
+    bool bVictimAirborne=false;
+    double MaxVictimHeightCm=0,MaxClientVictimHeightCm=0;
     bool bFacingRegression=false,bServerFacingChecked=false,bClientFacingChecked=false;
     TWeakObjectPtr<UWorld> Server,Client;
     TWeakObjectPtr<ACatfishingPlayerController> ClientPC;

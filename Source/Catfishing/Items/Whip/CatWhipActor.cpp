@@ -74,6 +74,7 @@ bool ACatWhipActor::IsWhipConfigurationReady() const
         || !FMath::IsFinite(HitWindowStart) || !FMath::IsFinite(HitWindowEnd) || HitWindowStart < 0 || HitWindowEnd <= HitWindowStart
         || HitWindowEnd > GetSwingDuration() || !FMath::IsFinite(TraceRadiusCm) || TraceRadiusCm < 1 || TraceRadiusCm > 20
         || !FMath::IsFinite(ImpulseNewtonSeconds) || ImpulseNewtonSeconds < 0 || ImpulseNewtonSeconds > 30
+        || !FMath::IsFinite(UpwardImpulseNewtonSeconds) || UpwardImpulseNewtonSeconds < 0 || UpwardImpulseNewtonSeconds > 30
         || !FMath::IsFinite(MaxTargetDistanceCm) || MaxTargetDistanceCm <= 0 || MaxTargetDistanceCm > 300
         || GripOffsetCm.ContainsNaN() || MeshRotationOffset.ContainsNaN()) return false;
     for (int32 Index=1; Index<=16; ++Index)
@@ -187,9 +188,10 @@ void ACatWhipActor::Sweep(const FVector& Start, const FVector& End)
         if (Direction.IsNearlyZero()) Direction = (Target->GetActorLocation()-GetActorLocation()).GetSafeNormal2D();
         if (Direction.IsNearlyZero()) Direction = FRotator(0,SwingYaw,0).Vector();
         HitTargets.Add(Target); // Record before applying the one authoritative external impulse.
-        Target->GetPhysicalBodyComponent()->AddExternalImpulseFromAuthority(Direction*(ImpulseNewtonSeconds*100.f));
-        UE_LOG(LogCatSocial, Log, TEXT("Event=whip_hit_applied RequestId=%s Item=%s Actor=%s Player=%s Target=%s World=%s NetMode=%d Authority=1 LocalRole=%d ImpulseNs=%.3f Direction=%s Result=Applied"),
-            *SwingRequestId.ToString(), *SourceItemId.ToString(), *GetName(), *GetNameSafe(SwingOwner), *GetNameSafe(Target), *GetNameSafe(GetWorld()), GetNetMode(), GetLocalRole(), ImpulseNewtonSeconds, *Direction.ToCompactString());
+        const FVector Impulse = (Direction*ImpulseNewtonSeconds+FVector::UpVector*UpwardImpulseNewtonSeconds)*100.f;
+        Target->GetPhysicalBodyComponent()->AddExternalImpulseFromAuthority(Impulse,true);
+        UE_LOG(LogCatSocial, Log, TEXT("Event=whip_hit_applied RequestId=%s Item=%s Actor=%s Player=%s Target=%s World=%s NetMode=%d Authority=1 LocalRole=%d ImpulseNs=%.3f UpwardImpulseNs=%.3f Direction=%s Result=Applied"),
+            *SwingRequestId.ToString(), *SourceItemId.ToString(), *GetName(), *GetNameSafe(SwingOwner), *GetNameSafe(Target), *GetNameSafe(GetWorld()), GetNetMode(), GetLocalRole(), ImpulseNewtonSeconds, UpwardImpulseNewtonSeconds, *Direction.ToCompactString());
         MulticastHitObserved(Target);
     }
 }

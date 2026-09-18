@@ -32,8 +32,10 @@ public:
     UPROPERTY(EditDefaultsOnly, Category="Whip", meta=(Units="s", ClampMin="0")) float HitWindowStart = 0.42f;
     UPROPERTY(EditDefaultsOnly, Category="Whip", meta=(Units="s", ClampMin="0")) float HitWindowEnd = 0.86f;
     UPROPERTY(EditDefaultsOnly, Category="Whip", meta=(Units="cm", ClampMin="1")) float TraceRadiusCm = 5.f;
-    /** 试玩初值：牛顿秒，提交至身体时乘 100 转 kg·cm/s；没有伤害或力量 buff。 */
-    UPROPERTY(EditDefaultsOnly, Category="Whip", meta=(ClampMin="0")) float ImpulseNewtonSeconds = 3.f;
+    /** 水平冲量（牛顿秒），提交至身体时乘 100 转 kg·cm/s；没有伤害或力量 buff。 */
+    UPROPERTY(EditDefaultsOnly, Category="Whip", meta=(ClampMin="0",ClampMax="30")) float ImpulseNewtonSeconds = 18.f;
+    /** 向上冲量（牛顿秒）；允许从地面腾空，之后沿原身体重力和落地流程运行。 */
+    UPROPERTY(EditDefaultsOnly, Category="Whip", meta=(ClampMin="0",ClampMax="30")) float UpwardImpulseNewtonSeconds = 12.f;
     UPROPERTY(EditDefaultsOnly, Category="Whip", meta=(Units="cm", ClampMin="1")) float MaxTargetDistanceCm = 180.f;
     /** 只作演示握持校正，不把猫 Mesh 的缩放传给 120 cm 皮鞭。 */
     UPROPERTY(EditDefaultsOnly, Category="Whip") FVector GripOffsetCm = FVector(0,0,3);

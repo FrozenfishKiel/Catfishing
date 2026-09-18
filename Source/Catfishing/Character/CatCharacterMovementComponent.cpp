@@ -149,7 +149,7 @@ void UCatCharacterMovementComponent::PerformMovement(float DeltaSeconds)
     if (IsMovingOnGround() && MovementExternalForce.Z > -GetGravityZ()*FMath::Max(1.0f,Mass))
     {
         SetMovementMode(MOVE_Falling);
-        if (bAuthority) Body->NotifyGripLiftFromAuthority();
+        if (bAuthority) Body->NotifyExternalLiftFromAuthority();
     }
     const bool bTraction = ActiveDrive.bFishing || ActiveDrive.bConnected || !MovementExternalForce.IsNearlyZero();
     const float Step = bTraction ? FMath::Min(MaxSimulationTimeStep, 1.0f / 120.0f) : MaxSimulationTimeStep;

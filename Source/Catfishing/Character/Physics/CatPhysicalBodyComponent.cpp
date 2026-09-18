@@ -534,21 +534,21 @@ double UCatPhysicalBodyComponent::GetJumpTractionWeight() const
         ? FMath::Clamp((JumpTractionUntilSeconds-GetWorld()->GetTimeSeconds())/.08,0.0,1.0) : 0.0;
 }
 
-void UCatPhysicalBodyComponent::NotifyGripLiftFromAuthority()
+void UCatPhysicalBodyComponent::NotifyExternalLiftFromAuthority()
 {
     if (!HasAuthority()) return;
     bGrounded = false;
     bPublishJumpAfterPhysics = true;
     // External lift never opens another jump window or propagates a hanging chain.
-    LogState(TEXT("physics_body_grip_lift"),TEXT("GripForceExceedsWeight"));
+    LogState(TEXT("physics_body_external_lift"),TEXT("ExternalForceExceedsWeight"));
 }
 
-void UCatPhysicalBodyComponent::AddExternalImpulseFromAuthority(FVector ImpulseKgCmS)
+void UCatPhysicalBodyComponent::AddExternalImpulseFromAuthority(FVector ImpulseKgCmS, bool bAllowGroundLift)
 {
 	if (!HasAuthority() || ImpulseKgCmS.ContainsNaN()) return;
 	if (CharacterMovement)
 	{
-		if (CharacterMovement->IsMovingOnGround()) ImpulseKgCmS.Z = 0;
+		if (CharacterMovement->IsMovingOnGround() && !bAllowGroundLift) ImpulseKgCmS.Z = 0;
 		CharacterMovement->QueueExternalImpulse(ImpulseKgCmS);
 	}
 	else if (Body) Body->AddImpulse(ImpulseKgCmS);

@@ -190,4 +190,35 @@ bool FCatCMCTractionSubstepTest::RunTest(const FString& Parameters)
     return !HasAnyErrors();
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatCMCExplicitImpulseLiftTest,
+    "Catfishing.CMC.Runtime.ExternalImpulseLiftRequiresOptIn",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FCatCMCExplicitImpulseLiftTest::RunTest(const FString&)
+{
+    for (const float Dt : {1.f/60,.05f,.12f})
+    {
+        CatPhysicalTest::FScene Scene;
+        if (!Scene.Initialize(this)) return false;
+        auto* Cat=Scene.SpawnCat(FVector(0,0,20));
+        Scene.Step(30);
+        auto* Body=Cat->GetPhysicalBodyComponent();
+        auto* Movement=Cat->GetCharacterMovement();
+        const FVector Start=Cat->GetActorLocation();
+        Body->AddExternalImpulseFromAuthority(FVector(0,0,1200));
+        Scene.World.TickTestWorld(Dt);
+        TestTrue(TEXT("既有调用默认丢弃地面向上冲量"),Movement->IsMovingOnGround() && FMath::Abs(Cat->GetActorLocation().Z-Start.Z)<1);
+        Body->AddExternalImpulseFromAuthority(FVector(1800,0,1200),true);
+        double Peak=0;
+        for(int32 I=0;I<FMath::CeilToInt(2.f/Dt);++I)
+        {
+            Scene.World.TickTestWorld(Dt);
+            Peak=FMath::Max(Peak,Cat->GetActorLocation().Z-Start.Z);
+        }
+        TestTrue(TEXT("显式冲量在普通和慢帧都产生真实腾空"),Peak>20);
+        TestTrue(TEXT("击飞后沿原重力重新落地"),Movement->IsMovingOnGround());
+        TestEqual(TEXT("外力离地不授予主动跳跃牵引窗口"),Body->GetJumpTractionWeight(),0.0);
+        AddInfo(FString::Printf(TEXT("Event=cmc_impulse_lift_verified Dt=%.3f PeakCm=%.2f TravelCm=%.2f"),Dt,Peak,FVector::Dist2D(Start,Cat->GetActorLocation())));
+    }
+    return !HasAnyErrors();
+}
 #endif
