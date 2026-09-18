@@ -20,13 +20,13 @@
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatShopWorldCheckpointTest,
 	"Catfishing.Unit.Save.MultiStorageFishTierWalletWorldColdDiskRoundTrip",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
-
+// 冷读档回归：源世界保存真实库存、道具余额与团队已购数，销毁后从磁盘恢复；同时核对原有鱼护、鱼重、公款和世界进度。
 bool FCatShopWorldCheckpointTest::RunTest(const FString& Parameters)
 {
 	const FName SlotId(*FGuid::NewGuid().ToString(EGuidFormats::Digits));
 	const FString SlotName = UCatSaveSubsystem::MakeRunSlotFileName(SlotId);
 	struct FCleanup { FString Slot; ~FCleanup() { UGameplayStatics::DeleteGameInSlot(Slot, 0); } } Cleanup{SlotName};
-	FGuid FishId, GuardItemId, GuardFishId;
+	FGuid FishId, GuardItemId, GuardFishId, WaterItemId;
 	FName RackName, StoreName, TankName, GuardName;
 	const FVector GuardSavedLocation(120, 230, 340);
 	{
@@ -52,6 +52,12 @@ bool FCatShopWorldCheckpointTest::RunTest(const FString& Parameters)
 		if (!TestNotNull(TEXT("formal rod"), Rod) || !TestNotNull(TEXT("formal bait"), Bait)) return false;
 		TestTrue(TEXT("rack owns rod"), Rack->GetInventoryComponent()->AddItemDefinition(Rod, 1));
 		TestTrue(TEXT("store owns bait"), Store->GetInventoryComponent()->AddItemDefinition(Bait, 3));
+		auto* Water = LoadObject<UCatInventoryItemDefinition>(nullptr, TEXT("/Game/Catfishing/Data/Items/Item_WaterSprayer.Item_WaterSprayer"));
+		auto* Net = LoadObject<UCatInventoryItemDefinition>(nullptr, TEXT("/Game/Catfishing/Data/Items/Item_CastNet.Item_CastNet"));
+		if (!Water || !Net || !Store->GetInventoryComponent()->AddItemDefinition(Water, 1)) return false;
+		for (auto* Item : Store->GetInventoryComponent()->GetAllItems()) if (Item->GetItemDefinition() == Water)
+		{ WaterItemId = Item->GetItemInstanceId(); TestTrue(TEXT("保存前剩余两次水量"), Item->SetRemainingResourceFromAuthority(2)); }
+		TestTrue(TEXT("保存前团队已购买一件网"), Shop->RestoreRunPurchaseCountsFromAuthority({{Net->ItemId, 1}}));
 		auto* Guard = World->SpawnActor<ACatFishGuardActor>();
 		Guard->SetActorLocation(GuardSavedLocation);
 		GuardName = Guard->GetFName();
@@ -128,6 +134,11 @@ bool FCatShopWorldCheckpointTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("store role survives"), Store->GetInventoryComponent()->GetTeamStorageRole(), ECatTeamStorageRole::SupplyStore);
 	TestEqual(TEXT("rod survives"), Rack->GetInventoryComponent()->CountVisibleInventoryQuantityByItemId(37), 1);
 	TestEqual(TEXT("bait survives"), Store->GetInventoryComponent()->CountVisibleInventoryQuantityByItemId(4), 3);
+	const int32 WaterSlot = Store->GetInventoryComponent()->FindInventorySlotIndexFromInstanceId(WaterItemId);
+	if (!TestTrue(TEXT("湿毛器身份冷读档保留"), WaterSlot != INDEX_NONE)) return false;
+	TestEqual(TEXT("冷读档不把水量补满"), Store->GetInventoryComponent()->GetInventoryEntryAtSlot(WaterSlot)->Instance->GetRemainingResource(), 2);
+	auto* Net = LoadObject<UCatInventoryItemDefinition>(nullptr, TEXT("/Game/Catfishing/Data/Items/Item_CastNet.Item_CastNet"));
+	TestEqual(TEXT("冷读档保留团队渔网已购数"), World->GetSubsystem<UCatShopEconomyService>()->GetRunPurchaseCounts().FindRef(Net->ItemId), 1);
 	TestEqual(TEXT("tier survives"), Tank->GetCapacityTier(), 2);
 	TestEqual(TEXT("thirty real slots survive"), Tank->GetFishInventoryComponent()->GetInventorySlotCount(), 30);
 	const int32 FishSlot = Tank->GetFishInventoryComponent()->FindInventorySlotIndexFromInstanceId(FishId);

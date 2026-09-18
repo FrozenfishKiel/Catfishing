@@ -69,6 +69,9 @@ class CATFISHING_API ACatfishingGameState : public AGameStateBase, public IAbili
 {
 	GENERATED_BODY()
 public:
+	/** 物品能力确认且付费后向全队发布喊话；可靠广播只承载显示文本，不允许客户端请求调用。 */
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_HornAnnouncement(const FString& Speaker, const FString& Message, FGuid RequestId);
 	/** 构造 GameState 的公开复制组件和唯一 Run ASC/稳定属性集；Owner/Avatar 在组件初始化后绑定为本 GameState。 */
 	ACatfishingGameState();
 	/** 本局公共板子的唯一容器；默认子对象，不要求 Blueprint 额外配字段。 */
@@ -117,7 +120,7 @@ public:
 	FCatFishSpeciesDiscoveryChanged OnFishSpeciesDiscoveryChanged;
 
 	/**
-	 * 声明：把一次「全场都该听见」的钓鱼信号发给每一个客户端（铃铛漂咬钩铃响）。
+	 * 铃铛漂咬钩信号需要送达远处队友，因此由始终网络相关的 GameState 承载全场广播。
 	 * 为什么挂在 GameState 上：角色的 NetMulticast 只发给该角色网络相关的客户端，湖对岸的猫收不到；
 	 *      GameState 对所有客户端恒相关，是这条「不受距离衰减」的唯一可靠载体。
 	 * 边界：它只投递「在哪里、响了什么」，具体播什么声音、衰减怎么配全在表现层；服务器不据此推进任何玩法。

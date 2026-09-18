@@ -13,7 +13,7 @@ SOURCE=PROJECT/'SourceArt/Props/Whip'
 DEST='/Game/Catfishing/Items/Whip'
 ITEM='/Game/Catfishing/Data/Items/Item_Whip'
 CATALOG='/Game/Catfishing/Data/Items/DT_ItemCatalog'
-ITEM_ID=44
+ITEM_ID=51
 LIB=unreal.EditorAssetLibrary
 TOOLS=unreal.AssetToolsHelpers.get_asset_tools()
 
@@ -172,7 +172,7 @@ if os.environ.get('WHIP_VERIFY_ONLY')!='1':
     rows=json.loads(unreal.DataTableFunctionLibrary.export_data_table_to_json_string(table))
     existing=next((r for r in rows if r['ItemId']==ITEM_ID),None)
     path=ITEM+'.Item_Whip'
-    require(existing is None or existing['ItemDefinition']==path,'Item 44 already belongs to another definition')
+    require(existing is None or existing['ItemDefinition']==path,'Item '+str(ITEM_ID)+' already belongs to another definition')
     before=[dict(r) for r in rows if r['ItemId']!=ITEM_ID]
     if existing is None: rows.append({'Name':str(ITEM_ID),'ItemId':ITEM_ID,'ItemDefinition':path})
     require(unreal.DataTableFunctionLibrary.fill_data_table_from_json_string(table,json.dumps(rows)),'Catalog update failed')

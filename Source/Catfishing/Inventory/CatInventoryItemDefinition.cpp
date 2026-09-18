@@ -5,6 +5,12 @@
 #include "Misc/DataValidation.h"
 #endif
 
+namespace CatItemTags
+{
+	UE_DEFINE_GAMEPLAY_TAG(Fish, "Item.Category.Fish");
+	UE_DEFINE_GAMEPLAY_TAG(Tool, "Item.Category.Tool");
+}
+
 namespace CatInventoryActionTags
 {
 	UE_DEFINE_GAMEPLAY_TAG(Use, "Inventory.Action.Use");

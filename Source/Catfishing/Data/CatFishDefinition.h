@@ -196,6 +196,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Distribution")
 	FName RarityTierId = NAME_None;
 
+	/** 是否接受稀有鱼概率加成；策划按鱼种设置，选择器用执行者 GAS 倍率调整权重后统一归一化。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Distribution")
+	bool bReceivesRarityBonus = false;
+
 	/** 该鱼可出现的 WaterRegion ID；钓点不是机制字段，空数组表示未配置。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Distribution")
 	TArray<FName> RegionIds;

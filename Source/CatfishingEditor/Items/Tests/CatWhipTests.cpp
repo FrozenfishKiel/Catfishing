@@ -39,8 +39,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatWhipAssetTest,"Catfishing.Editor.Whip.Asset
     EAutomationTestFlags::EditorContext|EAutomationTestFlags::ProductFilter)
 bool FCatWhipAssetTest::RunTest(const FString&)
 {
-    const auto* Item=GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(44);
-    if (!TestNotNull(TEXT("44号皮鞭正式目录"),Item)) return false;
+    const auto* Item=GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(51);
+    if (!TestNotNull(TEXT("51号皮鞭正式目录"),Item)) return false;
     const auto* Config=Item->FindFragment<UCatWhipUseFragment>();
     if (!TestNotNull(TEXT("GAS来源配置"),Config)) return false;
     TestTrue(TEXT("使用配置有效"),Config->IsRuntimeReady());
@@ -216,7 +216,7 @@ private:
         }
         auto* Pickup=Server->SpawnActor<ACatWhipActor>(Cls,Attacker->GetActorLocation()+FVector(30,0,20),FRotator::ZeroRotator);
         if (!Test->TestTrue(TEXT("正式拾取Actor发放同一实物"),Pickup && Pickup->Interact_Implementation(Attacker->GetController(),FGuid::NewGuid()))) return true;
-        for (const auto& E:Inv->GetInventoryEntries()) if(E.Instance && E.Instance->GetItemId()==44) ItemId=E.Instance->GetItemInstanceId();
+        for (const auto& E:Inv->GetInventoryEntries()) if(E.Instance && E.Instance->GetItemId()==51) ItemId=E.Instance->GetItemInstanceId();
         if (!Test->TestTrue(TEXT("拾取形成有效实例GUID"),ItemId.IsValid())) return true;
         Transition(1); return false;
     }

@@ -196,9 +196,26 @@ TArray<FCatShopTransactionRecord> UCatShopEconomyService::GetTransactionLedgerSn
 	return TransactionLedger;
 }
 
+// 额度读取流程：以加载前汇总为起点，只累加本世界已提交的购买记录；售鱼和失败订单不进入数量。
+TMap<int32, int32> UCatShopEconomyService::GetRunPurchaseCounts() const
+{
+	TMap<int32, int32> Counts = RestoredPurchaseCounts;
+	for (const auto& Record : TransactionLedger)
+		if (Record.bPurchase && Record.ItemId > 0 && Record.PurchaseQuantity > 0)
+			Counts.Add(Record.ItemId, static_cast<int32>(FMath::Min<int64>(MAX_int32, int64(Counts.FindRef(Record.ItemId)) + Record.PurchaseQuantity)));
+	return Counts;
+}
+// 恢复流程：只在服务器尚无新成交时接受完整历史汇总；先校验全部条目再替换，失败不留下半份额度。
+bool UCatShopEconomyService::RestoreRunPurchaseCountsFromAuthority(const TMap<int32, int32>& Counts)
+{
+	if (!GetWorld() || GetWorld()->GetNetMode() == NM_Client || bTransactionInProgress || !TransactionLedger.IsEmpty()) return false;
+	for (const auto& Pair : Counts) if (Pair.Key <= 0 || Pair.Value < 0) return false;
+	RestoredPurchaseCounts = Counts; return true;
+}
+
 // 整车报价流程：
 // 1. 先校验请求身份、来源摊位和购物车行，再合并重复 EntryId，保证库存与价格只算一次聚合数量。
-// 2. 逐行读取服务器当前货架目录和库存，计算本行小计、交付数量和整车总价；客户端传来的价格或数量倍率一律不用。
+// 2. 逐行读取服务器当前货架目录和库存，计算本行小计、交付数量和整车总价；按本局已购加本车累计检查定义限购，客户端价格或倍率一律不用。
 // 3. 最后按服务器当前团队余额整体裁决；客户端钱包快照不参与，任何一行库存不足、目录缺失或总价溢出都会让整车拒绝。
 bool UCatShopEconomyService::ResolveCatalogCartForAuthority(const FCatShopCartCommand& Command,
 	const UCatShopInventoryComponent* ShopInventory, FCatShopResolvedCart& OutResolved,
@@ -245,6 +262,7 @@ bool UCatShopEconomyService::ResolveCatalogCartForAuthority(const FCatShopCartCo
 	OutResolved.Command.Lines = NormalizedLines;
 	OutResolved.Lines.Reserve(NormalizedLines.Num());
 	int64 TotalPrice = 0;
+	TMap<int32, int32> PurchasedCounts = GetRunPurchaseCounts();
 	for (const FCatShopCartLineCommand& Line : NormalizedLines)
 	{
 		FCatShopCatalogEntry Entry;
@@ -290,6 +308,15 @@ bool UCatShopEconomyService::ResolveCatalogCartForAuthority(const FCatShopCartCo
 			return false;
 		}
 		FCatShopResolvedCartLine& ResolvedLine = OutResolved.Lines.AddDefaulted_GetRef();
+		const auto* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition(Entry.ItemId);
+		const int64 TotalPurchased = int64(PurchasedCounts.FindRef(Entry.ItemId)) + DeliveryQuantity;
+		if (Definition && Definition->TeamPurchaseLimitPerRun > 0 && TotalPurchased > Definition->TeamPurchaseLimitPerRun)
+		{
+			OutError = ECatDomainCommandError::CapacityExceeded;
+			OutResolved = FCatShopResolvedCart(); OutResolved.Wallet = GetWalletSnapshot();
+			OutResolved.FailureReason = TEXT("TeamRunPurchaseLimit"); return false;
+		}
+		PurchasedCounts.Add(Entry.ItemId, static_cast<int32>(FMath::Min<int64>(TotalPurchased, MAX_int32)));
 		ResolvedLine.Entry = Entry;
 		ResolvedLine.CartCount = Line.CartCount;
 		ResolvedLine.DeliveryQuantity = static_cast<int32>(DeliveryQuantity);
@@ -1010,6 +1037,7 @@ bool UCatShopEconomyService::ReopenCommandsForDebugForceNextDay()
 // 合法起始余额仍由 GameState ASC 播种，这里只保留版本、运行 gate 和收购表引用。
 void UCatShopEconomyService::LoadRuntimeEconomyFromSettings()
 {
+	RestoredPurchaseCounts.Reset();
 	WalletRevision = 0;
 	TransactionLedger.Reset();
 	TerminalCache.Reset();

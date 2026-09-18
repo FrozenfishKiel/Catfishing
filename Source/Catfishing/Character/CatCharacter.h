@@ -10,6 +10,7 @@ class UAbilitySystemComponent;
 class UCatAbilitySystemComponent;
 class UCatSurvivalAttributeSet;
 class UCatGrowthAttributeSet;
+class UCatItemBonusAttributeSet;
 class UCatItemAbilityComponent;
 class UCatConditionComponent;
 class UCatConditionPresentationComponent;
@@ -197,6 +198,8 @@ private:
 
 	/** 成长 GE 的临时输入；ASC 持有它，经验余额仍只存在 Growth 快照中。 */
 	UPROPERTY() TObjectPtr<UCatGrowthAttributeSet> GrowthAttributes;
+	/** 本身体由 GE 聚合的物品结算加成；ASC 持有，概率及体力结算读取，随 Pawn 结束回收。 */
+	UPROPERTY() TObjectPtr<UCatItemBonusAttributeSet> ItemBonusAttributes;
 	/** 物品来源能力的授予接线；随身体销毁，不保存另一份库存。 */
 	UPROPERTY(VisibleAnywhere, Category="Abilities") TObjectPtr<UCatItemAbilityComponent> ItemAbilities;
 

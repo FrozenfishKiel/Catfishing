@@ -53,7 +53,7 @@ ACatFishGuardActor* UCatFishGuardInventoryWidget::ResolveGroundedGuard() const
 	return IsValid(Guard) && !Guard->IsActorBeingDestroyed() && Guard->IsGrounded() && Guard->GetFishInventoryComponent() == Inventory ? Guard : nullptr;
 }
 
-// 刷新全部出售流程：先判定买家范围，再逐条检查每条鱼可报价并计算总价；任何异常都禁用整批交易，避免只卖部分鱼。
+// 刷新全部出售流程：先判定买家范围，跳过仅有鱼类标签的道具，再检查实物鱼报价并计算总价；实物鱼异常时禁用整批交易。
 void UCatFishGuardInventoryWidget::RefreshSellAllAction()
 {
 	ACatFishGuardActor* Guard = ResolveGroundedGuard();
@@ -66,6 +66,9 @@ void UCatFishGuardInventoryWidget::RefreshSellAllAction()
 		{
 			if (!Entry.Instance && Entry.StackCount == 0) { continue; }
 			UCatFishInventoryItemInstance* Fish = Cast<UCatFishInventoryItemInstance>(Entry.Instance); int32 Price = 0;
+			// 混合分类允许假鱼占格，但没有实物鱼能力的道具不参与报价，也不阻止出售其他真鱼。
+			if (Entry.Instance && !Fish && Entry.Instance->GetItemDefinition()
+				&& !Cast<UCatFishDefinition>(Entry.Instance->GetItemDefinition())) continue;
 			if (!Fish || Entry.StackCount != 1 || !Fish->GetItemInstanceId().IsValid() || !Buyer->TryAppraiseFish(Fish, Price)) { bAllQuoted = false; continue; }
 			++FishCount; TotalPrice += Price;
 		}
@@ -85,7 +88,7 @@ void UCatFishGuardInventoryWidget::SetSellAllActionVisible(const bool bVisible)
 	if (SellAllFishPriceText) { SellAllFishPriceText->SetVisibility(ActionVisibility); if (!bVisible) { SellAllFishPriceText->SetText(FText::GetEmpty()); } }
 }
 
-// 全部出售流程：遍历当前地面鱼护的正式库存并收集唯一 ID；发现异常条目时不提交部分集合。
+// 全部出售流程：遍历地面鱼护，只收集实物鱼的唯一 ID，鱼形道具留在原格；实物鱼身份或数量异常时不提交部分集合。
 void UCatFishGuardInventoryWidget::HandleSellAllClicked()
 {
 	if (PendingCommandRequestId.IsValid()) { return; }
@@ -97,6 +100,8 @@ void UCatFishGuardInventoryWidget::HandleSellAllClicked()
 	{
 		if (!Entry.Instance && Entry.StackCount == 0) { continue; }
 		UCatFishInventoryItemInstance* Fish = Cast<UCatFishInventoryItemInstance>(Entry.Instance);
+		if (Entry.Instance && !Fish && Entry.Instance->GetItemDefinition()
+			&& !Cast<UCatFishDefinition>(Entry.Instance->GetItemDefinition())) continue;
 		if (!Fish || Entry.StackCount != 1 || !Fish->GetItemInstanceId().IsValid()) { RefreshSellAllAction(); return; }
 		FishInstanceIds.AddUnique(Fish->GetItemInstanceId());
 	}

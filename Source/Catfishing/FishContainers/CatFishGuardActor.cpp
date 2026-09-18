@@ -1,5 +1,6 @@
 ﻿#include "FishContainers/CatFishGuardActor.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "Inventory/Fragments/CatItemContainerOpenFragment.h"
 #include "AbilitySystem/Tags/CatStateTags.h"
 
 #include "Character/CatCharacter.h"
@@ -15,6 +16,8 @@
 #include "Items/Fish/CatFishPickupActor.h"
 #include "Inventory/CatFishOnlyInventoryComponent.h"
 #include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventoryStatics.h"
+#include "Inventory/CatInventorySettings.h"
 #include "Inventory/CatFishGuardInventoryItemInstance.h"
 #include "Inventory/CatInventoryItemDefinition.h"
 #include "FishContainers/CatFishPickupSettings.h"
@@ -95,7 +98,8 @@ void ACatFishGuardActor::OnCarryReleased(ACatCharacter* Character, bool bThrow)
 }
 
 
-// 拾取流程：依次验证地面、触达、身体、单嘴占用和配置，再让正式背包整件收货；各拒绝原因落盘，满包不变，成功由宿主同步附着原鱼护。
+// 拾取流程：依次验证地面、触达、身体、单嘴占用和配置，再让正式背包整件收货；满包时把原鱼护安全落在角色旁，内部库存不动。
+// 正常入库由宿主同步附着原鱼护；附着失败保留原有回滚，不能把这类失败当容量溢出。
 bool ACatFishGuardActor::PickUpFromAuthority(AController* RequestingController, const FGuid RequestId)
 {
 	ACatCharacter* Character = RequestingController ? Cast<ACatCharacter>(RequestingController->GetPawn()) : nullptr;
@@ -147,7 +151,14 @@ bool ACatFishGuardActor::PickUpFromAuthority(AController* RequestingController, 
 	if (!CharacterInventory->TryAddInventoryBatch(Batch, false))
 	{
 		Character->ReleaseMouthCarriedActorFromAuthority(this);
-		return Finish(false, TEXT("InventoryRejected"));
+		FTransform DropTransform;
+		if (CharacterInventory->HasPreparedRemoval()
+			|| !UCatInventoryStatics::FindWorldReleaseTransform(Character, this, ECatInventoryWorldAction::Drop,
+				*GetDefault<UCatInventorySettings>(), DropTransform)) return Finish(false, TEXT("OverflowPositionUnavailable"));
+		SetActorTransform(DropTransform, false, nullptr, ETeleportType::TeleportPhysics);
+		WorldCollision->SetSimulatePhysics(true);
+		ForceNetUpdate();
+		return Finish(true, TEXT("InventoryFullDroppedNearby"));
 	}
 	// 收货设置实例宿主时已通过 OnRep_InventoryOwner 完成既有附着；这里只核对结果，不再执行第二次叼取。
 	if (GetAttachParentActor() != Character || Character->GetMouthCarriedActor() != this)
@@ -379,6 +390,7 @@ bool ACatFishGuardActor::Interact_Implementation(AController* RequestingControll
 	}
 
 	ACatCharacter* Character = Cast<ACatCharacter>(PlayerController->GetPawn());
+	UCatItemContainerOpenFragment::TriggerFirstFromAuthority(FishInventory, Character, RequestId);
 	if (ACatFishPickupActor* CarriedFish = ACatFishPickupActor::FindCarriedFish(Character))
 	{
 		const FCatCaptureCommitResult StoreResult = CarriedFish->StoreInFishGuardFromAuthority(

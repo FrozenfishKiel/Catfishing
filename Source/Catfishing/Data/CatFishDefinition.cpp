@@ -4,10 +4,11 @@
 #include "Inventory/CatFishInventoryItemInstance.h"
 #include "Logging/CatLog.h"
 
-// 鱼定义构造流程：在通用落地动作之外声明食用、叼起与单鱼出售；是否可执行仍按实例、容器和买家当前状态判断。
+// 鱼定义构造流程：声明鱼类身份供容器筛选，再提供食用、叼起与出售动作；动作许可仍读取对应配置和实际实例。
 UCatFishDefinition::UCatFishDefinition(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
+	InventorySemanticTags.AddTag(CatItemTags::Fish);
 	InventoryActions.Insert({CatInventoryActionTags::Use, NSLOCTEXT("CatInventory", "EatFish", "食用"), ECatInventoryActionQuantityMode::Single}, 0);
 	InventoryActions.Add({CatInventoryActionTags::Carry, NSLOCTEXT("CatInventory", "CarryFish", "叼起"), ECatInventoryActionQuantityMode::Single});
 	InventoryActions.Add({CatInventoryActionTags::Sell, NSLOCTEXT("CatInventory", "SellFish", "出售"), ECatInventoryActionQuantityMode::Single});

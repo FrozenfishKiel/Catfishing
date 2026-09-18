@@ -96,7 +96,16 @@ void UCatPhysicalEffortComponent::SettleMovementFromAuthority(const FCatBodyDriv
 	const bool bCanRest = !ASC->HasMatchingGameplayTag(CatStateTags::RecoveryBlocked);
 	const double Recovery = bCanRest ? FMath::Min(Maximum - Before, Settings->RecoveryPerSecond * Seconds) : 0.0;
 
-	const double Requested = FMath::Min(Before, LastResult.StaminaDrain) - Recovery;
+	// 协助者沿当前抓握找正在搏斗的竿；历史贡献名单不能决定当前成本归属。
+	double ItemMultiplier = 1.0;
+	if (Drive.bCooperative && Fishing)
+		if (const auto* Grab = GetOwner()->FindComponentByClass<UCatPhysicsGrabComponent>())
+			for (bool Left : {true, false})
+				if (Grab->IsGripping(Left))
+					if (auto* HeldRod = Cast<ACatFishingRodActor>(Grab->GetGripTarget(Left)))
+						if (auto* HelpedSession = Fishing->FindActiveSessionByRod(HeldRod); HelpedSession && HelpedSession->IsFightRunnerRunning())
+						{ ItemMultiplier = HelpedSession->ResolveItemStaminaCostMultiplier(ASC); break; }
+	const double Requested = FMath::Min(Before, LastResult.StaminaDrain * ItemMultiplier) - Recovery;
 	if (Requested != 0 && !ASC->ApplyFishingStaminaDelta(static_cast<float>(-Requested)))
 	{ LogState(TEXT("physical_effort_rejected"), TEXT("AbilityWriteFailed")); return; }
 	if (GetOwner()->IsActorBeingDestroyed() || !IsValid(ASC)) return;

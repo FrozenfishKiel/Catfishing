@@ -131,6 +131,13 @@ void UCatAbilityInputBindingComponent::HandleAbilityInputTagPressed(const FGamep
 	const bool bPrimary = Rod && Rod->IsPrimaryOperator(Controller ? Controller->PlayerState : nullptr);
 	FPressedRoute Route;
 	auto* ItemController = Cast<ACatfishingPlayerController>(Controller);
+	// 副操作拥有明确能力配置时优先于空手右抓；沿现有按下/松开配对记录，不增加第二套鼠标绑定。
+	if (!bLeft && bHandInput && !bPrimary && ItemController && ItemController->BeginSelectedItemSecondaryUseFromInput())
+	{
+		Route.SelectedItemController = ItemController;
+		PressedRoutes.Add(InputTag, Route);
+		return;
+	}
 	if (bLeft && !bPrimary && ItemController && ItemController->CanUseSelectedBackpackItemFromInput())
 	{
 		Route.SelectedItemController = ItemController;

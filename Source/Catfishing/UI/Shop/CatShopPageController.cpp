@@ -277,6 +277,8 @@ void UCatShopPageController::HandleCampCommandResultReceived(const FCatDomainCom
 		Reason = FText::FromString(TEXT("公款不足，整车未成交"));
 	else if (Result.FailureReason == TEXT("OutOfStock"))
 		Reason = FText::FromString(TEXT("所选商品库存不足，整车未成交"));
+	else if (Result.FailureReason == TEXT("TeamRunPurchaseLimit"))
+		Reason = FText::FromString(TEXT("所选商品已达到本局团队购买上限，整车未成交"));
 	else if (Result.FailureReason == TEXT("DeliveryCapacity"))
 		Reason = FText::FromString(TEXT("公共架或公库容量不足，整车未成交"));
 	else if (Result.FailureReason == TEXT("FacilityUpgradeInvalid"))

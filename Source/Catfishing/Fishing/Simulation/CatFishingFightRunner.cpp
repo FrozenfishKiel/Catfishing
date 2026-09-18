@@ -370,7 +370,9 @@ bool UCatFishingFightRunner::ApplyOperatorStaminaChanges(const FCatFightStepResu
 			MovementDrain += Result.StaminaDrain;
 		}
 	const double RodDrain = bFreeEffort ? 0.0 : Step.GetRodActionStaminaDrain();
-	const double RequestedDrain = MovementDrain + RodDrain;
+	// 一场减耗由实际参加的会话认领；仅修正成本，不放大放线恢复。
+	const double ItemMultiplier = Session.IsValid() ? Session->ResolveItemStaminaCostMultiplier(ASC) : 1.0;
+	const double RequestedDrain = (MovementDrain + RodDrain) * ItemMultiplier;
 	if (!FMath::IsFinite(RequestedDrain) || RequestedDrain < 0.0) return false;
 	const double Paid = FMath::Min(FrozenOperatorTotalStamina, RequestedDrain);
 	const bool bRecoveryLoaded = bFrozenOperatorUnderLoad || !Step.RodLineForceNewtons.IsNearlyZero(UE_DOUBLE_SMALL_NUMBER);

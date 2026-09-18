@@ -7,6 +7,7 @@
 
 class UCatInventoryItemInstance;
 class UCatAbilitySystemComponent;
+class UCatHornMessageWidget;
 
 /** 角色物品与 GAS 的授予接线；不拥有库存、不结算效果，负责来源能力和复制未就绪时的一次待处理输入。 */
 UCLASS()
@@ -25,7 +26,8 @@ public:
 	/** 服务器根据当前随身实例授予或回收能力；仅配有使用片段的物品参与。 */
 	void RefreshGrantedAbilities();
 	/** 本地使用入口；冻结来源并激活对应 Spec，共享容器使用角色常驻的食用能力。 */
-	bool RequestUse(UCatInventoryComponent* Inventory, FGuid ItemId, FGuid RequestId, bool bContinuousInput = false);
+	bool RequestUse(UCatInventoryComponent* Inventory, FGuid ItemId, FGuid RequestId, bool bContinuousInput = false,
+		bool bSecondaryInput = false, const FString& Message = FString());
 	/** 本地嘴叼鱼入口；固定当前世界鱼身份，沿角色常驻能力传输，不创建背包副本。 */
 	bool RequestUseCarriedFish(ACatFishPickupActor* Fish, FGuid RequestId);
 	/** 能力激活时读取一次本机输入；Spec 不匹配时拒绝，防止能力间串来源。 */
@@ -33,6 +35,8 @@ public:
 	/** 松开或取消本地冻结的来源输入；通过同一 Spec 的标准 GAS 事件传递，不再发物品专用 RPC。 */
 	void ReleaseUseInput(bool bCancelled);
 private:
+	/** 本地文字确认窗口；只允许同时打开一个，组件退出时关闭并释放模态输入。 */
+	UPROPERTY() TObjectPtr<UCatHornMessageWidget> MessageWindow;
 	/** 本次本地按住的来源能力；激活前写入，松开清除，永远不通过新选中格寻找。 */
 	FGameplayAbilitySpecHandle HeldInputHandle;
 	/** 观察中的真实背包；只用于解绑通知，不保存库存副本。 */

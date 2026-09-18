@@ -1,5 +1,9 @@
 ﻿#include "Fishing/CatFishingSession.h"
 #include "Growth/CatGrowthComponent.h"
+#include "AbilitySystem/Tags/CatStateTags.h"
+#include "Inventory/Fragments/CatItemDropFragment.h"
+#include "AbilitySystem/Attributes/CatItemBonusAttributeSet.h"
+#include "AbilitySystem/Effects/CatItemEffects.h"
 #include "AbilitySystem/Effects/CatFishingScoopCooldownEffect.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
@@ -1267,10 +1271,15 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 	FrozenSelectionContext.StrengthPerKilogram = FightBalance
 		? FightBalance->StrengthPerKilogram : 0.0;
 	FrozenSelectionContext.CatchWeightBonus = GetFisherGrowthMagnitude(ECatGrowthOptionId::CatchWeight);
+	UAbilitySystemComponent* SelectionASC = FisherCharacter.IsValid() ? FisherCharacter->GetAbilitySystemComponent() : nullptr;
+	if (SelectionASC && SelectionASC->HasAttributeSetForAttribute(UCatItemBonusAttributeSet::GetRareFishWeightMultiplierAttribute()))
+		FrozenSelectionContext.RareFishWeightMultiplier = SelectionASC->GetNumericAttribute(UCatItemBonusAttributeSet::GetRareFishWeightMultiplierAttribute());
 	FrozenSelectionContext.RandomSeed = static_cast<int32>(CurrentBiteRandomSeed);
 	const UCatFishCatalogSettings* Catalog = GetDefault<UCatFishCatalogSettings>();
 	// 按冻结上下文从鱼类图鉴中选出本次的鱼种（含权重/稀有度/条件判定，具体算法在 Catalog 内部）。
-	FrozenSelectionResult = Catalog->SelectRuntimeDefinition(FrozenSelectionContext);
+	const auto* SpawnWater = World->GetSubsystem<UCatWaterQuerySubsystem>();
+	const bool bSuppressed = SpawnWater && SpawnWater->IsFishSpawnSuppressed(AttemptSnapshot.ServerCorrectedLandingWorldPoint, AttemptSnapshot.WaterRegion);
+	FrozenSelectionResult = bSuppressed ? FCatFishSelectionResult{} : Catalog->SelectRuntimeDefinition(FrozenSelectionContext);
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_fish_selection_resolved SessionId=%s Selected=%s FishId=%s FightBalanceId=%s WeightKg=%.3f BaseFishStrength=%.3f CatConversionPerKg=%.3f EligibleCandidates=%d PositiveWeightCandidates=%d NormalizedProbability=%.6f ChumClass=%d ClassProbability=%.6f TimeFilter=%s WeatherFilter=%s TimeOfDay=%s Weather=%s ActivePlayers=%d ChumFields=%d FromBasePool=%d RandomSeed=%d Region=%s World=%s NetMode=%d Authority=1 LocalRole=%d"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphensLower),
@@ -1321,6 +1330,8 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 	Snapshot.FishFightStaminaRemaining = FishFightStaminaInitial;
 	Snapshot.NormalizedFishStamina = FishFightStaminaInitial > 0.0 ? 1.0 : 0.0;
 	SelectionResolution = ECatFishSelectionResolution::Selected;
+	// 已冻结的鱼不会再因 Buff 改变；只在成功生成这次选择后耗尽下一条鱼效果，空钩不浪费。
+	if (SelectionASC) SelectionASC->RemoveActiveEffectsWithGrantedTags(FGameplayTagContainer(CatItemEffectTags::NextFish));
 	Result.Resolution = SelectionResolution;
 	Result.ItemId = SelectedDefinition->ItemId;
 	Result.Error = ECatDomainCommandError::None;
@@ -2216,7 +2227,11 @@ bool ACatFishingSession::SpawnLandedFishPickupFromAuthority(const FVector& Surfa
 		static_cast<int32>(World->GetNetMode()),
 		*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
 	RecordRunCollectionCaptureFromAuthority(*Pickup);
+	// 终态会释放持竿者引用；先冻结执行者，奖励仍在终态提交后发放，避免重入再结算。
+	ACatCharacter* CaptureExecutor = FisherCharacter.Get();
 	FinalizeSession(ECatFishingPhase::Resolved, ECatFishingOutcome::Landed, DiagnosticReason);
+	if (const auto* Drops = FishDefinition->FindFragment<UCatItemDropFragment>())
+		Drops->AwardCaptureDropsFromAuthority(CaptureExecutor, Pickup->GetPresentationState().FishInstanceId);
 	return true;
 }
 
@@ -2536,6 +2551,9 @@ bool ACatFishingSession::SpawnScoopedFishPickupFromAuthority(ACatCharacter* Scoo
 		Snapshot.FishFightStaminaRemaining);
 	FinalizeSession(ECatFishingPhase::Resolved, ECatFishingOutcome::Caught,
 		TEXT("Scoop transferred hooked fish directly to mouth carry"));
+	// 抄起事件由抄网者完成，因此额外奖励读取抄网者属性并发给抄网者，不沿用原持竿者。
+	if (const auto* Drops = FishDefinition->FindFragment<UCatItemDropFragment>())
+		Drops->AwardCaptureDropsFromAuthority(ScoopingCharacter, Pickup->GetPresentationState().FishInstanceId);
 	return IsTerminal() && Snapshot.Phase == ECatFishingPhase::Resolved
 		&& Snapshot.Outcome == ECatFishingOutcome::Caught
 		&& ACatFishPickupActor::FindCarriedFish(ScoopingCharacter) == Pickup;
@@ -3044,6 +3062,7 @@ bool ACatFishingSession::IsTerminal() const
 // 既不补发捕获事务，也不回满任何人的搏斗体力。
 void ACatFishingSession::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	RefreshItemFightState(true);
 	GetWorldTimerManager().ClearTimer(CancelHoldTimer);
 	if (FightRunner) FightRunner->Stop();
 	StopWaitingBiteClock();
@@ -3129,9 +3148,66 @@ void ACatFishingSession::PublishSnapshot(const ECatFishingSnapshotMutation Mutat
 {
 	if (HasAuthority())
 	{
+		RefreshItemFightState();
 		Snapshot.AdvanceVersion(Mutation);
 		ForceNetUpdate();
 		NotifySnapshotChanged();
+	}
+}
+
+// 减耗绑定流程：只有非终局服务器会话能认领；主控进入真咬或帮手首次支付时冻结 GE 句柄并标记归属，离手不重置。
+// 另一场已认领的效果不参与本场成本；没有物品属性集的历史测试宿主保持倍率 1。
+double ACatFishingSession::ResolveItemStaminaCostMultiplier(UCatAbilitySystemComponent* ASC)
+{
+	if (!HasAuthority() || IsTerminal() || !ASC) return 1.0;
+	if (!FightItemEffects.Contains(ASC) && ASC->HasMatchingGameplayTag(CatItemEffectTags::NextFight))
+	{
+		if (ASC->HasMatchingGameplayTag(CatItemEffectTags::FightBound)) return 1.0;
+		const auto Handles = ASC->GetActiveEffects(FGameplayEffectQuery::MakeQuery_MatchAnyOwningTags(FGameplayTagContainer(CatItemEffectTags::NextFight)));
+		if (!Handles.IsEmpty())
+		{
+			FightItemEffects.Add(ASC, Handles);
+			ASC->SetStateTagsFromAuthority(TEXT("Item.FightBound"), FGameplayTagContainer(CatItemEffectTags::FightBound));
+			UE_LOG(LogCatFishing, Log, TEXT("Event=item_fight_bound SessionId=%s Actor=%s Effects=%d World=%s NetMode=%d Authority=1"),
+				*Snapshot.FishingSessionId.ToString(), *GetNameSafe(ASC->GetAvatarActor()), Handles.Num(), *GetNameSafe(GetWorld()), GetNetMode());
+		}
+	}
+	const double Value = ASC->HasAttributeSetForAttribute(UCatItemBonusAttributeSet::GetStaminaCostMultiplierAttribute())
+		? ASC->GetNumericAttribute(UCatItemBonusAttributeSet::GetStaminaCostMultiplierAttribute()) : 1.0;
+	return FMath::IsFinite(Value) ? FMath::Max(0.0, Value) : 1.0;
+}
+// 阶段同步流程：真咬至终局之间只给当前主控加禁用道具标签，换人撤销旧身体的本来源。
+// 终局和 EndPlay 共用同一清理，移除本场记录的减耗 GE；不改体力余额，也不消费尚未参加的效果。
+void ACatFishingSession::RefreshItemFightState(const bool bEnding)
+{
+	if (!HasAuthority()) return;
+	const bool bFinished = bEnding || IsTerminal();
+	const bool bBlocking = !bFinished && (Snapshot.Phase == ECatFishingPhase::TrueBiteWindow
+		|| Snapshot.Phase == ECatFishingPhase::HookedFight || Snapshot.Phase == ECatFishingPhase::NearShore
+		|| Snapshot.Phase == ECatFishingPhase::AutoHauling || Snapshot.Phase == ECatFishingPhase::ExhaustedReel);
+	auto* NewOwner = bBlocking && FisherCharacter.IsValid() ? FisherCharacter->GetCatAbilitySystemComponent() : nullptr;
+	const FName Source(*FString::Printf(TEXT("Fishing.%s"), *Snapshot.FishingSessionId.ToString()));
+	if (FightTagOwner.Get() != NewOwner)
+	{
+		if (auto* OldOwner = FightTagOwner.Get()) OldOwner->SetStateTagsFromAuthority(Source, {});
+		FightTagOwner = NewOwner;
+		if (NewOwner)
+		{
+			NewOwner->SetStateTagsFromAuthority(Source, FGameplayTagContainer(CatStateTags::FishingFight));
+			ResolveItemStaminaCostMultiplier(NewOwner);
+		}
+	}
+	if (bFinished)
+	{
+		for (const auto& Pair : FightItemEffects)
+			if (auto* ASC = Pair.Key.Get())
+			{
+				for (const auto Handle : Pair.Value) ASC->RemoveActiveGameplayEffect(Handle);
+				ASC->SetStateTagsFromAuthority(TEXT("Item.FightBound"), {});
+				UE_LOG(LogCatFishing, Log, TEXT("Event=item_fight_released SessionId=%s Actor=%s World=%s NetMode=%d Authority=1"),
+					*Snapshot.FishingSessionId.ToString(), *GetNameSafe(ASC->GetAvatarActor()), *GetNameSafe(GetWorld()), GetNetMode());
+			}
+		FightItemEffects.Reset();
 	}
 }
 

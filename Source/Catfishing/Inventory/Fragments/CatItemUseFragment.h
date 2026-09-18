@@ -14,6 +14,18 @@ class CATFISHING_API UCatItemUseFragment : public UCatInventoryItemFragment
 {
 	GENERATED_BODY()
 public:
+	/** 单件物品可容纳的使用资源；零表示无独立资源，湿毛器水量和响响筒次数由实例保存，不能堆叠。 */
+	UPROPERTY(EditDefaultsOnly, Category="使用资源", meta=(ClampMin="0"))
+	int32 ResourceCapacity = 0;
+	/** 每次主操作支付的资源单位；使用成本读取，补水操作不扣此值。 */
+	UPROPERTY(EditDefaultsOnly, Category="使用资源", meta=(ClampMin="1"))
+	int32 ResourceCost = 1;
+	/** 资源耗尽是否消费物品本体；响响筒启用，能补水的湿毛器关闭。 */
+	UPROPERTY(EditDefaultsOnly, Category="使用资源")
+	bool bConsumeWhenEmpty = false;
+	/** 阻止本次使用的角色状态；用于同类 Buff 不重复消费，GA 提交前再次核对。 */
+	UPROPERTY(EditDefaultsOnly, Category="使用")
+	FGameplayTagContainer BlockedStateTags;
 	/** 使用动作的程序实现；拥有物品时授予对应能力，共享容器由同类交互能力读取目标配置。 */
 	UPROPERTY(EditDefaultsOnly, Category="使用", meta=(DisplayName="使用能力"))
 	TSubclassOf<UCatItemGameplayAbility> AbilityClass;

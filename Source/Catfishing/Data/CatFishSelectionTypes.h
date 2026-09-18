@@ -59,6 +59,14 @@ struct FCatFishSelectionContext
 	double StrengthPerKilogram = 0.0;
 	/** 抛竿者成长的重量上浮比例；抽样时夹到本鱼种上限，后续力量与实物共用该重量。 */
 	double CatchWeightBonus = 0.0;
+
+	/** 本次选择冻结的稀有鱼权重倍率；调用方读取 GAS，1 保持基础分布，渔网使用 1。 */
+	UPROPERTY()
+	double RareFishWeightMultiplier = 1.0;
+
+	/** 本次捕获是否排除巨型鱼；渔网置为 true，普通钓鱼保留既有准入规则。 */
+	UPROPERTY()
+	bool bExcludeGiant = false;
 	int32 RandomSeed = 0;
 };
 

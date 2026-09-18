@@ -40,10 +40,16 @@ public:
 	virtual void OnUseCommitted(UCatInventoryItemInstance* ConsumedItem);
 	/** 成本写回实际支付结果；只记录本次能力状态，不是跨系统可变回执对象。 */
 	void SetResourceCommitted(bool bCommitted) const { bResourceCommitted = bCommitted; }
-	/** 按下时由本地输入采样目标；默认自用物品无需目标，目标型能力覆写但不能在这里执行玩法。 */
-	virtual void CaptureTarget(APlayerController* Controller, FCatItemAbilityTargetData& Target) const {}
+	/** 按下时由本地输入冻结视线；自用物品可忽略射线，目标型能力可覆写采样但不能在这里执行玩法。 */
+	virtual void CaptureTarget(APlayerController* Controller, FCatItemAbilityTargetData& Target) const;
+	/** 重查来源视点与方向是否合法；目标型使用只接受角色附近的视线，具体命中由各行为在服务器重算。 */
+	bool ResolveUseRay(FVector& Origin, FVector& Direction) const;
 	/** 行为是否需要等待同一来源的松开事件；瞬时动作不会因按钮松开而被取消。 */
 	virtual bool UsesContinuousInput() const { return false; }
+	/** 是否提供右键副操作；输入路由据此决定使用物品还是保留原右手抓握。 */
+	virtual bool SupportsSecondaryUse() const { return false; }
+	/** 是否需先输入一句话；本地确认后才发起能力，取消不产生服务器成本。 */
+	virtual bool RequiresMessageInput() const { return false; }
 	/** 世界产物与资源需要一同公开时延迟库存通知；领域提交方必须在终态写入后发布。 */
 	virtual bool DefersInventoryCostNotification() const { return false; }
 protected:

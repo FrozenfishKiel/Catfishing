@@ -216,6 +216,8 @@ public:
 
 	/** BeginPlay 时再次刷新槽位；处理蓝图默认值或运行期构造顺序导致的延迟配置。 */
 	virtual void BeginPlay() override;
+	/** 库存退出时停止排队；尚未执行的物品没有扣除，仍由原库存生命周期处理。 */
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	/** 复制声明流程：注册 FastArray 库存列表；实例对象走 registered subobject list，终态缓存和本地通知不复制。 */
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
@@ -341,7 +343,7 @@ public:
 	/** 能力成本消费精确实例并记录终态；默认发布数量变化，关闭通知时调用方须在同步提交完成后发布，重放不再扣量或调用外部效果。 */
 	FCatDomainCommandResult ConsumeAbilityItemFromAuthority(FGuid RequestId, FGuid ItemId, int32 Quantity, bool bPublishChange = true);
 
-	/** 菜单操作的唯一库存命令入口；复核载荷、槽位、访问与定义声明，预占请求后交给 Statics 执行并缓存结果。世界操作成功后通知库存，出售通知沿商店事务发布。 */
+	/** 菜单操作的唯一库存命令入口；复核访问、身份和数量，多件丢弃进入队列，其余立即执行；缓存等待或最终结果，成功后的通知由相应事务发布。 */
 	FCatDomainCommandResult ExecuteItemActionFromAuthority(const FCatInventoryItemUseContext& Context,
 		FGuid ItemInstanceId, FGameplayTag Action, int32 Quantity);
 
@@ -421,6 +423,28 @@ public:
 	bool RestoreTeamStorageRoleFromAuthority(ECatTeamStorageRole Role);
 
 protected:
+	/** 一次已获准的连续丢弃请求；只是重复单件操作，不持有或预扣物品。 */
+	struct FQueuedDrop
+	{
+		/** 发起者弱引用；出队时使用其当前位置，动作切换不影响队列。 */
+		TWeakObjectPtr<ACatCharacter> Character;
+		/** 原物品身份；每次重新找槽位，禁止丢掉后来换入的物品。 */
+		FGuid ItemId;
+		/** 原命令身份；用于最终回执和重复请求缓存。 */
+		FGuid RequestId;
+		/** 尚未执行的单件操作次数；每次出队减一。 */
+		int32 Remaining = 0;
+		/** 已成功丢出的件数；用于最终回执和部分成功日志。 */
+		int32 Succeeded = 0;
+		/** 此请求是否已有单件执行失败；完成时区别全部成功与部分丢出，不回滚已落地物。 */
+		bool bHadFailure = false;
+	};
+	/** 此库存已受理的丢弃请求，后来的请求追加到末尾；与渔网出鱼完全独立。 */
+	TArray<FQueuedDrop> DropQueue;
+	/** 仅驱动库存单件丢弃的定时器，不受能力和角色动作取消影响。 */
+	FTimerHandle DropQueueTimer;
+	/** 执行队首的一次单件丢弃，更新原请求结果，再安排下一次；失败项不扣物品。 */
+	void ExecuteNextQueuedDrop();
 	/** 正在准备离库的请求标识；非空表示这份库存被同步事务占用，普通写入口必须拒绝以保护已核对的槽位。 */
 	FGuid PreparedRemovalRequest;
 	/** 本批将整件移出的原槽位集合；PrepareRemovalFromAuthority 写入，FinishRemovalFromAuthority 读取，取消时只清锁不重建实例。 */

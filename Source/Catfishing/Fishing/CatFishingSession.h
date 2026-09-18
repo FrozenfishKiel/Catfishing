@@ -4,6 +4,7 @@
 #include "Growth/CatGrowthTypes.h"
 #include "GameFramework/Actor.h"
 #include "GameplayTagContainer.h"
+#include "GameplayEffectTypes.h"
 #include "Fishing/CatFishingTypes.h"
 #include "Fishing/CatFishingUseResults.h"
 #include "Data/CatFishSelectionTypes.h"
@@ -13,6 +14,7 @@
 #include "CatFishingSession.generated.h"
 
 class ACatCharacter;
+class UCatAbilitySystemComponent;
 class ACatFishingHookActor;
 class ACatFishPickupActor;
 class UCatEquipmentComponent;
@@ -42,6 +44,8 @@ class CATFISHING_API ACatFishingSession : public AActor
 	friend class FCatFishingR3HoldTest;
 
 public:
+	/** 主控进入真咬及成本消费者实际参加本场时调用；绑定尚未归属的减耗 GE 并返回当前倍率，其他会话已绑定时返回 1。 */
+	double ResolveItemStaminaCostMultiplier(UCatAbilitySystemComponent* AbilitySystem);
 	/** 成长选择后更新已存在的个人等待/完美窗，不重抽鱼或重置机会。 */
 	void RefreshGrowthFromAuthority(const ACatCharacter* Character, ECatGrowthOptionId OptionId, double AppliedDelta);
 	/** 创建唯一 StateTree 组件、开启只读 Snapshot 复制并关闭 Tick。 */
@@ -155,6 +159,12 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	/** 本场认领的实际 GE 句柄；终局精确移除这些效果，不影响后续新加的其他效果。 */
+	TMap<TWeakObjectPtr<UCatAbilitySystemComponent>, TArray<FActiveGameplayEffectHandle>> FightItemEffects;
+	/** 上次拥有本会话搏斗标签的身体；换人时先清旧身体，避免旧主控被永久锁住道具。 */
+	TWeakObjectPtr<UCatAbilitySystemComponent> FightTagOwner;
+	/** 同步主控阶段标签，并在终局或销毁时清理本场道具效果；销毁时强制按终局处理。 */
+	void RefreshItemFightState(bool bEnding = false);
 	friend class FCatGrowthRuntimeConsumersTest;
 	friend class FCatGrowthWearDeliveryTest;
 	friend class FCatRunFishCollectionHandoffTest;

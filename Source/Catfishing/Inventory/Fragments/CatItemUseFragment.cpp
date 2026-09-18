@@ -8,6 +8,10 @@
 // 配置检查流程：先核对非抽象能力、非负数量与前摇，以及效果引用和参数数值，再让能力 CDO 检查该行为支持的字段组合；不检查 GE 内部修饰器。
 bool UCatItemUseFragment::IsRuntimeReady() const
 {
+	if (ResourceCapacity < 0 || ResourceCost < 1 || (ResourceCapacity > 0 && ResourceCost > ResourceCapacity)) return false;
+	// 次数属于单件实例；堆叠合并只有数量语义，会丢失各件剩余次数。
+	const UCatInventoryItemDefinition* Definition = GetTypedOuter<UCatInventoryItemDefinition>();
+	if (ResourceCapacity > 0 && Definition && Definition->GetMaxStackCount() != 1) return false;
 	if (!AbilityClass || AbilityClass->HasAnyClassFlags(CLASS_Abstract) || ConsumeCount < 0 || !FMath::IsFinite(CommitDelay) || CommitDelay < 0.f) return false;
 	for (const auto& Effect : Effects) if (!Effect) return false;
 	for (const auto& Parameter : Magnitudes) if (!Parameter.Key.IsValid() || !FMath::IsFinite(Parameter.Value)) return false;

@@ -177,17 +177,24 @@ void UCatInventoryWidget::BeginInventoryCommand(const FGuid& RequestId)
 	RefreshInventorySlots();
 }
 
-// 回执流程：只消费本页容器级 RequestId；成功或拒绝均显示统一结果文本并重读库存。
+// 回执流程：只消费本页容器级 RequestId；排队时保留关联，最终结果到达后清除并重读库存。
 void UCatInventoryWidget::HandleInventoryCommandResult(const FCatDomainCommandResult& Result)
 {
 	if (!PendingCommandRequestId.IsValid() || Result.RequestId != PendingCommandRequestId) { return; }
-	PendingCommandRequestId.Invalidate(); ShowInventoryActionResult(Result);
+	if (!Result.bPending) PendingCommandRequestId.Invalidate();
+	ShowInventoryActionResult(Result);
 }
 
-// 结果展示流程：使用既有领域回执状态更新文本并刷新 Model；不根据客户端假设修改格子内容。
+// 结果展示流程：先区分正在排队与最终回执，再显示成功或拒绝并刷新 Model；排队只代表受理，不代表已经扣除物品。
 void UCatInventoryWidget::ShowInventoryActionResult(const FCatDomainCommandResult& Result)
 {
-	if (InventoryActionResultText) { InventoryActionResultText->SetText(CatIsAcceptedDomainCommandResult(Result) ? NSLOCTEXT("Catfishing", "InventoryActionSucceeded", "操作成功") : NSLOCTEXT("Catfishing", "InventoryActionRejected", "操作未完成，请重新选择物品")); }
+	if (InventoryActionResultText)
+	{
+		InventoryActionResultText->SetText(Result.bPending ? NSLOCTEXT("Catfishing", "InventoryActionQueued", "正在依次丢弃")
+			: Result.FailureReason == TEXT("PartialDrop") ? NSLOCTEXT("Catfishing", "InventoryDropPartial", "部分物品未能丢出，请检查剩余物品")
+			: CatIsAcceptedDomainCommandResult(Result) ? NSLOCTEXT("Catfishing", "InventoryActionSucceeded", "操作成功")
+			: NSLOCTEXT("Catfishing", "InventoryActionRejected", "操作未完成，请重新选择物品"));
+	}
 	RefreshInventorySlots();
 }
 

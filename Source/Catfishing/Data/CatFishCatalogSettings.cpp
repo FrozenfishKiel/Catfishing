@@ -88,13 +88,14 @@ FCatFishBiteTimingDefaults UCatFishCatalogSettings::ResolveBiteTiming(const UCat
 }
 
 // 两步抽鱼：先按窝料三轴占比冻结类别，再只在该类的合法候选中按鱼饵权重抽鱼。
-// 人数与生态条件仍是准入门；猫的力量/体力、鱼的稀有度和旧 SpawnWeight 不参与概率。
+// 人数与生态条件仍是准入门；接受加成的鱼种在原鱼饵权重上乘 GAS 倍率，最终统一归一化。
 FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
     const FCatFishSelectionContext& Context) const
 {
     FCatFishSelectionResult Result;
     const FCatChumVector& Chum = Context.ChumSample.EffectiveChumVector;
-    if (!FMath::IsFinite(Context.CatchWeightBonus) || Context.CatchWeightBonus < 0.0
+    if (!FMath::IsFinite(Context.RareFishWeightMultiplier) || Context.RareFishWeightMultiplier < 0.0
+        || !FMath::IsFinite(Context.CatchWeightBonus) || Context.CatchWeightBonus < 0.0
         || !Context.WaterRegion.IsValid() || !Context.ChumSample.bSucceeded
         || !(Context.ChumSample.WaterRegion == Context.WaterRegion)
         || Context.ActivePlayerCount < 1 || Context.ActivePlayerCount > 8
@@ -131,7 +132,8 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
     for (const TSoftObjectPtr<UCatFishDefinition>& Ref : Definitions)
     {
         UCatFishDefinition* Fish = Ref.LoadSynchronous();
-        if (!Fish || !CatFishCatalogSettingsPrivate::PassesWaterRegionGate(*Fish, Context.WaterRegion.RegionId)
+        if (!Fish || (Context.bExcludeGiant && Fish->BodyClass == ECatFishBodyClass::Giant)
+            || !CatFishCatalogSettingsPrivate::PassesWaterRegionGate(*Fish, Context.WaterRegion.RegionId)
             || !FCatFishEligibilityPolicy::PassesActivePlayerCount(*Fish, Context.ActivePlayerCount)
             || !FCatFishEligibilityPolicy::PassesTimeOfDay(*Fish, Context.TimeOfDay, bEnableTimeOfDayEligibilityFilter)
             || !FCatFishEligibilityPolicy::PassesWeather(*Fish, Context.Weather, bEnableWeatherEligibilityFilter)) continue;
@@ -147,7 +149,8 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
         const double K = Fish->FishStrengthPerKilogram;
         if (!FMath::IsFinite(K) || K <= 0.0) { ++InvalidStrengthCoefficientCount; continue; }
         const double Kg = CatFishCatalogSettingsPrivate::SampleIndividualWeight(*Fish, Context);
-        const double Weight = Fish->FindBaitMultiplierOrNeutral(Context.BaitItemId);
+        const double Weight = Fish->FindBaitMultiplierOrNeutral(Context.BaitItemId)
+            * (Fish->bReceivesRarityBonus ? Context.RareFishWeightMultiplier : 1.0);
         if (!FMath::IsFinite(K) || K <= 0.0 || !FMath::IsFinite(Kg) || Kg <= 0.0
             || !FMath::IsFinite(K * Kg) || !FMath::IsFinite(Weight) || Weight <= 0.0) continue;
         Candidates.Add({Fish, Kg, K * Kg, Weight});
@@ -223,7 +226,7 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectFromBasePool(const FCatFi
 			continue;
 		}
 		UCatFishDefinition* Definition = FindRuntimeDefinition(Entry.ItemId);
-		if (!Definition
+		if (!Definition || (Context.bExcludeGiant && Definition->BodyClass == ECatFishBodyClass::Giant)
 			|| !CatFishCatalogSettingsPrivate::PassesWaterRegionGate(*Definition, Context.WaterRegion.RegionId)
 			|| !FCatFishEligibilityPolicy::PassesActivePlayerCount(*Definition, Context.ActivePlayerCount)
 			|| !FCatFishEligibilityPolicy::PassesTimeOfDay(*Definition, Context.TimeOfDay,
@@ -243,11 +246,12 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectFromBasePool(const FCatFi
 		}
 		FBasePoolCandidate& Candidate = Candidates.AddDefaulted_GetRef();
 		Candidate.Definition = Definition;
-		Candidate.Probability = Entry.Probability;
+		Candidate.Probability = Entry.Probability * (Definition->bReceivesRarityBonus ? Context.RareFishWeightMultiplier : 1.0);
+		if (!FMath::IsFinite(Candidate.Probability) || Candidate.Probability <= 0.0) { Candidates.Pop(); continue; }
 		Candidate.WeightKilograms = WeightKilograms;
 		Candidate.BaseFishStrength = WeightKilograms * StrengthPerKilogram;
 		if (!FMath::IsFinite(Candidate.BaseFishStrength)) { Candidates.Pop(); continue; }
-		TotalProbability += Entry.Probability;
+		TotalProbability += Candidate.Probability;
 	}
 	if (InvalidStrengthCoefficientCount > 0)
 	{

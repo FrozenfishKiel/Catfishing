@@ -7,6 +7,7 @@
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "AbilitySystem/Items/CatItemAbilityComponent.h"
+#include "AbilitySystem/Items/Abilities/CatItemGameplayAbility.h"
 #include "Inventory/Fragments/CatItemUseFragment.h"
 #include "EngineUtils.h"
 #include "Fishing/CatFishingSession.h"
@@ -1274,10 +1275,22 @@ bool ACatfishingPlayerController::CanUseSelectedBackpackItemFromInput() const
 	return BackPack && BackPack->CanUseItemAtSlot(SelectedSlotIndex, GetPawn());
 }
 
-// 选中物品左键按下流程：
-// 1. 本地输入可用时优先处理嘴叼鱼；否则按独立快捷栏焦点解析背包实例，空格或不可用条目直接退出。
-// 2. 有使用片段时交给物品能力组件冻结来源并激活对应 Spec；选中鱼竿只有走到这里才请求拿出。
-// 3. 未声明使用片段的物品不启动行为；持续输入由能力组件保存原 Spec，切格不会改换来源。
+// 选中物品副操作流程：按能力声明识别右键，使用当前选中实例；不支持副操作时返回原抓握输入。
+bool ACatfishingPlayerController::BeginSelectedItemSecondaryUseFromInput()
+{
+	// 副操作按当前实例的能力配置路由；先检查输入锁，再冻结来源，不能把任意物品右键解释成补水。
+	if (!IsLocalController() || IsDayTransitionInputBlocked() || IsMoveInputIgnored()) return false;
+	auto* Inventory = GetControlledBackPack();
+	const auto* Entry = Inventory ? Inventory->GetInventoryEntryAtSlot(GetSelectedQuickbarSlotIndex()) : nullptr;
+	const auto* Definition = Entry && Entry->Instance ? Entry->Instance->GetItemDefinition() : nullptr;
+	const auto* Use = Definition ? Definition->FindFragment<UCatItemUseFragment>() : nullptr;
+	if (!Use || !Use->AbilityClass || !Use->AbilityClass->GetDefaultObject<UCatItemGameplayAbility>()->SupportsSecondaryUse()) return false;
+	if (auto* Items = GetPawn()->FindComponentByClass<UCatItemAbilityComponent>())
+		Items->RequestUse(Inventory, Entry->Instance->GetItemInstanceId(), FGuid::NewGuid(), false, true);
+	return true;
+}
+
+// 主操作流程：先使用嘴叼实物，否则读取当前选中格的使用片段；能力组件冻结该实例后交给 GAS，松开仍只作用于原来源。
 void ACatfishingPlayerController::BeginSelectedItemUseFromInput()
 {
 	// 嘴部已有鱼时，使用键锁定这条真实世界鱼；不把背包选中格当作它的替身。

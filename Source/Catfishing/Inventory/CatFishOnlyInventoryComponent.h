@@ -4,7 +4,7 @@
 #include "Inventory/CatInventoryComponent.h"
 #include "CatFishOnlyInventoryComponent.generated.h"
 
-/** 只能接收实物鱼的正式库存组件；鱼护和鱼缸用它表达容量与槽位，移动、复制和使用仍完全沿用 InventoryComponent。 */
+/** 接收鱼类标签物品的正式库存；真实鱼与鱼形道具可共存，实际食用和出售能力由各自配置决定。 */
 UCLASS(ClassGroup = (Catfishing), BlueprintType, Blueprintable, meta = (BlueprintSpawnableComponent))
 class CATFISHING_API UCatFishOnlyInventoryComponent : public UCatInventoryComponent
 {
