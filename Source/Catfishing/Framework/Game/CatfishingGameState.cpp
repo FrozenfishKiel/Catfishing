@@ -1,6 +1,8 @@
 #include "Framework/Game/CatfishingGameState.h"
 
 #include "AbilitySystem/Attributes/CatEconomyAttributeSet.h"
+#include "UI/Items/CatHornMessageWidget.h"
+#include "GameFramework/PlayerController.h"
 #include "AbilitySystem/Attributes/CatRunAttributeSet.h"
 #include "AbilitySystem/Attributes/CatRunModifierAttributeSet.h"
 #include "AbilitySystemComponent.h"
@@ -10,6 +12,21 @@
 #include "Logging/CatLog.h"
 #include "Net/UnrealNetwork.h"
 #include "ShopEconomy/CatShopEconomySettings.h"
+
+// 广播消费流程：每个本地玩家创建自己的顶部显示，专用服务器只记录事件；不把文本写入玩法状态或日志。
+void ACatfishingGameState::Multicast_HornAnnouncement_Implementation(const FString& Speaker, const FString& Message, FGuid RequestId)
+{
+	if (!RequestId.IsValid() || Message.IsEmpty() || Message.Len() > 120) return;
+	for (auto It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+		if (APlayerController* Controller = It->Get(); Controller && Controller->IsLocalController())
+			if (auto* Widget = CreateWidget<UCatHornAnnouncementWidget>(Controller))
+			{
+				Widget->Message = FText::FromString(Speaker + TEXT("：") + Message);
+				Widget->AddToPlayerScreen(90);
+			}
+	UE_LOG(LogCatfishing, Log, TEXT("Event=horn_announcement RequestId=%s Characters=%d World=%s NetMode=%d Authority=%d"),
+		*RequestId.ToString(), Message.Len(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority());
+}
 
 // 构造流程：先创建 ChumField 公开复制组件，再创建 GameState 自己拥有的 Run ASC、最终供品/世界进度集和来源倍率集；
 // ASC 开启复制并采用 Lyra 口径的 Mixed 模式；两套Run属性和独立经济属性共用此ASC，商店不再持有另一份可写余额。

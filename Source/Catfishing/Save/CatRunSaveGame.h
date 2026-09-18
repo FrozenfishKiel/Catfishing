@@ -12,6 +12,9 @@ USTRUCT()
 struct FCatSavedRunInventorySlot
 {
 	GENERATED_BODY()
+	/** 单件物品剩余使用资源；负一兼容没有该字段的旧普通物品，保存和恢复保留水量与播报次数。 */
+	UPROPERTY(SaveGame)
+	int32 RemainingResource = -1;
 
 	/** 物品运行定义键；恢复时由领域目录重新验证，未知定义不能进入库存。 */
 	UPROPERTY(SaveGame)
@@ -368,6 +371,9 @@ public:
 	TArray<FCatSavedWorldInventory> WorldInventories;
 	UPROPERTY(SaveGame)
 	int32 TeamWalletBalance = 0;
+	/** 本局截至断点的已购件数；读档恢复限购历史，旧档默认为空，因为旧版本尚无这些限购道具。 */
+	UPROPERTY(SaveGame)
+	TMap<int32, int32> TeamItemPurchaseCounts;
 
 	/** 旧单仓格式的世界鱼容器；仅为已有文件兼容读取保留，新断点写 WorldInventories。 */
 	UPROPERTY(SaveGame)

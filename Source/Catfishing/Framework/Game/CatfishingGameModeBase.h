@@ -78,6 +78,8 @@ class CATFISHING_API ACatfishingGameModeBase : public AGameModeBase
 	friend class FCatFishingCMCStabilityTest;
 	friend class FCatFishingFormalPhysicalRunnerTest;
 	friend class FCatPhysicalInputRouteTest;
+	/** 道具能力回归只在测试世界建立有效玩家准入；不增加运行时绕过权限的接口。 */
+	friend class FCatConsumableUseTest;
 	friend class FCatFishingOperatorRunnerIntegrationTest;
 	friend class FCatFishingSlackAimNetworkTest;
 	friend class FCatFishBehaviorStateTreeRuntimeTest;

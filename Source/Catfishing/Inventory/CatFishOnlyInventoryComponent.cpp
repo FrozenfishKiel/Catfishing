@@ -1,28 +1,28 @@
 #include "Inventory/CatFishOnlyInventoryComponent.h"
 
-#include "Data/CatFishDefinition.h"
+#include "Inventory/CatInventoryItemDefinition.h"
 #include "Inventory/CatInventoryItemInstance.h"
 
-// 构造流程：鱼护/鱼缸仍是普通正式库存，只把接收规则收窄到鱼定义。
+// 构造流程：鱼护和鱼缸沿用库存状态，仅按可组合的鱼类标签限制接收，不要求真实鱼子类。
 UCatFishOnlyInventoryComponent::UCatFishOnlyInventoryComponent(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
 }
 
-// 实例接收流程：先沿用正式库存的槽位边界，再确认 incoming 实例绑定的是鱼定义。
+// 实例接收流程：先检查库存槽位边界，再从实例定义读取鱼类标签；假鱼可用普通实例入库，不伪造捕获数据。
 bool UCatFishOnlyInventoryComponent::CanAcceptInventoryEntryAtSlot(const FCatInventoryEntry& IncomingEntry,
 	const int32 TargetSlotIndex) const
 {
 	const UCatInventoryItemDefinition* Definition =
 		IncomingEntry.Instance != nullptr ? IncomingEntry.Instance->GetItemDefinition() : nullptr;
 	return Super::CanAcceptInventoryEntryAtSlot(IncomingEntry, TargetSlotIndex)
-		&& Cast<const UCatFishDefinition>(Definition) != nullptr;
+		&& Definition && Definition->HasSemanticTag(CatItemTags::Fish);
 }
 
-// 定义接收流程：容量预演没有实例对象，因此直接检查定义类型并复用父类槽位边界。
+// 容量预演和实际收货共用 Fish 分类契约；假鱼可以占格，但可售卖、可食用等能力仍由各自片段决定。
 bool UCatFishOnlyInventoryComponent::CanAcceptInventoryDefinitionAtSlot(
 	const UCatInventoryItemDefinition& IncomingDefinition, const int32 TargetSlotIndex) const
 {
 	return Super::CanAcceptInventoryDefinitionAtSlot(IncomingDefinition, TargetSlotIndex)
-		&& Cast<const UCatFishDefinition>(&IncomingDefinition) != nullptr;
+		&& IncomingDefinition.HasSemanticTag(CatItemTags::Fish);
 }

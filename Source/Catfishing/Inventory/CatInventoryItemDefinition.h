@@ -10,6 +10,15 @@ class UCatInventoryItemInstance;
 class UTexture2D;
 class AActor;
 
+/** 可组合的物品身份；标签用于分类和准入，不能代替食用、出售等能力配置。 */
+namespace CatItemTags
+{
+	/** 鱼类容器接受的身份；真实鱼与鱼形道具都可声明，容器不据此生成重量或捕获记录。 */
+	CATFISHING_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Fish);
+	/** 道具身份；与鱼、装备等其他分类同时存在，不隐式授予任何能力。 */
+	CATFISHING_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Tool);
+}
+
 /** 库存操作标识；菜单和网络只传标识，具体行为由物品实例的虚函数处理。 */
 namespace CatInventoryActionTags
 {
@@ -164,6 +173,13 @@ public:
 	/** 单格最大堆叠数；1 表示不可堆叠，非法值会在读取时被压到 1。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Inventory", meta = (ClampMin = "1"))
 	int32 InventoryMaxStackCount = 1;
+
+	/** 单位随身库存内同种物品的总件数上限；0 不额外限制，仓库和容器不受影响，收货与转移共用。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Inventory", meta=(ClampMin="0"))
+	int32 InventoryCarryLimit = 0;
+	/** 全队一局可购买本物品的总件数；0 不限制，商店汇总已提交成交记录校验，刷新和换摊位不重置。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Inventory", meta=(ClampMin="0"))
+	int32 TeamPurchaseLimitPerRun = 0;
 
 	/** 默认运行实例类型；鱼竿、消耗品或后续特殊物品可以用实例子类承载自己的运行语义。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Inventory")

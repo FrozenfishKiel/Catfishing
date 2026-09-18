@@ -60,6 +60,7 @@ void UCatInventoryItemInstance::GetLifetimeReplicatedProps(TArray<FLifetimePrope
 	DOREPLIFETIME(ThisClass, ItemInstanceId);
 	DOREPLIFETIME(ThisClass, ItemDefinition);
 	DOREPLIFETIME(ThisClass, RuntimeOwnerActor);
+	DOREPLIFETIME(ThisClass, RemainingResource);
 }
 
 // 网络支持声明：库存组件会把实例登记为子对象，FastArray 里的指针才能在客户端稳定解析。
@@ -72,6 +73,10 @@ bool UCatInventoryItemInstance::IsSupportedForNetworking() const
 void UCatInventoryItemInstance::SetItemDefinition(UCatInventoryItemDefinition* InDefinition)
 {
 	ItemDefinition = InDefinition;
+	// 仅新实例从定义初始化资源；移动和保存恢复不能把已使用的次数补满。
+	if (RemainingResource < 0 && InDefinition)
+		if (const auto* Use = InDefinition->FindFragment<UCatItemUseFragment>(); Use && Use->ResourceCapacity > 0)
+			RemainingResource = Use->ResourceCapacity;
 
 	const UCatInventoryItemDefinition* CurrentDefinition = GetItemDefinition();
 	if (CurrentDefinition == nullptr)
@@ -87,6 +92,18 @@ void UCatInventoryItemInstance::SetItemDefinition(UCatInventoryItemDefinition* I
 		}
 	}
 	HandleItemDefinitionAssigned();
+}
+
+// 资源写入流程：先确认服务器宿主，再验证定义容量；无资源物品仅接受负一，非法存档或客户端写入不改变余额。
+bool UCatInventoryItemInstance::SetRemainingResourceFromAuthority(const int32 Value)
+{
+	const AActor* Host = GetRuntimeOwnerActor();
+	const auto* Use = ItemDefinition ? ItemDefinition->FindFragment<UCatItemUseFragment>() : nullptr;
+	if (!Host || !Host->HasAuthority()) return false;
+	if (!Use || Use->ResourceCapacity <= 0) return Value == -1;
+	if (Value < 0 || Value > Use->ResourceCapacity) return false;
+	RemainingResource = Value;
+	return true;
 }
 
 // 静态定义资产是实例身份来源；复制这个资产引用，避免从显示名或标签反推物品。

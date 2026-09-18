@@ -21,6 +21,7 @@
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "AbilitySystem/Attributes/CatGrowthAttributeSet.h"
+#include "AbilitySystem/Attributes/CatItemBonusAttributeSet.h"
 #include "AbilitySystem/Items/CatItemAbilityComponent.h"
 #include "Animation/AnimMontage.h"
 #include "Character/Animation/CatForceReactionComponent.h"
@@ -47,6 +48,8 @@ ACatCharacter::ACatCharacter(const FObjectInitializer& ObjectInitializer)
 	SurvivalAttributes = CreateDefaultSubobject<UCatSurvivalAttributeSet>(TEXT("SurvivalAttributes"));
 	GrowthAttributes = CreateDefaultSubobject<UCatGrowthAttributeSet>(TEXT("GrowthAttributes"));
 	AbilitySystemComponent->AddAttributeSetSubobject(GrowthAttributes.Get());
+	ItemBonusAttributes = CreateDefaultSubobject<UCatItemBonusAttributeSet>(TEXT("ItemBonusAttributes"));
+	AbilitySystemComponent->AddAttributeSetSubobject(ItemBonusAttributes.Get());
 	ItemAbilities = CreateDefaultSubobject<UCatItemAbilityComponent>(TEXT("ItemAbilities"));
 	// ASC 不会仅凭同 Actor 上存在 AttributeSet 就稳定纳入查询列表；构造期显式登记，保证占有时播种属性不会找不到 AttributeSet。
 	AbilitySystemComponent->AddAttributeSetSubobject(SurvivalAttributes.Get());

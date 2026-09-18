@@ -226,7 +226,7 @@ namespace
 		return true;
 	}
 
-	// 保存边界直接读取库存实例：保留空格位置、身份与数量，再采集装备耐久或鱼来源和重量。
+	// 保存边界直接读取库存实例：保留空格位置、身份、数量和剩余使用资源，再采集装备耐久或鱼来源和重量。
 	// 鱼保持原始实例 GUID，不重新生成身份；运行宿主、复制状态和临时 Use 上下文不进入磁盘。
 	bool WriteSavedInventorySlots(const TArray<FCatInventoryEntry>& Entries,
 		TArray<FCatSavedRunInventorySlot>& OutSaved, FText& OutFailure)
@@ -247,6 +247,7 @@ namespace
 				Saved.FishOwnerStableNetId = Fish->GetFishOwnerStableNetId();
 			}
 			Saved.ItemId = Entry.Instance->GetItemId();
+			Saved.RemainingResource = Entry.Instance->GetRemainingResource();
 			if (const auto* Guard = Cast<UCatFishGuardInventoryItemInstance>(Entry.Instance))
 				if (const auto* Host = Guard->GetWorldActor()) Saved.FishGuardHostName = Host->GetFName();
 			Saved.ItemInstanceId = Entry.Instance->GetItemInstanceId();
@@ -261,6 +262,7 @@ namespace
 	}
 
 	// 恢复边界先准备完整实例批次，不改现有库存：按保存的定义创建正确子类，恢复原实例身份、竿状态或鱼的来源与重量。
+	// 资源先由定义初始化，再用非负存档值恢复；负一沿用旧档缺省行为，其他负值或超过当前容量的余额拒绝整批恢复。
 	// 不合法的空格、重复身份和不可表示的状态会使整批失败；准备成功后，调用方才把 Entries 交给库存一次性接收。
 	bool PrepareInventoryEntriesFromSave(const TArray<FCatSavedRunInventorySlot>& Saved,
 		UCatInventoryComponent& Inventory, TArray<FCatInventoryEntry>& OutEntries, FText& OutFailure)
@@ -290,6 +292,8 @@ namespace
 			Instance->SetRuntimeOwnerActor(Owner);
 			Instance->SetItemDefinition(Definition);
 			Instance->SetItemInstanceIdFromAuthority(Slot.ItemInstanceId);
+			if (Slot.RemainingResource < -1 || (Slot.RemainingResource >= 0 && !Instance->SetRemainingResourceFromAuthority(Slot.RemainingResource)))
+			{ OutFailure = FText::FromString(TEXT("物品剩余资源超出定义容量。")); return false; }
 			if (UCatEquipmentInventoryItemInstance* Equipment = Cast<UCatEquipmentInventoryItemInstance>(Instance))
 			{
 				Equipment->SetRodRuntimeStateFromAuthority(Slot.RodDurability, Slot.bRodBroken);
@@ -983,6 +987,7 @@ bool UCatSaveSubsystem::RestoreWorldAfterHostsReady(ACatfishingGameModeBase& Gam
 			if (!ValidateLoadedRunSaveGame(*PendingRestoreSaveGame, ActiveSlotId, CheckpointFailure)
 				|| !RestoreWorldInventories(*World, PendingRestoreSaveGame->WorldInventories, CheckpointFailure)
 				|| !Shop || !Shop->RestoreWalletFromAuthority(PendingRestoreSaveGame->TeamWalletBalance)
+				|| !Shop->RestoreRunPurchaseCountsFromAuthority(PendingRestoreSaveGame->TeamItemPurchaseCounts)
 				|| !GameMode.RestoreWorldProgressFromSave(PendingRestoreSaveGame->WorldProgress, PendingRestoreSaveGame->DayIndex)
 				|| !State || !State->GetRunFishCollection()->RestoreCapturesFromAuthority(PendingRestoreSaveGame->RunFishCollectionCaptures))
 			{
@@ -1260,6 +1265,7 @@ bool UCatSaveSubsystem::BuildActiveRunSaveGame(UCatRunSaveGame& OutSaveGame, FTe
 	if (!Shop || !Shop->ExportWalletFromAuthority(OutSaveGame.TeamWalletBalance))
 	{ OutFailure = FText::FromString(TEXT("公款尚未就绪。")); return false; }
 	OutSaveGame.bHasInventoryCheckpoint = true;
+	OutSaveGame.TeamItemPurchaseCounts = Shop->GetRunPurchaseCounts();
 	OutSaveGame.bHasPlayerSnapshot = PendingRestoreSaveGame->bHasPlayerSnapshot;
 	OutSaveGame.PlayerSnapshot = PendingRestoreSaveGame->PlayerSnapshot;
 	OutSaveGame.WorldFishContainers.Reset();

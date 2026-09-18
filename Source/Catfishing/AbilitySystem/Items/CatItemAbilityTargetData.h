@@ -25,6 +25,10 @@ struct CATFISHING_API FCatItemAbilityTargetData : public FGameplayAbilityTargetD
 	UPROPERTY() FCatInventoryUseTarget Aim;
 	/** 本次动作是否由按住输入发起；菜单为 false，能力将其传入领域上下文，松开处理由具体连续行为实现。 */
 	UPROPERTY() bool bContinuousInput = false;
+	/** 本次是否请求配置允许的副操作；服务器能力校验资格，湿毛器据此补水而不是喷水。 */
+	UPROPERTY() bool bSecondaryInput = false;
+	/** 玩家确认提交的播报文本；只供文字型能力，网络长度有上限，服务器再次清理空白。 */
+	UPROPERTY() FString Message;
 	/** 网络目标的结构身份；接收方据此验证载荷类型，避免把瞄准点等其他目标数据解释为物品请求。 */
 	virtual UScriptStruct* GetScriptStruct() const override { return StaticStruct(); }
 	/** GAS 复制来源、视线目标、持续输入标记及请求身份；不接收客户端声明的物品定义、数量或经验。 */

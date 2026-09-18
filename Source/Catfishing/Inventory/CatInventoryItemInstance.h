@@ -48,6 +48,10 @@ class CATFISHING_API UCatInventoryItemInstance : public UObject
 	GENERATED_BODY()
 
 public:
+	/** 读取此实物剩余的使用资源；负一表示没有独立资源，不从物品名称推断水量或次数。 */
+	int32 GetRemainingResource() const { return RemainingResource; }
+	/** 服务器恢复或结算本实例资源；拒绝缺配置与越界数值，成功后由子对象复制给当前持有者。 */
+	bool SetRemainingResourceFromAuthority(int32 Value);
 	/** 查询定义声明的操作当前是否可用；客户端只读生成置灰原因，服务器执行前用同一规则复核。 */
 	virtual bool CanExecuteInventoryAction(const FGameplayTag& Action, const FCatInventoryEntry& Entry,
 		APawn* UserPawn, FText& OutReason) const;
@@ -111,6 +115,9 @@ public:
 
 
 protected:
+	/** 本实物剩余水量或次数；定义绑定初始化，能力成本扣除、补给恢复、保存读取，跨玩家转交不重置。 */
+	UPROPERTY(Replicated)
+	int32 RemainingResource = -1;
 	/** 这份物品在当前世界中的原 Actor；拾取保存、落地复用，只有一个引用，不按堆叠数量保存多份。 */
 	UPROPERTY(Transient)
 	TObjectPtr<AActor> WorldActor = nullptr;

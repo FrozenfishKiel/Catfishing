@@ -2,6 +2,30 @@
 
 #include "Environment/CatWaterGeometry.h"
 #include "Environment/CatWaterRegion.h"
+#include "Engine/World.h"
+#include "Logging/CatLog.h"
+
+// 登记流程：服务器验证水域及有限范围，清过期区后追加结束时刻；不改变任何已有会话。
+bool UCatWaterQuerySubsystem::AddFishSpawnSuppressionFromAuthority(const FVector& Center,
+	const FCatWaterRegionHandle& Region, const double Radius, const double Duration)
+{
+	if (!GetWorld() || GetWorld()->GetNetMode() == NM_Client || !Region.IsValid() || Center.ContainsNaN()
+		|| !FMath::IsFinite(Radius) || Radius <= 0 || !FMath::IsFinite(Duration) || Duration <= 0) return false;
+	IsFishSpawnSuppressed(Center, Region);
+	FishSpawnSuppressions.Add({Center, Region, Radius, GetWorld()->GetTimeSeconds() + Duration});
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fish_spawn_suppressed Region=%s Center=%s RadiusCm=%.1f DurationSeconds=%.1f World=%s NetMode=%d Authority=1"),
+		*Region.RegionId.ToString(), *Center.ToCompactString(), Radius, Duration, *GetNameSafe(GetWorld()), GetWorld()->GetNetMode());
+	return true;
+}
+// 查询流程：删除已经过期的记录，再检查同一水域内的水平范围；只在新鱼选择入口使用。
+bool UCatWaterQuerySubsystem::IsFishSpawnSuppressed(const FVector& Point, const FCatWaterRegionHandle& Region) const
+{
+	if (!GetWorld()) return false;
+	const double Now = GetWorld()->GetTimeSeconds();
+	FishSpawnSuppressions.RemoveAll([Now](const FFishSpawnSuppression& Area) { return Now >= Area.ExpiresAt; });
+	return FishSpawnSuppressions.ContainsByPredicate([&](const FFishSpawnSuppression& Area)
+	{ return Area.Region == Region && FVector::DistSquared2D(Point, Area.Center) <= FMath::Square(Area.Radius); });
+}
 
 namespace CatWaterQueryPrivate
 {

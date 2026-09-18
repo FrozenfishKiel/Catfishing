@@ -28,6 +28,10 @@ class CATFISHING_API UCatShopEconomyService : public UWorldSubsystem
 	GENERATED_BODY()
 
 public:
+	/** 汇总读档前与当前已提交购买件数；跨摊位限购和存档共用，不把货架补货当作额度恢复。 */
+	TMap<int32, int32> GetRunPurchaseCounts() const;
+	/** 世界断点在开放交易前恢复已购件数；拒绝无效编号和负数，不重放历史购买或扣款。 */
+	bool RestoreRunPurchaseCountsFromAuthority(const TMap<int32, int32>& Counts);
 	/** 世界断点启动时恢复唯一 ASC 公款；已发生交易后不能覆盖。 */
 	bool RestoreWalletFromAuthority(int32 Balance);
 	bool AreCommandsOpen() const { return bCommandsOpen; }
@@ -227,6 +231,8 @@ private:
 
 	/** 本局已完成交易的审计记录；购买仅在实物入库与扣款成功后写入，服务查询和公开流水读取它。 */
 	TArray<FCatShopTransactionRecord> TransactionLedger;
+	/** 读档时恢复的历史购买汇总；只代表加载前的成交，加载后的购买仍由 TransactionLedger 唯一记录。 */
+	TMap<int32, int32> RestoredPurchaseCounts;
 
 	/** RequestId 幂等终态缓存；重放返回首次账本记录但不重复扣款或入账。 */
 	TMap<FString, FCatShopTransactionResult> TerminalCache;

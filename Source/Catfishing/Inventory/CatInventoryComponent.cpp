@@ -4,7 +4,10 @@
 #include "GameFramework/Pawn.h"
 #include "Character/CatCharacter.h"
 #include "Engine/World.h"
+#include "TimerManager.h"
+#include "Framework/Game/CatfishingPlayerController.h"
 #include "Equipment/CatEquipmentItemDefinition.h"
+#include "Equipment/CatEquipmentComponent.h"
 #include "Fishing/CatFishingService.h"
 #include "Inventory/CatFishOnlyInventoryComponent.h"
 #include "Inventory/CatFishInventoryItemInstance.h"
@@ -47,7 +50,8 @@ namespace
 
 
 // 操作提交先查同请求载荷的终态，再复核当前槽位身份、数量与定义声明；副作用前占住请求，避免回调重入重复执行。
-// Statics 负责载体操作和出售接线；本组件统一保存菜单命令结果，世界操作成功后再广播，出售通知由商店事务负责。
+// 多件丢弃或已有丢弃排队时只追加请求并返回等待状态，不预扣库存；其余操作立即交给 Statics。
+// 本组件保存等待及最终结果，单件世界操作成功后再广播，出售通知由商店事务负责。
 // 拒绝也记录结果；同请求同载荷只回放，载荷改变则拒绝，避免旧请求作用于后来换入的实例。
 FCatDomainCommandResult UCatInventoryComponent::ExecuteItemActionFromAuthority(const FCatInventoryItemUseContext& Context,
 	const FGuid ItemInstanceId, const FGameplayTag Action, const int32 Quantity)
@@ -64,9 +68,9 @@ FCatDomainCommandResult UCatInventoryComponent::ExecuteItemActionFromAuthority(c
 	{
 		if (TerminalPayloadByKey.FindRef(Key) == Payload)
 		{
-			// 缓存保存的是首次终态；重试返回前必须改写为只读重放，避免表现层把第二次回执误当成又一次提交。
+			// 缓存可能仍在等待队列，也可能已落定；重试只回放当前结果，不能重复入队或让表现层再执行一次。
 			Result = *Cached;
-			MarkCommandReplayed(Result);
+			if (!Result.bPending) MarkCommandReplayed(Result);
 			return Result;
 		}
 		Result.Error = ECatDomainCommandError::InvalidPayload;
@@ -91,7 +95,21 @@ FCatDomainCommandResult UCatInventoryComponent::ExecuteItemActionFromAuthority(c
 	{
 		Result.Error = ECatDomainCommandError::AlreadyResolved;
 		TerminalPayloadByKey.Add(Key, Payload); TerminalCache.Add(Key, Result);
-		Result = UCatInventoryStatics::ExecuteResolvedInventoryActionFromAuthority(Context, Action, Quantity);
+		if (Action == CatInventoryActionTags::Drop && (Quantity > 1 || !DropQueue.IsEmpty()))
+		{
+			int64 Queued = 0;
+			for (const auto& Pending : DropQueue) if (Pending.ItemId == ItemInstanceId) Queued += Pending.Remaining;
+			if (Queued + Quantity > Current->StackCount) Result.Error = ECatDomainCommandError::InvalidPayload;
+			else
+			{
+				DropQueue.Add({Cast<ACatCharacter>(Context.UserPawn), ItemInstanceId, Context.RequestId, Quantity, 0});
+				Result.Error = ECatDomainCommandError::None; Result.bPending = true;
+				if (!GetWorld()->GetTimerManager().IsTimerActive(DropQueueTimer))
+					GetWorld()->GetTimerManager().SetTimer(DropQueueTimer, this, &ThisClass::ExecuteNextQueuedDrop,
+						FMath::Max(0.05f, GetDefault<UCatInventorySettings>()->DropIntervalSeconds), false);
+			}
+		}
+		else Result = UCatInventoryStatics::ExecuteResolvedInventoryActionFromAuthority(Context, Action, Quantity);
 		Result.RequestId = Context.RequestId;
 	}
 	TerminalPayloadByKey.Add(Key, Payload); TerminalCache.Add(Key, Result);
@@ -100,7 +118,7 @@ FCatDomainCommandResult UCatInventoryComponent::ExecuteItemActionFromAuthority(c
 		TEXT("Event=inventory_action_resolved World=%s NetMode=%d Authority=1 RequestId=%s Instance=%s Action=%s Quantity=%d Committed=%d Replay=%d Pending=%d Error=%s Reason=%s"),
 		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), *Context.RequestId.ToString(), *ItemInstanceId.ToString(),
 		*Action.ToString(), Quantity, Result.bCommitted, Result.bTerminalReplay, Result.bPending, *UEnum::GetValueAsString(Result.Error), *Reason.ToString());
-	if (CatIsAcceptedDomainCommandResult(Result))
+	if (Result.bPending || CatIsAcceptedDomainCommandResult(Result))
 	{
 		UE_LOG(LogCatInventory, Log, TEXT("%s"), *Event);
 	}
@@ -109,6 +127,60 @@ FCatDomainCommandResult UCatInventoryComponent::ExecuteItemActionFromAuthority(c
 		UE_LOG(LogCatInventory, Warning, TEXT("%s"), *Event);
 	}
 	return Result;
+}
+
+// 定时器每次只执行现有单件事务；先取出当前记录，防止库存广播期间追加请求使数组引用失效。
+// 入队已验操作权限，这里不再检查倒地、钓鱼或其他动作；只核原实例、库存预留和宿主存活，失败不扣量。
+// 未完成的记录仍排在新请求前，最后一次更新原请求缓存并回执；整个过程不创建第二套扣量或抛出逻辑。
+// 单件成功后刷新装备读模型再广播库存；执行已脱离最初菜单调用栈，不能依赖入队时的那次刷新反映实际扣量。
+void UCatInventoryComponent::ExecuteNextQueuedDrop()
+{
+	if (DropQueue.IsEmpty()) return;
+	FQueuedDrop Pending = DropQueue[0];
+	FCatDomainCommandResult Step; Step.Error = ECatDomainCommandError::InvalidPayload;
+	const int32 Slot = FindInventorySlotIndexFromInstanceId(Pending.ItemId);
+	if (Pending.Character.IsValid() && Slot != INDEX_NONE && !HasPreparedRemoval())
+	{
+		FCatInventoryItemUseContext Context;
+		Context.RequestId = FGuid::NewGuid(); Context.UserPawn = Pending.Character.Get();
+		Context.RequestingController = Pending.Character->GetController(); Context.SourceInventory = this;
+		Context.InventorySlotIndex = Slot;
+		Step = UCatInventoryStatics::ExecuteResolvedInventoryActionFromAuthority(Context, CatInventoryActionTags::Drop, 1);
+	}
+	Pending.Succeeded += Step.bCommitted ? 1 : 0;
+	Pending.bHadFailure |= !Step.bCommitted;
+	--Pending.Remaining;
+	DropQueue[0] = Pending;
+	if (Pending.Remaining == 0)
+	{
+		DropQueue.RemoveAt(0);
+		FCatDomainCommandResult Result; Result.RequestId = Pending.RequestId;
+		Result.bCommitted = Pending.Succeeded > 0;
+		Result.Error = Result.bCommitted ? ECatDomainCommandError::None : Step.Error;
+		if (Result.bCommitted && Pending.bHadFailure) Result.FailureReason = TEXT("PartialDrop");
+		TerminalCache.Add(MakeTerminalKey(TEXT("ItemAction"), Pending.RequestId), Result);
+		if (auto* Controller = Pending.Character.IsValid() ? Cast<ACatfishingPlayerController>(Pending.Character->GetController()) : nullptr)
+			Controller->ClientReceiveCampCommandResult(Result);
+	}
+	if (Step.bCommitted)
+	{
+		if (auto* Equipment = GetOwner()->FindComponentByClass<UCatEquipmentComponent>())
+			Equipment->RefreshLoadoutFromInventoryComponentFromAuthority();
+		BroadcastInventoryChange(Slot);
+	}
+	UE_LOG(LogCatInventory, Log, TEXT("Event=inventory_drop_queue_step RequestId=%s Instance=%s Remaining=%d Succeeded=%d Committed=%d Host=%s World=%s NetMode=%d Authority=1"),
+		*Pending.RequestId.ToString(), *Pending.ItemId.ToString(), Pending.Remaining, Pending.Succeeded, Step.bCommitted,
+		*GetNameSafe(GetOwner()), *GetNameSafe(GetWorld()), GetNetMode());
+	if (!DropQueue.IsEmpty()) GetWorld()->GetTimerManager().SetTimer(DropQueueTimer, this, &ThisClass::ExecuteNextQueuedDrop,
+		FMath::Max(0.05f, GetDefault<UCatInventorySettings>()->DropIntervalSeconds), false);
+}
+
+// 宿主退出只丢弃待执行请求，不扣剩余库存；定时器不会在组件销毁后再访问物品。
+void UCatInventoryComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (GetWorld()) GetWorld()->GetTimerManager().ClearTimer(DropQueueTimer);
+	DropQueue.Reset();
+	Super::EndPlay(EndPlayReason);
 }
 
 // 空格 owner 构造流程：新空格立即知道自己属于哪个库存组件，复制回调和调试输出使用已绑定宿主。
@@ -1835,7 +1907,7 @@ bool UCatInventoryComponent::CanAcceptInventoryDefinitionAtSlot(const UCatInvent
 	return IsValidInventorySlotIndex(TargetSlotIndex);
 }
 
-// 从现有格建立临时分配，按输入顺序优先堆叠再占空格；每项读分配后的总量，因此批次内部共享携带额度。
+// 从现有格建立临时分配，按输入顺序优先堆叠再占空格；每项读分配后的总量，分类上限和单物品上限取更紧的一项，批次内部共享额度。
 // 实例接收规则保留手持原格限制；仅分配载体转移意图，不提前修改来源实例。
 // 定义或数量非法即拒绝；先处理全部定义项，再处理实例项。仅单项调用提供余数指针时允许留下未接收数量，整批必须全部放下。
 bool UCatInventoryComponent::AllocateInventoryIntake(const FCatInventoryReceiveBatch& Batch,
@@ -1866,6 +1938,12 @@ bool UCatInventoryComponent::AllocateInventoryIntake(const FCatInventoryReceiveB
 			Allowance = static_cast<int32>(FMath::Clamp<int64>(int64(GetEffectiveCarryLimit(Category)) - Total, 0, Count));
 		}
 		FCatInventoryEntry Incoming;
+		if (EnforcesCarryLimits() && Definition->InventoryCarryLimit > 0)
+		{
+			int64 Total = 0;
+			for (const FInventoryIntakeSlot& Slot : Slots) if (Slot.ItemDefinition == Definition) Total += Slot.StackCount;
+			Allowance = FMath::Min(Allowance, static_cast<int32>(FMath::Clamp<int64>(int64(Definition->InventoryCarryLimit) - Total, 0, Count)));
+		}
 		Incoming.Instance = Instance;
 		Incoming.StackCount = Count;
 		bool bOriginalPlaced = false;
@@ -1983,8 +2061,8 @@ int32 UCatInventoryComponent::CountVisibleQuantityForCarryCategory(const ECatInv
 
 // 携带余量读取流程：
 // 1. 不受约束的库存（营地公库、鱼护、商店货架、鱼缸）一律返回 MAX_int32，「携带上限」只管猫身上那一份。
-// 2. 未配置上限的分类同样返回 MAX_int32 —— 漏配的后果是「这条规则还没生效」，不是把饵挡在背包外。
-// 3. 有效上限减去已带份数即余量；负值夹到 0。
+// 2. 分类未配置上限时先视为不限，再读取物品定义的独立总件数上限；两者任一有限都必须遵守。
+// 3. 各上限减去对应已带份数，负值夹到 0，最后返回更小余量供收货与转移共同裁决。
 int32 UCatInventoryComponent::GetRemainingCarryAllowanceForDefinition(
 	const UCatInventoryItemDefinition& ItemDefinition) const
 {
@@ -1994,11 +2072,16 @@ int32 UCatInventoryComponent::GetRemainingCarryAllowanceForDefinition(
 	}
 	const ECatInventoryCarryCategory Category = UCatInventorySettings::ResolveCarryCategory(ItemDefinition);
 	const int32 Limit = GetEffectiveCarryLimit(Category);
-	if (Category == ECatInventoryCarryCategory::None || Limit == MAX_int32)
+	int32 Allowance = Category == ECatInventoryCarryCategory::None || Limit == MAX_int32
+		? MAX_int32 : FMath::Max(0, Limit - CountVisibleQuantityForCarryCategory(Category));
+	if (ItemDefinition.InventoryCarryLimit > 0)
 	{
-		return MAX_int32;
+		int64 Total = 0;
+		for (const auto& Entry : InventoryList.Entries)
+			if (Entry.Instance && Entry.Instance->GetItemDefinition() == &ItemDefinition) Total += Entry.StackCount;
+		Allowance = FMath::Min(Allowance, static_cast<int32>(FMath::Max<int64>(0, int64(ItemDefinition.InventoryCarryLimit) - Total)));
 	}
-	return FMath::Max(0, Limit - CountVisibleQuantityForCarryCategory(Category));
+	return Allowance;
 }
 
 // 实例引用检查流程：清理指定槽位时跳过该槽，确认同一实例没有被其他格继续持有。

@@ -24,6 +24,8 @@ class CATFISHING_API UCatFishingService : public UWorldSubsystem
 	friend class FCatFishingSessionScoopMouthCarryTest;
 
 public:
+	/** 钓竿与渔网共用的准入人数快照；汇总当前合法身体的力量与体力，依赖缺失时保持零，不创建会话。 */
+	void BuildFightCapabilitySnapshot(int32& OutParticipantCount, double& OutFishingStrength, double& OutFightStamina) const;
 	/** 每人场上合计最多两根实体竿；手持和损坏但尚未收回的竿也占名额。 */
 	// 墓碑（2026-09-13）：每人部署竿上限改读 CatFishingSettings，默认仍为两根。
 
@@ -194,9 +196,6 @@ private:
 	static bool TryGetFightCapability(const AController* Controller, FString& OutStableNetId,
 		ACatCharacter*& OutCharacter, double& OutFishingStrength, double& OutFightStamina);
 
-	/** 从当前所有服务器 Controller 汇总合法参与者人数、力量与搏斗体力；任一依赖缺失时输出保持零。 */
-	void BuildFightCapabilitySnapshot(int32& OutParticipantCount, double& OutFishingStrength,
-		double& OutFightStamina) const;
 
 	/** FishingSessionId 到服务器 Actor 弱引用；Actor/StateTree 自己持有阶段真相。 */
 	TMap<FGuid, TWeakObjectPtr<ACatFishingSession>> Sessions;

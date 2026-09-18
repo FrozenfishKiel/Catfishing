@@ -64,6 +64,8 @@ public:
 	bool RequestCycleQuickbarSlotFromInput(int32 Direction);
 	/** 选中物品的左键按下入口；只在当前本地选择槽位已解析实例时提交统一 Use，请求不会猜测或替换槽位。 */
 	void BeginSelectedItemUseFromInput();
+	/** 右键按下时尝试当前物品副操作；有明确副操作才占用输入，否则保留原右手抓握。 */
+	bool BeginSelectedItemSecondaryUseFromInput();
 	/** 左键松开时结束同一持续使用请求；普通瞬时物品没有活动请求时无副作用，取消和旅行也复用它清理。 */
 	void EndSelectedItemUseFromInput(bool bCancelled);
 	/** 查询当前输入是否可以使用一个本地选中且有有效实例的背包槽位；不做服务器权限裁决。 */

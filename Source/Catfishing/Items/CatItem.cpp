@@ -82,8 +82,8 @@ double ACatItem::GetInteractionRadius_Implementation() const { return Interactio
 // 交互提交流程：
 // 1. 客户端只通过现有 PlayerController RPC 重放这次目标交互，不直接修改世界物或库存。
 // 2. authority 重新检查请求者距离和 RequestId，再读取完整批次并调用唯一 Actor 收货入口。
-// 3. 入库前占用本世界物，阻止回调重入；失败释放占用。成功后将原 Actor 交给接收实例并隐藏。
-// 4. 合入已有载体的堆叠只增加数量；多种物品的发货批次没有唯一对应实例，仍按原批次规则清理发货 Actor。
+// 3. 入库前占用本世界物，阻止回调重入；准备失败释放占用。容量不足由收货入口把余量落在宿主附近。
+// 4. 原物被库存保管时隐藏；若被复用为落地余量则保留可拾取状态。其余已交付批次清理原发货 Actor。
 bool ACatItem::Interact_Implementation(AController* RequestingController, const FGuid RequestId)
 {
 	ACatfishingPlayerController* PlayerController = Cast<ACatfishingPlayerController>(RequestingController);
@@ -145,7 +145,7 @@ bool ACatItem::Interact_Implementation(AController* RequestingController, const 
 	bPickupClaimed = true;
 	UCatInventoryComponent* ReceivingInventory = nullptr;
 	const bool bCommitted = !PickupBatch.IsEmpty()
-		&& UCatInventoryStatics::TryAddInventoryBatchToActor(PlayerController->GetPawn(), PickupBatch, &ReceivingInventory);
+		&& UCatInventoryStatics::ReceiveInventoryWithOverflowFromAuthority(PlayerController->GetPawn(), PickupBatch, &ReceivingInventory);
 	if (!bCommitted)
 	{
 		bPickupClaimed = false;
@@ -166,6 +166,8 @@ bool ACatItem::Interact_Implementation(AController* RequestingController, const 
 		*GetNameSafe(this), *RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(PlayerController->GetPawn()),
 		PickupBatch.DefinitionEntries.Num(), PickupBatch.InstanceEntries.Num(), bRetained, *GetNameSafe(GetWorld()),
 		static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()));
+	// 满库存时统一收货可能直接复用本实物并重新落在宿主附近；初始化已解除占用，不再销毁刚交付的余量。
+	if (!bPickupClaimed && !bRetained) return true;
 	if (bRetained)
 	{
 		PickupCollision->SetSimulatePhysics(false);

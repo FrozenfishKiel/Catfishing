@@ -88,13 +88,12 @@ public:
 	static FCatDomainCommandResult ExecuteInventoryActionFromAuthority(ACatCharacter* Character, FGuid RequestId,
 		AActor* SourceHost, int32 SourceSlot, FGuid ItemInstanceId, FGameplayTag Action, int32 Quantity,
 		const FCatInventoryUseTarget& Target = FCatInventoryUseTarget());
-	/** 仅供库存已校验并预占的命令调用；世界动作准备载体并静默扣量，出售直接交给商店事务。本层不另建菜单请求缓存，世界动作通知由库存调用方发布。 */
+	/** 仅供库存已校验的命令调用；Drop 每次只接受一件，准备载体成功后才扣量；出售沿商店事务。本层不另建请求缓存，世界动作通知由库存调用方发布。 */
 	static FCatDomainCommandResult ExecuteResolvedInventoryActionFromAuthority(
 		const FCatInventoryItemUseContext& Context, FGameplayTag Action, int32 Quantity);
-	/** 只读求解已有世界物的丢弃或放置变换；Drop 可附加世界坐标偏移来预检批量载体的分散落点，Place 始终忽略偏移以保持既有调用语义。 */
+	/** 只读求解单个世界物的丢弃或放置变换；连续丢弃每次都按当时角色位置调用。 */
 	static bool FindWorldReleaseTransform(ACatCharacter* Character, AActor* ItemActor,
-		ECatInventoryWorldAction Action, const UCatInventorySettings& Settings, FTransform& OutTransform,
-		FVector DropOffset = FVector::ZeroVector);
+		ECatInventoryWorldAction Action, const UCatInventorySettings& Settings, FTransform& OutTransform);
 
 	/** 判断目标 Actor 身上的某个库存组件能否完整接收这一批物品；它只做预检，不改变库存状态。 */
 	static bool CanActorFullyAcceptInventoryBatch(const AActor* TargetActor,
@@ -102,6 +101,10 @@ public:
 
 	/** 按优先级向首个能完整收货的组件写入；可选输出返回实际接收者，供拾取关联原世界物。 */
 	static bool TryAddInventoryBatchToActor(AActor* TargetActor, const FCatInventoryReceiveBatch& ReceiveBatch,
+		UCatInventoryComponent** OutReceivingInventory = nullptr);
+
+	/** 拾取与奖励收货：按库存优先级尽量入库，余量掉在宿主附近；先准备所有落地载体，准备失败不写库存。交易仍使用整批原子入口。 */
+	static bool ReceiveInventoryWithOverflowFromAuthority(AActor* TargetActor, const FCatInventoryReceiveBatch& ReceiveBatch,
 		UCatInventoryComponent** OutReceivingInventory = nullptr);
 
 	/** 在两个可触达 Actor 的正式库存之间移动物品；外部只提交宿主和槽位，组件负责正式格子事务。 */

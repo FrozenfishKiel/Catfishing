@@ -16,12 +16,28 @@
 #include "Data/CatFishDefinition.h"
 #include "Data/CatFishCatalogSettings.h"
 #include "Fishing/CatFishingService.h"
+#include "Fishing/Integration/CatFishingAimLibrary.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "Items/Fish/CatFishPickupActor.h"
 #include "Logging/CatLog.h"
 #include "TimerManager.h"
 #include "Misc/ScopeExit.h"
+
+// 采样流程：记录本机按下时的视点与单位方向；不执行命中效果，自用能力可忽略该采样。
+void UCatItemGameplayAbility::CaptureTarget(APlayerController* Controller, FCatItemAbilityTargetData& Target) const
+{
+	Target.Aim.bHasViewRay = UCatFishingAimLibrary::TryGetLocalCastViewRay(Controller, Target.Aim.ViewOrigin, Target.Aim.ViewDirection);
+}
+// 射线复核流程：先拒绝坏数值，再与服务器当前 Pawn 视点核距和方向；返回原冻结方向，绝不采信客户端目标 Actor。
+bool UCatItemGameplayAbility::ResolveUseRay(FVector& Origin, FVector& Direction) const
+{
+	const auto* Pawn = Cast<APawn>(GetAvatarActorFromActorInfo());
+	if (!Pawn || !UseTarget.Aim.bHasViewRay) return false;
+	Origin = UseTarget.Aim.ViewOrigin;
+	Direction = UseTarget.Aim.ViewDirection;
+	return UCatFishingAimLibrary::IsCastViewRayValid(Origin, Direction, Pawn->GetPawnViewLocation(), Pawn->GetViewRotation().Vector());
+}
 
 // 能力配置流程：资源成本由专用对象处理，身体动作标签使取消和互斥继续使用现有 GAS 契约。
 UCatItemGameplayAbility::UCatItemGameplayAbility()
@@ -106,6 +122,8 @@ bool UCatItemGameplayAbility::ValidateUse() const
 	const auto* Item = ResolveSourceItem();
 	const auto* Config = GetUseConfiguration();
 	const auto* Spec = GetCurrentAbilitySpec();
+	if (UseTarget.bSecondaryInput && !SupportsSecondaryUse()) return false;
+	if (Character && Config && Character->GetCatAbilitySystemComponent()->HasAnyMatchingGameplayTags(Config->BlockedStateTags)) return false;
 	if (!Character || !UseTarget.RequestId.IsValid() || !Config || !Config->IsRuntimeReady()
 		|| Config->AbilityClass != GetClass() || !Spec || !Character->GetConditionComponent()
 		|| Character->GetCatAbilitySystemComponent()->HasMatchingGameplayTag(CatStateTags::Downed)) return false;

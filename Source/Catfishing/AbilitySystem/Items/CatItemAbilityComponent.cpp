@@ -1,6 +1,7 @@
 #include "AbilitySystem/Items/CatItemAbilityComponent.h"
 #include "AbilitySystem/Items/Abilities/CatItemGameplayAbility.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "UI/Items/CatHornMessageWidget.h"
 #include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatInventoryItemInstance.h"
 #include "Inventory/Fragments/CatItemUseFragment.h"
@@ -29,9 +30,10 @@ void UCatItemAbilityComponent::BeginPlay()
 	}
 	RefreshGrantedAbilities();
 }
-// 结束流程：先解绑变化通知，再取消并移除旧 Pawn 的能力；本地待处理意图随组件销毁失效。
+// 结束流程：先关闭文字窗口释放模态输入，再解绑变化通知并取消、移除旧 Pawn 的能力；本地待处理意图随组件销毁失效。
 void UCatItemAbilityComponent::EndPlay(EEndPlayReason::Type Reason)
 {
+	if (MessageWindow) { MessageWindow->RemoveFromParent(); MessageWindow = nullptr; }
 	if (ObservedInventory) ObservedInventory->OnInventoryObservedChanged.RemoveAll(this);
 	if (auto* ASC = UCatAbilitySystemComponent::FindCatAbilitySystemFromActor(GetOwner()); ASC && GetOwner()->HasAuthority())
 	{
@@ -63,16 +65,32 @@ void UCatItemAbilityComponent::RefreshGrantedAbilities()
 		if (!Present.Contains(It.Key())) { ASC->CancelAbilityHandle(It.Value()); ASC->SetRemoveAbilityOnEnd(It.Value()); It.RemoveCurrent(); }
 }
 // 输入流程：本地控制者提交有效库存引用与身份；已有待处理意图时拒绝新输入，否则冻结来源及持续输入标记。
+// 需要文字且尚无确认内容时只打开一个窗口，不激活能力；确认后重走本入口，冻结主副操作及有界文本。
 // 能力配置已可读时由 CDO 采样一次目标，再匹配 Spec；等待期间不重新瞄准，最多等待两秒。
-bool UCatItemAbilityComponent::RequestUse(UCatInventoryComponent* Inventory, FGuid ItemId, FGuid RequestId, bool bContinuousInput)
+bool UCatItemAbilityComponent::RequestUse(UCatInventoryComponent* Inventory, FGuid ItemId, FGuid RequestId, bool bContinuousInput,
+	bool bSecondaryInput, const FString& Message)
 {
 	auto* Pawn = Cast<APawn>(GetOwner());
 	if (!Pawn || !Pawn->IsLocallyControlled() || !IsValid(Inventory) || !ItemId.IsValid() || !RequestId.IsValid()) return false;
 	if (PendingTarget.RequestId.IsValid()) return false;
+	const auto* SourceEntry = Inventory->GetInventoryEntryAtSlot(Inventory->FindInventorySlotIndexFromInstanceId(ItemId));
+	const auto* SourceUse = SourceEntry && SourceEntry->Instance && SourceEntry->Instance->GetItemDefinition()
+		? SourceEntry->Instance->GetItemDefinition()->FindFragment<UCatItemUseFragment>() : nullptr;
+	if (Message.IsEmpty() && SourceUse && SourceUse->AbilityClass
+		&& SourceUse->AbilityClass->GetDefaultObject<UCatItemGameplayAbility>()->RequiresMessageInput())
+	{
+		if (MessageWindow && MessageWindow->IsInViewport()) return false;
+		MessageWindow = CreateWidget<UCatHornMessageWidget>(Cast<APlayerController>(Pawn->GetController()));
+		if (!MessageWindow) return false;
+		MessageWindow->SetSource(this, Inventory, ItemId); MessageWindow->AddToPlayerScreen(100);
+		return true;
+	}
 	if (auto* ASC = UCatAbilitySystemComponent::FindCatAbilitySystemFromActor(GetOwner()))
 		if (const auto* Held = ASC->FindAbilitySpecFromHandle(HeldInputHandle); Held && Held->IsActive()) return false;
 	PendingTarget = {}; PendingTarget.Inventory = Inventory; PendingTarget.ItemId = ItemId; PendingTarget.RequestId = RequestId;
 	PendingTarget.bContinuousInput = bContinuousInput;
+	PendingTarget.bSecondaryInput = bSecondaryInput;
+	PendingTarget.Message = Message.Left(120);
 	UE_LOG(LogCatCharacter, Log, TEXT("Event=item_use_requested RequestId=%s Item=%s Owner=%s World=%s NetMode=%d Authority=%d LocalRole=%d Source=%s"),
 		*RequestId.ToString(), *ItemId.ToString(), *GetNameSafe(GetOwner()), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()),
 		GetOwner()->HasAuthority(), int32(GetOwner()->GetLocalRole()), *GetNameSafe(Inventory->GetOwner()));

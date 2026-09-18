@@ -154,8 +154,13 @@ void UCatInventoryPageController::RequestCloseInventoryFromWidget()
 // 3. 仅在正式菜单 WBP 可创建时保存源格并显示；提交时会再次重读该格，不能信任这里的快照。
 void UCatInventoryPageController::OpenInventoryContextMenu(UCatInventorySlotWidget* SourceSlot, const FVector2D& ScreenPosition)
 {
-	// 未回执时保留本次请求的反馈归属；关闭页面会清除此等待，不允许旧视图覆盖它。
-	if (PendingInventoryActionRequestId.IsValid()) return;
+	// 未受理前保持原来的防重入；服务器已确认排队后允许继续追加，页面只跟踪最后一次请求的反馈。
+	if (PendingInventoryActionRequestId.IsValid())
+	{
+		const auto* Controller = Cast<ACatfishingPlayerController>(BoundPlayerController.Get());
+		if (!Controller || !Controller->GetLastCampCommandResult().bPending
+			|| Controller->GetLastCampCommandResult().RequestId != PendingInventoryActionRequestId) return;
+	}
 	CancelInventoryContextMenu(false);
 	if (ULocalPlayer* LocalPlayer = BoundPlayerController.IsValid() ? BoundPlayerController->GetLocalPlayer() : nullptr)
 	{
@@ -374,14 +379,15 @@ void UCatInventoryPageController::HandleInventoryContextMenuCancelled()
 	CancelInventoryContextMenu();
 }
 
-// 回执流程：只接受本菜单提交的 RequestId；匹配后清除等待标识并让当前页面使用既有结果文本显示服务器终态。
+// 回执流程：只接受当前跟踪的菜单 RequestId；追加新请求后旧请求反馈不再覆盖页面。
+// 排队回执保留关联，终态才清除等待标识，再交给页面展示服务器结果。
 void UCatInventoryPageController::HandleInventoryActionCommandResult(const FCatDomainCommandResult& Result)
 {
 	if (!PendingInventoryActionRequestId.IsValid() || Result.RequestId != PendingInventoryActionRequestId)
 	{
 		return;
 	}
-	PendingInventoryActionRequestId.Invalidate();
+	if (!Result.bPending) PendingInventoryActionRequestId.Invalidate();
 	if (BoundView)
 	{
 		BoundView->ShowInventoryActionResult(Result);

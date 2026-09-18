@@ -138,4 +138,8 @@ public:
 	/** 丢弃时竖直向上的初速度，单位厘米每秒；与重力共同形成轻抛，不影响固定放置。 */
 	UPROPERTY(Config, EditAnywhere, Category = "World", meta = (ClampMin = "0.0"))
 	double DropUpwardSpeed = 200.0;
+
+	/** 连续丢弃的执行间隔，单位秒；库存队列据此安排首件及后续单件，空队列中的独立单件请求仍立即执行。 */
+	UPROPERTY(Config, EditAnywhere, Category = "World", meta = (ClampMin = "0.05", Units = "s"))
+	float DropIntervalSeconds = 0.35f;
 };
