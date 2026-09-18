@@ -839,7 +839,7 @@ void UCatLocalPlayerUISubsystem::RefreshFrontendForCurrentController()
 // 全局遮罩刷新流程：
 // 1. 对齐本次 Start/Leave 请求；请求切换时取消旧完成展示，防止新一轮等待沿用旧截止时间。
 // 2. 再按 Online、引擎和本地 UI 就绪事实决定显示；仍在真实等待时取消完成态停留并刷新正式 WBP。
-// 3. 真实完成时只安排一次短暂完成展示，保留请求直到实际撤罩；就绪回退仍能回到等待，错误或无过渡则立即释放。
+// 3. 进入游戏完成后保留既有完成展示；返回主菜单就绪则立即撤罩，不增加完成态停留。错误或无过渡也立即释放。
 void UCatLocalPlayerUISubsystem::RefreshGlobalLoadingScreen(const FCatOnlineSnapshot& Snapshot)
 {
 	const ECatOnlineOperation PreviousLoadingOperation = GlobalLoadingOperation;
@@ -859,10 +859,8 @@ void UCatLocalPlayerUISubsystem::RefreshGlobalLoadingScreen(const FCatOnlineSnap
 	}
 	const bool bCanPresentGameplayCompletion = GlobalLoadingOperation == ECatOnlineOperation::Start
 		&& IsGameplayLoadingReadyToDismiss(Snapshot);
-	const bool bCanPresentFrontendCompletion = GlobalLoadingOperation == ECatOnlineOperation::Leave
-		&& IsFrontendLoadingReadyToDismiss(Snapshot);
 	if (Snapshot.LastError == ECatOnlineError::None && bHadVisibleLoadingScreen
-		&& (bCanPresentGameplayCompletion || bCanPresentFrontendCompletion))
+		&& bCanPresentGameplayCompletion)
 	{
 		if (!bGlobalLoadingDismissalPending)
 		{
@@ -893,7 +891,7 @@ void UCatLocalPlayerUISubsystem::RefreshGlobalLoadingScreenFromCurrentSnapshot()
 // 全局遮罩 gate 流程：
 // 1. 错误快照直接放行，让业务页面显示失败原因，不把失败藏在遮罩下面。
 // 2. 进入游戏时显示总进度；Start、玩法软资源预热、地图包、Travel、World、BeginPlay、Connected 和本地 UI 都只按真实 gate 推进。
-// 3. 返回主菜单时不显示进度条，只展示保存、拆局、销毁房间、切图和主菜单 UI 就绪这些真实步骤。
+// 3. 返回主菜单保留真实就绪判断，只显示保存、离开房间或准备主菜单，不展示内部接口及诊断文字。
 // 4. Start/Leave 操作已结案但 UI 尚未就绪时，依靠本地过渡记忆继续显示，直到真实就绪事件触发刷新。
 bool UCatLocalPlayerUISubsystem::ShouldShowGlobalLoadingScreen(
 	const FCatOnlineSnapshot& Snapshot, FCatGlobalLoadingPresentation& OutPresentation) const
@@ -991,54 +989,21 @@ bool UCatLocalPlayerUISubsystem::ShouldShowGlobalLoadingScreen(
 	{
 		OutPresentation.HeadingText = FText::FromString(TEXT("正在返回主菜单"));
 		OutPresentation.bShowProgressBar = false;
+		// 退出只展示玩家需要知道的阶段；内部等待原因由 Online 与 Run 日志记录。
 		if (Snapshot.SessionState == ECatOnlineSessionState::Destroying)
 		{
-			OutPresentation.StatusText = FText::FromString(TEXT("正在关闭当前房间。"));
-			OutPresentation.DetailText = FText::FromString(TEXT("等待 DestroySession 完成回调。"));
-			OutPresentation.ReasonText = FText::FromString(TEXT("等待平台 Session 销毁确认。"));
-			return true;
+			OutPresentation.StatusText = FText::FromString(TEXT("正在离开房间…"));
 		}
-		if (Snapshot.ActiveOperation == ECatOnlineOperation::Leave && Snapshot.WorldState == ECatOnlineWorldState::Lake)
+		else if (Snapshot.ActiveOperation == ECatOnlineOperation::Leave && Snapshot.WorldState == ECatOnlineWorldState::Lake)
 		{
-			OutPresentation.StatusText = Snapshot.SessionRole == ECatOnlineSessionRole::Host
-				? FText::FromString(TEXT("正在保存并收尾当前游戏。"))
-				: FText::FromString(TEXT("正在离开当前游戏。"));
-			OutPresentation.DetailText = Snapshot.SessionRole == ECatOnlineSessionRole::Host
-				? FText::FromString(TEXT("等待存档和本局收尾完成。"))
-				: FText::FromString(TEXT("等待客户端离开当前会话。"));
-			OutPresentation.ReasonText = FText::FromString(TEXT("等待 Leave 链路进入 DestroySession 或前台旅行。"));
-			return true;
+			OutPresentation.StatusText = Snapshot.bLocalRoomActive || Snapshot.SessionRole == ECatOnlineSessionRole::Host
+				? FText::FromString(TEXT("正在保存并离开游戏…"))
+				: FText::FromString(TEXT("正在离开游戏…"));
 		}
-		if (Snapshot.bIsMapPreloadPending && Snapshot.WorldState == ECatOnlineWorldState::TravelingToFrontend)
+		else
 		{
-			OutPresentation.StatusText = FText::FromString(TEXT("正在读取主菜单世界。"));
-			OutPresentation.DetailText = Snapshot.bHasMapLoadProgress && !Snapshot.MapLoadProgressStatus.IsEmpty()
-				? FText::FromString(Snapshot.MapLoadProgressStatus)
-				: FText::FromString(TEXT("等待 Frontend 地图包预载完成。"));
-			OutPresentation.ReasonText = FText::FromString(TEXT("等待 LoadPackageAsync 完成。"));
-			return true;
+			OutPresentation.StatusText = FText::FromString(TEXT("正在准备主菜单…"));
 		}
-		FText EngineStatusText;
-		FText EngineDetailText;
-		FText EngineReasonText;
-		if (TryGetEngineLoadingReason(Snapshot, true, EngineStatusText, EngineDetailText, EngineReasonText))
-		{
-			OutPresentation.StatusText = EngineStatusText;
-			OutPresentation.DetailText = EngineDetailText;
-			OutPresentation.ReasonText = EngineReasonText;
-			return true;
-		}
-		if (Snapshot.WorldState == ECatOnlineWorldState::TravelingToFrontend
-			|| Snapshot.TransportState == ECatOnlineTransportState::TravelQueued)
-		{
-			OutPresentation.StatusText = FText::FromString(TEXT("正在切换到主菜单。"));
-			OutPresentation.DetailText = FText::FromString(TEXT("等待 PostLoadMap 确认 Frontend 世界。"));
-			OutPresentation.ReasonText = FText::FromString(TEXT("等待 ServerTravel 或 ClientTravel 完成。"));
-			return true;
-		}
-		OutPresentation.StatusText = FText::FromString(TEXT("正在创建主菜单界面。"));
-		OutPresentation.DetailText = FText::FromString(TEXT("等待 Frontend Root 进入视口。"));
-		OutPresentation.ReasonText = FText::FromString(TEXT("等待 LocalPlayer Frontend UI 装配完成。"));
 		return true;
 	}
 	return false;
@@ -1132,38 +1097,26 @@ void UCatLocalPlayerUISubsystem::HideGlobalLoadingScreen()
 }
 
 // 完成态遮罩移除请求流程：
-// 1. 根据刚完成的 Start/Leave 写入真实完成文案，Start 明确显示总进度 100%，Leave 仍不显示进度条。
+// 1. 仅为进入游戏展示完成文案与 100%；退出或其他操作直接撤罩，主菜单就绪后不再人为等待。
 // 2. 从 UI 设置读取最短展示秒数并换成单调时间；这段等待发生在加载全部完成之后，只服务玩家看清完成态。
 // 3. 复用显示时已注册的 Slate 观察；若 Slate 不可用则直接清理，避免完成状态留下无法消费的停留请求。
 void UCatLocalPlayerUISubsystem::RequestGlobalLoadingDismissalAfterPresentation(
 	const ECatOnlineOperation CompletedOperation)
 {
-	if (CompletedOperation != ECatOnlineOperation::Start && CompletedOperation != ECatOnlineOperation::Leave)
+	if (CompletedOperation != ECatOnlineOperation::Start)
 	{
 		HideGlobalLoadingScreen();
 		return;
 	}
 	bGlobalLoadingDismissalPending = true;
 	FCatGlobalLoadingPresentation Presentation;
-	if (CompletedOperation == ECatOnlineOperation::Start)
-	{
-		Presentation.HeadingText = FText::FromString(TEXT("正在进入游戏"));
-		Presentation.StatusText = FText::FromString(TEXT("游戏世界准备完成。"));
-		Presentation.DetailText = FText::FromString(TEXT("本地玩家界面已就绪。"));
-		Presentation.ReasonText = FText::FromString(TEXT("准备完成，马上开始旅程。"));
-		Presentation.bShowProgressBar = true;
-		Presentation.bHasProgressPercent = true;
-		Presentation.ProgressPercent = 100.0f;
-	}
-	else
-	{
-		Presentation.HeadingText = FText::FromString(TEXT("正在返回主菜单"));
-		Presentation.StatusText = FText::FromString(TEXT("主菜单准备完成。"));
-		Presentation.DetailText = FText::FromString(TEXT("主菜单界面已就绪。"));
-		Presentation.ReasonText = FText::FromString(TEXT("准备完成，马上返回主菜单。"));
-		Presentation.bShowProgressBar = false;
-		Presentation.bHasProgressPercent = false;
-	}
+	Presentation.HeadingText = FText::FromString(TEXT("正在进入游戏"));
+	Presentation.StatusText = FText::FromString(TEXT("游戏世界准备完成。"));
+	Presentation.DetailText = FText::FromString(TEXT("本地玩家界面已就绪。"));
+	Presentation.ReasonText = FText::FromString(TEXT("准备完成，马上开始旅程。"));
+	Presentation.bShowProgressBar = true;
+	Presentation.bHasProgressPercent = true;
+	Presentation.ProgressPercent = 100.0f;
 	ShowGlobalLoadingScreen(Presentation);
 	const UCatUISettings* UISettings = GetDefault<UCatUISettings>();
 	const double HoldSeconds = UISettings ? UISettings->GetGlobalLoadingCompletionHoldSeconds() : 0.0;

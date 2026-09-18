@@ -135,10 +135,8 @@ public:
 	void CancelAltarDayTransition(ACatAltarActor* Altar, const FText& Error);
 	/** 供 owning client 在成像归档已收口后提交结算完成终态；本方法只发送 StateTree 事件，不在 C++ 选择目标 Phase。 */
 	FCatRunCommandResult CompleteSettlementFromServerRequest(FGuid RequestId, int64 ExpectedRevision);
-	/** Host 离局前关闭新命令、计时器和 StateTree；结果原样携带 Online RequestId/epoch。 */
+	/** 返回主菜单前同步关闭新命令、计时器和 StateTree 并通知远端；不等待个人记录或远端退出回执，重复请求不重复清理。 */
 	FCatRunTeardownResult RequestRunTeardown(const FCatRunTeardownRequest& Request);
-	/** 返回 Run teardown 终态委托；Online 必须在回调中再次核对 RequestId/epoch。 */
-	FCatRunTeardownCompleted& OnRunTeardownCompleted();
 	/** 返回服务器 Run 聚合的只读公开事实；客户端应读取 GameState 的复制副本。 */
 	const FCatRunPublicState& GetRunPublicState() const;
 #if !UE_BUILD_SHIPPING
@@ -155,10 +153,6 @@ public:
 #endif
 	/** Online Client 主动离局前标记当前 Controller；Logout 据此按 VoluntaryLeaveRecovery 决定是否保留重连准入。 */
 	void MarkVoluntaryLeave(AController* Controller);
-	/** 远端 Client 完成本地 DestroySession 后确认同一 Host exit RequestId；全部确认后再复核最终 Grant ACK。 */
-	void AcknowledgeHostExitClient(AController* Controller, FGuid RequestId);
-	/** owning client 完成真实 Profile Grant ACK 后复核 Host exit 的全部依赖；只在远端 Destroy ACK 也齐全时提前 Ready。 */
-	void NotifyHostExitGrantAckProgress();
 	/** 只读判断当前 Controller 是否仍为 Active 且 Run 玩法命令门开放；teardown/回执协议不调用该 gate。 */
 	bool CanAcceptGameplayCommand(const AController* Controller) const;
 	/** 白天和夜晚均可操作鱼竿/打窝；仍要求 Active 身份、本局命令开放且角色未倒地。 */
@@ -311,8 +305,6 @@ private:
 #endif
 	/** 启动 gate 失败时保持 NotStarted、关闭写口并发布 StartupFailed，不回退为 C++ 状态机。 */
 	void FailRunStartup(const TCHAR* Reason);
-	/** 远端销毁 ACK 或精确 Logout 全齐且 Profile Grant ACK 全部到达后广播 Ready；重复完成不会触发第二次 Online Destroy。 */
-	void CompleteHostExitWait();
 	/** 把商店当前余额、货架库存和公开交易记录整体发布给 GameState。 */
 	void PublishShopEconomySnapshot();
 	/** 将服务器私有 StableNetId 解析成可复制的 PlayerState。 */
@@ -364,18 +356,8 @@ private:
 	FTimerHandle DayMorningEnvironmentRefreshTimerHandle;
 	/** 白天 Day 转 Dusk 的语义刷新句柄；它只触发同一 RunPublicState 重发，不决定 Phase。 */
 	FTimerHandle DayDuskEnvironmentRefreshTimerHandle;
-	/** Host teardown 完成通知；它不复制且只在服务器 GameMode 生命周期内有效。 */
-	FCatRunTeardownCompleted RunTeardownCompleted;
 	/** 已成功发布自然空间窝点的 Run+Day+Event+Anchor 键；只活在本 GameMode，防止环境刷新重复创建。 */
 	TSet<FString> SubmittedNaturalChumFieldKeys;
-	/** 当前 Host exit 仍待离局的远端 StableNetId；销毁 ACK 或精确 Logout 消费，不代表永久 Grant 已落盘。 */
-	TSet<FString> PendingHostExitRemoteStableNetIds;
-	/** 当前 Host exit 的关联 RequestId；远端销毁 ACK 必须匹配，Logout 则必须匹配仍 Active 的 Controller。 */
-	FGuid ActiveHostExitRequestId;
-	/** 当前 Host exit 的 Online epoch；完成广播原样返回，迟到 ACK 不进入下一代。 */
-	int64 ActiveHostExitOperationEpoch = 0;
-	/** 当前 Host exit 是否已完成远端离局和最终 Grant ACK 等待；真实 Logout 不冒充远端销毁或档案落盘成功。 */
-	bool bHostExitWaitComplete = false;
 	/** 商店公开经济变化的服务器本机订阅；EndPlay 成对解除，避免失效 World 回调。 */
 	FDelegateHandle ShopPublicTransactionHandle;
 

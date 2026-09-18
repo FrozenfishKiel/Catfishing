@@ -1,6 +1,8 @@
 # UI WBP 拼装接口清单
 
-文档状态：当前代码与 Frontend / 局内菜单接口核对版（2026-09-08）
+文档状态：当前代码与 Frontend / 局内菜单接口核对版（退出合同更新于 2026-09-18，打包表现待人工验收）
+
+退出合同事实来源：2026-09-18 用户确认允许未确认图鉴记录丢失；`UCatOnlineSubsystem::BeginHostRunTeardown`、`ACatfishingGameModeBase::RequestRunTeardown` 和 `UCatLocalPlayerUISubsystem::ShouldShowGlobalLoadingScreen`。
 
 范围：这份文档只说明当前项目给 WBP 提供的父类、控件名、蓝图事件、蓝图可调用函数和只读数据。它用于手工重做 UI 样式，不作为验收文档，也不规定最终美术风格。
 
@@ -149,7 +151,7 @@ Root 会在五个子 WBP 的 WidgetTree 内按名称解析以下关键控件：�
 
 普通 Escape 对应 `IA_LakeMenu`，用于打开或关闭局内菜单；PIE 里的 Shift+Escape 保留给编辑器停止运行。这个键位关系由局内菜单 Controller 和 `Source/CatfishingEditor/CatfishingEditor.cpp` 一起维护，WBP 不需要自己判断编辑器停止运行。
 
-`退出到主菜单` 和 `退出游戏` 是两条不同意图：前者交给 Online 的 Leave 链路异步完成保存、拆局、Session 销毁和回前台旅行，等待期间显示全局加载遮罩且不使用固定倒计时上限；后者直接调用本地 `QuitGame` 退出游戏进程。
+`退出到主菜单` 和 `退出游戏` 是两条不同意图：前者交给 Online 的 Leave 链路异步完成保存、拆局、Session 销毁和回前台旅行，世界保存完成后同步清理本局，不等待图鉴 ACK 或远端退出回执；未确认记录按 2026-09-18 用户裁决允许丢失并记日志。等待期间显示全局遮罩，不使用固定倒计时；后者直接调用本地 `QuitGame` 退出游戏进程。
 
 ### 运行链路
 
@@ -182,7 +184,7 @@ Root 会在五个子 WBP 的 WidgetTree 内按名称解析以下关键控件：�
 | `LoadingProgressTextBlock` | `TextBlock` | Start、Leave 或 Travel 的阶段文本；由 LocalPlayer UI 从 Online 快照派生。 |
 | `LoadingProgressBar` | `ProgressBar` | 进入游戏时按真实 gate 合成总进度，其中地图包区间读取引擎异步百分比；退出到主菜单会被 C++ 折叠，资产侧可改成旋转等待动画。 |
 | `LoadingDayTextBlock` | `TextBlock` | 全局遮罩下显示“正在切换世界”，只表达当前旅行阶段。 |
-| `LoadingProgressTextBlock` | `TextBlock` | 全局遮罩下显示当前真实等待细节，例如地图包百分比、DestroySession 回调、PostLoadMap 确认或 Frontend Root 入视口。 |
+| `LoadingProgressTextBlock` | `TextBlock` | 进入游戏时显示真实加载细节；退出时只显示保存、离开游戏或准备主菜单，内部回调和世界状态仅记日志。 |
 
 ### 设置页控件名
 

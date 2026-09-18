@@ -100,6 +100,14 @@
 
 本轮删减审查保留了必要的三处边界：SaveGame 对象承接引擎生命周期；一次性完成委托衔接 Online 的真实落盘回执；文件头检查阻止已复现的引擎旧格式回退断言。库存载荷只保留一套预检，旧 FormatVersion 和装备磁盘 DTO 因 v5 消费者继续保留。没有新增配置、业务进度清单或并行存档实现。
 
+## 2026-09-18 返回主菜单边界（现行）
+
+状态：代码已调整，打包双端表现待人工验收。事实来源：本轮用户明确要求仅清理退出边界并接受未确认图鉴丢失；`UCatOnlineSubsystem::RequestLeave/BeginHostRunTeardown`、`ACatfishingGameModeBase::RequestRunTeardown` 及 `UCatRunImprintService::PrepareForRunTeardown`。
+
+返回主菜单仍先沿唯一世界保存入口保存，再同步关闭玩法命令、计时器和 StateTree、末次投递个人记录并通知远端，随后关闭会话并回 Frontend。本地单人跳过平台会话销毁。退出不再等待图鉴 ACK、客户端销毁 ACK 或 Logout；未确认数量写入 `run_teardown_unconfirmed_grants`，不伪造永久档案写入成功。图鉴账号归属与持久化未修改，未确认记录可能随世界卸载丢失。退出只发布关闭状态，不再重新求值天气、生成自然窝点或修改角色淋湿状态。
+
+下面 09-11 的等待集合、ACK 回执、完成委托及对应测试属于已被替换的历史实现，不再是现行接线或验收要求；保留原始故障与证据用于追溯。
+
 ## 2026-09-11 房主保存退出卡住修复
 
 故障证据是 `打包/Windows/Catfishing/Saved/Logs/Catfishing-backup-2026.09.11-09.21.13.log`：09:20:38 UTC，退出 RequestId `6944D663-4D62-C2A8-A727-BDB64BC4FCFC` 的保存已经 `Verified=1`、`Success=1`；随后 `run_teardown_pending` 为 `PendingRemoteAcks=1 PendingGrantAcks=0`。约 0.18 秒后远端断开并触发 `identity_released Result=ControllerMatched`，房主仍未开始 Destroy/Frontend travel。当前客户端 `HandleDestroySessionComplete` 在平台销毁后才提交末次 Reliable RPC，随后马上旅行；连接结束后不能保证该 RPC 送达。原 `Logout` 删除准入身份却没有解除退出等待，使后续 ACK 也无法再通过 Active Controller 校验。

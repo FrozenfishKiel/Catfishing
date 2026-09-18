@@ -417,7 +417,7 @@ struct FCatRunPublicState
 	UPROPERTY(BlueprintReadOnly)
 	ECatRunEndReason EndReason = ECatRunEndReason::None;
 
-	/** Host teardown 是否已经停止本地写口并完成远端 Destroy/最终 Grant ACK 的统一有界收口；Pending 期间保持 false。 */
+	/** 本局是否已完成退出清理；GameMode 关闭玩法写口并通知远端后置为 true，供 Online 继续销毁会话及重复请求幂等判断，不代表个人记录已落盘。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bTeardownComplete = false;
 };
@@ -545,19 +545,17 @@ struct FCatRunTransitionResult
 	int64 Revision = 0;
 };
 
-/** Host Online Leave 发给 Run 的 teardown 状态；Pending 表示当前 Fishing/Social/FishContainers/Imprint/remote ACK 的统一有界收口尚未完成。 */
+/** Online 离开请求对应的同步本局清理结果；只报告能否继续销毁会话，不等待远端或个人记录确认。 */
 UENUM()
 enum class ECatRunTeardownStatus : uint8
 {
 	/** Run 已完成本阶段全部收口，Online 可以继续 DestroySession。 */
 	Ready,
-	/** 当前管线已关闭并收口 Fishing/Social/FishContainers/Imprint，正在有界等待远端退出 ACK 与 durable Grant ACK；Online 必须等待同一 RequestId/epoch 回调。 */
-	Pending,
 	/** Run 无法安全收口，Online 必须停止 Destroy/旅行链。 */
 	Failed
 };
 
-/** Online 与 Run teardown 的关联请求；Online RequestId 与 epoch 必须原样贯穿迟到回调过滤。 */
+/** Online 与 Run teardown 的关联请求；Online RequestId 与 epoch 原样用于同步结果与日志关联。 */
 USTRUCT()
 struct FCatRunTeardownRequest
 {
@@ -566,11 +564,11 @@ struct FCatRunTeardownRequest
 	/** 当前 Online Leave 的稳定 RequestId。 */
 	FGuid RequestId;
 
-	/** 当前 Online 操作代际；完成回调必须精确匹配，失效 World 结果不得推进新退出。 */
+	/** 当前 Online 操作代际；与 RequestId 一起区分每次退出操作。 */
 	int64 OperationEpoch = 0;
 };
 
-/** Run teardown 的结构化结果；Ready/Pending/Failed 均携带原 RequestId/epoch，供 Online 幂等过滤。 */
+/** Run teardown 的结构化结果；Ready/Failed 均携带原 RequestId/epoch，供调用方关联当前退出请求。 */
 USTRUCT()
 struct FCatRunTeardownResult
 {
@@ -585,12 +583,10 @@ struct FCatRunTeardownResult
 	/** 与请求相同的 Online epoch。 */
 	int64 OperationEpoch = 0;
 
-	/** Failed 的结构化原因；Ready/Pending 保持 None。 */
+	/** Failed 的结构化原因；Ready 保持 None。 */
 	ECatRunCommandError Error = ECatRunCommandError::None;
 };
 
-/** Run teardown 终态通知；Online 订阅后仍必须复核 RequestId 与 epoch，避免同步或迟到完成重入。 */
-DECLARE_MULTICAST_DELEGATE_OneParam(FCatRunTeardownCompleted, const FCatRunTeardownResult&);
 
 /** Core 中的 Environment 只读求值接口；Run 只认识该合同，不依赖 Environment 具体实现。 */
 UINTERFACE(MinimalAPI)

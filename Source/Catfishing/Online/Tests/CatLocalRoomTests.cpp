@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "Collection/CatRunImprintService.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
@@ -35,6 +36,8 @@ class FCatLocalTravelCommand : public IAutomationLatentCommand
 public:
  FCatLocalTravelCommand(FAutomationTestBase* InTest, UGameInstance* InGame)
  : Test(InTest), Game(InGame), Started(FPlatformTime::Seconds()), Name(TEXT("离线回归_") + FGuid::NewGuid().ToString().Left(8)) {}
+ // 逐帧驱动正式菜单：创建隔离槽、进入游戏，向不存在的测试接收者生成未确认记录，再点击手动保存并等写入结束。
+ // 随后退出，等主菜单根界面入视口且遮罩撤下，再重读存档；阶段未就绪继续等下一帧，失败或超时立即报告。
  virtual bool Update() override
  {
    if (!Game.IsValid())
@@ -132,8 +135,26 @@ public:
      UI->LakeMainMenuController->ToggleMenu();
      Phase = 90; break;
    case 90:
-     // 既有在线退出也会报告此精确错误（ListenHandoff-SteamVerified.log）；只隔离本次 teardown 的一个已知事件。
-     Test->AddExpectedError(TEXT("Event=environment_evaluation_failed RunId=.* Revision=[0-9]+ SourceRunRevision=[0-9]+ Error=TimeOfDayUnavailable"), EAutomationExpectedErrorFlags::Contains, 1);
+     // 只向不存在的测试接收者生成未确认记录，不写任何真实玩家档案；完整退出链必须仍能返回。
+     {
+       UCatRunImprintService* Imprint = Game->GetWorld()->GetSubsystem<UCatRunImprintService>();
+       if (!Test->TestNotNull(TEXT("Gameplay imprint service exists"), Imprint)) { return true; }
+       if (!Test->TestTrue(TEXT("Real pending record created before manual save"),
+         Imprint->RecordCommittedUnlock(TEXT("ExitRegressionOnly"), TEXT("ExitRegressionAbsentRecipient")).IsValid())) { return true; }
+       Test->TestEqual(TEXT("Pending record has no fabricated ACK"), Imprint->GetPendingGrantAckCount(), 1);
+       Test->AddExpectedMessage(TEXT("Event=run_teardown_unconfirmed_grants"), EAutomationExpectedMessageFlags::Contains, 1);
+     }
+     if (!Test->TestNotNull(TEXT("Formal in-game menu exists before save"), UI->LakeMainMenuWidget.Get())) { return true; }
+     {
+       auto* SaveButton = Cast<UButton>(UI->LakeMainMenuWidget->GetWidgetFromName(TEXT("SaveButton")));
+       if (!Test->TestNotNull(TEXT("Formal save button exists"), SaveButton)) { return true; }
+       Test->TestTrue(TEXT("Manual save button enabled"), SaveButton->GetIsEnabled());
+       SaveButton->OnClicked.Broadcast();
+       if (!Test->TestTrue(TEXT("Manual save queued"), Save->IsBusy())) { return true; }
+     }
+     Phase = 91; break;
+   case 91:
+     if (Save->IsBusy()) { return false; }
      if (!Test->TestNotNull(TEXT("Formal in-game menu exists"), UI->LakeMainMenuWidget.Get())) { return true; }
      {
        auto* Return = Cast<UButton>(UI->LakeMainMenuWidget->GetWidgetFromName(TEXT("ReturnToMainMenuButton")));
@@ -145,6 +166,11 @@ public:
      Phase = 10; break;
    case 10:
      if (!Test->TestEqual(TEXT("Save and return reaches frontend"), Snapshot.WorldState, ECatOnlineWorldState::Frontend)) { return true; }
+     // 地图到达不等于玩家可操作；等待正式根界面入视口且遮罩真实撤下，再继续重读存档。
+     if (!UI->IsFrontendLoadingReadyToDismiss(Snapshot)
+       || (UI->GlobalLoadingScreenWidget && UI->GlobalLoadingScreenWidget->IsInViewport())) { return false; }
+     Test->TestTrue(TEXT("Returned frontend root visible"), UI->FrontendRootWidget && UI->FrontendRootWidget->IsInViewport());
+     FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir() / TEXT("Screenshots/LocalRoom-Returned.png"), true, false);
      Test->TestFalse(TEXT("Return clears local room"), Snapshot.bLocalRoomActive);
      Test->TestTrue(TEXT("Return releases save"), Save->GetActiveSlotId().IsNone());
      Test->TestNull(TEXT("Return has no driver"), Game->GetWorld()->GetNetDriver());

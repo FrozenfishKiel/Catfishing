@@ -754,24 +754,12 @@ void ACatfishingPlayerController::ClientReceiveProfileGrant_Implementation(const
 	}
 }
 
-// Profile ACK 服务器流程：先让 RunImprintService 以当前 Controller 核对并推进独立 DeliveryRecord；真实 ACK 成功或已重放后再通知 GameMode 复核 Host exit 统一等待。
+// 个人记录确认流程：将当前 Controller 和记录编号交给唯一投递服务校验并更新 ACK；不再推进或阻塞退出。
 void ACatfishingPlayerController::ServerAcknowledgeProfileGrant_Implementation(const FGuid GrantId)
 {
 	if (UCatRunImprintService* Service = GetWorld() ? GetWorld()->GetSubsystem<UCatRunImprintService>() : nullptr)
 	{
-		const FCatDomainCommandResult AckResult = Service->AcknowledgeGrant(this, GrantId);
-		if (AckResult.bCommitted || AckResult.Error == ECatDomainCommandError::AlreadyResolved)
-		{
-			FCatProfileGrant AcknowledgedGrant;
-			if (Service->TryGetAcknowledgedGrant(GrantId, AcknowledgedGrant)
-				&& AcknowledgedGrant.Kind == ECatProfileGrantKind::Unlock)
-			{
-			}
-			if (ACatfishingGameModeBase* GameMode = GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>())
-			{
-				GameMode->NotifyHostExitGrantAckProgress();
-			}
-		}
+		Service->AcknowledgeGrant(this, GrantId);
 	}
 }
 
@@ -1778,22 +1766,13 @@ void ACatfishingPlayerController::ServerMarkVoluntaryLeave_Implementation()
 	}
 }
 
-// Host exit 客户端流程：从本地 GameInstance 取得唯一 Online 子系统并提交服务器关联 RequestId；子系统只在本地 DestroySession 成功后回 ACK，失败会让 Host 继续等待真实回执。
+// Host exit 客户端流程：从本地 GameInstance 取得唯一 Online 子系统并提交服务器关联 RequestId；本机独立完成会话清理和返回主菜单，不向房主提交退出回执。
 void ACatfishingPlayerController::ClientPrepareForHostExit_Implementation(const FGuid RequestId)
 {
 	UGameInstance* GameInstance = GetGameInstance();
 	if (UCatOnlineSubsystem* Online = GameInstance ? GameInstance->GetSubsystem<UCatOnlineSubsystem>() : nullptr)
 	{
 		Online->RequestRemoteHostExit(RequestId);
-	}
-}
-
-// Host exit ACK 服务器流程：只把当前 Controller 与关联键交给 authority GameMode；RPC 自身不销毁 Session、不旅行或更改 Run。
-void ACatfishingPlayerController::ServerAcknowledgeHostExit_Implementation(const FGuid RequestId)
-{
-	if (ACatfishingGameModeBase* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr)
-	{
-		GameMode->AcknowledgeHostExitClient(this, RequestId);
 	}
 }
 

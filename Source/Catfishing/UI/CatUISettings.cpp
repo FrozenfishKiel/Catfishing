@@ -223,7 +223,7 @@ UInputMappingContext* UCatUISettings::LoadGameplayInputMappingContext() const
 	return GameplayInputMappingContext.LoadSynchronous();
 }
 
-// 完成态停留读取流程：读取项目 UI 设置中的秒数，非法浮点或负值按 0 处理；调用方只在加载真实完成后使用这个值决定遮罩何时撤下。
+// 完成态停留读取流程：读取项目 UI 设置中的秒数，非法浮点或负值按 0 处理；UI 只在进入游戏真实就绪后使用此值，返回主菜单不读取它延迟撤罩。
 float UCatUISettings::GetGlobalLoadingCompletionHoldSeconds() const
 {
 	return FMath::IsFinite(GlobalLoadingCompletionHoldSeconds)

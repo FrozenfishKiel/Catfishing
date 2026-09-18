@@ -215,7 +215,6 @@ void UCatOnlineSubsystem::Deinitialize()
 	ClearRunReleaseDelegate();
 	bReleaseActiveRunOnFrontend = false;
 	ClearHostLeaveSaveDelegate();
-	ClearRunTeardownDelegate();
 	ClearOperationDelegates();
 	ClearInviteDelegate();
 	StopLobbyFactPolling();
@@ -262,7 +261,6 @@ void UCatOnlineSubsystem::Deinitialize()
 	InviteSummaries.Reset();
 	ExpectedPackage.Reset();
 	GameplayMapPackage.Reset();
-	PendingHostExitAckRequestId.Invalidate();
 	ActiveOperation = ECatOnlineOperation::None;
 	OperationRole = ECatOnlineSessionRole::None;
 	bLocalOperation = false;
@@ -1559,7 +1557,7 @@ FCatOnlineResult UCatOnlineSubsystem::BeginOperation(const ECatOnlineOperation O
 	return Result;
 }
 
-// 远端 Host exit 流程：先拒绝并发并验证 Lake Client 与服务器关联键；受理后不提交主动离局标记，保存 Destroy 后的 ACK 键并允许 Client 回前台后释放本机载荷，复用同一 Leave 状态机。
+// 远端 Host exit 流程：先拒绝并发并验证 Lake Client 与服务器关联键；受理后不提交主动离局标记，允许 Client 回前台后释放本机载荷，复用同一 Leave 状态机。
 FCatOnlineResult UCatOnlineSubsystem::RequestRemoteHostExit(const FGuid HostExitRequestId)
 {
 	UE_LOG(LogCatOnline, Log,
@@ -1584,10 +1582,8 @@ FCatOnlineResult UCatOnlineSubsystem::RequestRemoteHostExit(const FGuid HostExit
 	}
 	OperationRole = ECatOnlineSessionRole::Client;
 	bReleaseActiveRunOnFrontend = true;
-	PendingHostExitAckRequestId = HostExitRequestId;
 	if (!BeginDestroySession(ECatOnlineError::None))
 	{
-		PendingHostExitAckRequestId.Invalidate();
 		Result.bAccepted = false;
 		Result.Error = LastError;
 	}
@@ -2145,7 +2141,8 @@ void UCatOnlineSubsystem::ClearRunReleaseDelegate()
 	RunReleaseSaveSubsystem.Reset();
 }
 
-// Host Run 收口流程：保存成功后取得当前 authority GameMode 并在调用前绑定完成委托，再提交携带 Online RequestId/epoch 的 teardown；同步广播可能重入本子系统，因此返回后只在操作仍属于本代时解释直接结果。
+// 退出收尾流程：取得本机权威 GameMode，同步提交当前退出请求；清理失败就报告错误，成功直接进入会话销毁。
+// GameMode 不再异步等待图鉴和远端退出，因此这里不持有完成委托，也不保留旧 World 的等待状态。
 bool UCatOnlineSubsystem::BeginHostRunTeardown()
 {
 	UWorld* World = GetWorld();
@@ -2155,39 +2152,10 @@ bool UCatOnlineSubsystem::BeginHostRunTeardown()
 		FinishOperationFailure(ECatOnlineError::RunTeardownFailed);
 		return false;
 	}
-
-	ClearRunTeardownDelegate();
-	RunTeardownGameMode = GameMode;
-	RunTeardownHandle = GameMode->OnRunTeardownCompleted().AddUObject(this, &ThisClass::HandleRunTeardownCompleted);
-	const FGuid SubmittedRequestId = ActiveRequestId;
-	const uint64 SubmittedEpoch = OperationEpoch;
 	FCatRunTeardownRequest Request;
-	Request.RequestId = SubmittedRequestId;
-	Request.OperationEpoch = static_cast<int64>(SubmittedEpoch);
+	Request.RequestId = ActiveRequestId;
+	Request.OperationEpoch = static_cast<int64>(OperationEpoch);
 	const FCatRunTeardownResult Result = GameMode->RequestRunTeardown(Request);
-
-	const bool bStillCurrent = ActiveOperation == ECatOnlineOperation::Leave
-		&& IsAuthorityOperation()
-		&& ActiveRequestId == SubmittedRequestId
-		&& OperationEpoch == SubmittedEpoch
-		&& RunTeardownHandle.IsValid();
-	if (!bStillCurrent)
-	{
-		return true;
-	}
-	if (Result.RequestId != SubmittedRequestId || Result.OperationEpoch != static_cast<int64>(SubmittedEpoch))
-	{
-		ClearRunTeardownDelegate();
-		FinishOperationFailure(ECatOnlineError::RunTeardownFailed);
-		return false;
-	}
-	if (Result.Status == ECatRunTeardownStatus::Pending)
-	{
-		BroadcastSnapshot(TEXT("online_run_teardown_pending"));
-		return true;
-	}
-
-	ClearRunTeardownDelegate();
 	if (Result.Status != ECatRunTeardownStatus::Ready)
 	{
 		FinishOperationFailure(ECatOnlineError::RunTeardownFailed);
@@ -2792,57 +2760,10 @@ void UCatOnlineSubsystem::HandleDestroySessionComplete(const FName SessionName, 
 		}
 		return;
 	}
-	if (OperationRole == ECatOnlineSessionRole::Client && PendingHostExitAckRequestId == ActiveRequestId)
-	{
-		if (ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr))
-		{
-			Controller->ServerAcknowledgeHostExit(PendingHostExitAckRequestId);
-			// 这里只能证明 RPC 已提交；Steam 销毁/旅行可能先断线，Host 还会按真实 Logout 收口。
-			UE_LOG(LogCatOnline, Log,
-				TEXT("Event=online_host_exit_ack_submitted RequestId=%s Epoch=%llu World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s Result=RpcSubmitted"),
-				*PendingHostExitAckRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch,
-				*GetNameSafe(GetWorld()), static_cast<int32>(Controller->GetNetMode()), Controller->HasAuthority(),
-				static_cast<int32>(Controller->GetLocalRole()), *GetNameSafe(Controller));
-		}
-		else
-		{
-			UE_LOG(LogCatOnline, Warning,
-				TEXT("Event=online_host_exit_ack_unavailable RequestId=%s Epoch=%llu World=%s NetMode=%d Result=ControllerMissing"),
-				*PendingHostExitAckRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch,
-				*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE);
-		}
-		PendingHostExitAckRequestId.Invalidate();
-	}
 	if (!BeginTravelToFrontend())
 	{
 		FinishOperationFailure(ECatOnlineError::TravelRejected);
 	}
-}
-
-// Run teardown 完成流程：先核对当前仍是同一 Host Leave 及相同 RequestId/epoch，再解绑精确 GameMode；Ready 进入唯一 Destroy 链，Failed 以 Online 错误结案，Pending 通知仅保留等待。
-void UCatOnlineSubsystem::HandleRunTeardownCompleted(const FCatRunTeardownResult& Result)
-{
-	if (ActiveOperation != ECatOnlineOperation::Leave
-		|| !IsAuthorityOperation()
-		|| Result.RequestId != ActiveRequestId
-		|| Result.OperationEpoch != static_cast<int64>(OperationEpoch))
-	{
-		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_callback_ignored Callback=RunTeardown RequestId=%s Epoch=%lld CurrentEpoch=%llu"),
-			*Result.RequestId.ToString(EGuidFormats::DigitsWithHyphens), Result.OperationEpoch, OperationEpoch);
-		return;
-	}
-	if (Result.Status == ECatRunTeardownStatus::Pending)
-	{
-		return;
-	}
-
-	ClearRunTeardownDelegate();
-	if (Result.Status != ECatRunTeardownStatus::Ready)
-	{
-		FinishOperationFailure(ECatOnlineError::RunTeardownFailed);
-		return;
-	}
-	BeginDestroySession(ECatOnlineError::None);
 }
 
 // 邀请接受流程：先核对真实平台结果、单本地玩家账号与房间匹配性，再拒绝忙或已有会话，绝不替用户离房。
@@ -3335,7 +3256,7 @@ void UCatOnlineSubsystem::ReleasePreloadedMapWorld(TObjectPtr<UWorld>& Preloaded
 }
 
 // 成功结案流程：获准释放的 Leave 先确认无会话且回到 Frontend，再交给释放收口；busy 时不提前宣告退出完成。
-// 释放已完成或无需释放时，撤销许可并解绑两类 Save、Run 与平台回调；Start 成功只清地图包请求并保留玩法预热 handle，回到 Frontend 的终态才释放本局预热资源；最后推进 epoch 并广播成功，不改真实 Session/World/Transport。
+// 释放已完成或无需释放时，撤销许可并解绑两类 Save 与平台回调；Start 成功只清地图包请求并保留玩法预热 handle，回到 Frontend 的终态才释放本局预热资源；最后推进 epoch 并广播成功，不改真实 Session/World/Transport。
 void UCatOnlineSubsystem::FinishOperationSuccess()
 {
 	if (ActiveOperation == ECatOnlineOperation::Leave && bReleaseActiveRunOnFrontend
@@ -3351,7 +3272,6 @@ void UCatOnlineSubsystem::FinishOperationSuccess()
 	bReleaseActiveRunOnFrontend = false;
 	ClearRunReleaseDelegate();
 	ClearHostLeaveSaveDelegate();
-	ClearRunTeardownDelegate();
 	ClearOperationDelegates();
 	StopMapPreloadProgressTracking();
 	ActiveSearch.Reset();
@@ -3361,7 +3281,6 @@ void UCatOnlineSubsystem::FinishOperationSuccess()
 	bLocalOperation = false;
 	DeferredFailureAfterDestroy = ECatOnlineError::None;
 	DeferredFailureAfterTravel = ECatOnlineError::None;
-	PendingHostExitAckRequestId.Invalidate();
 	if (bFinishingGameplayStart)
 	{
 		GameplayPreloadRequestId = INDEX_NONE;
@@ -3378,7 +3297,7 @@ void UCatOnlineSubsystem::FinishOperationSuccess()
 	BroadcastSnapshot(TEXT("online_operation_succeeded"));
 }
 
-// 失败结案流程：若 Leave 已安全清会话并回 Frontend 且获释放许可，保留原错误并等待载荷释放；保存失败没有许可，Destroy/返回失败未达到终态，均不清载荷。
+// 失败结案流程：若 Leave 已安全清会话并回 Frontend 且获释放许可，保留原错误并等待载荷释放；缺少释放许可或 Destroy/返回失败尚未达到终态时不清载荷。
 // 其他情况撤销释放许可并解绑所有等待，清操作和预载、使 epoch 失效；Start 失败或已经回到 Frontend 的 Leave 失败都会释放玩法预热资源，不按本地时间安排重试。
 void UCatOnlineSubsystem::FinishOperationFailure(const ECatOnlineError Error)
 {
@@ -3398,7 +3317,6 @@ void UCatOnlineSubsystem::FinishOperationFailure(const ECatOnlineError Error)
 	bReleaseActiveRunOnFrontend = false;
 	ClearRunReleaseDelegate();
 	ClearHostLeaveSaveDelegate();
-	ClearRunTeardownDelegate();
 	ClearOperationDelegates();
 	StopMapPreloadProgressTracking();
 	ActiveSearch.Reset();
@@ -3408,7 +3326,6 @@ void UCatOnlineSubsystem::FinishOperationFailure(const ECatOnlineError Error)
 	bLocalOperation = false;
 	DeferredFailureAfterDestroy = ECatOnlineError::None;
 	DeferredFailureAfterTravel = ECatOnlineError::None;
-	PendingHostExitAckRequestId.Invalidate();
 	if (bFinishingGameplayStart)
 	{
 		ClearGameplayStartupAssetsPreload(true);
@@ -3424,17 +3341,6 @@ void UCatOnlineSubsystem::FinishOperationFailure(const ECatOnlineError Error)
 	LastError = Error;
 	++OperationEpoch;
 	BroadcastSnapshot(TEXT("online_operation_failed"));
-}
-
-// Run teardown 解绑流程：仅在保存的 GameMode 仍有效且句柄有效时移除；随后无条件 Reset 两者，使同步回调、失败结案和 World 销毁可以安全重复清理。
-void UCatOnlineSubsystem::ClearRunTeardownDelegate()
-{
-	if (ACatfishingGameModeBase* GameMode = RunTeardownGameMode.Get(); GameMode && RunTeardownHandle.IsValid())
-	{
-		GameMode->OnRunTeardownCompleted().Remove(RunTeardownHandle);
-	}
-	RunTeardownHandle.Reset();
-	RunTeardownGameMode.Reset();
 }
 
 // 操作委托清理流程：只在保存的精确 Session 接口上逐一清理有效句柄；每个 Clear 同时 Reset 句柄，重复调用不会影响后续 epoch。

@@ -93,7 +93,7 @@ public:
 	/** 返回项目唯一 Gameplay Mapping Context；UI 只解析资产接线，不安装第二套 Context。 */
 	UInputMappingContext* LoadGameplayInputMappingContext() const;
 
-	/** 返回全局加载完成态最短展示秒数；调用方只在真实完成后读取它控制撤遮罩时机，不用它推进加载进度。 */
+	/** 返回进入游戏完成态最短展示秒数；UI 在真实就绪后读取它控制撤罩时机，不推进加载进度，也不延迟返回主菜单。 */
 	float GetGlobalLoadingCompletionHoldSeconds() const;
 
 	/** 从正式 IMC 中解析背包开关 Action 的第一个按键名；解析失败时返回 None。 */
@@ -191,7 +191,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Input")
 	TSoftObjectPtr<UInputMappingContext> GameplayInputMappingContext;
 
-	/** 全局加载遮罩完成态的最短停留时间，单位秒；只影响真实加载完成后的视觉收口，不参与 Online 状态、资源加载或进度合成。 */
+	/** 进入游戏完成态的最短展示时间，单位秒；由项目 UI 配置写入、加载遮罩读取，只影响进入游戏就绪后的视觉收口，不用于返回主菜单或加载进度。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Loading", meta = (ClampMin = "0.0", UIMin = "0.0", UIMax = "1.0"))
 	float GlobalLoadingCompletionHoldSeconds = 0.35f;
 

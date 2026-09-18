@@ -210,10 +210,10 @@ private:
 	/** 移除遮罩并成对停止 Slate 观察，清空阶段文本和过渡记忆；只释放本地表现，不改变 Online 操作。 */
 	void HideGlobalLoadingScreen();
 
-	/** 请求在完成态短暂停留后移除全局遮罩；Start/Leave 已完成但玩家还需要看清 100% 或完成状态时调用。 */
+	/** 进入游戏完成后短暂展示 100% 再撤罩；返回主菜单或其他操作调用时立即撤罩，不增加完成后的等待。 */
 	void RequestGlobalLoadingDismissalAfterPresentation(ECatOnlineOperation CompletedOperation);
 
-	/** 遮罩存活期间重读 World、Online 和本地 UI 就绪条件；真实完成后才检查完成文案停留时长并撤罩。 */
+	/** 遮罩存活期间重读 World、Online 和本地 UI 就绪条件；进入游戏完成后检查展示时长，返回主菜单就绪则立即撤罩。 */
 	void HandleGlobalLoadingPostTick(float DeltaTime);
 
 	/** 清空完成文案的待撤罩状态；重新等待时仍保留 Slate 观察，只有隐藏遮罩才移除订阅。 */
@@ -314,10 +314,10 @@ private:
 	/** 当前全局遮罩跟随的请求关联键；新 Start/Leave 请求会覆盖它，日志和迟到 UI 刷新可据此识别同一段等待。 */
 	FGuid GlobalLoadingRequestId;
 
-	/** 是否已经安排在完成态停留后移除遮罩；它代表 UI 收口等待，不代表 Online 还有加载任务。 */
+	/** 是否已安排进入游戏的完成态展示；UI 在加载就绪后写入，显示观察据此延后撤罩，不代表 Online 还有加载任务，也不用于退出。 */
 	bool bGlobalLoadingDismissalPending = false;
 
-	/** 全局加载完成态允许撤遮罩的最早单调时间，单位秒；只在真实完成后写入，值到达前不改变任何 Online 状态。 */
+	/** 进入游戏完成态允许撤罩的最早单调时间，单位秒；UI 在真实完成后写入、显示观察读取，不改变 Online 状态，不延迟返回主菜单。 */
 	double GlobalLoadingDismissalReadyTimeSeconds = 0.0;
 
 	/** 遮罩存活期间的 Slate 观察订阅；显示时注册、隐藏时解绑，捕获没有 Online/Pawn 通知的迟到就绪，不保存第二份加载状态。 */

@@ -15,13 +15,11 @@
 #include "CatOnlineSubsystem.generated.h"
 
 class APlayerController;
-class ACatfishingGameModeBase;
 class UCatSaveSubsystem;
 class IOnlineSubsystem;
 class UNetDriver;
 class UPackage;
 struct FStreamableHandle;
-struct FCatRunTeardownResult;
 
 /** Online 快照变更通知；订阅者收到通知后重新读取只读 Snapshot，不持有平台对象。 */
 DECLARE_MULTICAST_DELEGATE(FCatOnlineSnapshotChanged);
@@ -246,7 +244,7 @@ private:
 	/** 在当前操作 epoch 下绑定 Destroy 回调并提交平台清理；FailureAfterDestroy 非 None 表示旅行/解析失败后的补偿。 */
 	bool BeginDestroySession(ECatOnlineError FailureAfterDestroy);
 
-	/** Lake Host Leave 启动活动世界保存并订阅最终落盘结果；同步拒绝保留 Session，受理后由匹配 RequestId/epoch 的完成回调继续 teardown。 */
+	/** 本机权威端离开玩法世界时尝试保存；同步拒绝仍继续清理，受理后由匹配 RequestId/epoch 的完成回调继续，写盘失败也不阻止退出。 */
 	bool BeginHostLeaveSave();
 
 	/** 消费离开请求所属的世界保存结果；匹配的成功或失败回执均继续 teardown 和返回后的载荷释放；失效回调仍拒绝。 */
@@ -261,7 +259,7 @@ private:
 	/** 成对解除终态释放所等待的精确 Save 变化通知；不会清除 Save 数据，结案和反初始化均可幂等调用。 */
 	void ClearRunReleaseDelegate();
 
-	/** Host Leave 在一次世界保存尝试结束后向当前玩法地图 GameMode 提交 Run teardown；同步 Ready、异步 Pending 与失败都保持同一 RequestId/epoch。 */
+	/** 本机权威端完成一次世界保存尝试后，向当前 GameMode 同步请求清理；Ready 继续销毁会话，失败保留现场并结束本次退出。 */
 	bool BeginHostRunTeardown();
 
 	/** Host 预载完成后的唯一玩法地图 Listen 旅行入口；只提交旅行并等待 PostLoadMap，Lobby ready 还必须通过目标地图的 listen 与 Run 玩法命令门。 */
@@ -291,8 +289,6 @@ private:
 	/** DestroySession 回调：区分正常 Leave 与失败补偿；只在当前 epoch 下推进旅行或发布终态。 */
 	void HandleDestroySessionComplete(FName SessionName, bool bWasSuccessful, uint64 CallbackEpoch);
 
-	/** Run teardown 回调：只消费当前 Host Leave 的 RequestId/epoch；Ready 才继续 Destroy，Failed 则保留 Session 并结案。 */
-	void HandleRunTeardownCompleted(const FCatRunTeardownResult& Result);
 
 	/** 接收平台用户已确认的邀请；无效、忙或已有会话时明确拒绝，否则建立有期限的意图，由 Online 自身检查就绪后复用 RequestAcceptInvite。 */
 	void HandleSessionUserInviteAccepted(bool bWasSuccessful, int32 ControllerId, FUniqueNetIdPtr UserId, const FOnlineSessionSearchResult& InviteResult);
@@ -327,8 +323,6 @@ private:
 	/** 成对解除当前操作可能绑定的 Create/Find/Join/Destroy 回调，并释放绑定它们的精确 Session 接口。 */
 	void ClearOperationDelegates();
 
-	/** 从精确 GameMode 实例解除 Run teardown 委托并清弱引用；重复清理或 World 已销毁时保持幂等。 */
-	void ClearRunTeardownDelegate();
 
 	/** 按当前 World 维护唯一 OSS 邀请订阅；接口未变时保留原委托，接口变化才成对重绑，冷启动暂缺接口可由生命周期检查恢复。 */
 	void RebindInviteDelegate();
@@ -351,7 +345,7 @@ private:
 	/** 当前地图运输事实；前台监听本身不伪装为客户端连接完成，旅行提交、PostLoadMap 和失败事件写入。 */
 	ECatOnlineTransportState TransportState = ECatOnlineTransportState::Idle;
 
-	/** 当前唯一复合操作；BeginOperation 写入，Finish/Deinitialize 清空；请求入口据此拒绝并发，平台操作与 Run teardown 回调再和 OperationEpoch 联合校验。 */
+	/** 当前唯一复合操作；BeginOperation 写入，Finish/Deinitialize 清空；请求入口据此拒绝并发，平台回调再和 OperationEpoch 联合校验。 */
 	ECatOnlineOperation ActiveOperation = ECatOnlineOperation::None;
 
 	/** 已确认的本地 NamedSession 角色；Create/Join 成功写入，Destroy 成功清空。 */
@@ -377,8 +371,6 @@ private:
 	/** 最近一次受理操作或无活动操作时同步拒绝的 RequestId；受理值贯穿平台回调、旅行与补偿日志，pending 拒绝不会覆盖活动关联键。 */
 	FGuid ActiveRequestId;
 
-	/** 远端 Host exit 要在本地 DestroySession 成功后回 ACK 的关联键；普通 Leave 保持无效。 */
-	FGuid PendingHostExitAckRequestId;
 
 	/** 每次 Begin/Finish/Deinitialize 单调推进的回调代际；迟到回调携带变更前值时只记录并返回。 */
 	uint64 OperationEpoch = 0;
@@ -563,11 +555,7 @@ private:
 	/** 等待 Save 结束 busy 的变化订阅；只有当前 Leave epoch 能继续，释放前、失败与反初始化都会移除以阻止同步重入。 */
 	FDelegateHandle RunReleaseChangedHandle;
 
-	/** 当前 Host Leave 绑定的 Run teardown 句柄；完成、失败、World 销毁或子系统反初始化都会消费。 */
-	FDelegateHandle RunTeardownHandle;
 
-	/** Run teardown 句柄所属的精确玩法地图 GameMode；只用于成对解绑，不作为 World 或 Session 真相。 */
-	TWeakObjectPtr<ACatfishingGameModeBase> RunTeardownGameMode;
 
 	/** SessionUserInviteAccepted 全局委托的配对解绑句柄。 */
 	FDelegateHandle InviteAcceptedHandle;

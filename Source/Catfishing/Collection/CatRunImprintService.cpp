@@ -451,19 +451,6 @@ FCatDomainCommandResult UCatRunImprintService::AcknowledgeGrant(AController* Rep
 	return Result;
 }
 
-// ACK Grant 读取流程：只返回已经进入 Acknowledged 的服务器投递记录；Pending/Delivered 或未知 ID 都不能驱动运行期授权。
-bool UCatRunImprintService::TryGetAcknowledgedGrant(const FGuid GrantId, FCatProfileGrant& OutGrant) const
-{
-	OutGrant = FCatProfileGrant();
-	const FCatGrantDeliveryRecord* Record = GrantDeliveries.Find(GrantId);
-	if (!GrantId.IsValid() || !Record || Record->Stage != ECatGrantDeliveryStage::Acknowledged)
-	{
-		return false;
-	}
-	OutGrant = Record->Grant;
-	return true;
-}
-
 // 重投流程：先验证当前 Controller 身份，再逐个重投本人的非终态 CapturePlan 和非 ACK Grant；原 ID 与内容始终不变。
 void UCatRunImprintService::DeliverPendingForController(AController* Controller)
 {
@@ -491,8 +478,8 @@ void UCatRunImprintService::DeliverPendingForController(AController* Controller)
 	}
 }
 
-// teardown 流程：永久关闭新命令，把仍未成像的计划标为失败，并最终重投全部未 ACK Grant；存在未 ACK 时返回 false 让 GameMode 等真实 ACK。
-bool UCatRunImprintService::PrepareForRunTeardown()
+// teardown 流程：永久关闭新命令，把仍未成像的计划标为失败，并最终重投全部未 ACK Grant；未确认记录留给退出方记录风险，不阻塞退出也不伪造 ACK。
+void UCatRunImprintService::PrepareForRunTeardown()
 {
 	bCommandsOpen = false;
 	for (TPair<FGuid, FCatImprintCaptureDeliveryRecord>& Pair : CaptureDeliveries)
@@ -510,16 +497,9 @@ bool UCatRunImprintService::PrepareForRunTeardown()
 			DeliverGrantRecord(Pair.Value);
 		}
 	}
-	return AreAllGrantAcksComplete();
 }
 
-// Grant ACK 完成读取流程：只扫描独立投递记录的真实 Acknowledged 阶段；投递次数或连接消失都不能把它变成 true。
-bool UCatRunImprintService::AreAllGrantAcksComplete() const
-{
-	return GetPendingGrantAckCount() == 0;
-}
-
-// Grant ACK 计数流程：统计每条尚未由 owning client durable Profile 回 ACK 的记录；只供退出等待判断和诊断，不推进投递状态。
+// Grant ACK 计数流程：统计每条尚未由 owning client durable Profile 回 ACK 的记录；只供退出风险诊断，不推进投递状态。
 int32 UCatRunImprintService::GetPendingGrantAckCount() const
 {
 	int32 PendingCount = 0;

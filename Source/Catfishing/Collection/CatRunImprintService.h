@@ -62,19 +62,15 @@ public:
 	/** 客户端 durable Profile 完成后按 GrantId ACK；身份由当前 Controller PlayerState 重建。 */
 	FCatDomainCommandResult AcknowledgeGrant(AController* ReportingController, FGuid GrantId);
 
-	/** 只读取得已经 durable ACK 的 Grant 内容；调用方用它做服务器侧投影，不接受客户端在 ACK 中夹带内容。 */
-	bool TryGetAcknowledgedGrant(FGuid GrantId, FCatProfileGrant& OutGrant) const;
 
 	/** 玩家登录或生成新 Grant 后重投其所有未 ACK Grant 和未终态 CapturePlan；每次重投复用原稳定 ID。 */
 	void DeliverPendingForController(AController* Controller);
 
-	/** Run teardown 前关闭新候选、把未成像计划标记失败并最终重投 Grant；返回 false 表示需等待真实 ACK，不是立即失败。 */
-	bool PrepareForRunTeardown();
+	/** 离局时关闭新命令、结束未完成成像并末次投递个人记录；不等待 ACK，调用方可查询未确认数记录风险。 */
+	void PrepareForRunTeardown();
 
-	/** 只读判断最终重投后的所有永久 Grant 是否已有真实 durable ACK；退出等待不会改写这些记录。 */
-	bool AreAllGrantAcksComplete() const;
 
-	/** 返回仍未收到 durable ACK 的 Grant 数量；Host 退出等待日志用它暴露仍在处理的持久化回执。 */
+	/** 返回仍未收到 durable ACK 的 Grant 数量；退出日志用它记录可能丢失的未确认记录，不作为退出条件。 */
 	int32 GetPendingGrantAckCount() const;
 
 #if WITH_DEV_AUTOMATION_TESTS

@@ -109,7 +109,7 @@ public:
 	UFUNCTION(Client, Reliable)
 	void ClientReceiveProfileGrant(const FCatProfileGrant& Grant);
 
-	/** 客户端在本地 Journal 完整落盘后确认 GrantId；服务器重建身份，并在真实 ACK 后复核 Host exit 有界等待。 */
+	/** 客户端在本地 Journal 完整落盘后确认 GrantId；服务器重建身份并更新投递记录，确认结果不再决定能否退出。 */
 	UFUNCTION(Server, Reliable)
 	void ServerAcknowledgeProfileGrant(FGuid GrantId);
 
@@ -235,9 +235,6 @@ public:
 	UFUNCTION(Client, Reliable)
 	void ClientPrepareForHostExit(FGuid RequestId);
 
-	/** 远端本地 DestroySession 成功后向 Host 回 ACK；GameMode 只接受当前 Active Controller 与同 RequestId。 */
-	UFUNCTION(Server, Reliable)
-	void ServerAcknowledgeHostExit(FGuid RequestId);
 
 	/** 服务器登录完成后让 owning client 从 durable Profile 刷新公开图鉴摘要。 */
 	UFUNCTION(Client, Reliable)
