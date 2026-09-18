@@ -12,6 +12,8 @@
 #include "Inventory/CatInventoryAccessRules.h"
 #include "Inventory/Fragments/CatItemUseFragment.h"
 #include "Character/CatCharacter.h"
+#include "Character/Physics/CatPhysicsPrototypeVisualComponent.h"
+#include "Animation/AnimMontage.h"
 #include "Condition/CatConditionComponent.h"
 #include "Data/CatFishDefinition.h"
 #include "Data/CatFishCatalogSettings.h"
@@ -86,7 +88,11 @@ void UCatItemGameplayAbility::ReceiveTargetData(const FGameplayAbilityTargetData
 	const UCatItemUseFragment* Config = GetUseConfiguration();
 	if (Config->Montage)
 	{
-		auto* MontageTask = UAbilityTask_PlayMontageAndWait::CreatePlayMontageAndWaitProxy(this, NAME_None, Config->Montage);
+		// GAS 直接使用 AnimInstance，不经过 Character::PlayAnimMontage；先复用角色的骨架映射。
+		const auto* Visual = GetAvatarActorFromActorInfo()->FindComponentByClass<UCatPhysicsPrototypeVisualComponent>();
+		UAnimMontage* Montage = Visual ? Cast<UAnimMontage>(Visual->ResolveAnimationAsset(Config->Montage)) : Config->Montage.Get();
+		if (!Montage) { CancelPendingUse(); return; }
+		auto* MontageTask = UAbilityTask_PlayMontageAndWait::CreatePlayMontageAndWaitProxy(this, NAME_None, Montage);
 		MontageTask->OnInterrupted.AddDynamic(this, &ThisClass::CancelPendingUse);
 		MontageTask->OnCancelled.AddDynamic(this, &ThisClass::CancelPendingUse);
 		MontageTask->ReadyForActivation();

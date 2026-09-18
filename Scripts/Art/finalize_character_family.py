@@ -3,6 +3,7 @@
 Run after create_cute_cat_retarget.py and create_character_family.py, with editor assets unlocked.
 Both native operations are idempotent. The animation operation also repairs the earlier
 root-only normalization and removes translation from the three additive lean poses.
+Non-additive retarget clips receive the native idle eye-layer pose; additive eyes remain neutral.
 """
 from pathlib import Path
 import shutil

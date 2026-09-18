@@ -31,6 +31,21 @@ def migrate():
     ids = {row['legacy_id']: row['item_id'] for row in entries}
     if len(ids) != len(entries) or len(set(ids.values())) != len(entries) or min(ids.values()) <= 0:
         raise RuntimeError('Invalid frozen identity map')
+    # 冻结映射只描述历史身份；保留迁移完成后新增的正式目录行，不能重建时删掉新物品。
+    table = unreal.load_asset('/Game/Catfishing/Data/Items/DT_ItemCatalog')
+    current_rows = json.loads(unreal.DataTableFunctionLibrary.export_data_table_to_json_string(table))
+    rows = [dict(Name=str(entry['item_id']), ItemId=entry['item_id'], ItemDefinition=entry['definition']) for entry in entries]
+    seen_ids, seen_names = set(ids.values()), {row['Name'] for row in rows}
+    for row in current_rows:
+        if row['ItemId'] in ids.values():
+            continue
+        asset = unreal.load_asset(row['ItemDefinition'])
+        if (row['ItemId'] <= 0 or row['ItemId'] in seen_ids or row['Name'] in seen_names
+                or not isinstance(asset, unreal.CatInventoryItemDefinition)
+                or asset.get_editor_property('item_id') != row['ItemId']):
+            raise RuntimeError('Invalid post-migration catalog row: ' + repr(row))
+        rows.append(row)
+        seen_ids.add(row['ItemId']); seen_names.add(row['Name'])
     prepared, new_entries = [], []
     for entry in entries:
         path = entry['definition']
@@ -83,9 +98,8 @@ def migrate():
             raise RuntimeError('Unknown fish price row: ' + old)
     prepared += [shop, prices]
     if not apply:
-        unreal.log('ItemCatalogMigration: preview validated %d packages, %d new definitions' % (len(prepared), len(new_entries)))
+        unreal.log('ItemCatalogMigration: preview validated %d packages, %d new definitions, %d catalog rows' % (len(prepared), len(new_entries), len(rows)))
         return
-    table = unreal.load_asset('/Game/Catfishing/Data/Items/DT_ItemCatalog')
     for asset in prepared + [table]:
         backup(root, asset)
     for entry in new_entries:
@@ -102,14 +116,13 @@ def migrate():
         # 扩容仍由交易分支直接执行，不把服务商品变成可丢弃、放置的实物。
         asset.set_editor_property('inventory_actions', [])
         prepared.append(asset)
-    rows = [dict(Name=str(entry['item_id']), ItemId=entry['item_id'], ItemDefinition=entry['definition']) for entry in entries]
     for asset, data in [(table, rows), (shop, shop_rows), (prices, price_rows)]:
         if not unreal.DataTableFunctionLibrary.fill_data_table_from_json_string(asset, json.dumps(data, ensure_ascii=False)):
             raise RuntimeError('Cannot fill table: ' + asset.get_path_name())
     for asset in prepared + [table]:
         if not unreal.EditorAssetLibrary.save_loaded_asset(asset, only_if_is_dirty=False):
             raise RuntimeError('Cannot save migrated asset: ' + asset.get_path_name())
-    unreal.log('ItemCatalogMigration: saved %d catalog identities and migrated references' % len(entries))
+    unreal.log('ItemCatalogMigration: saved %d catalog identities and migrated references' % len(rows))
 
 
 migrate()

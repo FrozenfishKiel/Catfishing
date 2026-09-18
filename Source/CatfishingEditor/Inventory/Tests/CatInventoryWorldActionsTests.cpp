@@ -547,7 +547,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatInventoryFishGuardRoundTripTest,
 	"Catfishing.Runtime.Inventory.WorldActions.GuardPickupReleasePreservesFish",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-// 鱼护回归：在原生猫上装正式猫蓝图的骨架，给真实鱼护放入两条正式鱼；满包拾取失败后释放容量，再实际拾取和放置。
+// 鱼护回归：在原生猫上装正式猫蓝图的骨架，给真实鱼护放入两条正式鱼；满包时原鱼护安全落地，再释放容量实际拾取和放置。
 // 之后再次拾取并丢弃，每次都核对同一载体、同一FishInventory和同一内鱼实例；不生成替代鱼数组，也不改嘴部设置。
 bool FCatInventoryFishGuardRoundTripTest::RunTest(const FString& Parameters)
 {
@@ -595,15 +595,24 @@ bool FCatInventoryFishGuardRoundTripTest::RunTest(const FString& Parameters)
 	}
 	const int32 Capacity = Inventory->GetInventorySlotCount();
 	if (!TestTrue(TEXT("正式背包有容量"), Capacity > 0)) return false;
-	// 用正式的一格一鱼填满背包，避免临时改小全局容量；拒绝后清掉这些填充物，内鱼库存完全不动。
-	if (!TestTrue(TEXT("填满背包以验证失败"), Inventory->AddItemDefinition(FishDefinition, Capacity))) return false;
-	TestFalse(TEXT("满包拾取鱼护失败"), Guard->PickUpFromAuthority(Controller, FGuid::NewGuid()));
-	TestTrue(TEXT("满包失败仍在地面"), Guard->IsGrounded());
-	TestEqual(TEXT("满包失败不扣背包数量"), Inventory->CountVisibleInventoryQuantityByItemId(FishDefinition->GetItemId()), Capacity);
+	// 用正式的一格一鱼填满背包；满包沿远端的统一溢出语义落地，内鱼库存完全不动。
+	if (!TestTrue(TEXT("填满背包以验证溢出"), Inventory->AddItemDefinition(FishDefinition, Capacity))) return false;
+	FTransform OverflowTransform;
+	if (!TestTrue(TEXT("角色旁有安全鱼护落点"), UCatInventoryStatics::FindWorldReleaseTransform(
+		Character, Guard, ECatInventoryWorldAction::Drop, *GetDefault<UCatInventorySettings>(), OverflowTransform))) return false;
+	TestTrue(TEXT("满包拾取通过安全落地完成"), Guard->PickUpFromAuthority(Controller, FGuid::NewGuid()));
+	TestTrue(TEXT("满包保留原鱼护在地面"), IsValid(Guard) && Guard->IsGrounded());
+	TestTrue(TEXT("满包鱼护移到安全落点"), Guard->GetActorLocation().Equals(OverflowTransform.GetLocation(), 0.1));
+	const UPrimitiveComponent* OverflowBody = Cast<UPrimitiveComponent>(Guard->GetRootComponent());
+	TestTrue(TEXT("满包落地鱼护启用真实物理"), OverflowBody && OverflowBody->IsSimulatingPhysics());
+	TestNull(TEXT("满包落地不残留嘴部占用"), Character->GetMouthCarriedActor());
+	TestTrue(TEXT("满包落地保留原内部库存"), Guard->GetFishInventoryComponent() == FishInventory);
+	TestEqual(TEXT("满包不把鱼护额外塞入背包"), Inventory->CountVisibleInventoryQuantityByItemId(GuardDefinition->GetItemId()), 0);
+	TestEqual(TEXT("满包溢出不扣背包数量"), Inventory->CountVisibleInventoryQuantityByItemId(FishDefinition->GetItemId()), Capacity);
 	for (int32 Index = 0; Index < FishIds.Num(); ++Index)
 	{
 		const FCatInventoryEntry* Entry = FishInventory->GetInventoryEntryAtSlot(FishInventory->FindInventorySlotIndexFromInstanceId(FishIds[Index]));
-		TestTrue(TEXT("满包失败不损失内鱼身份与数量"), Entry && Entry->Instance == FishInstances[Index] && Entry->StackCount == 1);
+		TestTrue(TEXT("满包落地不损失内鱼身份与数量"), Entry && Entry->Instance == FishInstances[Index] && Entry->StackCount == 1);
 	}
 	const TArray<FCatInventoryEntry> FillerEntries = Inventory->GetInventoryEntries();
 	for (const FCatInventoryEntry& Entry : FillerEntries) if (Entry.Instance) Inventory->RemoveItemInstance(Entry.Instance);

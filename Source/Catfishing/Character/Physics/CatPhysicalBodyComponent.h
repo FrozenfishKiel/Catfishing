@@ -105,12 +105,14 @@ public:
 	double GetVerticalGripForceFromAuthority() const;
 	/** A successful voluntary jump permits brief reciprocal vertical grip traction, never suspension. */
 	double GetJumpTractionWeight() const;
-	void NotifyGripLiftFromAuthority();
+	/** 外力导致离地时发布身体状态；不授予主动跳跃的抓握牵引窗口。 */
+	void NotifyExternalLiftFromAuthority();
 	FVector ComputeHorizontalDriveForce(const FVector& Velocity, double Mass, double StepSeconds);
 	FCatBodyDriveSample CaptureDriveSample();
 	static FVector ComputeDriveForce(FCatBodyDriveSample& Sample, const FVector& Position, const FVector& Velocity, double Mass, double StepSeconds);
 	bool HasFishingMotor() const { return FishingMotorSource.IsValid(); }
-	void AddExternalImpulseFromAuthority(FVector ImpulseKgCmS);
+	/** 原有牵引默认不能从地面抬起；明确的击飞冲量可显式允许地面 Z 分量。 */
+	void AddExternalImpulseFromAuthority(FVector ImpulseKgCmS, bool bAllowGroundLift = false);
 	USphereComponent* GetHand(bool bLeft) const { return bLeft ? LeftHand : RightHand; }
 	UCatPhysicsGrabComponent* GetGrab() const { return Grab; }
 	FVector GetVelocity() const;
