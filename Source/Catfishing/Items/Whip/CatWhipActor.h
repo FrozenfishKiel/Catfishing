@@ -48,7 +48,6 @@ private:
     UPROPERTY(Replicated) FGuid SwingRequestId;
     UPROPERTY(Replicated) FGuid SourceItemId;
     UPROPERTY(Replicated) double SwingStartServerTime = 0;
-    UPROPERTY(Replicated) float SwingYaw = 0;
     UFUNCTION() void OnRep_Swing();
     UFUNCTION(NetMulticast, Unreliable) void MulticastHitObserved(ACatCharacter* Target);
     bool bPresentationStarted = false;
