@@ -34,7 +34,6 @@ void ACatWhipActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLif
     DOREPLIFETIME(ThisClass, SwingRequestId);
     DOREPLIFETIME(ThisClass, SourceItemId);
     DOREPLIFETIME(ThisClass, SwingStartServerTime);
-    DOREPLIFETIME(ThisClass, SwingYaw);
 }
 
 void ACatWhipActor::InitializeActorSpawnConfig()
@@ -92,14 +91,13 @@ bool ACatWhipActor::StartSwingFromAuthority(ACatCharacter* Character, FGuid Requ
 {
     if (!HasAuthority() || SwingOwner || !Character || !RequestId.IsValid() || !ItemId.IsValid() || !IsWhipConfigurationReady()) return false;
     SwingOwner = Character; SwingRequestId = RequestId; SourceItemId = ItemId;
-    // Freeze the body's actual facing at activation; looking around must not aim the whip.
-    SwingStartServerTime = ServerTime(); SwingYaw = Character->GetActorRotation().Yaw;
+    SwingStartServerTime = ServerTime();
     SetOwner(Character); SetInstigator(Character); SetReplicateMovement(false);
     HitTargets.Reset(); OccludedTargets.Reset(); LastSampleTime = 0;
     OnRep_Swing(); SetLifeSpan(GetSwingDuration()+1.f); ForceNetUpdate();
-    UE_LOG(LogCatSocial, Log, TEXT("Event=whip_swing_started RequestId=%s Item=%s Actor=%s Player=%s World=%s NetMode=%d Authority=1 LocalRole=%d Duration=%.3f Window=%.3f:%.3f ImpulseNs=%.3f BodyYaw=%.2f ViewYaw=%.2f SwingYaw=%.2f"),
+    UE_LOG(LogCatSocial, Log, TEXT("Event=whip_swing_started RequestId=%s Item=%s Actor=%s Player=%s World=%s NetMode=%d Authority=1 LocalRole=%d Duration=%.3f Window=%.3f:%.3f ImpulseNs=%.3f BodyYaw=%.2f ViewYaw=%.2f FacingMode=FollowBody"),
         *SwingRequestId.ToString(), *SourceItemId.ToString(), *GetName(), *GetNameSafe(Character), *GetNameSafe(GetWorld()), GetNetMode(), GetLocalRole(), GetSwingDuration(), HitWindowStart, HitWindowEnd, ImpulseNewtonSeconds,
-        Character->GetActorRotation().Yaw, Character->GetControlRotation().Yaw, SwingYaw);
+        Character->GetActorRotation().Yaw, Character->GetControlRotation().Yaw);
     return true;
 }
 
@@ -125,7 +123,9 @@ FTransform ACatWhipActor::GetGripTransform() const
     FVector Location = SwingOwner->GetActorLocation();
     if (auto* Visual = SwingOwner->FindComponentByClass<UCatPhysicsPrototypeVisualComponent>(); Visual && Visual->GetVisualMesh()) Location = Visual->GetVisualHandWorldLocation(false);
     else if (auto* Body = SwingOwner->GetPhysicalBodyComponent()) if (auto* Hand = Body->GetHand(false)) Location = Hand->GetComponentLocation();
-    const FRotator Rotation(0,SwingYaw,0);
+    // The hand and facing follow the same current body, including mid-swing turns.
+    // Clients use their existing character rotation; camera yaw never aims the whip.
+    const FRotator Rotation(0,SwingOwner->GetActorRotation().Yaw,0);
     return FTransform(Rotation, Location + Rotation.RotateVector(GripOffsetCm));
 }
 
@@ -186,7 +186,7 @@ void ACatWhipActor::Sweep(const FVector& Start, const FVector& End)
         }
         FVector Direction = (End-Start).GetSafeNormal2D();
         if (Direction.IsNearlyZero()) Direction = (Target->GetActorLocation()-GetActorLocation()).GetSafeNormal2D();
-        if (Direction.IsNearlyZero()) Direction = FRotator(0,SwingYaw,0).Vector();
+        if (Direction.IsNearlyZero()) Direction = GetActorForwardVector();
         HitTargets.Add(Target); // Record before applying the one authoritative external impulse.
         const FVector Impulse = (Direction*ImpulseNewtonSeconds+FVector::UpVector*UpwardImpulseNewtonSeconds)*100.f;
         Target->GetPhysicalBodyComponent()->AddExternalImpulseFromAuthority(Impulse,true);

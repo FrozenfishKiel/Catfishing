@@ -87,7 +87,7 @@ public:
 class FExercise : public IAutomationLatentCommand
 {
 public:
-    explicit FExercise(FAutomationTestBase* In,bool InFacingRegression=false):Test(In),bFacingRegression(InFacingRegression){}
+    explicit FExercise(FAutomationTestBase* In,bool InFacingRegression=false,bool InLiveTurn=false):Test(In),bFacingRegression(InFacingRegression),bLiveTurn(InLiveTurn){}
     bool Update() override
     {
         if (Start==0) Start=FPlatformTime::Seconds();
@@ -113,11 +113,26 @@ public:
         }
         if (Stage==3 || Stage==5)
         {
+            if (Stage==3 && bLiveTurn && !bTurned && Age()>.2)
+            {
+                // Controlled body rotation during windup, after the replicated swing already exists.
+                // Keep camera yaw distinct, and leave the victim on the new facing axis.
+                Attacker->SetActorRotation(FRotator(0,90,0));
+                ClientPC->GetPawn()->SetActorRotation(FRotator(0,90,0));
+                Attacker->GetController()->SetControlRotation(FRotator(0,180,0));
+                ClientPC->SetControlRotation(FRotator(0,180,0));
+                bTurned=true;
+            }
             Observe();
             if (Age()<2.3) return false;
             Test->TestEqual(TEXT("同一次挥击最多结算一次"),MaxHits,Stage==3?1:0);
             if (Stage==3)
             {
+                if (bLiveTurn)
+                {
+                    Test->TestTrue(TEXT("服务器挥击中跟随90度转身"),bServerTurnChecked);
+                    Test->TestTrue(TEXT("客户端挥击中跟随90度转身"),bClientTurnChecked);
+                }
                 Test->TestTrue(TEXT("客户端看见服务器使用Actor"),bClientSeen);
                 Test->TestTrue(TEXT("服务器实际播放当前骨架占位蒙太奇"),bServerMontage);
                 Test->TestTrue(TEXT("拥有客户端实际播放当前骨架占位蒙太奇"),bClientMontage);
@@ -224,7 +239,9 @@ private:
     {
         auto* A=Attacker->GetPhysicalBodyComponent(); auto* B=Victim->GetPhysicalBodyComponent();
         A->TeleportBodyFromAuthority(FTransform(FRotator::ZeroRotator,FVector(0,0,A->GetStandRootHeightCm())),TEXT("WhipTest"));
-        B->TeleportBodyFromAuthority(FTransform(FRotator::ZeroRotator,FVector(85,0,B->GetStandRootHeightCm())),TEXT("WhipTest"));
+        const FVector TargetOffset=bLiveTurn && Stage<3?FVector(0,85,0):FVector(85,0,0);
+        B->TeleportBodyFromAuthority(FTransform(FRotator::ZeroRotator,TargetOffset+FVector(0,0,B->GetStandRootHeightCm())),TEXT("WhipTest"));
+        ClientPC->GetPawn()->SetActorRotation(FRotator::ZeroRotator);
         const FRotator View(0,bFacingRegression?(Stage<3?90:180):0,0);
         Attacker->GetController()->SetControlRotation(View); ClientPC->SetControlRotation(View);
         VictimStart=Victim->GetActorLocation();
@@ -268,6 +285,11 @@ private:
             if(It->GetOwner()==Attacker.Get())
             {
                 MaxHits=FMath::Max(MaxHits,It->GetHitCount()); MaxOccluded=FMath::Max(MaxOccluded,It->GetOccludedTargetCount());
+                if (Stage==3 && bLiveTurn && bTurned && Age()>.4 && !bServerTurnChecked)
+                {
+                    bServerTurnChecked=true;
+                    CheckTurn(*It,Attacker.Get(),TEXT("Server"));
+                }
                 if (bFacingRegression && !bServerFacingChecked)
                 {
                     bServerFacingChecked=true;
@@ -275,16 +297,31 @@ private:
                     Test->TestTrue(TEXT("场景确实分离猫与镜头朝向"),FMath::Abs(FMath::FindDeltaAngleDegrees(Attacker->GetActorRotation().Yaw,Attacker->GetControlRotation().Yaw))>80);
                 }
             }
-        if (bFacingRegression && !bClientFacingChecked)
+        if (bFacingRegression)
             for(TActorIterator<ACatWhipActor> It(Client.Get());It;++It)
                 if(It->GetOwner()==ClientPC->GetPawn())
                 {
-                    bClientFacingChecked=true;
-                    Test->TestTrue(TEXT("客户端鞭子同样朝猫身体前方"),It->GetActorForwardVector().Dot(ClientPC->GetPawn()->GetActorForwardVector())>.99);
+                    if (!bClientFacingChecked)
+                    {
+                        bClientFacingChecked=true;
+                        Test->TestTrue(TEXT("客户端鞭子同样朝猫身体前方"),It->GetActorForwardVector().Dot(ClientPC->GetPawn()->GetActorForwardVector())>.99);
+                    }
+                    if (Stage==3 && bLiveTurn && bTurned && Age()>.4 && !bClientTurnChecked)
+                    {
+                        bClientTurnChecked=true;
+                        CheckTurn(*It,Cast<ACatCharacter>(ClientPC->GetPawn()),TEXT("Client"));
+                    }
                 }
         bClientSeen|=CountSwing(Client.Get())>0;
         if(!FirstRequest.IsValid()) for(const auto& Spec:Attacker->GetCatAbilitySystemComponent()->GetActivatableAbilities())
             if(Spec.IsActive()) if(const auto* GA=Cast<UCatGA_UseWhip>(Spec.GetPrimaryInstance())) FirstRequest=GA->GetUseTarget().RequestId;
+    }
+    void CheckTurn(ACatWhipActor* Whip,ACatCharacter* Cat,const TCHAR* Side)
+    {
+        Test->TestTrue(FString::Printf(TEXT("%s 身体确实转向新目标"),Side),FMath::Abs(FMath::FindDeltaAngleDegrees(Cat->GetActorRotation().Yaw,90.f))<2);
+        Test->TestTrue(FString::Printf(TEXT("%s 鞭子跟随挥击中转身"),Side),Whip->GetActorForwardVector().Dot(Cat->GetActorForwardVector())>.99);
+        Test->TestTrue(FString::Printf(TEXT("%s 镜头仍与身体分离"),Side),FMath::Abs(FMath::FindDeltaAngleDegrees(Cat->GetActorRotation().Yaw,Cat->GetControlRotation().Yaw))>80);
+        Test->AddInfo(FString::Printf(TEXT("Event=whip_live_turn_verified Side=%s BodyYaw=%.2f WhipYaw=%.2f ViewYaw=%.2f"),Side,Cat->GetActorRotation().Yaw,Whip->GetActorRotation().Yaw,Cat->GetControlRotation().Yaw));
     }
     void Transition(int32 Next) {Stage=Next; At=Server->GetTimeSeconds(); bServerFacingChecked=bClientFacingChecked=false;}
     void Capture()
@@ -318,6 +355,7 @@ private:
     bool bVictimAirborne=false;
     double MaxVictimHeightCm=0,MaxClientVictimHeightCm=0;
     bool bFacingRegression=false,bServerFacingChecked=false,bClientFacingChecked=false;
+    bool bLiveTurn=false,bTurned=false,bServerTurnChecked=false,bClientTurnChecked=false;
     TWeakObjectPtr<UWorld> Server,Client;
     TWeakObjectPtr<ACatfishingPlayerController> ClientPC;
     TWeakObjectPtr<ACatCharacter> Attacker,Victim;
@@ -327,7 +365,7 @@ private:
 };
 }
 
-static bool RunWhipNetworkTest(FAutomationTestBase* Test,bool FacingRegression)
+static bool RunWhipNetworkTest(FAutomationTestBase* Test,bool FacingRegression,bool LiveTurn=false)
 {
     if(!Test->TestTrue(TEXT("idle editor"),GEditor && GEngine && !GEditor->PlayWorld)) return false;
     const auto Restore=MakeShared<CatWhipTests::FRestore>();
@@ -336,7 +374,7 @@ static bool RunWhipNetworkTest(FAutomationTestBase* Test,bool FacingRegression)
     {D.DriverClassName=TEXT("/Script/OnlineSubsystemUtils.IpNetDriver"); D.DriverClassNameFallback=D.DriverClassName;}
     ADD_LATENT_AUTOMATION_COMMAND(FEditorLoadMap(TEXT("/Game/Catfishing/Maps/TestMap")));
     ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
-    FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<CatWhipTests::FExercise>(Test,FacingRegression));
+    FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<CatWhipTests::FExercise>(Test,FacingRegression,LiveTurn));
     ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
     FAutomationTestFramework::Get().EnqueueLatentCommand(Restore);
     return true;
@@ -347,4 +385,7 @@ bool FCatWhipNetworkTest::RunTest(const FString&) {return RunWhipNetworkTest(thi
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatWhipFacingTest,"Catfishing.Editor.Whip.BodyFacingAndCampInteraction",
     EAutomationTestFlags::EditorContext|EAutomationTestFlags::ProductFilter)
 bool FCatWhipFacingTest::RunTest(const FString&) {return RunWhipNetworkTest(this,true);}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatWhipLiveTurnTest,"Catfishing.Editor.Whip.LiveTurnDuringSwing",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ProductFilter)
+bool FCatWhipLiveTurnTest::RunTest(const FString&) {return RunWhipNetworkTest(this,true,true);}
 #endif
