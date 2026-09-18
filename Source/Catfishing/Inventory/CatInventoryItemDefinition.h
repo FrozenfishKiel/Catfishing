@@ -100,8 +100,11 @@ public:
 	/** 库存目录稳定 ID；商店、存档和 Equipment 读模型都用它对齐同一种物品。 */
 	virtual int32  GetItemId() const;
 
-	/** 玩家可见名称；UI 和日志通过这层虚拟读取普通库存资产与装备资产。 */
+	/** 定义提供的原始显示名；通过虚函数读取普通物品、鱼和装备的策划字段，允许空值供审计，玩家 UI 使用 GetPlayerFacingName 补齐占位。 */
 	virtual FText GetInventoryDisplayName() const;
+
+	/** 玩家名称统一出口；读取定义的多态显示名，缺定义或空名时返回可读占位，不把数字身份当名称。 */
+	static FText GetPlayerFacingName(const UCatInventoryItemDefinition* Definition);
 
 	/** 玩家可见说明；详情面板通过这层虚拟读取，不参与容量或使用裁决。 */
 	virtual FText GetInventoryDescription() const;

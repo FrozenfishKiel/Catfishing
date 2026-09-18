@@ -161,14 +161,32 @@ def tick(delta):
                 unreal.log('WORLD_INFO_PROBE TANK World={} View={}'.format(world.get_name(), found))
                 check(found and found['visible'] and found['detail'] == 1, 'focused tank shows full formal WBP')
             unreal.SystemLibrary.execute_console_command(server, 'Shot SHOWUI filename=WorldInfo_TankFull.png -nosuffix', host)
-            # 已有调试入口仅生成实物鱼；后续使用真实嘴叼、鱼护入库与客户端 Carry/Store RPC，不直接改写库存或摘要字段。
+            # 统一给予先入本人背包；等待客户端复制后正式 Drop，再检验世界鱼拾取和容器交互。
             pawn = remote_server.get_controlled_pawn()
             pawn.set_actor_location(tank.get_actor_location() + unreal.Vector(-180, -100, 80), False, True)
             guard = next(iter(unreal.GameplayStatics.get_all_actors_of_class(server, unreal.CatFishGuardActor)))
             guard.set_actor_location(tank.get_actor_location() + unreal.Vector(-80, -210, 0), False, True)
             definition = unreal.load_asset('/Game/Catfishing/Data/Fish/Fish_Blackfish')
-            check(definition.minimum_weight_kilograms <= 5.0 <= definition.maximum_weight_kilograms, 'fixture weight lies within real fish definition bounds')
-            unreal.SystemLibrary.execute_console_command(server, 'cat.Fishing.Debug.GiveFish {} 5 {}'.format(definition.item_id, players.index(remote_server)), host)
+            unreal.SystemLibrary.execute_console_command(client, 'cat.Item.Give {}'.format(definition.item_id), remote)
+            state.update(stage=2.2, at=now, guard_name=guard.get_name(), fish_id=definition.item_id)
+        elif stage == 2.2 and now - state['at'] > 0.5:
+            pawn = remote.get_controlled_pawn()
+            entries = pawn.get_component_by_class(unreal.CatBackPackComponent).get_inventory_entries()
+            match = next(((i, e.instance) for i, e in enumerate(entries) if e.instance and isinstance(e.instance, unreal.CatFishInventoryItemInstance)), None)
+            if not match:
+                return
+            slot, instance = match
+            weight = instance.get_fish_weight_kilograms()
+            tuning = unreal.get_default_object(unreal.CatRunSettings)
+            boundaries = [tuning.get_editor_property(name) for name in ['small_offering_max_weight_kilograms', 'medium_offering_max_weight_kilograms', 'large_offering_max_weight_kilograms']]
+            points = next((score for bound, score in zip(boundaries, [1, 2, 4]) if weight < bound), 10)
+            state.update(weight=weight, points=points)
+            unreal.SystemLibrary.execute_console_command(client, 'cat.WorldInfo.Probe.Fish Drop {} {}'.format(pawn.get_name(), slot), remote)
+            state.update(stage=2.4, at=now)
+        elif stage == 2.4 and now - state['at'] > 0.5:
+            if not unreal.GameplayStatics.get_all_actors_of_class(server, unreal.CatFishPickupActor):
+                return
+            guard = next(a for a in unreal.GameplayStatics.get_all_actors_of_class(server, unreal.CatFishGuardActor) if a.get_name() == state['guard_name'])
             fish = next(iter(unreal.GameplayStatics.get_all_actors_of_class(server, unreal.CatFishPickupActor)))
             fish.set_actor_location(tank.get_actor_location() + unreal.Vector(-180, -50, 80), False, True)
             check(fish.interact(remote_server, unreal.GuidLibrary.new_guid()), 'real world fish enters mouth via authority interaction')
@@ -187,9 +205,9 @@ def tick(delta):
         elif stage == 4 and now - state['at'] > 1.0:
             for world in [server, client]:
                 found = find_view(world, '共享鱼缸')
-                check(found and found['rows'].get('OfferingReserve') == '4 点', '5kg tank reserve is four points on {}'.format(world.get_path_name()))
+                check(found and found['rows'].get('OfferingReserve') == '{} 点'.format(state['points']), 'actual fish weight determines tank points on {}'.format(world.get_path_name()))
                 check(found['rows'].get('FishCountCapacity') == '1 / 20', 'tank count and real capacity agree')
-                check(found['rows'].get('OfferingShortfall') == '9 点', 'tank shortfall uses current target')
+                check(found['rows'].get('OfferingShortfall') == '{} 点'.format(max(0, 13 - state['points'])), 'tank shortfall uses current target')
             client_guard = next(a for a in unreal.GameplayStatics.get_all_actors_of_class(client, unreal.CatFishGuardActor) if a.get_name() == state['guard_name'])
             unreal.SystemLibrary.execute_console_command(client, 'cat.WorldInfo.Probe.Fish Carry {} 0'.format(client_tank.get_name()), remote)
             state.update(stage=4.5, at=now)

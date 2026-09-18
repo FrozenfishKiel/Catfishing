@@ -33,10 +33,10 @@
 #include "Widgets/SWidget.h"
 #include <limits>
 
-// 墓碑（T24，联机社交:220）：旧 Probe.Move 直转库存鱼；探针现在只转发正式 Carry/目标交互 RPC。
+// 探针仅转发正式丢弃、Carry 和目标交互 RPC；统一给予先入包，因此地面拾取验证也必须经正式 Drop 生成实物。
 // Python 调用栈退出后在下一帧发请求，避免编辑器脚本保护把 RPC 当作本地执行。
 static FAutoConsoleCommandWithWorldAndArgs GCatWorldInfoProbeFish(
-	TEXT("cat.WorldInfo.Probe.Fish"), TEXT("PIE only: Carry Host Slot | Store Host"),
+	TEXT("cat.WorldInfo.Probe.Fish"), TEXT("PIE only: Carry Host Slot | Drop Host Slot | Store Host"),
 	FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
 	{
 		if (!World || World->WorldType != EWorldType::PIE || Args.Num() < 2) return;
@@ -45,15 +45,16 @@ static FAutoConsoleCommandWithWorldAndArgs GCatWorldInfoProbeFish(
 		for (TActorIterator<AActor> It(World); It; ++It)
 			if (It->GetName() == Args[1]) Host = *It;
 		const bool bCarry = Args[0] == TEXT("Carry");
+		const bool bDrop = Args[0] == TEXT("Drop");
 		int32 Slot = INDEX_NONE;
 		if (!Player || !Player->IsLocalController() || !Host
-			|| (bCarry && (Args.Num() != 3 || !LexTryParseString(Slot, *Args[2])))
-			|| (!bCarry && (Args[0] != TEXT("Store") || Args.Num() != 2))) return;
+			|| ((bCarry || bDrop) && (Args.Num() != 3 || !LexTryParseString(Slot, *Args[2])))
+			|| (!(bCarry || bDrop) && (Args[0] != TEXT("Store") || Args.Num() != 2))) return;
 		World->GetTimerManager().SetTimerForNextTick(FTimerDelegate::CreateLambda(
-			[Player = TWeakObjectPtr<ACatfishingPlayerController>(Player), Host = TWeakObjectPtr<AActor>(Host), Slot, bCarry]()
+			[Player = TWeakObjectPtr<ACatfishingPlayerController>(Player), Host = TWeakObjectPtr<AActor>(Host), Slot, bCarry, bDrop]()
 			{
 				if (!Player.IsValid() || !Host.IsValid()) return;
-				if (!bCarry)
+				if (!bCarry && !bDrop)
 				{
 					Player->ServerRequestInteraction(Host.Get(), FGuid::NewGuid());
 					return;
@@ -63,7 +64,7 @@ static FAutoConsoleCommandWithWorldAndArgs GCatWorldInfoProbeFish(
 				const FCatInventoryEntry* Entry = Inventories.IsEmpty() ? nullptr : Inventories[0]->GetInventoryEntryAtSlot(Slot);
 				if (Entry && Entry->Instance)
 					Player->ServerExecuteInventoryAction(FGuid::NewGuid(), Host.Get(), Slot,
-						Entry->Instance->GetItemInstanceId(), CatInventoryActionTags::Carry, 1);
+						Entry->Instance->GetItemInstanceId(), bDrop ? CatInventoryActionTags::Drop : CatInventoryActionTags::Carry, 1);
 			}));
 	}));
 

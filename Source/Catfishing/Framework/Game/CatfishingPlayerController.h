@@ -46,6 +46,12 @@ class CATFISHING_API ACatfishingPlayerController : public APlayerController
 	friend class FCatFishingSlackAimCommandRoutingTest;
 	friend class FCatPhysicalInputRouteTest;
 public:
+	/** 调试给予本人当前角色；服务器重新验证数字身份和数量，Shipping 保留反射签名但不执行发货。 */
+	UFUNCTION(Server, Reliable)
+	void ServerDebugGiveItem(FGuid RequestId, int32 ItemId, int32 Quantity);
+	/** 将给予结果回送命令输入者；显示名称、数字身份和结果，并记录可关联请求的客户端日志。 */
+	UFUNCTION(Client, Reliable)
+	void ClientDebugGiveItemResult(FGuid RequestId, int32 ItemId, int32 Quantity, const FText& ItemName, FName FailureReason);
 	/** 本人提交物品操作意图；服务器按宿主、槽位和实例身份重读物品，不接受客户端定义或效果。 */
 	UFUNCTION(Server, Reliable)
 	void ServerExecuteInventoryAction(FGuid RequestId, AActor* SourceInventoryHost, int32 SourceSlotIndex,

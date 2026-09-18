@@ -79,10 +79,18 @@ int32  UCatInventoryItemDefinition::GetItemId() const
 	return ItemId;
 }
 
-// 展示名读取流程：普通库存资产直接返回库存字段；空文本由 UI 再决定是否回退到稳定 ID。
+// 原始展示名读取流程：普通库存资产返回策划字段；保留空值供资产审计，玩家表现通过 GetPlayerFacingName 收口。
 FText UCatInventoryItemDefinition::GetInventoryDisplayName() const
 {
 	return InventoryDisplayName;
+}
+
+// 先区分无法解析的定义，再读取鱼、装备或普通物品自己的显示名；空名统一占位，数字 ID 留给日志和数据契约。
+FText UCatInventoryItemDefinition::GetPlayerFacingName(const UCatInventoryItemDefinition* Definition)
+{
+	if (!Definition) return NSLOCTEXT("CatItem", "UnknownItem", "未知物品");
+	const FText Name = Definition->GetInventoryDisplayName();
+	return Name.IsEmptyOrWhitespace() ? NSLOCTEXT("CatItem", "UnnamedItem", "未命名物品") : Name;
 }
 
 // 说明文本读取流程：这里只暴露静态描述，不把 Use、装备或商店状态混进库存定义。

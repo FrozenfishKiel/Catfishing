@@ -35,6 +35,7 @@ void UCatCollectionModel::Unbind()
 }
 
 // 刷新流程：先确认账号与总表就绪，再按鱼目录建立卡片；只有成功捕获记录才开放名称和偏好。
+// 已解锁鱼和偏好鱼饵使用统一显示名占位；未解锁项仍用图鉴的未知文案，不提前暴露内容。
 // 鱼饵仅取倍率大于 1 的关联，窝料只读现有三轴需求；不计算水中混合、概率或推荐分数。
 void UCatCollectionModel::Refresh()
 {
@@ -63,7 +64,7 @@ void UCatCollectionModel::Refresh()
 			Entry.bRecordedUnlocked = Record && Record->bRecordedUnlocked;
 			Entry.Thumbnail = Fish->GetInventoryThumbnail();
 			Entry.BestWeightKilograms = Record ? Record->BestWeightKilograms : 0.0;
-			Entry.DisplayName = Entry.bRecordedUnlocked ? Fish->GetInventoryDisplayName() : Unknown;
+			Entry.DisplayName = Entry.bRecordedUnlocked ? UCatInventoryItemDefinition::GetPlayerFacingName(Fish) : Unknown;
 			Entry.BaitPreferenceText = Entry.ChumPreferenceText = Unknown;
 			if (!Entry.bRecordedUnlocked) continue;
 			// 推荐只按策划指定身份读图，不从权重或窝料轴推导；零或无效配置保留空格。
@@ -73,7 +74,7 @@ void UCatCollectionModel::Refresh()
 			for (const auto& Weight : Fish->BaitWeightMultipliers)
 				// 中性倍率是 1；只有提高选鱼权重的关联才属于偏好，不把中性或抑制项列入。
 				if (Weight.Multiplier > 1.0)
-					if (const auto* Bait = Items->FindRuntimeDefinition(Weight.BaitItemId)) Baits.AddUnique(Bait->GetInventoryDisplayName().ToString());
+					if (const auto* Bait = Items->FindRuntimeDefinition(Weight.BaitItemId)) Baits.AddUnique(UCatInventoryItemDefinition::GetPlayerFacingName(Bait).ToString());
 			Entry.BaitPreferenceText = FText::FromString(Baits.IsEmpty() ? TEXT("未配置") : FString::Join(Baits, TEXT("、")));
 			TArray<FString> Chum;
 			if (Fish->ChumPreference.Fishy > 0.0) Chum.Add(TEXT("腥"));

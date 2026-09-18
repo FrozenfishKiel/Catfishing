@@ -1,4 +1,4 @@
-﻿#include "Fishing/Debug/CatFishingDebugSubsystem.h"
+#include "Fishing/Debug/CatFishingDebugSubsystem.h"
 #include "Inventory/CatInventorySettings.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 
@@ -38,63 +38,12 @@
 #include "GameFramework/PlayerState.h"
 #include "HAL/IConsoleManager.h"
 #include "Inventory/CatInventoryComponent.h"
-#include "FishContainers/CatFishPickupSettings.h"
-#include "Items/Fish/CatFishPickupActor.h"
 #include "Logging/CatLog.h"
 #include "UI/CatFishingViewBridge.h"
 
 #if !UE_BUILD_SHIPPING
 namespace CatFishingDebugCommands
 {
-	// 鱼定义选择流程：显式参数先按稳定 ItemId 查找，再同步加载配置里的候选资产名做兼容。
-	// 没有参数时优先返回可进鱼缸展示的正式鱼，若都不可展示则退到第一条可运行定义。
-	// 同步加载只发生在非 Shipping 调试命令里，避免正式链路为验收便利付成本。
-	static UCatFishDefinition* ResolveFishDefinition(const TArray<FString>& Args)
-	{
-		const UCatFishCatalogSettings* Catalog = GetDefault<UCatFishCatalogSettings>();
-		if (!Catalog)
-		{
-			return nullptr;
-		}
-		if (!Args.IsEmpty() && !Args[0].IsEmpty())
-		{
-			const FName RequestedName(*Args[0]);
-			if (UCatFishDefinition* Definition = Catalog->FindRuntimeDefinition(FCString::Atoi(*Args[0])))
-			{
-				return Definition;
-			}
-			for (const TSoftObjectPtr<UCatFishDefinition>& DefinitionRef : Catalog->Definitions)
-			{
-				UCatFishDefinition* Definition = DefinitionRef.LoadSynchronous();
-				const FName AssetName(*DefinitionRef.ToSoftObjectPath().GetAssetName());
-				if (Definition && Definition->IsRuntimeDefinitionReady() && AssetName == RequestedName)
-				{
-					return Definition;
-				}
-			}
-			return nullptr;
-		}
-
-		UCatFishDefinition* FirstReadyDefinition = nullptr;
-		for (const TSoftObjectPtr<UCatFishDefinition>& DefinitionRef : Catalog->Definitions)
-		{
-			UCatFishDefinition* Definition = DefinitionRef.LoadSynchronous();
-			if (!Definition || !Definition->IsRuntimeDefinitionReady())
-			{
-				continue;
-			}
-			if (!FirstReadyDefinition)
-			{
-				FirstReadyDefinition = Definition;
-			}
-			if (Definition->bTankDisplayEligible)
-			{
-				return Definition;
-			}
-		}
-		return FirstReadyDefinition;
-	}
-
 	// 玩家选择流程：按当前 World 的 PlayerController 迭代顺序选择目标；World 缺失或索引非法时返回空，
 	// 让外层统一记录拒绝日志。PlayerIndex 只影响调试命令落点，不进入领域身份。
 	static APlayerController* ResolvePlayerController(UWorld* World, const int32 PlayerIndex)
@@ -119,81 +68,6 @@ namespace CatFishingDebugCommands
 		}
 		return nullptr;
 	}
-
-	// 调试死鱼生成流程：只在 authority 为目标玩家前方生成可交互的世界鱼。
-	// 后续仍必须由玩家按 E 叼起，再对具体地面鱼护按 E 入箱；调试命令不绕过正式交互与容器事务。
-	static void GiveFishToPlayer(const TArray<FString>& Args, UWorld* World)
-	{
-		UCatFishDefinition* Definition = ResolveFishDefinition(Args);
-		double WeightKilograms = Definition
-			? (Definition->MinimumWeightKilograms + Definition->MaximumWeightKilograms) * 0.5 : 0.0;
-		if (Args.IsValidIndex(1))
-		{
-			WeightKilograms = FCString::Atod(*Args[1]);
-		}
-		int32 PlayerIndex = 0;
-		if (Args.IsValidIndex(2))
-		{
-			PlayerIndex = FMath::Max(0, FCString::Atoi(*Args[2]));
-		}
-		APlayerController* Controller = ResolvePlayerController(World, PlayerIndex);
-		ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
-		APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
-		if (!World || !Definition || !Controller || !Controller->HasAuthority() || !Character || !PlayerState
-			|| !PlayerState->GetUniqueId().IsValid() || !FMath::IsFinite(WeightKilograms)
-			|| WeightKilograms < Definition->MinimumWeightKilograms
-			|| WeightKilograms > Definition->MaximumWeightKilograms)
-		{
-			UE_LOG(LogCatFishing, Warning,
-				TEXT("Event=fishing_debug_give_fish_rejected Reason=InvalidPayload World=%s Controller=%s FishDefinition=%s WeightKg=%.3f"),
-				World ? *World->GetName() : TEXT("None"),
-				*GetNameSafe(Controller),
-				Definition ? *FString::FromInt(Definition->ItemId) : TEXT("None"), WeightKilograms);
-			return;
-		}
-
-		const UCatFishPresentationDefinition* FishPresentation =
-			Definition->LoadRuntimePresentationDefinition();
-		const FVector SpawnLocation = Character->GetActorLocation()
-			+ Character->GetActorForwardVector() * 150.0 + FVector(0.0, 0.0, 40.0);
-		FRotator SpawnRotation = Character->GetActorRotation();
-		SpawnRotation.Pitch = 0.0;
-		// 与正式生成入口一致，侧躺角由世界鱼网格消费，调试入口不再旋转物理根。
-		SpawnRotation.Roll = 0.0;
-		FActorSpawnParameters SpawnParams;
-		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-		ACatFishPickupActor* Pickup = World->SpawnActor<ACatFishPickupActor>(
-			ACatFishPickupActor::StaticClass(), SpawnLocation, SpawnRotation, SpawnParams);
-		const FString StableNetId = PlayerState->GetUniqueId()->ToString();
-		const TArray<FString> Participants{ StableNetId };
-		const double VisualScale = FishPresentation
-			? FishPresentation->ComputeUniformVisualScale(WeightKilograms) : 1.0;
-		// 调试给鱼把请求者当成上钩者：这条鱼的图鉴收集层就记给他，与正式路径同一条归属规则。
-		FCatCaptureConditionSnapshot DebugCondition;
-		DebugCondition.RegionId = TEXT("DebugSpawn");
-		if (!Pickup || !Pickup->InitializeFromAuthority(FGuid::NewGuid(), FGuid::NewGuid(), Definition,
-			WeightKilograms, VisualScale, DebugCondition, StableNetId, Participants))
-		{
-			if (Pickup)
-			{
-				Pickup->Destroy();
-			}
-			UE_LOG(LogCatFishing, Warning,
-				TEXT("Event=fishing_debug_give_fish_rejected Reason=SpawnFailed FishDefinition=%s PlayerIndex=%d"),
-				*FString::FromInt(Definition->ItemId), PlayerIndex);
-			return;
-		}
-		UE_LOG(LogCatFishing, Log,
-			TEXT("Event=fishing_debug_dead_fish_spawned Pickup=%s FishDefinition=%s WeightKg=%.3f PlayerIndex=%d"),
-			*GetNameSafe(Pickup), *FString::FromInt(Definition->ItemId), WeightKilograms, PlayerIndex);
-	}
-
-	/** 非 Shipping 构建里的死鱼生成入口；只生成世界 Actor，不直接改背包或鱼护。 */
-	static FAutoConsoleCommandWithWorldAndArgs CmdGiveFish(
-		TEXT("cat.Fishing.Debug.GiveFish"),
-		TEXT("在玩家前方生成可按 E 叼起的死鱼。参数：ItemId WeightKg PlayerIndex。"),
-		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&GiveFishToPlayer),
-		ECVF_Cheat);
 
 #if WITH_DEV_AUTOMATION_TESTS
 	// 授予入口本身挂在 WITH_DEV_AUTOMATION_TESTS 下（CatEquipmentComponent.h:58），

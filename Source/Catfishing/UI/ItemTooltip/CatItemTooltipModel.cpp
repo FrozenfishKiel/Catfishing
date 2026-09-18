@@ -6,7 +6,8 @@
 #include "Inventory/CatFishInventoryItemInstance.h"
 #include "Inventory/CatInventoryItemDefinition.h"
 
-// 先清空输出并核对实例定义，再读取通用展示字段；最后仅为鱼与鱼竿追加其真实实例值。
+// 先清空输出并核对实例定义，缺定义则不生成提示；名称通过统一出口补齐空名，其余通用展示字段直接读定义。
+// 最后仅为鱼与鱼竿追加其真实实例值。
 // 数值不回写领域对象；非有限值不显示为合法重量或耐久，复制未就绪时由下一次投影恢复。
 bool UCatItemTooltipModel::BuildViewData(const UCatInventoryItemInstance* Instance, FCatItemTooltipViewData& OutData) const
 {
@@ -16,7 +17,7 @@ bool UCatItemTooltipModel::BuildViewData(const UCatInventoryItemInstance* Instan
 	{
 		return false;
 	}
-	OutData.Name = Definition->GetInventoryDisplayName();
+	OutData.Name = UCatInventoryItemDefinition::GetPlayerFacingName(Definition);
 	OutData.Description = Definition->GetInventoryDescription();
 	OutData.Icon = Definition->GetInventoryThumbnail().LoadSynchronous();
 	if (const UCatFishInventoryItemInstance* Fish = Cast<UCatFishInventoryItemInstance>(Instance))

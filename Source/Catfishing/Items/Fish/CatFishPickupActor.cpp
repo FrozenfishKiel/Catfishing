@@ -751,6 +751,7 @@ void ACatFishPickupActor::EndLocalFocus_Implementation()
 	ApplyLocalFocus(false);
 }
 
+// 只为可拾取且未被库存保管的鱼显示提示；名称沿定义解析，重量仍读复制的实物状态，缺配时不泄漏数字身份。
 FText ACatFishPickupActor::GetInteractionPrompt_Implementation() const
 {
 	if (PresentationState.State != ECatFishPickupState::Available || IsHidden()
@@ -759,7 +760,7 @@ FText ACatFishPickupActor::GetInteractionPrompt_Implementation() const
 		return FText::GetEmpty();
 	}
 	return FText::Format(NSLOCTEXT("Catfishing", "FishPickupPrompt", "叼起 {0}  {1} kg"),
-		FText::AsNumber(PresentationState.ItemId),
+		UCatInventoryItemDefinition::GetPlayerFacingName(GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(PresentationState.ItemId)),
 		FText::AsNumber(PresentationState.WeightKilograms));
 }
 

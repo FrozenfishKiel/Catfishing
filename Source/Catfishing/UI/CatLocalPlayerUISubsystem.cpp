@@ -300,7 +300,7 @@ void UCatLocalPlayerUISubsystem::RefreshHUDAfterPageVisibilityChanged()
 
 // 本机首解锁特写流程：
 // 1. 事实已经 durable——Profile 在第二次落盘成功之后才广播，所以这里弹出来的东西一定已经写进图鉴。
-// 2. 从正式鱼目录取展示名、介绍与彩页图；鱼种没登记时仍然弹，名字退回鱼种 ID，不静默吞掉一次首解锁。
+// 2. 从正式鱼目录取展示名、介绍与彩页图；定义缺失或空名时使用统一名称占位，仍展示这次首解锁，不把数字 ID 当名字。
 // 3. 浮层 WBP 资产不在本轮范围：类没配置时只记一次诊断，不创建原生白盒替身，也不影响已经写好的图鉴记录。
 void UCatLocalPlayerUISubsystem::HandleLocalFishSpeciesFirstRecorded(const int32  ItemId,
 	const double WeightKilograms)
@@ -355,8 +355,7 @@ void UCatLocalPlayerUISubsystem::HandleLocalFishSpeciesFirstRecorded(const int32
 	const UCatFishCatalogSettings* Catalog = GetDefault<UCatFishCatalogSettings>();
 	const UCatFishDefinition* Definition = Catalog ? Catalog->FindRuntimeDefinition(ItemId) : nullptr;
 	FCatFishRevealViewData ViewData;
-	const FText DisplayName = Definition ? Definition->GetInventoryDisplayName() : FText();
-	ViewData.NameText = DisplayName.IsEmpty() ? FText::AsNumber(ItemId) : DisplayName;
+	ViewData.NameText = UCatInventoryItemDefinition::GetPlayerFacingName(Definition);
 	ViewData.DescriptionText = Definition ? Definition->GetInventoryDescription() : FText();
 	if (FMath::IsFinite(WeightKilograms) && WeightKilograms > 0.0)
 	{
@@ -390,6 +389,7 @@ void UCatLocalPlayerUISubsystem::HandleLocalFishSpeciesFirstRecorded(const int32
 }
 
 // 他人解锁提示流程：只读 GameState 复制的那一条广播，按 AnnouncementId 去重；本人那条不在这里重复弹。
+// 鱼名使用统一展示出口处理缺配；发现者名字读取广播快照，空值时使用“有只猫”。
 // 提示走 HUD 的一次性播报位，因此它不打断操作、不抢焦点、不进模态层
 // （主界面参考稿逐字写「你仍可移动，交互和继续钓鱼」）。
 void UCatLocalPlayerUISubsystem::HandleFishSpeciesDiscoveryAnnounced()
@@ -414,8 +414,7 @@ void UCatLocalPlayerUISubsystem::HandleFishSpeciesDiscoveryAnnounced()
 	}
 	const UCatFishCatalogSettings* Catalog = GetDefault<UCatFishCatalogSettings>();
 	const UCatFishDefinition* Definition = Catalog ? Catalog->FindRuntimeDefinition(Announcement.ItemId) : nullptr;
-	const FText FishNameText = (Definition && !Definition->GetInventoryDisplayName().IsEmpty())
-		? Definition->GetInventoryDisplayName() : FText::AsNumber(Announcement.ItemId);
+	const FText FishNameText = UCatInventoryItemDefinition::GetPlayerFacingName(Definition);
 	const FText DiscovererText = Announcement.DiscovererDisplayName.IsEmpty()
 		? NSLOCTEXT("CatFishReveal", "UnknownDiscoverer", "有只猫")
 		: FText::FromString(Announcement.DiscovererDisplayName);

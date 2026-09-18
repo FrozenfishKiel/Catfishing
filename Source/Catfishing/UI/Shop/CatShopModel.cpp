@@ -304,6 +304,7 @@ void UCatShopModel::HandleShopInventoryIdentityChanged()
 
 // 商品投影流程：
 // 1. 把 Catalog 展示字段和库存定义展示字段合成中文展示行；商店专属图优先，未配置时回退到定义的通用缩略图。
+//    商店名称覆盖优先；没有覆盖时走统一物品名称出口，缺定义或空名不再显示编号。
 // 2. 使用公开货架库存读取有限库存剩余数，并用当前团队公款推导单品是否买得起；加购不受单品余额影响。
 // 3. 这些结果只影响 UI 展示和明显无效点击；真正扣款、数量和公共仓库发货仍在服务器 ShopEconomy 与交易入口。
 FCatShopEntryView UCatShopModel::MakeEntryView(const FCatShopCatalogEntry& Entry,
@@ -350,9 +351,7 @@ FCatShopEntryView UCatShopModel::MakeEntryView(const FCatShopCatalogEntry& Entry
 	}
 	View.DisplayNameText = !Entry.DisplayNameOverride.IsEmpty()
 		? Entry.DisplayNameOverride
-		: (Definition && !Definition->GetInventoryDisplayName().IsEmpty()
-			? Definition->GetInventoryDisplayName()
-			: (Entry.ItemId == 0 ? FText::FromName(Entry.EntryId) : FText::AsNumber(Entry.ItemId)));
+		: UCatInventoryItemDefinition::GetPlayerFacingName(Definition);
 	View.DescriptionText = !Entry.DescriptionOverride.IsEmpty()
 		? Entry.DescriptionOverride
 		: (Definition ? Definition->GetInventoryDescription() : FText());

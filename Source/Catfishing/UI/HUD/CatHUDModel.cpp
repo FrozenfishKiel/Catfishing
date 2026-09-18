@@ -1,4 +1,4 @@
-﻿#include "UI/HUD/CatHUDModel.h"
+#include "UI/HUD/CatHUDModel.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "AbilitySystem/Tags/CatStateTags.h"
 
@@ -49,7 +49,7 @@ namespace
 	constexpr double CatHUDPurchaseBroadcastSeedGraceSeconds = 1.0;
 
 	// 商品名解析流程：实物读取库存定义；设施没有库存定义，按同一升级配置输出目标容量。
-	// 摊位的展示覆盖仍由商店页绑定；其他缺配定义保留 ID，方便内容交付核对。
+	// 摊位的展示覆盖仍由商店页绑定；其他缺配定义使用统一名称占位，数字身份只留在诊断数据里。
 	FText MakePurchaseItemNameText(const int32  ItemId, const FName EntryId)
 	{
 		const auto* Containers = GetDefault<UCatFishContainerSettings>();
@@ -59,12 +59,7 @@ namespace
 		const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
 		const UCatInventoryItemDefinition* Definition =
 			(InventorySettings && !(ItemId == 0)) ? InventorySettings->FindRuntimeDefinition(ItemId) : nullptr;
-		const FText DefinitionNameText = Definition ? Definition->GetInventoryDisplayName() : FText();
-		if (!DefinitionNameText.IsEmpty())
-		{
-			return DefinitionNameText;
-		}
-		return ItemId == 0 ? FText::FromName(EntryId) : FText::AsNumber(ItemId);
+		return UCatInventoryItemDefinition::GetPlayerFacingName(Definition);
 	}
 }
 
