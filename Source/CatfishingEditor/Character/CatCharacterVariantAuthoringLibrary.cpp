@@ -85,6 +85,26 @@ FString UCatCharacterVariantAuthoringLibrary::NormalizeCuteCatRetargetedAnimatio
 	USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/Characters/CuteCat/Meshes/SK_CuteCat"));
 	if (!Mesh) return TEXT("ERROR: Missing target mesh");
 	const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
+	// The imported bind pose is not CuteCat's visible neutral eye shape. Native clips
+	// flatten the eyeballs and position/scale the pupil and highlight layers together.
+	UAnimSequence* EyePose = LoadObject<UAnimSequence>(nullptr,
+		TEXT("/Game/Characters/CuteCat/Meshes/SK_CuteCat_Anim_Armature_idle_A_0"));
+	if (!EyePose || EyePose->GetSkeleton() != Mesh->GetSkeleton() || !EyePose->GetDataModel())
+		return TEXT("ERROR: Missing native CuteCat eye pose");
+	TArray<FName> EyeTracks;
+	EyePose->GetDataModel()->GetBoneTrackNames(EyeTracks);
+	TMap<int32, FTransform> NativeEyes;
+	for (int32 Bone = 0; Bone < Ref.GetNum(); ++Bone)
+	{
+		const FName Name = Ref.GetBoneName(Bone);
+		if (!Name.ToString().StartsWith(TEXT("Eye_"))) continue;
+		if (!EyeTracks.Contains(Name)) return TEXT("ERROR: Missing native eye track: ") + Name.ToString();
+		const FTransform Pose = EyePose->GetDataModel()->GetBoneTrackTransform(Name, FFrameNumber(0));
+		if (Pose.ContainsNaN() || Pose.GetScale3D().GetMin() <= 0)
+			return TEXT("ERROR: Invalid native eye track: ") + Name.ToString();
+		NativeEyes.Add(Bone, Pose);
+	}
+	if (NativeEyes.Num() != 20) return TEXT("ERROR: CuteCat eye skeleton changed; review eye layers before migration");
 	const int32 Pelvis = Ref.FindBoneIndex(TEXT("Center_001"));
 	const int32 Head = Ref.FindBoneIndex(TEXT("Head_001"));
 	if (Pelvis == INDEX_NONE || Head == INDEX_NONE || !Ref.GetRefBonePose()[0].GetScale3D().Equals(FVector(100), 0.001))
@@ -111,6 +131,7 @@ FString UCatCharacterVariantAuthoringLibrary::NormalizeCuteCatRetargetedAnimatio
 			return TEXT("ERROR: Unrecognized retarget translation convention; preserve asset for review\n") + Report;
 		const bool bLean = Sequence->GetName() == TEXT("Add_Neutral") || Sequence->GetName() == TEXT("Add_Loco_Left") || Sequence->GetName() == TEXT("Add_Loco_Right");
 		const bool bNeutral = Sequence->GetName() == TEXT("Add_Neutral");
+		const bool bNativeEyes = !Sequence->IsValidAdditive();
 		bool bChanged = false;
 		TArray<TArray<FVector>> Positions, Scales;
 		TArray<TArray<FQuat>> Rotations;
@@ -128,7 +149,10 @@ FString UCatCharacterVariantAuthoringLibrary::NormalizeCuteCatRetargetedAnimatio
 				if (bRawExport && Bone == Pelvis) RebasedLocal.ScaleTranslation(0.01);
 				if (bLegacyCollapsed && Bone != 0 && Bone != Pelvis) RebasedLocal.ScaleTranslation(100.0);
 				RebasedLocal.SetScale3D(Reference.GetScale3D());
-				if (Bone != 0 && Bone != Pelvis && !RebasedLocal.GetTranslation().Equals(Reference.GetTranslation(), 0.0002))
+				const FTransform* NativeEye = NativeEyes.Find(Bone);
+				if (NativeEye)
+					RebasedLocal = bNativeEyes ? *NativeEye : Reference;
+				if (!NativeEye && Bone != 0 && Bone != Pelvis && !RebasedLocal.GetTranslation().Equals(Reference.GetTranslation(), 0.0002))
 					return FString::Printf(TEXT("ERROR: Unexpected animated FK translation Animation=%s Bone=%s Frame=%d"), *Sequence->GetName(), *Ref.GetBoneName(Bone).ToString(), Frame);
 				// A lean is a rotation offset, not a second body pose. Its zero sample must
 				// evaluate to additive identity, including the retargeted pelvis offset.
@@ -144,11 +168,13 @@ FString UCatCharacterVariantAuthoringLibrary::NormalizeCuteCatRetargetedAnimatio
 		}
 		if (!bChanged) continue;
 		IAnimationDataController& Controller = Sequence->GetController();
-		Controller.OpenBracket(FText::FromString(TEXT("Restore CuteCat local proportions and neutral additive pose")), false);
+		Controller.OpenBracket(FText::FromString(TEXT("Restore CuteCat local proportions, native eyes and neutral additive pose")), false);
 		for (int32 Bone=0; Bone<Ref.GetNum(); ++Bone)
 			Controller.SetBoneTrackKeys(Ref.GetBoneName(Bone), Positions[Bone], Rotations[Bone], Scales[Bone], false);
 		Controller.CloseBracket(false);
 		Sequence->MarkPackageDirty();
+		UE_LOG(LogTemp, Display, TEXT("Event=character_retarget_eyes_repaired Animation=%s EyeBones=%d NativePose=%s Result=%s"),
+			*Sequence->GetPathName(), NativeEyes.Num(), *EyePose->GetPathName(), bNativeEyes ? TEXT("NativeNeutralEyes") : TEXT("ZeroAdditiveEyes"));
 		UE_LOG(LogTemp, Display, TEXT("Event=character_retarget_proportions_repaired Animation=%s RawExport=%d LegacyCollapsed=%d RotationOnlyLean=%d Result=ReferenceBoneUnits"),
 			*Sequence->GetPathName(), bRawExport, bLegacyCollapsed, bLean);
 		++Changed;

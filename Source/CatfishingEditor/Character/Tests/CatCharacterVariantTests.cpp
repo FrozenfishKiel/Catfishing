@@ -141,8 +141,17 @@ bool FCatCharacterVariantRuntime::RunTest(const FString& Parameters)
 			Camera->bCaptureOnMovement = false;
 			Camera->CaptureSource = ESceneCaptureSource::SCS_FinalColorLDR;
 			Camera->FOVAngle = 45;
-			const FVector Center = Cat->GetActorLocation() + FVector(0,0,5);
-			const FVector Position = Center + FVector(150,170,100);
+			FVector Center = Cat->GetActorLocation() + FVector(0,0,5);
+			FVector Position = Center + FVector(150,170,100);
+			if (Visual->RigSettings.RigId == TEXT("CuteCat") && FParse::Param(FCommandLine::Get(), TEXT("CatEyeScreenshots")))
+			{
+				auto* Visible = Visual->GetVisualMesh();
+				Center = (Visible->GetBoneLocationByName(TEXT("Eye_L_001"), EBoneSpaces::WorldSpace)
+					+ Visible->GetBoneLocationByName(TEXT("Eye_R_001"), EBoneSpaces::WorldSpace)) * .5;
+				const FVector Forward = (Visible->GetBoneLocationByName(TEXT("Nose_001"), EBoneSpaces::WorldSpace)
+					- Visible->GetBoneLocationByName(TEXT("Head_001"), EBoneSpaces::WorldSpace)).GetSafeNormal();
+				Position = Center + Forward * 65;
+			}
 			Camera->SetWorldLocationAndRotation(Position, (Center-Position).Rotation());
 			UTextureRenderTarget2D* Target = NewObject<UTextureRenderTarget2D>(Rig);
 			Target->RenderTargetFormat = ETextureRenderTargetFormat::RTF_RGBA8;
@@ -169,6 +178,28 @@ bool FCatCharacterVariantRuntime::RunTest(const FString& Parameters)
 			Rig->Destroy();
 		};
 		Capture(TEXT("Idle"));
+		int32 EyeSamples = 0;
+		double MaxEyeShapeError = 0.0, MaxEyeCopyError = 0.0;
+		const auto SampleEyes = [&]()
+		{
+			if (Visual->RigSettings.RigId != TEXT("CuteCat")) return;
+			const auto& SourcePose = Cat->GetMesh()->GetBoneSpaceTransforms();
+			const auto& VisiblePose = Visual->GetVisualMesh()->BoneSpaceTransforms;
+			for (const TCHAR* Name : {TEXT("Eye_L_001"), TEXT("Eye_R_001"), TEXT("Eye_L_004"), TEXT("Eye_R_004")})
+			{
+				const int32 Bone = Cat->GetMesh()->GetBoneIndex(Name);
+				if (!SourcePose.IsValidIndex(Bone) || !VisiblePose.IsValidIndex(Bone)) { MaxEyeShapeError = DBL_MAX; continue; }
+				// Native eyes flatten the eyeball and enlarge the pupil layer. Losing either
+				// invariant makes the pupil disappear even when head/nose proportions pass.
+				const FVector Expected = FString(Name).EndsWith(TEXT("001")) ? FVector(1, .6, 1) : FVector(1.689049);
+				MaxEyeShapeError = FMath::Max(MaxEyeShapeError, FVector::Distance(SourcePose[Bone].GetScale3D(), Expected));
+				MaxEyeShapeError = FMath::Max(MaxEyeShapeError, FVector::Distance(VisiblePose[Bone].GetScale3D(), Expected));
+				MaxEyeCopyError = FMath::Max(MaxEyeCopyError, FVector::Distance(SourcePose[Bone].GetTranslation(), VisiblePose[Bone].GetTranslation()));
+				MaxEyeCopyError = FMath::Max(MaxEyeCopyError, SourcePose[Bone].GetRotation().AngularDistance(VisiblePose[Bone].GetRotation()));
+			}
+			++EyeSamples;
+		};
+		SampleEyes();
 		TestEqual(TEXT("one animation source is the inherited Character mesh"), Visual->GetAnimationSource(), Cat->GetMesh());
 		TestTrue(TEXT("capsule remains CMC authority"), Body->UsesCharacterMovement() && !Cat->GetCapsuleComponent()->IsSimulatingPhysics());
 		const FVector Start = Cat->GetActorLocation();
@@ -261,7 +292,7 @@ bool FCatCharacterVariantRuntime::RunTest(const FString& Parameters)
 		int32 AirFrames=0;
 		const double GroundZ=Cat->GetActorLocation().Z;
 		double Apex=GroundZ;
-		for (int32 Frame=0; Frame<100; ++Frame) { Step(1); AirFrames += !Body->IsGrounded(); Apex=FMath::Max(Apex, Cat->GetActorLocation().Z); if (Frame == 12) Capture(TEXT("Jump")); }
+		for (int32 Frame=0; Frame<100; ++Frame) { Step(1); SampleEyes(); AirFrames += !Body->IsGrounded(); Apex=FMath::Max(Apex, Cat->GetActorLocation().Z); if (Frame == 12) Capture(TEXT("Jump")); }
 		Cat->StopJumping();
 		TestTrue(TEXT("character jump remains physical movement"), AirFrames > 5 && Apex > GroundZ + 10);
 		TestTrue(TEXT("character returns to floor"), Body->IsGrounded());
@@ -275,6 +306,7 @@ bool FCatCharacterVariantRuntime::RunTest(const FString& Parameters)
 		for (int32 Frame=0; Frame<180; ++Frame)
 		{
 			Step(1);
+			SampleEyes();
 			if (Frame==15) Capture(TEXT("ScoopSwing"));
 			if (Visual->RigSettings.RigId != TEXT("CuteCat")) continue;
 			const int32 Head=Cat->GetMesh()->GetBoneIndex(TEXT("Head_001")), Nose=Cat->GetMesh()->GetBoneIndex(TEXT("Nose_001"));
@@ -300,7 +332,13 @@ bool FCatCharacterVariantRuntime::RunTest(const FString& Parameters)
 		Capture(TEXT("Action"));
 		TestTrue(TEXT("selected animation instance is playing mapped asset"), Cat->GetMesh()->GetAnimInstance()->Montage_IsPlaying(Resolved));
 		Cat->StopAnimMontage(Original);
-		Step(90);
+		for (int32 Frame = 0; Frame < 90; ++Frame) { Step(1); SampleEyes(); }
+		if (Visual->RigSettings.RigId == TEXT("CuteCat"))
+		{
+			TestTrue(TEXT("jump, landing and montage blends preserve visible native eye shape"), EyeSamples >= 370 && MaxEyeShapeError < 0.01);
+			TestTrue(TEXT("visible mesh consumes eye translation and rotation from the animation source"), MaxEyeCopyError < 0.001);
+			AddInfo(FString::Printf(TEXT("Event=character_eye_runtime_verified Samples=%d MaxShapeError=%.8f MaxCopyError=%.8f"), EyeSamples, MaxEyeShapeError, MaxEyeCopyError));
+		}
 		TestFalse(TEXT("stop maps the same original montage identity"), Cat->GetMesh()->GetAnimInstance()->Montage_IsActive(Resolved));
 		CheckPose();
 		APlayerController* Controller = World.GetTestWorld()->SpawnActor<APlayerController>();
@@ -330,6 +368,8 @@ bool FCatRetargetProportions::RunTest(const FString& Parameters)
 	USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/Characters/CuteCat/Meshes/SK_CuteCat"));
 	if (!TestNotNull(TEXT("target mesh"), Mesh)) return false;
 	const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
+	UAnimSequence* NativeIdle = LoadObject<UAnimSequence>(nullptr, TEXT("/Game/Characters/CuteCat/Meshes/SK_CuteCat_Anim_Armature_idle_A_0"));
+	if (!TestNotNull(TEXT("native eye shape donor"), NativeIdle)) return false;
 	const int32 Pelvis = Ref.FindBoneIndex(TEXT("Center_001"));
 	TArray<FAssetData> Assets;
 	FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get().GetAssetsByPath(TEXT("/Game/Characters/CuteCat/Animation/Retargeted"), Assets, true);
@@ -342,19 +382,23 @@ bool FCatRetargetProportions::RunTest(const FString& Parameters)
 		const IAnimationDataModel* Model = Sequence->GetDataModel();
 		const bool bAdditive = Sequence->IsValidAdditive();
 		const bool bNeutral = Sequence->GetName() == TEXT("Add_Neutral");
-		double MaxOffsetError=0, MaxScaleError=0, MaxNeutralRotation=0;
+		double MaxOffsetError=0, MaxScaleError=0, MaxNeutralRotation=0, MaxEyeRotationError=0;
 		for (int32 Frame=0; Frame<Model->GetNumberOfKeys(); ++Frame)
 			for (int32 Bone=0; Bone<Ref.GetNum(); ++Bone)
 			{
 				const FTransform Pose = Model->GetBoneTrackTransform(Ref.GetBoneName(Bone), FFrameNumber(Frame));
 				const FTransform& Reference = Ref.GetRefBonePose()[Bone];
+				const bool bNativeEye = !bAdditive && Ref.GetBoneName(Bone).ToString().StartsWith(TEXT("Eye_"));
+				const FTransform Expected = bNativeEye ? NativeIdle->GetDataModel()->GetBoneTrackTransform(Ref.GetBoneName(Bone), FFrameNumber(0)) : Reference;
 				if (bAdditive || (Bone != 0 && Bone != Pelvis))
-					MaxOffsetError = FMath::Max(MaxOffsetError, FVector::Distance(Pose.GetTranslation(), Reference.GetTranslation()));
-				MaxScaleError = FMath::Max(MaxScaleError, FVector::Distance(Pose.GetScale3D(), Reference.GetScale3D()));
+					MaxOffsetError = FMath::Max(MaxOffsetError, FVector::Distance(Pose.GetTranslation(), Expected.GetTranslation()));
+				MaxScaleError = FMath::Max(MaxScaleError, FVector::Distance(Pose.GetScale3D(), Expected.GetScale3D()));
+				if (bNativeEye) MaxEyeRotationError = FMath::Max(MaxEyeRotationError, Pose.GetRotation().AngularDistance(Expected.GetRotation()));
 				if (bNeutral) MaxNeutralRotation = FMath::Max(MaxNeutralRotation, Pose.GetRotation().AngularDistance(Reference.GetRotation()));
 			}
 		TestTrue(Sequence->GetName() + TEXT(" preserves target bone offsets across all keys"), MaxOffsetError < 0.0003);
 		TestTrue(Sequence->GetName() + TEXT(" preserves imported scale"), MaxScaleError < 0.001);
+		TestTrue(Sequence->GetName() + TEXT(" preserves native eye layer orientation"), MaxEyeRotationError < 0.001);
 		if (bNeutral) TestTrue(TEXT("neutral lean has no additive rotation"), MaxNeutralRotation < 0.001);
 		AddInfo(FString::Printf(TEXT("Event=retarget_proportions_contract Animation=%s Keys=%d MaxLocalOffsetError=%.8f MaxScaleError=%.8f"), *Sequence->GetName(), Model->GetNumberOfKeys(), MaxOffsetError, MaxScaleError));
 	}

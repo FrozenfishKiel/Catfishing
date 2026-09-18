@@ -1,5 +1,26 @@
 # 角色换装与公共动画模板
 
+## 2026-09-18 跳跃和 Montage 的眼部姿态修复
+
+原始导入 FBX 的 AnimationStack 已只读核对：除 `_static_pose` 外有 21 段 idle、walk、run、sit、layingdown 和过渡动画，没有 jump。`/Game/StylizedCat/Animations` 有跳跃素材，但不是当前 `SK_CuteCat` 的骨架。当前跳跃三段及玩法 Montage 继续使用 Animalia 重定向动作。
+
+问题不是瞳孔贴图丢失。原生动画的 `Eye_L/R_001` 局部缩放为 `(1,0.6,1)`，`Eye_L/R_004` 约为 `(1.689,1.689,1.689)`，瞳孔及高光层还有独立位置和旋转。重定向未映射眼部，而旧归一化要求所有骨骼恢复参考缩放，因此动作切换后这些层回到 bind pose。修复前正面渲染已复现黄眼球、缩小的瞳孔和错误重叠的白色高光；修复后的跳跃及挥网近景已人工查看，瞳孔与星形高光恢复。
+
+基线：工作区已有祭坛、Showcase2、抓握组件及未跟踪文档的并行改动，本轮保留。`Saved/Diagnostics/CuteEyeBaseline` 原有 4 项通过（1 项带警告），说明旧身体比例测试没有覆盖眼部；新增断言在旧资产上的 `CuteEyeRed` 为 2 项失败，眼部运行形状误差 1.19346790。首次构建被正在运行的编辑器锁定 DLL，用户保存关闭后继续；新镜头测试的 const 接口编译错误已修正，最终 Editor Development 构建成功。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 原始动画与生成 | `Scripts/Art/import_cute_cat.py` 导入 21 段原生片段；`create_cute_cat_retarget.py` 映射身体、头、下巴，不含眼部 | 原生动画不变，补足重定向缺失的眼部造型 | 保留现有入口，使用 `idle_A_0` 首帧作为眼部局部姿态基准 | 读取源→修归一化→保存已有动作 | 不误用另一套猫的骨架；源素材只读检查 | 原 FBX、原生步态、骨架、材质均未改写 |
+| 计算与持久化 | `CatCharacterVariantAuthoringLibrary::NormalizeCuteCatRetargetedAnimations` ← `finalize_character_family.py` / `create_force_reaction_assets.py` | 原统一参考缩放改为身体参考比例、非附加眼部原生姿态；坐标单位不变 | 同入口处理 20 根 `Eye_` 骨骼，包含高光和末端；缺失基准轨道明确拒绝 | 先备份→迁移→保存→重复执行→冷启动测试 | 三段附加倾斜不能产生眼部增量；不能改变根、骨盆、时长和动作通知 | 20 段非附加序列保存；三个 Add 资产未变化；`CuteEyeMigration.log` 首次 Changed=20、重复 Changed=0 |
+| 正式消费者 | `BP_CuteCatCharacter`→`ABP_CuteCat`→跳跃播放器；`ACatCharacter::PlayAnimMontage`→AnimationOverrides→现有 Montage 内序列 | 保留所有输入身份、动作时长、通知、状态转换、Slot 和根运动；眼部不再回到 bind pose | 包路径原位修复，无第二个运行入口 | 资产正确后由原消费者加载 | 跳跃/落地、挥网、显式播停、混入退出、鱼竿回调 | 原猫及 CuteCat 真实运行通过；源 Mesh 与最终 PoseableMesh 371 帧眼部检查通过 |
+| 测试与表现 | `CatCharacterVariantTests.cpp` 原身体比例断言及 Capture；`CatPhysicsPrototypeVisualComponent::RefreshVisualPose` 复制可见姿态 | 原测试允许眼部变形；按身体与眼部契约分别断言 | 删除全骨骼必须参考缩放的错误前提；新增眼部运行检查与 `-CatEyeScreenshots` 近景选项 | 旧资产红灯→迁移→同测试绿灯→看图 | 检查数据以外的实际遮挡及高光；不只更改测试期望 | `CuteEyeFinal/index.json` 13 项通过，10 clean、3 warning；前后近景在 `Saved/Diagnostics/CuteEyeBeforeCloseup` / `CuteEyeAfterCloseup` |
+| 配置、权威与退出 | `Config/DefaultGame.ini` 原 Montage 身份→角色映射；现有跳跃状态机、CMC、Condition | 默认值、网络裁决、复制、扣费、存档及退出清理不变；WBP/DataAsset 不涉及修改 | 保留现有配置和 Cook 引用，无新增包入口，无删除二进制资产 | 无新状态交接或双重执行 | 身体权威、两种骨架、网络动画与步态回归 | 本轮只改 Editor 工具/测试及动作资产；网络角色测试通过；新 Cook 和打包双端未运行 |
+| 日志、文档及旧口径 | `LogCatCharacter` 现有 `character_animation_resolved`、`physics_visual_jump_root_compensation`、`physics_prototype_visual_ready`；本页归一化说明 | 保留 Development 可落盘的动作身份、角色、World/NetMode 日志，纠正“参考缩放适合全部骨骼”口径 | 工具增加 `character_retarget_eyes_repaired`；运行时仍由原动画链唯一驱动 | 修改工具及说明后审查 diff | 不引入每帧日志或第二份玩法状态 | 文档与测试已同步；旧错误规则已替换，无残留运行分支 |
+
+验证分层：`contract` 为 Editor 构建、全片段逐帧身体/眼部契约、映射契约及迁移幂等检查；`runtime_behavior` 为 `CuteEyeFinal` 角色和步态 13 项通过，含网络动画、实际跳跃和 Montage 播停。眼部最大形状误差从 1.19346790 降至 0.00000079，源/可见网格复制误差 0.00000003。3 项带警告涉及既有 Profile 迁移、重置后迟到输入及 EOS 配置联网失败。`presentation_delivery` 已检查独立测试世界的原生待机、跳跃及挥网正面渲染，正式 Showcase2 人工复测、新 Cook/Development 双端画面和日志未验证，不关闭模块。
+
+扩展验证的限制：`CuteEyeVerified.log` 中角色 4 项已通过，随后 ForceReaction 套件发现当前 CuteCat 的 `bEnabled=false`、`DirectionalMontages.Num()=0`；契约要求已开启的四向配置而失败，网络测试 `CatCuteCatNetworkTests.cpp` 无保护索引 `[0]` 后崩溃。该角色 Blueprint 未被本轮改写；没有擅自重新启用受力反应或把组合测试记作通过。需确认受力反应现行需求，再对齐该套件及其空数组保护；缺口归唯一模块进度入口。
+
 ## 2026-09-11 猫之间推拉的一次性受力表现（试用）
 
 `ACatCharacter` 创建 `UCatForceReactionComponent`（`Character/Animation/`），原猫与 CuteCat 的角色子蓝图启用它。服务器在 `TG_PostPhysics`、身体移动 Tick 之后采样本帧已提交的猫之间抓握/身体推动力；不会在 `ApplyTraction` 每帧先清再写的中间状态触发。抓杆、鱼线、重力、纯竖直抓跳不触发水平受力 Montage。玩法移动、抓握、体力账本、Condition 权威均不改变。
@@ -79,7 +100,7 @@ CuteCat 的默认花色为 Calico。在 Mesh 的材质槽中成对替换 `M_Cute
 
 `create_character_family.py` 调用 Editor-only 的 `UCatCharacterVariantAuthoringLibrary::CreateCharacterFamily` 做一次性迁移，并在验证工程的 `Saved/CharacterFamilyBackup` 中备份原资产。工具拒绝覆盖已有角色族；不要把该脚本作为每次启动或反复重导的入口。迁移既有资产应在其未被其他编辑器占用时执行。
 
-之后运行 `finalize_character_family.py`：它恢复 CuteCat 根骨 100 倍缩放，单独转换重定向骨盆的位置单位，保留其余骨骼的原始局部间距；同时把三个转向附加姿势处理为仅旋转、零位移增量，其中 Neutral 为附加单位姿势。工具也能修复早期仅恢复根缩放却压缩子骨骼间距的资产，重复运行不再改写正确数据。鱼竿蓝图的原猫专用 Cast / 直接 Mesh Montage 播放会迁移为 `ACatCharacter::PlayAnimMontage`。原 FBX、原生 idle/walk/run、原猫骨架和原动画数据不因此改写。
+之后运行 `finalize_character_family.py`：它恢复 CuteCat 根骨 100 倍缩放，单独转换重定向骨盆的位置单位，保留身体骨骼的原始局部间距；非附加动作的 20 根 `Eye_` 骨骼（包含瞳孔、高光及末端）使用原生 `idle_A_0` 首帧的局部位置、旋转和缩放，不能统一还原为 bind pose。三个转向附加姿势仍为仅旋转、零位移增量，眼部保持零附加增量，其中 Neutral 为完整附加单位姿势。工具也能修复早期仅恢复根缩放却压缩子骨骼间距的资产，重复运行不再改写正确数据。鱼竿蓝图的原猫专用 Cast / 直接 Mesh Montage 播放会迁移为 `ACatCharacter::PlayAnimMontage`。原 FBX、原生 idle/walk/run、原猫骨架和原动画数据不因此改写。
 
 定向 Automation 入口为 `Catfishing.CharacterVariants`，并应回归 `Catfishing.Locomotion` 及原有抓握/跳跃测试。运行真实渲染验证时增加 `-CatVariantScreenshots`，输出位于该工程 `Saved/CharacterVariantScreenshots`。Automation 通过不替代正式地图、联网画面或打包体验验收。
 

@@ -23,7 +23,7 @@ public:
 	/** One-time migration; refuses pre-existing outputs and only saves after every Blueprint compiles. */
 	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Character")
 	static FString CreateCharacterFamily();
-	/** Restore imported bone units, migrate collapsed legacy exports, and make lean poses rotation-only. */
+	/** Restore imported bone units and native eye shape, migrate legacy exports, and keep lean eyes additive-neutral. */
 	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Character")
 	static FString NormalizeCuteCatRetargetedAnimations();
 	/** Migrate the audited rod presentation consumer to the shared native character playback API. */
